@@ -61,21 +61,6 @@ interface TeachingPlanResponse {
   }>
 }
 
-interface IllustratedLessonResponse {
-  id: string
-  status: 'COMPLETE' | 'INCOMPLETE'
-  sections: Array<{
-    position: number
-    type: string
-    title: string
-    required: boolean
-    evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
-    visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
-    visualCaption: string
-    steps: Array<{ position: number; text: string; sourcePages: number[] }>
-  }>
-}
-
 const router = useRouter()
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
@@ -96,7 +81,6 @@ const planBeginnerCount = ref(2)
 const planDurationMinutes = ref(30)
 const teachingPlan = ref<TeachingPlanResponse | null>(null)
 const creatingPlan = ref(false)
-const illustratedLesson = ref<IllustratedLessonResponse | null>(null)
 const creatingLesson = ref(false)
 const processingProgress = ref<Record<string, { stage: string; percentage: number; processedPages: number; complete: boolean }>>({})
 
@@ -169,7 +153,6 @@ async function previewStructure(versionId: string) {
     ruleStructure.value = (await response.json()) as RuleStructureResponse
     structureVersionId.value = versionId
     teachingPlan.value = null
-    illustratedLesson.value = null
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '无法读取规则结构。'
   }
@@ -196,7 +179,6 @@ async function createTeachingPlan(versionId: string) {
     })
     if (!response.ok) throw new Error('无法创建教学计划，请检查人数和讲解时长。')
     teachingPlan.value = (await response.json()) as TeachingPlanResponse
-    illustratedLesson.value = null
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '无法创建教学计划。'
   } finally {
@@ -215,7 +197,8 @@ async function createIllustratedLesson(planId: string) {
       headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error('无法生成图文讲解。')
-    illustratedLesson.value = (await response.json()) as IllustratedLessonResponse
+    localStorage.setItem('rulepilot:last-plan-id', planId)
+    await router.push({ name: 'lesson', params: { planId } })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '无法生成图文讲解。'
   } finally {
@@ -426,36 +409,6 @@ onMounted(load)
                 </ol>
                 <button :disabled="creatingLesson" class="mt-5 rounded-xl bg-indigo px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" @click="createIllustratedLesson(teachingPlan.id)">{{ creatingLesson ? '正在组织讲解…' : '生成带引用的图文讲解' }}</button>
               </div>
-              <section v-if="illustratedLesson" class="mt-6 space-y-5">
-                <div class="flex items-center justify-between gap-4">
-                  <h3 class="font-display text-2xl font-semibold">图文讲解</h3>
-                  <span :class="illustratedLesson.status === 'COMPLETE' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1 text-xs font-semibold">{{ illustratedLesson.status === 'COMPLETE' ? '证据完整' : '存在证据缺口' }}</span>
-                </div>
-                <article v-for="lessonSection in illustratedLesson.sections" :key="lessonSection.type" class="overflow-hidden rounded-3xl border border-ink/10 bg-paper">
-                  <div class="grid gap-0 sm:grid-cols-[0.38fr_0.62fr]">
-                    <div class="flex min-h-44 flex-col justify-between bg-indigo/8 p-5">
-                      <span class="text-xs font-semibold uppercase tracking-widest text-indigo">{{ lessonSection.visualKind.replaceAll('_', ' ') }}</span>
-                      <div aria-hidden="true" class="my-5 flex items-center gap-2">
-                        <span v-for="step in Math.min(lessonSection.steps.length, 4)" :key="step" class="flex h-9 w-9 items-center justify-center rounded-full border-2 border-indigo/30 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
-                        <span v-if="lessonSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
-                      </div>
-                      <p class="text-sm leading-6 text-ink/55">{{ lessonSection.visualCaption }}</p>
-                    </div>
-                    <div class="p-5">
-                      <div class="flex items-start justify-between gap-3">
-                        <div><p class="text-xs font-semibold text-ink/40">第 {{ lessonSection.position }} 节</p><h4 class="mt-1 font-display text-xl font-semibold">{{ lessonSection.title }}</h4></div>
-                        <span v-if="lessonSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">证据不足</span>
-                      </div>
-                      <ol class="mt-4 space-y-4">
-                        <li v-for="step in lessonSection.steps" :key="step.position" class="text-sm leading-7 text-ink/70">
-                          <p>{{ step.text }}</p>
-                          <p v-if="step.sourcePages.length" class="mt-1 text-xs font-semibold text-indigo">规则书第 {{ step.sourcePages.join('、') }} 页</p>
-                        </li>
-                      </ol>
-                    </div>
-                  </div>
-                </article>
-              </section>
             </div>
             <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
               <p v-if="pages.length === 0" class="text-sm text-ink/45">尚未提取到页面文字。</p>

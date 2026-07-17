@@ -1,0 +1,239 @@
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
+
+import {
+  finishSection,
+  initialLessonProgress,
+  restoreLessonProgress,
+  type LessonProgress,
+} from '@/lib/lessonProgress'
+
+interface TeachingPlan {
+  id: string
+  documentVersionId: string
+  playerCount: number
+  beginnerCount: number
+  durationMinutes: number
+}
+
+interface IllustratedLesson {
+  id: string
+  status: 'COMPLETE' | 'INCOMPLETE'
+  sections: LessonSection[]
+}
+
+interface LessonSection {
+  position: number
+  type: string
+  title: string
+  required: boolean
+  evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
+  visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
+  visualCaption: string
+  steps: Array<{ position: number; text: string; sourcePages: number[] }>
+}
+
+const route = useRoute()
+const router = useRouter()
+const loading = ref(true)
+const errorMessage = ref('')
+const online = ref(navigator.onLine)
+const plan = ref<TeachingPlan | null>(null)
+const lesson = ref<IllustratedLesson | null>(null)
+const progress = ref<LessonProgress>(initialLessonProgress())
+
+const planId = computed(() => String(route.params.planId ?? ''))
+const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const completedCount = computed(() => new Set([...progress.value.completed, ...progress.value.skipped]).size)
+const progressPercent = computed(() =>
+  lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
+)
+
+function progressKey() {
+  return lesson.value ? `rulepilot:lesson-progress:${lesson.value.id}` : ''
+}
+
+function saveProgress() {
+  const key = progressKey()
+  if (key) localStorage.setItem(key, JSON.stringify(progress.value))
+}
+
+async function loadLesson() {
+  loading.value = true
+  errorMessage.value = ''
+  let targetPlanId = planId.value
+  if (!targetPlanId) {
+    const remembered = localStorage.getItem('rulepilot:last-plan-id')
+    if (remembered) {
+      await router.replace({ name: 'lesson', params: { planId: remembered } })
+      targetPlanId = remembered
+    } else {
+      loading.value = false
+      return
+    }
+  }
+  try {
+    const [planResponse, lessonResponse] = await Promise.all([
+      fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+    ])
+    if (planResponse.status === 401 || lessonResponse.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (!planResponse.ok || !lessonResponse.ok) throw new Error('无法读取这份讲解，请重新生成。')
+    plan.value = (await planResponse.json()) as TeachingPlan
+    lesson.value = (await lessonResponse.json()) as IllustratedLesson
+    localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
+    progress.value = restoreLessonProgress(
+      localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
+      lesson.value.sections.length,
+    )
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
+  } finally {
+    loading.value = false
+  }
+}
+
+function selectSection(index: number) {
+  progress.value = { ...progress.value, currentIndex: index }
+  saveProgress()
+}
+
+function previousSection() {
+  if (progress.value.currentIndex === 0) return
+  selectSection(progress.value.currentIndex - 1)
+}
+
+function finish(outcome: 'completed' | 'skipped') {
+  if (!lesson.value || progress.value.paused) return
+  progress.value = finishSection(progress.value, lesson.value.sections.length, outcome)
+  saveProgress()
+}
+
+function togglePause() {
+  progress.value = { ...progress.value, paused: !progress.value.paused }
+  saveProgress()
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowLeft') previousSection()
+  if (event.key === 'ArrowRight') finish('completed')
+}
+
+function updateOnlineStatus() {
+  online.value = navigator.onLine
+}
+
+onMounted(() => {
+  void loadLesson()
+  window.addEventListener('online', updateOnlineStatus)
+  window.addEventListener('offline', updateOnlineStatus)
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', updateOnlineStatus)
+  window.removeEventListener('offline', updateOnlineStatus)
+  window.removeEventListener('keydown', handleKeydown)
+})
+</script>
+
+<template>
+  <main class="min-h-screen overflow-x-hidden bg-canvas pb-28 text-ink lg:pb-8">
+    <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
+      <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
+        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold">RulePilot</RouterLink>
+        <div v-if="plan" class="text-right text-xs text-ink/50">
+          <p class="font-semibold text-ink/75">规则版本 {{ plan.documentVersionId.slice(0, 8) }}</p>
+          <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
+        </div>
+      </div>
+      <div v-if="lesson" class="h-1 bg-ink/8"><div class="h-full bg-copper transition-all" :style="{ width: `${progressPercent}%` }" /></div>
+    </header>
+
+    <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；已加载的讲解和本地进度仍可使用。</p>
+
+    <div v-if="loading" class="mx-auto max-w-7xl px-5 py-16 sm:px-8" aria-live="polite">
+      <div class="h-7 w-44 animate-pulse rounded bg-ink/10" />
+      <div class="mt-6 h-80 animate-pulse rounded-3xl bg-paper" />
+    </div>
+
+    <section v-else-if="errorMessage" class="mx-auto max-w-xl px-5 py-20 text-center">
+      <p class="font-display text-2xl font-semibold">讲解暂时无法打开</p>
+      <p class="mt-3 text-ink/60" role="alert">{{ errorMessage }}</p>
+      <button class="mt-6 rounded-xl bg-copper px-5 py-3 font-semibold text-white" @click="loadLesson">重新加载</button>
+    </section>
+
+    <section v-else-if="!lesson" class="mx-auto max-w-xl px-5 py-20 text-center">
+      <p class="eyebrow">NO LESSON YET</p>
+      <h1 class="mt-4 font-display text-4xl font-semibold">还没有可以继续的讲解</h1>
+      <p class="mt-4 leading-7 text-ink/60">先导入规则书，创建教学计划并生成图文讲解。</p>
+      <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-xl bg-copper px-5 py-3 font-semibold text-white">开始导入</RouterLink>
+    </section>
+
+    <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
+      <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" aria-label="讲解章节">
+        <div class="flex items-end justify-between">
+          <div><p class="eyebrow">GUIDED LESSON</p><h1 class="mt-2 font-display text-2xl font-semibold">完整规则讲解</h1></div>
+          <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
+        </div>
+        <ol class="mt-5 flex max-w-full gap-2 overflow-x-auto pb-2 lg:block lg:space-y-2 lg:overflow-visible">
+          <li v-for="(section, index) in lesson.sections" :key="section.type" class="shrink-0 lg:shrink">
+            <button
+              class="flex min-h-12 w-52 items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm transition lg:w-full"
+              :class="index === progress.currentIndex ? 'bg-ink-panel text-panel-text' : 'bg-paper/60 text-ink hover:bg-paper'"
+              :aria-current="index === progress.currentIndex ? 'step' : undefined"
+              @click="selectSection(index)"
+            >
+              <span class="grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold">{{ progress.completed.includes(index) ? '✓' : progress.skipped.includes(index) ? '–' : section.position }}</span>
+              <span class="truncate">{{ section.title }}</span>
+            </button>
+          </li>
+        </ol>
+      </aside>
+
+      <section v-if="currentSection" class="min-w-0" aria-live="polite">
+        <div class="rounded-[2rem] border border-ink/10 bg-paper p-5 shadow-sm sm:p-8">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div><p class="text-xs font-semibold text-ink/45">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p><h2 class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ currentSection.title }}</h2></div>
+            <span v-if="currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900">证据不足</span>
+            <span v-else class="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">有规则书依据</span>
+          </div>
+
+          <div class="mt-7 rounded-3xl bg-indigo/8 p-5">
+            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo">{{ currentSection.visualKind.replaceAll('_', ' ') }}</p>
+            <div class="my-6 flex items-center gap-2" aria-hidden="true">
+              <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
+              <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
+            </div>
+            <p class="text-sm text-ink/60">{{ currentSection.visualCaption }}</p>
+          </div>
+
+          <ol class="mt-7 space-y-5">
+            <li v-for="step in currentSection.steps" :key="step.position" class="rounded-2xl border border-ink/8 p-4 sm:p-5">
+              <p class="text-base leading-8 text-ink/75">{{ step.text }}</p>
+              <details v-if="step.sourcePages.length" class="mt-3">
+                <summary class="cursor-pointer text-sm font-semibold text-indigo">查看规则证据</summary>
+                <p class="mt-2 rounded-xl bg-indigo/8 px-3 py-2 text-sm text-indigo">来源：规则书第 {{ step.sourcePages.join('、') }} 页</p>
+              </details>
+            </li>
+          </ol>
+
+          <div v-if="progress.paused" class="mt-7 rounded-2xl border border-copper/25 bg-copper/8 p-4 text-sm font-semibold" role="status">讲解已暂停。继续后才能完成或跳过当前章节。</div>
+        </div>
+      </section>
+    </div>
+
+    <nav v-if="lesson" class="fixed inset-x-0 bottom-0 z-30 border-t border-ink/10 bg-canvas/95 p-3 backdrop-blur lg:sticky lg:bottom-0 lg:mx-auto lg:max-w-4xl lg:rounded-2xl lg:border" aria-label="讲解控制">
+      <div class="mx-auto grid max-w-3xl grid-cols-4 gap-2">
+        <button :disabled="progress.currentIndex === 0" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="previousSection">上一节</button>
+        <button class="min-h-12 rounded-xl border border-copper/30 px-3 text-sm font-semibold text-copper" @click="togglePause">{{ progress.paused ? '继续' : '暂停' }}</button>
+        <button :disabled="progress.paused" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="finish('skipped')">跳过</button>
+        <button :disabled="progress.paused" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:opacity-35" @click="finish('completed')">{{ progress.currentIndex === lesson.sections.length - 1 ? '完成' : '下一节' }}</button>
+      </div>
+    </nav>
+  </main>
+</template>

@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import CatalogView from '@/views/CatalogView.vue'
 import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
+import LessonView from '@/views/LessonView.vue'
 import LoginView from '@/views/LoginView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
@@ -30,10 +31,9 @@ const router = createRouter({
       component: DocumentsView,
     },
     {
-      path: '/lesson',
+      path: '/lesson/:planId?',
       name: 'lesson',
-      component: PlaceholderView,
-      meta: { eyebrow: 'GUIDED LESSON', title: '分步骤规则讲解', description: '按组件、setup、回合流程、行动、结束条件和计分逐章学习，并随时回看证据页码。' },
+      component: LessonView,
     },
     {
       path: '/questions',

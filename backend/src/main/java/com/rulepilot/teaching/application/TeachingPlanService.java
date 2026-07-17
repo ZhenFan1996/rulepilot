@@ -39,4 +39,9 @@ public class TeachingPlanService {
     public Optional<TeachingPlan> latest(UUID documentVersionId) {
         return repository.findLatest(documentVersionId);
     }
+
+    @Transactional(readOnly = true)
+    public Optional<TeachingPlan> find(UUID planId) {
+        return repository.findById(planId);
+    }
 }
