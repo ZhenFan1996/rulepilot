@@ -1,6 +1,7 @@
 package com.rulepilot.ingestion.application;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.ingestion.RuleStructureCatalog;
 import com.rulepilot.ingestion.application.RuleStructureRepository.DetectedRuleSection;
 import com.rulepilot.ingestion.domain.LessonRuleSectionType;
 import java.util.Arrays;
@@ -15,7 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
-public class RuleStructureService {
+public class RuleStructureService implements RuleStructureCatalog {
 
     private final RuleStructureClassifier classifier;
     private final RuleStructureRepository repository;
@@ -31,6 +32,7 @@ public class RuleStructureService {
     }
 
     @Transactional(readOnly = true)
+    @Override
     public StructureView structure(UUID documentVersionId) {
         Map<LessonRuleSectionType, DetectedRuleSection> detected = repository.findByDocumentVersion(documentVersionId)
                 .stream()
@@ -47,8 +49,4 @@ public class RuleStructureService {
                 ? new SectionView(type.name(), type.label(), false, "", List.of())
                 : new SectionView(type.name(), type.label(), true, detected.content(), detected.pageNumbers());
     }
-
-    public record StructureView(List<SectionView> sections, int presentSections, int requiredSections) {}
-
-    public record SectionView(String type, String label, boolean present, String content, List<Integer> pageNumbers) {}
 }

@@ -46,6 +46,21 @@ interface RuleStructureResponse {
   }>
 }
 
+interface TeachingPlanResponse {
+  id: string
+  playerCount: number
+  beginnerCount: number
+  durationMinutes: number
+  sections: Array<{
+    position: number
+    type: string
+    required: boolean
+    evidenceAvailable: boolean
+    sourcePages: number[]
+    dependencies: string[]
+  }>
+}
+
 const router = useRouter()
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
@@ -61,6 +76,11 @@ const previewVersionId = ref('')
 const pages = ref<Array<{ pageNumber: number; text: string; characterCount: number }>>([])
 const structureVersionId = ref('')
 const ruleStructure = ref<RuleStructureResponse | null>(null)
+const planPlayerCount = ref(4)
+const planBeginnerCount = ref(2)
+const planDurationMinutes = ref(30)
+const teachingPlan = ref<TeachingPlanResponse | null>(null)
+const creatingPlan = ref(false)
 const processingProgress = ref<Record<string, { stage: string; percentage: number; processedPages: number; complete: boolean }>>({})
 
 const editionOptions = computed<EditionOption[]>(() =>
@@ -79,6 +99,21 @@ const sourceTypes = [
   ['OFFICIAL_ERRATA', '官方勘误'],
   ['OFFICIAL_PLAYER_AID', '官方玩家辅助'],
 ] as const
+
+const sectionLabels: Record<string, string> = {
+  OBJECTIVE: '目标与胜利条件',
+  COMPONENTS: '组件与用途',
+  SETUP: 'Setup',
+  ROUND_STRUCTURE: '轮次与回合',
+  PHASES: '阶段',
+  ACTIONS: '可执行行动',
+  END_CONDITIONS: '结束条件',
+  SCORING: '计分',
+  TIE_BREAKERS: '同分规则',
+  FIRST_ROUND_PRACTICE: '首轮演练',
+  COMMON_MISTAKES: '常见错误',
+  RECAP: '流程回顾',
+}
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
@@ -116,8 +151,37 @@ async function previewStructure(versionId: string) {
     if (!response.ok) throw new Error('无法读取规则结构。')
     ruleStructure.value = (await response.json()) as RuleStructureResponse
     structureVersionId.value = versionId
+    teachingPlan.value = null
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '无法读取规则结构。'
+  }
+}
+
+async function createTeachingPlan(versionId: string) {
+  if (planBeginnerCount.value > planPlayerCount.value) {
+    errorMessage.value = '新手人数不能超过总玩家人数。'
+    return
+  }
+  creatingPlan.value = true
+  errorMessage.value = ''
+  try {
+    const csrfResponse = await checkedFetch('/api/auth/csrf')
+    const csrf = (await csrfResponse.json()) as CsrfResponse
+    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        playerCount: planPlayerCount.value,
+        beginnerCount: planBeginnerCount.value,
+        durationMinutes: planDurationMinutes.value,
+      }),
+    })
+    if (!response.ok) throw new Error('无法创建教学计划，请检查人数和讲解时长。')
+    teachingPlan.value = (await response.json()) as TeachingPlanResponse
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '无法创建教学计划。'
+  } finally {
+    creatingPlan.value = false
   }
 }
 
@@ -298,6 +362,30 @@ onMounted(load)
                     <pre class="mt-3 max-h-44 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/65">{{ section.content }}</pre>
                   </details>
                 </article>
+              </div>
+              <form class="mt-5 rounded-2xl border border-ink/10 p-4" @submit.prevent="createTeachingPlan(entry.latestVersion.id)">
+                <h3 class="font-semibold">规划这次讲解</h3>
+                <div class="mt-3 grid gap-3 sm:grid-cols-3">
+                  <label class="text-sm font-semibold">玩家人数<input v-model.number="planPlayerCount" type="number" min="1" max="20" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
+                  <label class="text-sm font-semibold">其中新手<input v-model.number="planBeginnerCount" type="number" min="0" :max="planPlayerCount" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
+                  <label class="text-sm font-semibold">讲解分钟<input v-model.number="planDurationMinutes" type="number" min="2" max="180" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
+                </div>
+                <button :disabled="creatingPlan" class="mt-4 rounded-xl bg-copper px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">{{ creatingPlan ? '正在规划…' : '创建教学计划' }}</button>
+              </form>
+              <div v-if="teachingPlan" class="mt-5 rounded-2xl bg-indigo/5 p-4">
+                <p class="font-semibold">{{ teachingPlan.playerCount }} 人 · {{ teachingPlan.beginnerCount }} 位新手 · {{ teachingPlan.durationMinutes }} 分钟</p>
+                <ol class="mt-4 space-y-2">
+                  <li v-for="section in teachingPlan.sections" :key="section.type" class="flex items-start gap-3 text-sm">
+                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo text-xs font-semibold text-white">{{ section.position }}</span>
+                    <span>
+                      <strong>{{ sectionLabels[section.type] ?? section.type }}</strong>
+                      <span v-if="section.required && !section.evidenceAvailable" class="ml-2 text-amber-700">缺少规则证据</span>
+                      <span v-else-if="!section.required && !section.evidenceAvailable" class="ml-2 text-amber-700">按受众加入，待补前置证据</span>
+                      <span v-else-if="!section.required" class="ml-2 text-ink/45">按受众加入</span>
+                      <span v-if="section.dependencies.length" class="mt-1 block text-xs text-ink/45">前置：{{ section.dependencies.map((dependency) => sectionLabels[dependency] ?? dependency).join('、') }}</span>
+                    </span>
+                  </li>
+                </ol>
               </div>
             </div>
             <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
