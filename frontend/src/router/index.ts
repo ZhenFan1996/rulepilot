@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import CatalogView from '@/views/CatalogView.vue'
+import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LoginView from '@/views/LoginView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
@@ -26,8 +27,7 @@ const router = createRouter({
     {
       path: '/teach',
       name: 'teach',
-      component: PlaceholderView,
-      meta: { eyebrow: 'IMPORT RULEBOOK', title: '从规则书开始', description: '导入规则书并确认版本、扩展和语言，随后生成从 setup 到计分的完整讲解。' },
+      component: DocumentsView,
     },
     {
       path: '/lesson',

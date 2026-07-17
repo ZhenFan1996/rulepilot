@@ -25,6 +25,8 @@ public class IdentitySecurityConfiguration {
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/games", "/api/v1/games/*/editions", "/api/v1/games/*/expansions")
                         .hasRole("EDITOR")
+                        .requestMatchers(HttpMethod.POST, "/api/v1/editions/*/documents")
+                        .hasRole("EDITOR")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions

@@ -17,6 +17,8 @@ public interface CatalogRepository {
 
     Optional<Game> findGame(UUID gameId);
 
+    Optional<GameEdition> findEdition(UUID editionId);
+
     List<Game> findGames();
 
     List<GameEdition> findEditions(UUID gameId);

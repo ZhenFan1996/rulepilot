@@ -59,6 +59,12 @@ public class JpaCatalogRepository implements CatalogRepository {
     }
 
     @Override
+    public Optional<GameEdition> findEdition(UUID editionId) {
+        GameEditionEntity entity = entityManager.find(GameEditionEntity.class, editionId);
+        return Optional.ofNullable(entity).map(GameEditionEntity::toDomain);
+    }
+
+    @Override
     public List<Game> findGames() {
         return entityManager.createQuery("select game from CatalogGameEntity game order by game.name", GameEntity.class)
                 .getResultStream()

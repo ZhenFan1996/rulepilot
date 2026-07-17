@@ -38,7 +38,7 @@ public class MinioDocumentStorage implements DocumentStorage {
                     .bucket(bucket)
                     .object(objectKey)
                     .contentType(contentType)
-                    .stream(hashingStream, size, -1)
+                    .stream(hashingStream, size, -1L)
                     .build());
             return new StoredDocument(objectKey, size, contentType, HexFormat.of().formatHex(digest.digest()));
         } catch (NoSuchAlgorithmException exception) {
