@@ -35,6 +35,12 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     }
 
     @Override
+    public Optional<TeachingPlan> findById(UUID planId) {
+        return Optional.ofNullable(entityManager.find(TeachingPlanEntity.class, planId))
+                .map(plan -> plan.toDomain(findSections(plan.id)));
+    }
+
+    @Override
     public Optional<TeachingPlan> findLatest(UUID documentVersionId) {
         return entityManager
                 .createQuery(

@@ -8,5 +8,7 @@ public interface TeachingPlanRepository {
 
     TeachingPlan save(TeachingPlan plan);
 
+    Optional<TeachingPlan> findById(UUID planId);
+
     Optional<TeachingPlan> findLatest(UUID documentVersionId);
 }
