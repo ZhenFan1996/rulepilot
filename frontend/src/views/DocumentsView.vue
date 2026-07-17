@@ -47,6 +47,7 @@ const message = ref('')
 const errorMessage = ref('')
 const previewVersionId = ref('')
 const pages = ref<Array<{ pageNumber: number; text: string; characterCount: number }>>([])
+const processingProgress = ref<Record<string, { stage: string; percentage: number; processedPages: number; complete: boolean }>>({})
 
 const editionOptions = computed<EditionOption[]>(() =>
   games.value.flatMap((entry) =>
@@ -134,16 +135,37 @@ async function upload() {
     })
     if (response.status === 403) throw new Error('需要 EDITOR 或 ADMIN 权限才能上传规则书。')
     if (!response.ok) throw new Error('上传失败，请确认文件是 50 MiB 以内的 PDF。')
-    const result = (await response.json()) as { duplicate: boolean; version: { status: string } }
+    const result = (await response.json()) as { duplicate: boolean; version: { id: string; status: string } }
     message.value = result.duplicate ? '这份文件已上传，已保留现有版本。' : '规则书已安全保存，等待解析。'
     title.value = ''
     file.value = null
     await loadDocuments()
+    if (!result.duplicate) watchProgress(result.version.id)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '上传失败。'
   } finally {
     uploading.value = false
   }
+}
+
+function watchProgress(versionId: string) {
+  const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
+  events.addEventListener('progress', (event) => {
+    const snapshot = JSON.parse((event as MessageEvent<string>).data) as {
+      stage: string
+      percentage: number
+      processedPages: number
+      complete: boolean
+    }
+    processingProgress.value = { ...processingProgress.value, [versionId]: snapshot }
+    const document = documents.value.find((entry) => entry.latestVersion.id === versionId)
+    if (document) document.latestVersion.status = snapshot.stage
+    if (snapshot.complete) {
+      events.close()
+      void loadDocuments()
+    }
+  })
+  events.onerror = () => events.close()
 }
 
 watch(editionId, async () => {
@@ -218,6 +240,12 @@ onMounted(load)
                 <p class="mt-2 text-sm text-ink/55">{{ entry.latestVersion.originalFilename }} · v{{ entry.latestVersion.versionNumber }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB</p>
               </div>
               <span class="rounded-full bg-indigo/10 px-3 py-1.5 text-xs font-semibold text-indigo">{{ entry.latestVersion.status }}</span>
+            </div>
+            <div v-if="processingProgress[entry.latestVersion.id]" class="mt-4">
+              <div class="h-2 overflow-hidden rounded-full bg-ink/8">
+                <div class="h-full rounded-full bg-indigo transition-all" :style="{ width: `${processingProgress[entry.latestVersion.id]!.percentage}%` }" />
+              </div>
+              <p class="mt-2 text-xs text-ink/45">{{ processingProgress[entry.latestVersion.id]!.percentage }}% · 已读取 {{ processingProgress[entry.latestVersion.id]!.processedPages }} 页</p>
             </div>
             <p class="mt-4 truncate font-mono text-xs text-ink/35" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
             <button class="mt-4 text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewPages(entry.latestVersion.id)">查看页级文字</button>
