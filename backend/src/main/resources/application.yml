@@ -50,6 +50,8 @@ management:
       show-details: never
 
 rulepilot:
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:fake}
   speech:
     provider: ${SPEECH_PROVIDER:fake}
   video:

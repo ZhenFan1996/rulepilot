@@ -56,6 +56,24 @@ class DocumentProcessingService implements DocumentProcessing {
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markEmbedding(UUID documentVersionId) {
+        transition(documentVersionId, ProcessingStatus.EMBEDDING);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markIndexing(UUID documentVersionId) {
+        transition(documentVersionId, ProcessingStatus.INDEXING);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markReady(UUID documentVersionId) {
+        transition(documentVersionId, ProcessingStatus.READY);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(UUID documentVersionId) {
         DocumentVersion version = requireVersion(documentVersionId);
         if (version.status().canTransitionTo(ProcessingStatus.FAILED)) {

@@ -16,6 +16,12 @@ public interface DocumentProcessing {
 
     void markChunking(UUID documentVersionId);
 
+    void markEmbedding(UUID documentVersionId);
+
+    void markIndexing(UUID documentVersionId);
+
+    void markReady(UUID documentVersionId);
+
     void markFailed(UUID documentVersionId);
 
     void replacePages(UUID documentVersionId, List<ExtractedPage> pages);
