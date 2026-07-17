@@ -18,6 +18,7 @@
 
     <properties>
         <java.version>21</java.version>
+        <start-class>com.rulepilot.RulePilotApplication</start-class>
     </properties>
 
     <dependencies>
@@ -31,12 +32,25 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-session-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -62,6 +76,20 @@
                 <artifactId>maven-antrun-plugin</artifactId>
                 <version>3.1.0</version>
                 <executions>
+                    <execution>
+                        <id>remove-macos-main-sidecar-files</id>
+                        <phase>process-classes</phase>
+                        <configuration>
+                            <target>
+                                <delete includeemptydirs="false">
+                                    <fileset dir="${project.build.outputDirectory}" includes="**/._*" defaultexcludes="false"/>
+                                </delete>
+                            </target>
+                        </configuration>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                    </execution>
                     <execution>
                         <id>remove-macos-sidecar-files</id>
                         <phase>process-test-classes</phase>

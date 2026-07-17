@@ -1,9 +1,26 @@
 spring:
   application:
     name: rulepilot
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  session:
+    timeout: 8h
+    data:
+      redis:
+        namespace: rulepilot:session
   mvc:
     problemdetails:
       enabled: true
+
+server:
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
 
 management:
   endpoints:
@@ -13,3 +30,12 @@ management:
   endpoint:
     health:
       show-details: never
+
+rulepilot:
+  identity:
+    user:
+      username: ${RULEPILOT_USER_USERNAME:player}
+      password: ${RULEPILOT_USER_PASSWORD:rulepilot-local}
+    admin:
+      username: ${RULEPILOT_ADMIN_USERNAME:admin}
+      password: ${RULEPILOT_ADMIN_PASSWORD:rulepilot-admin-local}
