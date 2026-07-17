@@ -34,6 +34,18 @@ interface DocumentResponse {
   }
 }
 
+interface RuleStructureResponse {
+  presentSections: number
+  requiredSections: number
+  sections: Array<{
+    type: string
+    label: string
+    present: boolean
+    content: string
+    pageNumbers: number[]
+  }>
+}
+
 const router = useRouter()
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
@@ -47,6 +59,8 @@ const message = ref('')
 const errorMessage = ref('')
 const previewVersionId = ref('')
 const pages = ref<Array<{ pageNumber: number; text: string; characterCount: number }>>([])
+const structureVersionId = ref('')
+const ruleStructure = ref<RuleStructureResponse | null>(null)
 const processingProgress = ref<Record<string, { stage: string; percentage: number; processedPages: number; complete: boolean }>>({})
 
 const editionOptions = computed<EditionOption[]>(() =>
@@ -92,6 +106,18 @@ async function previewPages(versionId: string) {
     previewVersionId.value = versionId
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '无法读取页级预览。'
+  }
+}
+
+async function previewStructure(versionId: string) {
+  errorMessage.value = ''
+  try {
+    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/rule-structure`)
+    if (!response.ok) throw new Error('无法读取规则结构。')
+    ruleStructure.value = (await response.json()) as RuleStructureResponse
+    structureVersionId.value = versionId
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '无法读取规则结构。'
   }
 }
 
@@ -248,7 +274,32 @@ onMounted(load)
               <p class="mt-2 text-xs text-ink/45">{{ processingProgress[entry.latestVersion.id]!.percentage }}% · 已读取 {{ processingProgress[entry.latestVersion.id]!.processedPages }} 页</p>
             </div>
             <p class="mt-4 truncate font-mono text-xs text-ink/35" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
-            <button class="mt-4 text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewPages(entry.latestVersion.id)">查看页级文字</button>
+            <div class="mt-4 flex flex-wrap gap-4">
+              <button class="text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewStructure(entry.latestVersion.id)">查看讲解结构</button>
+              <button class="text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewPages(entry.latestVersion.id)">查看页级文字</button>
+            </div>
+            <div v-if="structureVersionId === entry.latestVersion.id && ruleStructure" class="mt-5 border-t border-ink/10 pt-5">
+              <div class="flex items-center justify-between gap-4">
+                <p class="font-semibold">已识别 {{ ruleStructure.presentSections }} / {{ ruleStructure.requiredSections }} 个必需章节</p>
+                <span :class="ruleStructure.presentSections === ruleStructure.requiredSections ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1 text-xs font-semibold">
+                  {{ ruleStructure.presentSections === ruleStructure.requiredSections ? '结构完整' : '仍有缺失' }}
+                </span>
+              </div>
+              <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                <article v-for="section in ruleStructure.sections" :key="section.type" class="rounded-2xl bg-canvas p-4">
+                  <div class="flex items-center justify-between gap-3">
+                    <h3 class="font-semibold">{{ section.label }}</h3>
+                    <span :class="section.present ? 'text-emerald-700' : 'text-amber-700'" class="text-xs font-semibold">{{ section.present ? '已找到' : '缺失' }}</span>
+                  </div>
+                  <p v-if="section.present" class="mt-2 text-xs text-ink/45">来源页：{{ section.pageNumbers.join('、') }}</p>
+                  <p v-else class="mt-2 text-sm leading-6 text-ink/50">规则书中暂未识别到该章节，生成讲解前需要补充证据。</p>
+                  <details v-if="section.present" class="mt-3">
+                    <summary class="cursor-pointer text-sm font-semibold text-indigo">展开证据</summary>
+                    <pre class="mt-3 max-h-44 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/65">{{ section.content }}</pre>
+                  </details>
+                </article>
+              </div>
+            </div>
             <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
               <p v-if="pages.length === 0" class="text-sm text-ink/45">尚未提取到页面文字。</p>
               <article v-for="page in pages" :key="page.pageNumber" class="rounded-2xl bg-canvas p-4">

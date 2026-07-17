@@ -50,6 +50,12 @@ class DocumentProcessingService implements DocumentProcessing {
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markChunking(UUID documentVersionId) {
+        transition(documentVersionId, ProcessingStatus.CHUNKING);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markFailed(UUID documentVersionId) {
         DocumentVersion version = requireVersion(documentVersionId);
         if (version.status().canTransitionTo(ProcessingStatus.FAILED)) {

@@ -19,14 +19,17 @@ public class UploadedDocumentIngestion {
     private final DocumentProcessing documents;
     private final PdfPageExtractor extractor;
     private final ProcessingProgressTracker progress;
+    private final RuleStructureService structures;
 
     public UploadedDocumentIngestion(
             DocumentProcessing documents,
             PdfPageExtractor extractor,
-            ProcessingProgressTracker progress) {
+            ProcessingProgressTracker progress,
+            RuleStructureService structures) {
         this.documents = documents;
         this.extractor = extractor;
         this.progress = progress;
+        this.structures = structures;
     }
 
     @Async("ingestionTaskExecutor")
@@ -41,9 +44,12 @@ public class UploadedDocumentIngestion {
             progress.update(event.documentVersionId(), "EXTRACTING", 65, pages.size(), false);
             documents.replacePages(event.documentVersionId(), pages);
             documents.markStructuring(event.documentVersionId());
-            progress.update(event.documentVersionId(), "STRUCTURING", 75, pages.size(), true);
+            progress.update(event.documentVersionId(), "STRUCTURING", 75, pages.size(), false);
+            structures.organize(event.documentVersionId(), pages);
+            documents.markChunking(event.documentVersionId());
+            progress.update(event.documentVersionId(), "CHUNKING", 85, pages.size(), true);
         } catch (RuntimeException exception) {
-            LOGGER.error("PDF extraction failed for documentVersionId={}", event.documentVersionId(), exception);
+            LOGGER.error("Rulebook ingestion failed for documentVersionId={}", event.documentVersionId(), exception);
             try {
                 documents.markFailed(event.documentVersionId());
                 progress.update(event.documentVersionId(), "FAILED", 100, 0, true);
