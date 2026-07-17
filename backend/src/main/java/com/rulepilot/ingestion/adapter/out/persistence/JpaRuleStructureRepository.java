@@ -25,17 +25,34 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
     @Override
     public void replace(UUID documentVersionId, List<DetectedRuleSection> sections) {
         entityManager
+                .createQuery("delete from RuleChunkEntity c where c.documentVersionId = :versionId")
+                .setParameter("versionId", documentVersionId)
+                .executeUpdate();
+        entityManager
                 .createQuery("delete from RuleStructureSectionEntity s where s.documentVersionId = :versionId")
                 .setParameter("versionId", documentVersionId)
                 .executeUpdate();
         Instant now = Instant.now();
-        sections.forEach(section -> entityManager.persist(new RuleStructureSectionEntity(
-                UUID.randomUUID(),
-                documentVersionId,
-                section.type().name(),
-                section.content(),
-                section.pageNumbers().stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")),
-                now)));
+        for (int index = 0; index < sections.size(); index++) {
+            var section = sections.get(index);
+            entityManager.persist(new RuleStructureSectionEntity(
+                    UUID.randomUUID(),
+                    documentVersionId,
+                    section.type().name(),
+                    section.content(),
+                    section.pageNumbers().stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")),
+                    now));
+            entityManager.persist(new RuleChunkEntity(
+                    UUID.randomUUID(),
+                    documentVersionId,
+                    section.type().name(),
+                    section.type().label(),
+                    section.content(),
+                    section.pageNumbers().getFirst(),
+                    section.pageNumbers().getLast(),
+                    index,
+                    now));
+        }
         entityManager.flush();
     }
 
@@ -50,6 +67,61 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
                 .stream()
                 .map(RuleStructureSectionEntity::toView)
                 .toList();
+    }
+}
+
+@Entity(name = "RuleChunkEntity")
+@Table(name = "rule_chunk")
+class RuleChunkEntity {
+
+    @Id
+    UUID id;
+
+    @Column(name = "document_version_id", nullable = false)
+    UUID documentVersionId;
+
+    @Column(name = "section_type", nullable = false)
+    String sectionType;
+
+    @Column(nullable = false)
+    String heading;
+
+    @Column(nullable = false, columnDefinition = "text")
+    String content;
+
+    @Column(name = "page_from", nullable = false)
+    int pageFrom;
+
+    @Column(name = "page_to", nullable = false)
+    int pageTo;
+
+    @Column(name = "chunk_index", nullable = false)
+    int chunkIndex;
+
+    @Column(name = "created_at", nullable = false)
+    Instant createdAt;
+
+    protected RuleChunkEntity() {}
+
+    RuleChunkEntity(
+            UUID id,
+            UUID documentVersionId,
+            String sectionType,
+            String heading,
+            String content,
+            int pageFrom,
+            int pageTo,
+            int chunkIndex,
+            Instant createdAt) {
+        this.id = id;
+        this.documentVersionId = documentVersionId;
+        this.sectionType = sectionType;
+        this.heading = heading;
+        this.content = content;
+        this.pageFrom = pageFrom;
+        this.pageTo = pageTo;
+        this.chunkIndex = chunkIndex;
+        this.createdAt = createdAt;
     }
 }
 
