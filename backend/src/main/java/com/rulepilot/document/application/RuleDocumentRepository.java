@@ -1,5 +1,6 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.RuleDocument;
@@ -18,6 +19,14 @@ public interface RuleDocumentRepository {
     int nextVersionNumber(UUID documentId);
 
     DocumentVersion save(DocumentVersion version);
+
+    Optional<DocumentVersion> findVersion(UUID versionId);
+
+    void update(DocumentVersion version);
+
+    void replacePages(UUID versionId, List<DocumentProcessing.ExtractedPage> pages);
+
+    List<DocumentProcessing.PageView> findPages(UUID versionId);
 
     List<DocumentSummary> findByEdition(UUID editionId);
 

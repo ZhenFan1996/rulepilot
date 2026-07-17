@@ -1,6 +1,7 @@
 package com.rulepilot.document.application;
 
 import com.rulepilot.catalog.CatalogEditionLookup;
+import com.rulepilot.document.DocumentUploaded;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.RuleDocument;
@@ -10,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,17 +23,20 @@ public class UploadRuleDocumentService {
     private final RuleDocumentStorageService storageService;
     private final DocumentStorage storage;
     private final RuleDocumentRepository repository;
+    private final ApplicationEventPublisher events;
     private final Clock clock = Clock.systemUTC();
 
     public UploadRuleDocumentService(
             CatalogEditionLookup catalog,
             RuleDocumentStorageService storageService,
             DocumentStorage storage,
-            RuleDocumentRepository repository) {
+            RuleDocumentRepository repository,
+            ApplicationEventPublisher events) {
         this.catalog = catalog;
         this.storageService = storageService;
         this.storage = storage;
         this.repository = repository;
+        this.events = events;
     }
 
     @Transactional
@@ -70,7 +75,9 @@ public class UploadRuleDocumentService {
                 stored.contentType(),
                 now);
         try {
-            return new UploadResult(document, repository.save(version), false);
+            DocumentVersion saved = repository.save(version);
+            events.publishEvent(new DocumentUploaded(saved.id()));
+            return new UploadResult(document, saved, false);
         } catch (RuntimeException exception) {
             storage.delete(stored.objectKey());
             throw exception;

@@ -45,6 +45,8 @@ const loading = ref(true)
 const uploading = ref(false)
 const message = ref('')
 const errorMessage = ref('')
+const previewVersionId = ref('')
+const pages = ref<Array<{ pageNumber: number; text: string; characterCount: number }>>([])
 
 const editionOptions = computed<EditionOption[]>(() =>
   games.value.flatMap((entry) =>
@@ -78,6 +80,18 @@ async function loadDocuments() {
   const response = await checkedFetch(`/api/v1/editions/${editionId.value}/documents`)
   if (!response.ok) throw new Error('无法读取该版本的规则资料。')
   documents.value = (await response.json()) as DocumentResponse[]
+}
+
+async function previewPages(versionId: string) {
+  errorMessage.value = ''
+  try {
+    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/pages`)
+    if (!response.ok) throw new Error('无法读取页级预览。')
+    pages.value = (await response.json()) as typeof pages.value
+    previewVersionId.value = versionId
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '无法读取页级预览。'
+  }
 }
 
 async function load() {
@@ -206,6 +220,17 @@ onMounted(load)
               <span class="rounded-full bg-indigo/10 px-3 py-1.5 text-xs font-semibold text-indigo">{{ entry.latestVersion.status }}</span>
             </div>
             <p class="mt-4 truncate font-mono text-xs text-ink/35" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
+            <button class="mt-4 text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewPages(entry.latestVersion.id)">查看页级文字</button>
+            <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
+              <p v-if="pages.length === 0" class="text-sm text-ink/45">尚未提取到页面文字。</p>
+              <article v-for="page in pages" :key="page.pageNumber" class="rounded-2xl bg-canvas p-4">
+                <div class="flex items-center justify-between text-xs font-semibold text-ink/45">
+                  <span>第 {{ page.pageNumber }} 页</span>
+                  <span>{{ page.characterCount }} 字符</span>
+                </div>
+                <pre class="mt-3 max-h-56 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/70">{{ page.text || '此页没有可提取文字，后续可进入 OCR。' }}</pre>
+              </article>
+            </div>
           </li>
         </ul>
       </section>

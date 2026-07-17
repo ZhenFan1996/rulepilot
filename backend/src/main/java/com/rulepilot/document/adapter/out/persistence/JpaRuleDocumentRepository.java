@@ -1,5 +1,6 @@
 package com.rulepilot.document.adapter.out.persistence;
 
+import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.application.RuleDocumentRepository;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
@@ -80,6 +81,47 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
         entityManager.persist(new DocumentVersionEntity(version));
         entityManager.flush();
         return version;
+    }
+
+    @Override
+    public Optional<DocumentVersion> findVersion(UUID versionId) {
+        return Optional.ofNullable(entityManager.find(DocumentVersionEntity.class, versionId))
+                .map(DocumentVersionEntity::toDomain);
+    }
+
+    @Override
+    public void update(DocumentVersion version) {
+        DocumentVersionEntity entity = entityManager.find(DocumentVersionEntity.class, version.id());
+        if (entity == null) {
+            throw new IllegalArgumentException("document version does not exist");
+        }
+        entity.processingStatus = version.status().name();
+        entityManager.flush();
+    }
+
+    @Override
+    public void replacePages(UUID versionId, List<DocumentProcessing.ExtractedPage> pages) {
+        entityManager
+                .createQuery("delete from DocumentPageEntity p where p.documentVersionId = :versionId")
+                .setParameter("versionId", versionId)
+                .executeUpdate();
+        Instant now = Instant.now();
+        pages.forEach(page -> entityManager.persist(new DocumentPageEntity(
+                UUID.randomUUID(), versionId, page.pageNumber(), page.text(), page.text().length(), now)));
+        entityManager.flush();
+    }
+
+    @Override
+    public List<DocumentProcessing.PageView> findPages(UUID versionId) {
+        return entityManager
+                .createQuery(
+                        "select p from DocumentPageEntity p where p.documentVersionId = :versionId order by p.pageNumber",
+                        DocumentPageEntity.class)
+                .setParameter("versionId", versionId)
+                .getResultList()
+                .stream()
+                .map(page -> new DocumentProcessing.PageView(page.pageNumber, page.textContent, page.characterCount))
+                .toList();
     }
 
     @Override
@@ -210,5 +252,45 @@ class DocumentVersionEntity {
                 contentType,
                 ProcessingStatus.valueOf(processingStatus),
                 createdAt);
+    }
+}
+
+@Entity(name = "DocumentPageEntity")
+@Table(name = "document_page")
+class DocumentPageEntity {
+
+    @Id
+    UUID id;
+
+    @Column(name = "document_version_id", nullable = false)
+    UUID documentVersionId;
+
+    @Column(name = "page_number", nullable = false)
+    int pageNumber;
+
+    @Column(name = "text_content", nullable = false, columnDefinition = "text")
+    String textContent;
+
+    @Column(name = "character_count", nullable = false)
+    int characterCount;
+
+    @Column(name = "created_at", nullable = false)
+    Instant createdAt;
+
+    protected DocumentPageEntity() {}
+
+    DocumentPageEntity(
+            UUID id,
+            UUID documentVersionId,
+            int pageNumber,
+            String textContent,
+            int characterCount,
+            Instant createdAt) {
+        this.id = id;
+        this.documentVersionId = documentVersionId;
+        this.pageNumber = pageNumber;
+        this.textContent = textContent;
+        this.characterCount = characterCount;
+        this.createdAt = createdAt;
     }
 }
