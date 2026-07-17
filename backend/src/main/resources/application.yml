@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: rulepilot
+  mvc:
+    problemdetails:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never

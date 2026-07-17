@@ -1,0 +1,64 @@
+#!/bin/sh
+
+set -eu
+
+BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROPERTIES_FILE="$BASE_DIR/.mvn/wrapper/maven-wrapper.properties"
+
+distribution_url=$(awk -F= '$1 == "distributionUrl" { print substr($0, index($0, "=") + 1) }' "$PROPERTIES_FILE")
+expected_sha512=$(awk -F= '$1 == "distributionSha512Sum" { print $2 }' "$PROPERTIES_FILE")
+maven_version=$(printf '%s' "$distribution_url" | sed -n 's#.*apache-maven-\([0-9][0-9.]*\)-bin.zip#\1#p')
+
+if [ -z "$distribution_url" ] || [ -z "$expected_sha512" ] || [ -z "$maven_version" ]; then
+	echo "Invalid Maven Wrapper properties: $PROPERTIES_FILE" >&2
+	exit 1
+fi
+
+maven_user_home=${MAVEN_USER_HOME:-${HOME:-.}/.m2}
+distribution_root="$maven_user_home/wrapper/dists/apache-maven-$maven_version"
+maven_home="$distribution_root/apache-maven-$maven_version"
+archive="$distribution_root/apache-maven-$maven_version-bin.zip"
+
+download_archive() {
+	if command -v curl >/dev/null 2>&1; then
+		curl --fail --location --silent --show-error "$distribution_url" --output "$archive"
+	elif command -v wget >/dev/null 2>&1; then
+		wget --quiet "$distribution_url" --output-document="$archive"
+	else
+		echo "Maven Wrapper requires curl or wget to download Maven." >&2
+		exit 1
+	fi
+}
+
+verify_archive() {
+	actual_sha512=""
+	if command -v shasum >/dev/null 2>&1; then
+		actual_sha512=$(shasum -a 512 "$archive" | awk '{print $1}')
+	elif command -v sha512sum >/dev/null 2>&1; then
+		actual_sha512=$(sha512sum "$archive" | awk '{print $1}')
+	else
+		echo "Maven Wrapper requires shasum or sha512sum to verify Maven." >&2
+		exit 1
+	fi
+
+	if [ "$actual_sha512" != "$expected_sha512" ]; then
+		echo "Maven distribution checksum verification failed." >&2
+		exit 1
+	fi
+}
+
+if [ ! -x "$maven_home/bin/mvn" ]; then
+	rm -rf "$distribution_root"
+	mkdir -p "$distribution_root"
+	[ -f "$archive" ] || download_archive
+	verify_archive
+	unzip -q "$archive" -d "$distribution_root"
+fi
+
+if [ ! -x "$maven_home/bin/mvn" ]; then
+	echo "Maven distribution was not installed at $maven_home." >&2
+	exit 1
+fi
+
+cd "$BASE_DIR"
+exec "$maven_home/bin/mvn" "$@"

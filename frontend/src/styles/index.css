@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Avenir Next", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Iowan Old Style", "Noto Serif SC", Georgia, serif;
+  --color-canvas: #f5f0e8;
+  --color-paper: #fffaf2;
+  --color-ink: #1a232a;
+  --color-ink-panel: #1a232a;
+  --color-panel-text: #f5f0e8;
+  --color-copper: #aa5b31;
+  --color-copper-dark: #8d4524;
+  --color-indigo: #4f5e9d;
+  --color-border: rgba(26, 35, 42, 0.12);
+}
+
+:root {
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  background: #f5f0e8;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --color-canvas: #12191e;
+  --color-paper: #1d272d;
+  --color-ink: #f4eee4;
+  --color-border: rgba(244, 238, 228, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    color-scheme: dark;
+    --color-canvas: #12191e;
+    --color-paper: #1d272d;
+    --color-ink: #f4eee4;
+    --color-border: rgba(244, 238, 228, 0.14);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: var(--color-canvas);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+}
+
+@layer components {
+  .eyebrow {
+    color: color-mix(in srgb, var(--color-copper) 85%, var(--color-ink));
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    line-height: 1.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

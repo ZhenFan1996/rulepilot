@@ -1,0 +1,39 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Java and Maven
+backend/target/
+*.class
+
+# Node and frontend build output
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/output/
+node_modules/
+dist/
+coverage/
+output/
+
+# Local runtime data and logs
+.local/
+local-data/
+uploads/
+*.log
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# Operating-system metadata
+.DS_Store
+._*
+Thumbs.db
+
+# Temporary files
+*.swp
+*.swo
+*.tmp

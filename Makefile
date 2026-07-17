@@ -1,0 +1,75 @@
+SHELL := /bin/sh
+
+.PHONY: help bootstrap dev format backend-test frontend-test integration-test e2e verify compose-up compose-down
+
+help: ## Show the available repository commands
+	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
+
+bootstrap: ## Validate the current repository foundation
+	@sh scripts/verify-foundation.sh
+
+dev: ## Start backend and frontend development servers
+	@set -e; \
+		trap 'kill 0' INT TERM EXIT; \
+		(cd backend && ./mvnw spring-boot:run) & \
+		(cd frontend && npm run dev -- --host 127.0.0.1) & \
+		wait
+
+format: ## Format backend and frontend sources (planned)
+	@echo "format is not available yet; formatter configuration is pending."
+	@exit 2
+
+backend-test: ## Run backend unit and application tests
+	@if [ -f backend/mvnw ]; then \
+		(cd backend && ./mvnw test); \
+	else \
+		echo "backend-test is not available yet; P0-02 is pending."; \
+		exit 2; \
+	fi
+
+frontend-test: ## Run frontend typecheck, lint, unit tests, and build
+	@if [ -f frontend/package.json ]; then \
+		(cd frontend && npm run verify); \
+	else \
+		echo "frontend-test is not available yet; P0-03 is pending."; \
+		exit 2; \
+	fi
+
+integration-test: ## Run Testcontainers integration tests (planned)
+	@echo "integration-test is not available yet; backend and infrastructure are pending."
+	@exit 2
+
+e2e: ## Run Playwright end-to-end tests (planned)
+	@echo "e2e is not available yet; the frontend and backend journeys are pending."
+	@exit 2
+
+verify: ## Verify repository structure, backend, and frontend
+	@sh scripts/verify-foundation.sh
+	@if [ -f backend/mvnw ]; then \
+		(cd backend && ./mvnw verify); \
+	else \
+		echo "backend verification is not available yet; P0-02 is pending."; \
+		exit 2; \
+	fi
+	@if [ -f frontend/package.json ]; then \
+		(cd frontend && npm run verify); \
+	else \
+		echo "frontend verification is not available yet; P0-03 is pending."; \
+		exit 2; \
+	fi
+
+compose-up: ## Start local PostgreSQL, Redis, RabbitMQ, and MinIO (planned)
+	@if [ -f infra/compose.yml ]; then \
+		docker compose -f infra/compose.yml up -d; \
+	else \
+		echo "compose-up is not available yet; P0-04 is pending."; \
+		exit 2; \
+	fi
+
+compose-down: ## Stop local infrastructure services (planned)
+	@if [ -f infra/compose.yml ]; then \
+		docker compose -f infra/compose.yml down; \
+	else \
+		echo "compose-down is not available yet; P0-04 is pending."; \
+		exit 2; \
+	fi
