@@ -46,6 +46,13 @@ management:
       show-details: never
 
 rulepilot:
+  storage:
+    minio:
+      endpoint: http://${MINIO_HOST:localhost}:${MINIO_PORT:9000}
+      access-key: ${MINIO_ACCESS_KEY:rulepilot}
+      secret-key: ${MINIO_SECRET_KEY:change-me-local-only}
+      bucket: ${MINIO_BUCKET:rulepilot-documents}
+      max-pdf-bytes: ${MAX_PDF_BYTES:52428800}
   identity:
     user:
       username: ${RULEPILOT_USER_USERNAME:player}
