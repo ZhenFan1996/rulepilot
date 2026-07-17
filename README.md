@@ -84,6 +84,18 @@ RulePilot 是一个面向桌游规则书的多媒体规则讲解应用。项目�
 cp .env.example .env
 ```
 
+启动 PostgreSQL（含 pgvector）、Redis、RabbitMQ 和 MinIO：
+
+```sh
+make compose-up
+```
+
+该命令会等待所有依赖通过健康检查，并验证 pgvector、服务连接和持久化卷。停止服务时保留本地数据：
+
+```sh
+make compose-down
+```
+
 同时启动后端和前端：
 
 ```sh
@@ -107,6 +119,10 @@ npm run dev
 
 - 前端：http://127.0.0.1:5173
 - 后端健康检查：http://127.0.0.1:8080/actuator/health
+- PostgreSQL：127.0.0.1:5432
+- Redis：127.0.0.1:6379
+- RabbitMQ：127.0.0.1:5672（管理界面：http://127.0.0.1:15672）
+- MinIO：http://127.0.0.1:9000（控制台：http://127.0.0.1:9001）
 
 ## 常用命令
 
@@ -115,6 +131,8 @@ make help
 make bootstrap
 make backend-test
 make frontend-test
+make compose-up
+make compose-down
 make verify
 ```
 

@@ -43,8 +43,9 @@ e2e: ## Run Playwright end-to-end tests (planned)
 	@echo "e2e is not available yet; the frontend and backend journeys are pending."
 	@exit 2
 
-verify: ## Verify repository structure, backend, and frontend
+verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-foundation.sh
+	@sh scripts/verify-compose.sh config
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \
@@ -58,18 +59,8 @@ verify: ## Verify repository structure, backend, and frontend
 		exit 2; \
 	fi
 
-compose-up: ## Start local PostgreSQL, Redis, RabbitMQ, and MinIO (planned)
-	@if [ -f infra/compose.yml ]; then \
-		docker compose -f infra/compose.yml up -d; \
-	else \
-		echo "compose-up is not available yet; P0-04 is pending."; \
-		exit 2; \
-	fi
+compose-up: ## Start and verify local PostgreSQL, Redis, RabbitMQ, and MinIO
+	@sh scripts/verify-compose.sh up
 
-compose-down: ## Stop local infrastructure services (planned)
-	@if [ -f infra/compose.yml ]; then \
-		docker compose -f infra/compose.yml down; \
-	else \
-		echo "compose-down is not available yet; P0-04 is pending."; \
-		exit 2; \
-	fi
+compose-down: ## Stop local infrastructure services and retain their data
+	@sh scripts/verify-compose.sh down
