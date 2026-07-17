@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import HomeView from './HomeView.vue'
 
 describe('HomeView', () => {
-  it('presents the three core table-side actions', () => {
+  it('prioritizes rulebook import and guided teaching before questions', () => {
     const wrapper = mount(HomeView, {
       global: {
         stubs: {
@@ -15,9 +15,10 @@ describe('HomeView', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('开始讲解')
-    expect(wrapper.text()).toContain('快速查规则')
-    expect(wrapper.text()).toContain('了解实时桌局')
+    expect(wrapper.text()).toContain('导入规则书')
+    expect(wrapper.text()).toContain('查看讲解流程')
+    expect(wrapper.text()).toContain('讲解后继续答疑')
+    expect(wrapper.text()).toContain('结束条件与计分')
   })
 
   it('updates the accessible theme toggle label', async () => {
