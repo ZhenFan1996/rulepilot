@@ -71,6 +71,33 @@ interface SpeechCue {
   endMillis: number
 }
 
+interface ChapterVideo {
+  id: string
+  status: 'READY' | 'INCOMPLETE'
+  durationMillis: number
+  chapters: VideoChapter[]
+}
+
+interface VideoChapter {
+  position: number
+  type: string
+  title: string
+  evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
+  visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
+  visualCaption: string
+  startMillis: number
+  endMillis: number
+  frames: Array<{
+    segmentPosition: number
+    startMillis: number
+    endMillis: number
+    subtitle: string
+    sourcePages: number[]
+  }>
+}
+
+type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
@@ -80,6 +107,8 @@ const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const quality = ref<LessonQualityReport | null>(null)
 const narration = ref<NarrationScript | null>(null)
+const video = ref<ChapterVideo | null>(null)
+const mediaMode = ref<MediaMode>('TEXT')
 const narrationPlayer = ref<HTMLAudioElement | null>(null)
 const narrationProvider = ref('')
 const narrationDurationMillis = ref(0)
@@ -93,12 +122,22 @@ const progress = ref<LessonProgress>(initialLessonProgress())
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
+const currentVideoChapter = computed(() => video.value?.chapters[progress.value.currentIndex] ?? null)
 const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
 const activeCue = computed(() =>
   narrationCues.value.find(
     (cue) => narrationMillis.value >= cue.startMillis && narrationMillis.value < cue.endMillis,
   ),
 )
+const activeVideoFrame = computed(() => {
+  const chapter = currentVideoChapter.value
+  if (!chapter) return null
+  return (
+    chapter.frames.find(
+      (frame) => narrationMillis.value >= frame.startMillis && narrationMillis.value < frame.endMillis,
+    ) ?? chapter.frames[0] ?? null
+  )
+})
 const completedCount = computed(() => new Set([...progress.value.completed, ...progress.value.skipped]).size)
 const progressPercent = computed(() =>
   lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
@@ -128,22 +167,30 @@ async function loadLesson() {
     }
   }
   try {
-    const [planResponse, lessonResponse, qualityResponse, narrationResponse] = await Promise.all([
+    const [planResponse, lessonResponse, qualityResponse, narrationResponse, videoResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/video`, { credentials: 'include' }),
     ])
     if (
       planResponse.status === 401 ||
       lessonResponse.status === 401 ||
       qualityResponse.status === 401 ||
-      narrationResponse.status === 401
+      narrationResponse.status === 401 ||
+      videoResponse.status === 401
     ) {
       await router.push({ name: 'login' })
       return
     }
-    if (!planResponse.ok || !lessonResponse.ok || !qualityResponse.ok || !narrationResponse.ok) {
+    if (
+      !planResponse.ok ||
+      !lessonResponse.ok ||
+      !qualityResponse.ok ||
+      !narrationResponse.ok ||
+      !videoResponse.ok
+    ) {
       throw new Error('无法读取这份讲解，请重新生成。')
     }
     plan.value = (await planResponse.json()) as TeachingPlan
@@ -154,6 +201,7 @@ async function loadLesson() {
     narrationProvider.value = playback.provider
     narrationDurationMillis.value = playback.durationMillis
     narrationCues.value = playback.cues
+    video.value = (await videoResponse.json()) as ChapterVideo
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = restoreLessonProgress(
       localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
@@ -223,6 +271,11 @@ function onNarrationTimeUpdate() {
   const player = narrationPlayer.value
   if (!player || narrationRestoreTarget.value !== null) return
   narrationMillis.value = Math.round(player.currentTime * 1_000)
+  const cue = activeCue.value
+  if (mediaMode.value === 'VIDEO' && cue && progress.value.currentIndex !== cue.chapterPosition - 1) {
+    progress.value = { ...progress.value, currentIndex: cue.chapterPosition - 1 }
+    saveProgress()
+  }
   if (narrationPlaying.value) saveNarrationPosition()
 }
 
@@ -304,6 +357,11 @@ function formatDuration(millis: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
+function selectMediaMode(mode: MediaMode) {
+  mediaMode.value = mode
+  if (mode === 'TEXT') narrationPlayer.value?.pause()
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'ArrowLeft') previousSection()
   if (event.key === 'ArrowRight') finish('completed')
@@ -380,6 +438,18 @@ onUnmounted(() => {
             </li>
           </ul>
         </details>
+        <div class="mt-4 grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1" aria-label="讲解形式">
+          <button
+            v-for="mode in ([['TEXT', '图文'], ['AUDIO', '语音'], ['VIDEO', '视频']] as const)"
+            :key="mode[0]"
+            class="min-h-10 rounded-xl px-2 text-xs font-semibold transition"
+            :class="mediaMode === mode[0] ? 'bg-ink-panel text-panel-text' : 'text-ink/55 hover:text-ink'"
+            :aria-pressed="mediaMode === mode[0]"
+            @click="selectMediaMode(mode[0])"
+          >
+            {{ mode[1] }}
+          </button>
+        </div>
         <ol class="mt-5 flex max-w-full gap-2 overflow-x-auto pb-2 lg:block lg:space-y-2 lg:overflow-visible">
           <li v-for="(section, index) in lesson.sections" :key="section.type" class="shrink-0 lg:shrink">
             <button
@@ -403,7 +473,61 @@ onUnmounted(() => {
             <span v-else class="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">有规则书依据</span>
           </div>
 
-          <div class="mt-7 rounded-3xl bg-indigo/8 p-5">
+          <audio
+            ref="narrationPlayer"
+            class="hidden"
+            preload="metadata"
+            :src="narrationAudioUrl"
+            @loadedmetadata="onNarrationLoaded"
+            @seeked="onNarrationSeeked"
+            @timeupdate="onNarrationTimeUpdate"
+            @play="narrationPlaying = true"
+            @pause="onNarrationPaused"
+            @ended="narrationPlaying = false"
+          >浏览器不支持音频播放。</audio>
+
+          <section v-if="mediaMode === 'VIDEO' && currentVideoChapter && activeVideoFrame" class="mt-7" aria-label="分章节视频">
+            <div class="relative aspect-[4/3] overflow-hidden rounded-3xl bg-ink-panel text-panel-text shadow-xl sm:aspect-video">
+              <div class="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(199,111,57,0.35),transparent_35%),radial-gradient(circle_at_80%_75%,rgba(84,91,157,0.4),transparent_38%)]" />
+              <div class="relative flex h-full flex-col justify-between p-5 sm:p-8">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-panel-text/55">{{ currentVideoChapter.visualKind.replaceAll('_', ' ') }}</p>
+                    <h3 class="mt-2 font-display text-2xl font-semibold sm:text-4xl">{{ currentVideoChapter.title }}</h3>
+                  </div>
+                  <span class="rounded-full border border-panel-text/20 px-3 py-1 text-xs">第 {{ currentVideoChapter.position }} 章</span>
+                </div>
+                <div class="mx-auto flex w-full max-w-md items-center justify-center gap-3" aria-hidden="true">
+                  <span v-for="frame in Math.min(currentVideoChapter.frames.length, 5)" :key="frame" class="grid size-12 place-items-center rounded-2xl border border-panel-text/25 bg-panel-text/8 font-display text-lg font-semibold">{{ frame }}</span>
+                </div>
+                <div>
+                  <p class="rounded-2xl bg-black/35 px-4 py-3 text-center text-sm leading-6 sm:text-base">{{ activeVideoFrame.subtitle }}</p>
+                  <p v-if="activeVideoFrame.sourcePages.length" class="mt-2 text-center text-xs text-panel-text/60">规则书第 {{ activeVideoFrame.sourcePages.join('、') }} 页</p>
+                </div>
+              </div>
+            </div>
+            <p class="mt-3 text-sm text-ink/55">{{ currentVideoChapter.visualCaption }}</p>
+            <input class="mt-4 w-full accent-copper" type="range" min="0" :max="video?.durationMillis ?? 0" :value="narrationMillis" aria-label="视频播放位置" @input="seekNarration">
+            <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45"><span>{{ formatDuration(narrationMillis) }}</span><span>{{ formatDuration(video?.durationMillis ?? 0) }}</span></div>
+            <div class="mt-3 grid grid-cols-3 gap-2">
+              <button class="min-h-11 rounded-xl bg-copper px-3 text-sm font-semibold text-white" @click="toggleNarration">{{ narrationPlaying ? '暂停视频' : '播放视频' }}</button>
+              <button class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="replayCurrentSegment">重播画面</button>
+              <button class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="cycleNarrationRate">{{ narrationRate }}×</button>
+            </div>
+            <nav class="mt-4 flex gap-2 overflow-x-auto pb-2" aria-label="视频章节跳转">
+              <button
+                v-for="(chapter, index) in video?.chapters"
+                :key="chapter.position"
+                class="shrink-0 rounded-full border px-3 py-2 text-xs font-semibold"
+                :class="index === progress.currentIndex ? 'border-copper bg-copper/10 text-copper' : 'border-ink/10 text-ink/50'"
+                @click="selectSection(index)"
+              >
+                {{ chapter.position }}. {{ chapter.title }}
+              </button>
+            </nav>
+          </section>
+
+          <div v-if="mediaMode !== 'VIDEO'" class="mt-7 rounded-3xl bg-indigo/8 p-5">
             <p class="text-xs font-semibold uppercase tracking-[0.18em] text-indigo">{{ currentSection.visualKind.replaceAll('_', ' ') }}</p>
             <div class="my-6 flex items-center gap-2" aria-hidden="true">
               <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
@@ -412,7 +536,7 @@ onUnmounted(() => {
             <p class="text-sm text-ink/60">{{ currentSection.visualCaption }}</p>
           </div>
 
-          <ol class="mt-7 space-y-5">
+          <ol v-if="mediaMode !== 'VIDEO'" class="mt-7 space-y-5">
             <li v-for="step in currentSection.steps" :key="step.position" class="rounded-2xl border border-ink/8 p-4 sm:p-5">
               <p class="text-base leading-8 text-ink/75">{{ step.text }}</p>
               <details v-if="step.sourcePages.length" class="mt-3">
@@ -422,7 +546,7 @@ onUnmounted(() => {
             </li>
           </ol>
 
-          <details v-if="currentNarration" class="mt-7 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 sm:p-5">
+          <details v-if="currentNarration" v-show="mediaMode === 'AUDIO'" open class="mt-7 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 sm:p-5">
             <summary class="cursor-pointer list-none font-semibold text-indigo">
               <span class="flex items-center justify-between gap-3">
                 <span>本节解说稿</span>
@@ -443,18 +567,6 @@ onUnmounted(() => {
             </ol>
             <div class="mt-5 border-t border-indigo/10 pt-4">
               <p class="text-xs leading-5 text-ink/50">当前为 {{ narrationProvider }} 媒体管线测试音轨（非语音）；字幕和音轨共用同一份已验证稿件。</p>
-              <audio
-                ref="narrationPlayer"
-                class="hidden"
-                preload="metadata"
-                :src="narrationAudioUrl"
-                @loadedmetadata="onNarrationLoaded"
-                @seeked="onNarrationSeeked"
-                @timeupdate="onNarrationTimeUpdate"
-                @play="narrationPlaying = true"
-                @pause="onNarrationPaused"
-                @ended="narrationPlaying = false"
-              >浏览器不支持音频播放。</audio>
               <input
                 class="mt-4 w-full accent-copper"
                 type="range"
