@@ -45,6 +45,18 @@ interface LessonQualityReport {
   }>
 }
 
+interface NarrationScript {
+  id: string
+  status: 'READY' | 'INCOMPLETE'
+  chapters: Array<{
+    position: number
+    type: string
+    title: string
+    supported: boolean
+    segments: Array<{ position: number; text: string; sourcePages: number[] }>
+  }>
+}
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
@@ -53,10 +65,13 @@ const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const quality = ref<LessonQualityReport | null>(null)
+const narration = ref<NarrationScript | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
+const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
 const completedCount = computed(() => new Set([...progress.value.completed, ...progress.value.skipped]).size)
 const progressPercent = computed(() =>
   lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
@@ -86,19 +101,28 @@ async function loadLesson() {
     }
   }
   try {
-    const [planResponse, lessonResponse, qualityResponse] = await Promise.all([
+    const [planResponse, lessonResponse, qualityResponse, narrationResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/narration/script`, { credentials: 'include' }),
     ])
-    if (planResponse.status === 401 || lessonResponse.status === 401 || qualityResponse.status === 401) {
+    if (
+      planResponse.status === 401 ||
+      lessonResponse.status === 401 ||
+      qualityResponse.status === 401 ||
+      narrationResponse.status === 401
+    ) {
       await router.push({ name: 'login' })
       return
     }
-    if (!planResponse.ok || !lessonResponse.ok || !qualityResponse.ok) throw new Error('无法读取这份讲解，请重新生成。')
+    if (!planResponse.ok || !lessonResponse.ok || !qualityResponse.ok || !narrationResponse.ok) {
+      throw new Error('无法读取这份讲解，请重新生成。')
+    }
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
     quality.value = (await qualityResponse.json()) as LessonQualityReport
+    narration.value = (await narrationResponse.json()) as NarrationScript
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = restoreLessonProgress(
       localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
@@ -249,6 +273,25 @@ onUnmounted(() => {
               </details>
             </li>
           </ol>
+
+          <details v-if="currentNarration" class="mt-7 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 sm:p-5">
+            <summary class="cursor-pointer list-none font-semibold text-indigo">
+              <span class="flex items-center justify-between gap-3">
+                <span>本节解说稿</span>
+                <span class="text-xs">{{ currentNarration.supported ? '引用已保留' : '证据不足，跳过讲解' }}</span>
+              </span>
+            </summary>
+            <ol class="mt-4 space-y-3 border-t border-indigo/10 pt-4">
+              <li v-for="segment in currentNarration.segments" :key="segment.position" class="text-sm leading-7 text-ink/70">
+                <p>{{ segment.text }}</p>
+                <p v-if="segment.sourcePages.length" class="mt-1 text-xs font-semibold text-indigo">规则书第 {{ segment.sourcePages.join('、') }} 页</p>
+              </li>
+            </ol>
+            <div class="mt-5 border-t border-indigo/10 pt-4">
+              <p class="text-xs leading-5 text-ink/50">当前为本地媒体管线测试音轨（非语音）；后续语音 Provider 会复用上方同一份已验证稿件。</p>
+              <audio class="mt-3 h-10 w-full" controls preload="none" :src="narrationAudioUrl">浏览器不支持音频播放。</audio>
+            </div>
+          </details>
 
           <div v-if="progress.paused" class="mt-7 rounded-2xl border border-copper/25 bg-copper/8 p-4 text-sm font-semibold" role="status">讲解已暂停。继续后才能完成或跳过当前章节。</div>
         </div>

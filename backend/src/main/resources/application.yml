@@ -50,6 +50,8 @@ management:
       show-details: never
 
 rulepilot:
+  speech:
+    provider: ${SPEECH_PROVIDER:fake}
   storage:
     minio:
       endpoint: http://${MINIO_HOST:localhost}:${MINIO_PORT:9000}
