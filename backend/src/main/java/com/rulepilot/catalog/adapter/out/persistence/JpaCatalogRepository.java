@@ -1,0 +1,236 @@
+package com.rulepilot.catalog.adapter.out.persistence;
+
+import com.rulepilot.catalog.application.CatalogRepository;
+import com.rulepilot.catalog.domain.Expansion;
+import com.rulepilot.catalog.domain.Game;
+import com.rulepilot.catalog.domain.GameEdition;
+import jakarta.persistence.Column;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.EmbeddedId;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Id;
+import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.Table;
+import java.io.Serializable;
+import java.time.Instant;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Repository;
+
+@Repository
+@Profile("!test")
+public class JpaCatalogRepository implements CatalogRepository {
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Override
+    public Game save(Game game) {
+        entityManager.persist(new GameEntity(game));
+        entityManager.flush();
+        return game;
+    }
+
+    @Override
+    public GameEdition save(GameEdition edition) {
+        entityManager.persist(new GameEditionEntity(edition));
+        entityManager.flush();
+        return edition;
+    }
+
+    @Override
+    public Expansion save(Expansion expansion) {
+        entityManager.persist(new ExpansionEntity(expansion));
+        expansion.compatibleEditionIds().forEach(editionId -> entityManager.persist(
+                new EditionExpansionEntity(new EditionExpansionId(editionId, expansion.id()))));
+        entityManager.flush();
+        return expansion;
+    }
+
+    @Override
+    public Optional<Game> findGame(UUID gameId) {
+        GameEntity entity = entityManager.find(GameEntity.class, gameId);
+        return Optional.ofNullable(entity).map(GameEntity::toDomain);
+    }
+
+    @Override
+    public List<Game> findGames() {
+        return entityManager.createQuery("select game from CatalogGameEntity game order by game.name", GameEntity.class)
+                .getResultStream()
+                .map(GameEntity::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<GameEdition> findEditions(UUID gameId) {
+        return entityManager.createQuery(
+                        "select edition from CatalogGameEditionEntity edition where edition.gameId = :gameId order by edition.name",
+                        GameEditionEntity.class)
+                .setParameter("gameId", gameId)
+                .getResultStream()
+                .map(GameEditionEntity::toDomain)
+                .toList();
+    }
+
+    @Override
+    public List<Expansion> findExpansions(UUID gameId) {
+        return entityManager.createQuery(
+                        "select expansion from CatalogExpansionEntity expansion where expansion.gameId = :gameId order by expansion.name",
+                        ExpansionEntity.class)
+                .setParameter("gameId", gameId)
+                .getResultStream()
+                .map(entity -> entity.toDomain(findCompatibleEditionIds(entity.id)))
+                .toList();
+    }
+
+    private Set<UUID> findCompatibleEditionIds(UUID expansionId) {
+        return new LinkedHashSet<>(entityManager.createQuery(
+                        "select compatibility.id.editionId from CatalogEditionExpansionEntity compatibility "
+                                + "where compatibility.id.expansionId = :expansionId",
+                        UUID.class)
+                .setParameter("expansionId", expansionId)
+                .getResultList());
+    }
+}
+
+@Entity(name = "CatalogGameEntity")
+@Table(name = "game")
+class GameEntity {
+
+    @Id
+    UUID id;
+
+    @Column(nullable = false, length = 120)
+    String name;
+
+    @Column(name = "created_at", nullable = false)
+    Instant createdAt;
+
+    protected GameEntity() {}
+
+    GameEntity(Game game) {
+        id = game.id();
+        name = game.name();
+        createdAt = game.createdAt();
+    }
+
+    Game toDomain() {
+        return new Game(id, name, createdAt);
+    }
+}
+
+@Entity(name = "CatalogGameEditionEntity")
+@Table(name = "game_edition")
+class GameEditionEntity {
+
+    @Id
+    UUID id;
+
+    @Column(name = "game_id", nullable = false)
+    UUID gameId;
+
+    @Column(nullable = false, length = 120)
+    String name;
+
+    @Column(nullable = false, length = 20)
+    String language;
+
+    @Column(name = "publication_year")
+    Integer publicationYear;
+
+    @Column(name = "created_at", nullable = false)
+    Instant createdAt;
+
+    protected GameEditionEntity() {}
+
+    GameEditionEntity(GameEdition edition) {
+        id = edition.id();
+        gameId = edition.gameId();
+        name = edition.name();
+        language = edition.language();
+        publicationYear = edition.publicationYear();
+        createdAt = edition.createdAt();
+    }
+
+    GameEdition toDomain() {
+        return new GameEdition(id, gameId, name, language, publicationYear, createdAt);
+    }
+}
+
+@Entity(name = "CatalogExpansionEntity")
+@Table(name = "expansion")
+class ExpansionEntity {
+
+    @Id
+    UUID id;
+
+    @Column(name = "game_id", nullable = false)
+    UUID gameId;
+
+    @Column(nullable = false, length = 120)
+    String name;
+
+    @Column(name = "created_at", nullable = false)
+    Instant createdAt;
+
+    protected ExpansionEntity() {}
+
+    ExpansionEntity(Expansion expansion) {
+        id = expansion.id();
+        gameId = expansion.gameId();
+        name = expansion.name();
+        createdAt = expansion.createdAt();
+    }
+
+    Expansion toDomain(Set<UUID> editionIds) {
+        return new Expansion(id, gameId, name, editionIds, createdAt);
+    }
+}
+
+@Entity(name = "CatalogEditionExpansionEntity")
+@Table(name = "edition_expansion")
+class EditionExpansionEntity {
+
+    @EmbeddedId
+    EditionExpansionId id;
+
+    protected EditionExpansionEntity() {}
+
+    EditionExpansionEntity(EditionExpansionId id) {
+        this.id = id;
+    }
+}
+
+@Embeddable
+class EditionExpansionId implements Serializable {
+
+    @Column(name = "edition_id", nullable = false)
+    UUID editionId;
+
+    @Column(name = "expansion_id", nullable = false)
+    UUID expansionId;
+
+    protected EditionExpansionId() {}
+
+    EditionExpansionId(UUID editionId, UUID expansionId) {
+        this.editionId = editionId;
+        this.expansionId = expansionId;
+    }
+
+    @Override
+    public boolean equals(Object candidate) {
+        return candidate instanceof EditionExpansionId other
+                && editionId.equals(other.editionId)
+                && expansionId.equals(other.expansionId);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * editionId.hashCode() + expansionId.hashCode();
+    }
+}
