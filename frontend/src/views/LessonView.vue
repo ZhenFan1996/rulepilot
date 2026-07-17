@@ -34,6 +34,17 @@ interface LessonSection {
   steps: Array<{ position: number; text: string; sourcePages: number[] }>
 }
 
+interface LessonQualityReport {
+  status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED'
+  score: number
+  checks: Array<{
+    type: string
+    status: 'PASS' | 'FAIL' | 'NOT_EVALUATED'
+    summary: string
+    detail: string
+  }>
+}
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
@@ -41,6 +52,7 @@ const errorMessage = ref('')
 const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
+const quality = ref<LessonQualityReport | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
 
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -74,17 +86,19 @@ async function loadLesson() {
     }
   }
   try {
-    const [planResponse, lessonResponse] = await Promise.all([
+    const [planResponse, lessonResponse, qualityResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
     ])
-    if (planResponse.status === 401 || lessonResponse.status === 401) {
+    if (planResponse.status === 401 || lessonResponse.status === 401 || qualityResponse.status === 401) {
       await router.push({ name: 'login' })
       return
     }
-    if (!planResponse.ok || !lessonResponse.ok) throw new Error('无法读取这份讲解，请重新生成。')
+    if (!planResponse.ok || !lessonResponse.ok || !qualityResponse.ok) throw new Error('无法读取这份讲解，请重新生成。')
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
+    quality.value = (await qualityResponse.json()) as LessonQualityReport
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = restoreLessonProgress(
       localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
@@ -180,6 +194,20 @@ onUnmounted(() => {
           <div><p class="eyebrow">GUIDED LESSON</p><h1 class="mt-2 font-display text-2xl font-semibold">完整规则讲解</h1></div>
           <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
         </div>
+        <details v-if="quality" class="mt-4 rounded-2xl border border-ink/10 bg-paper/70 p-3">
+          <summary class="cursor-pointer list-none text-sm font-semibold">
+            <span class="flex items-center justify-between gap-3">
+              <span>讲解质量 {{ quality.score }} 分</span>
+              <span :class="quality.status === 'READY' ? 'text-emerald-700' : quality.status === 'BLOCKED' ? 'text-red-700' : 'text-amber-700'">{{ quality.status === 'READY' ? '可交付' : quality.status === 'BLOCKED' ? '有阻塞项' : '需要复核' }}</span>
+            </span>
+          </summary>
+          <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
+            <li v-for="check in quality.checks" :key="check.type" class="text-xs leading-5">
+              <p class="font-semibold"><span aria-hidden="true">{{ check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '×' : '?' }}</span> {{ check.summary }}</p>
+              <p class="mt-0.5 text-ink/50">{{ check.detail }}</p>
+            </li>
+          </ul>
+        </details>
         <ol class="mt-5 flex max-w-full gap-2 overflow-x-auto pb-2 lg:block lg:space-y-2 lg:overflow-visible">
           <li v-for="(section, index) in lesson.sections" :key="section.type" class="shrink-0 lg:shrink">
             <button
