@@ -5,6 +5,7 @@
 
 # Java and Maven
 backend/target/
+build/
 *.class
 
 # Node and frontend build output
