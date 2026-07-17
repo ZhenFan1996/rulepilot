@@ -35,17 +35,21 @@ frontend-test: ## Run frontend typecheck, lint, unit tests, and build
 		exit 2; \
 	fi
 
-integration-test: ## Run Testcontainers integration tests (planned)
-	@echo "integration-test is not available yet; backend and infrastructure are pending."
-	@exit 2
+integration-test: ## Run local infrastructure integration smoke tests
+	@sh scripts/run-integration-tests.sh
 
-e2e: ## Run Playwright end-to-end tests (planned)
-	@echo "e2e is not available yet; the frontend and backend journeys are pending."
-	@exit 2
+e2e: ## Run Playwright end-to-end tests
+	@if [ -f frontend/package.json ]; then \
+		(cd frontend && npm run test:e2e); \
+	else \
+		echo "e2e is not available; the frontend project is missing."; \
+		exit 2; \
+	fi
 
 verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-foundation.sh
 	@sh scripts/verify-compose.sh config
+	@sh scripts/verify-architecture.sh
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \

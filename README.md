@@ -131,6 +131,8 @@ make help
 make bootstrap
 make backend-test
 make frontend-test
+make integration-test
+make e2e
 make compose-up
 make compose-down
 make verify
