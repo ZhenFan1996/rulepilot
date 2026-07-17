@@ -78,6 +78,17 @@ interface ChapterVideo {
   chapters: VideoChapter[]
 }
 
+interface MediaConsistencyReport {
+  status: 'CONSISTENT' | 'INCONSISTENT'
+  consistencyPercent: number
+  checks: Array<{
+    type: string
+    status: 'PASS' | 'FAIL'
+    summary: string
+    detail: string
+  }>
+}
+
 interface VideoChapter {
   position: number
   type: string
@@ -108,6 +119,9 @@ const lesson = ref<IllustratedLesson | null>(null)
 const quality = ref<LessonQualityReport | null>(null)
 const narration = ref<NarrationScript | null>(null)
 const video = ref<ChapterVideo | null>(null)
+const mediaConsistency = ref<MediaConsistencyReport | null>(null)
+const mediaWarnings = ref<string[]>([])
+const audioAvailable = ref(false)
 const mediaMode = ref<MediaMode>('TEXT')
 const narrationPlayer = ref<HTMLAudioElement | null>(null)
 const narrationProvider = ref('')
@@ -152,9 +166,30 @@ function saveProgress() {
   if (key) localStorage.setItem(key, JSON.stringify(progress.value))
 }
 
+async function optionalFetch(url: string) {
+  try {
+    return await fetch(url, { credentials: 'include' })
+  } catch {
+    return null
+  }
+}
+
+function addMediaWarning(message: string) {
+  if (!mediaWarnings.value.includes(message)) mediaWarnings.value.push(message)
+}
+
 async function loadLesson() {
   loading.value = true
   errorMessage.value = ''
+  narration.value = null
+  video.value = null
+  mediaConsistency.value = null
+  mediaWarnings.value = []
+  audioAvailable.value = false
+  narrationProvider.value = ''
+  narrationDurationMillis.value = 0
+  narrationCues.value = []
+  narrationMillis.value = 0
   let targetPlanId = planId.value
   if (!targetPlanId) {
     const remembered = localStorage.getItem('rulepilot:last-plan-id')
@@ -167,19 +202,18 @@ async function loadLesson() {
     }
   }
   try {
-    const [planResponse, lessonResponse, qualityResponse, narrationResponse, videoResponse] = await Promise.all([
+    const [planResponse, lessonResponse, qualityResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/video`, { credentials: 'include' }),
+      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`),
+      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
+      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
     ])
     if (
       planResponse.status === 401 ||
       lessonResponse.status === 401 ||
-      qualityResponse.status === 401 ||
-      narrationResponse.status === 401 ||
-      videoResponse.status === 401
+      qualityResponse.status === 401
     ) {
       await router.push({ name: 'login' })
       return
@@ -187,21 +221,31 @@ async function loadLesson() {
     if (
       !planResponse.ok ||
       !lessonResponse.ok ||
-      !qualityResponse.ok ||
-      !narrationResponse.ok ||
-      !videoResponse.ok
+      !qualityResponse.ok
     ) {
       throw new Error('无法读取这份讲解，请重新生成。')
     }
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
     quality.value = (await qualityResponse.json()) as LessonQualityReport
-    const playback = (await narrationResponse.json()) as NarrationPlayback
-    narration.value = playback.script
-    narrationProvider.value = playback.provider
-    narrationDurationMillis.value = playback.durationMillis
-    narrationCues.value = playback.cues
-    video.value = (await videoResponse.json()) as ChapterVideo
+    if (narrationResponse?.ok) {
+      const playback = (await narrationResponse.json()) as NarrationPlayback
+      narration.value = playback.script
+      narrationProvider.value = playback.provider
+      narrationDurationMillis.value = playback.durationMillis
+      narrationCues.value = playback.cues
+      audioAvailable.value = true
+    } else {
+      addMediaWarning('语音暂不可用，已保留完整图文讲解。')
+    }
+    if (videoResponse?.ok) {
+      video.value = (await videoResponse.json()) as ChapterVideo
+    } else {
+      addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
+    }
+    if (consistencyResponse?.ok) {
+      mediaConsistency.value = (await consistencyResponse.json()) as MediaConsistencyReport
+    }
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = restoreLessonProgress(
       localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
@@ -297,9 +341,16 @@ function onNarrationPaused() {
   narrationPlaying.value = false
 }
 
+function onNarrationError() {
+  audioAvailable.value = false
+  narrationPlayer.value?.pause()
+  if (mediaMode.value === 'AUDIO') mediaMode.value = 'TEXT'
+  addMediaWarning('音轨加载失败，已切换到图文讲解。')
+}
+
 async function toggleNarration() {
   const player = narrationPlayer.value
-  if (!player) return
+  if (!player || !audioAvailable.value) return
   if (player.paused) await player.play()
   else player.pause()
 }
@@ -358,8 +409,15 @@ function formatDuration(millis: number) {
 }
 
 function selectMediaMode(mode: MediaMode) {
+  if (!mediaModeAvailable(mode)) return
   mediaMode.value = mode
   if (mode === 'TEXT') narrationPlayer.value?.pause()
+}
+
+function mediaModeAvailable(mode: MediaMode) {
+  if (mode === 'AUDIO') return narration.value !== null && audioAvailable.value
+  if (mode === 'VIDEO') return video.value !== null
+  return true
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -399,6 +457,9 @@ onUnmounted(() => {
     </header>
 
     <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；已加载的讲解和本地进度仍可使用。</p>
+    <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
+      <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
+    </div>
 
     <div v-if="loading" class="mx-auto max-w-7xl px-5 py-16 sm:px-8" aria-live="polite">
       <div class="h-7 w-44 animate-pulse rounded bg-ink/10" />
@@ -438,12 +499,27 @@ onUnmounted(() => {
             </li>
           </ul>
         </details>
+        <details v-if="mediaConsistency" class="mt-3 rounded-2xl border border-ink/10 bg-paper/70 p-3">
+          <summary class="cursor-pointer list-none text-sm font-semibold">
+            <span class="flex items-center justify-between gap-3">
+              <span>媒体一致性 {{ mediaConsistency.consistencyPercent }}%</span>
+              <span :class="mediaConsistency.status === 'CONSISTENT' ? 'text-emerald-700' : 'text-red-700'">{{ mediaConsistency.status === 'CONSISTENT' ? '一致' : '需检查' }}</span>
+            </span>
+          </summary>
+          <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
+            <li v-for="check in mediaConsistency.checks" :key="check.type" class="text-xs leading-5">
+              <p class="font-semibold">{{ check.status === 'PASS' ? '✓' : '×' }} {{ check.summary }}</p>
+              <p class="text-ink/50">{{ check.detail }}</p>
+            </li>
+          </ul>
+        </details>
         <div class="mt-4 grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1" aria-label="讲解形式">
           <button
             v-for="mode in ([['TEXT', '图文'], ['AUDIO', '语音'], ['VIDEO', '视频']] as const)"
             :key="mode[0]"
             class="min-h-10 rounded-xl px-2 text-xs font-semibold transition"
-            :class="mediaMode === mode[0] ? 'bg-ink-panel text-panel-text' : 'text-ink/55 hover:text-ink'"
+            :disabled="!mediaModeAvailable(mode[0])"
+            :class="mediaMode === mode[0] ? 'bg-ink-panel text-panel-text' : 'text-ink/55 hover:text-ink disabled:cursor-not-allowed disabled:opacity-35'"
             :aria-pressed="mediaMode === mode[0]"
             @click="selectMediaMode(mode[0])"
           >
@@ -474,6 +550,7 @@ onUnmounted(() => {
           </div>
 
           <audio
+            v-if="narration"
             ref="narrationPlayer"
             class="hidden"
             preload="metadata"
@@ -484,6 +561,7 @@ onUnmounted(() => {
             @play="narrationPlaying = true"
             @pause="onNarrationPaused"
             @ended="narrationPlaying = false"
+            @error="onNarrationError"
           >浏览器不支持音频播放。</audio>
 
           <section v-if="mediaMode === 'VIDEO' && currentVideoChapter && activeVideoFrame" class="mt-7" aria-label="分章节视频">
@@ -510,9 +588,9 @@ onUnmounted(() => {
             <input class="mt-4 w-full accent-copper" type="range" min="0" :max="video?.durationMillis ?? 0" :value="narrationMillis" aria-label="视频播放位置" @input="seekNarration">
             <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45"><span>{{ formatDuration(narrationMillis) }}</span><span>{{ formatDuration(video?.durationMillis ?? 0) }}</span></div>
             <div class="mt-3 grid grid-cols-3 gap-2">
-              <button class="min-h-11 rounded-xl bg-copper px-3 text-sm font-semibold text-white" @click="toggleNarration">{{ narrationPlaying ? '暂停视频' : '播放视频' }}</button>
-              <button class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="replayCurrentSegment">重播画面</button>
-              <button class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="cycleNarrationRate">{{ narrationRate }}×</button>
+              <button :disabled="!audioAvailable" class="min-h-11 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:opacity-35" @click="toggleNarration">{{ audioAvailable ? (narrationPlaying ? '暂停视频' : '播放视频') : '音轨不可用' }}</button>
+              <button :disabled="!audioAvailable" class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="replayCurrentSegment">重播画面</button>
+              <button :disabled="!audioAvailable" class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="cycleNarrationRate">{{ narrationRate }}×</button>
             </div>
             <nav class="mt-4 flex gap-2 overflow-x-auto pb-2" aria-label="视频章节跳转">
               <button
