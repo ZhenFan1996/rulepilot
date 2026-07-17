@@ -1,9 +1,12 @@
 package com.rulepilot.teaching.adapter.out.speech;
 
 import com.rulepilot.teaching.SpeechSynthesisPort;
+import com.rulepilot.teaching.SpeechSynthesisPort.SpeechCue;
 import com.rulepilot.teaching.domain.NarrationScript;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -12,18 +15,37 @@ import org.springframework.stereotype.Component;
 public class FakeSpeechSynthesis implements SpeechSynthesisPort {
 
     private static final int SAMPLE_RATE = 8_000;
-    private static final int MILLISECONDS_PER_CHAPTER = 180;
+    private static final int CHAPTER_GAP_MILLIS = 250;
+    private static final int MARKER_MILLIS = 70;
 
     @Override
     public SynthesizedSpeech synthesize(NarrationScript script) {
-        int chapterCount = Math.max(1, script.chapters().size());
-        int sampleCount = SAMPLE_RATE * MILLISECONDS_PER_CHAPTER * chapterCount / 1_000;
+        var cues = cues(script);
+        long durationMillis = cues.isEmpty() ? 500 : cues.getLast().endMillis();
+        int sampleCount = Math.toIntExact(SAMPLE_RATE * durationMillis / 1_000);
         int dataSize = sampleCount * Short.BYTES;
         var wav = ByteBuffer.allocate(44 + dataSize).order(ByteOrder.LITTLE_ENDIAN);
         writeHeader(wav, dataSize);
-        writeChapterMarkers(wav, sampleCount);
+        writeSegmentMarkers(wav, sampleCount, cues);
         return new SynthesizedSpeech(
-                "audio/wav", "fake", wav.array(), (long) MILLISECONDS_PER_CHAPTER * chapterCount);
+                "audio/wav", "fake", wav.array(), durationMillis, cues);
+    }
+
+    private List<SpeechCue> cues(NarrationScript script) {
+        var cues = new ArrayList<SpeechCue>();
+        long cursor = 0;
+        for (var chapter : script.chapters()) {
+            for (var segment : chapter.segments()) {
+                long duration = Math.clamp(segment.text().codePointCount(0, segment.text().length()) * 90L + 700, 1_200, 7_000);
+                cues.add(new SpeechCue(
+                        chapter.position(), segment.position(), cursor, cursor + duration));
+                cursor += duration;
+            }
+            if (chapter.position() < script.chapters().size()) {
+                cursor += CHAPTER_GAP_MILLIS;
+            }
+        }
+        return List.copyOf(cues);
     }
 
     private void writeHeader(ByteBuffer wav, int dataSize) {
@@ -41,12 +63,16 @@ public class FakeSpeechSynthesis implements SpeechSynthesisPort {
         wav.putInt(dataSize);
     }
 
-    private void writeChapterMarkers(ByteBuffer wav, int sampleCount) {
-        int samplesPerChapter = SAMPLE_RATE * MILLISECONDS_PER_CHAPTER / 1_000;
+    private void writeSegmentMarkers(ByteBuffer wav, int sampleCount, List<SpeechCue> cues) {
+        int cueIndex = 0;
         for (int sample = 0; sample < sampleCount; sample++) {
-            int withinChapter = sample % samplesPerChapter;
-            double seconds = withinChapter / (double) SAMPLE_RATE;
-            short amplitude = withinChapter < SAMPLE_RATE / 12
+            long millis = sample * 1_000L / SAMPLE_RATE;
+            while (cueIndex + 1 < cues.size() && millis >= cues.get(cueIndex + 1).startMillis()) {
+                cueIndex++;
+            }
+            long withinCue = cues.isEmpty() ? Long.MAX_VALUE : millis - cues.get(cueIndex).startMillis();
+            double seconds = sample / (double) SAMPLE_RATE;
+            short amplitude = withinCue >= 0 && withinCue < MARKER_MILLIS
                     ? (short) (Math.sin(2 * Math.PI * 440 * seconds) * 2_000)
                     : 0;
             wav.putShort(amplitude);

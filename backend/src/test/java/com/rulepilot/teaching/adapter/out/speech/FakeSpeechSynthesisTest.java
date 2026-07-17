@@ -35,6 +35,12 @@ class FakeSpeechSynthesisTest {
         assertThat(speech.provider()).isEqualTo("fake");
         assertThat(new String(speech.audio(), 0, 4, StandardCharsets.US_ASCII)).isEqualTo("RIFF");
         assertThat(new String(speech.audio(), 8, 4, StandardCharsets.US_ASCII)).isEqualTo("WAVE");
-        assertThat(speech.durationMillis()).isEqualTo(180);
+        assertThat(speech.durationMillis()).isEqualTo(2_140);
+        assertThat(speech.cues()).singleElement().satisfies(cue -> {
+            assertThat(cue.chapterPosition()).isEqualTo(1);
+            assertThat(cue.segmentPosition()).isEqualTo(1);
+            assertThat(cue.startMillis()).isZero();
+            assertThat(cue.endMillis()).isEqualTo(2_140);
+        });
     }
 }

@@ -57,6 +57,20 @@ interface NarrationScript {
   }>
 }
 
+interface NarrationPlayback {
+  script: NarrationScript
+  provider: string
+  durationMillis: number
+  cues: SpeechCue[]
+}
+
+interface SpeechCue {
+  chapterPosition: number
+  segmentPosition: number
+  startMillis: number
+  endMillis: number
+}
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
@@ -66,12 +80,25 @@ const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const quality = ref<LessonQualityReport | null>(null)
 const narration = ref<NarrationScript | null>(null)
+const narrationPlayer = ref<HTMLAudioElement | null>(null)
+const narrationProvider = ref('')
+const narrationDurationMillis = ref(0)
+const narrationCues = ref<SpeechCue[]>([])
+const narrationMillis = ref(0)
+const narrationPlaying = ref(false)
+const narrationRate = ref(1)
+const narrationRestoreTarget = ref<number | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
 const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
+const activeCue = computed(() =>
+  narrationCues.value.find(
+    (cue) => narrationMillis.value >= cue.startMillis && narrationMillis.value < cue.endMillis,
+  ),
+)
 const completedCount = computed(() => new Set([...progress.value.completed, ...progress.value.skipped]).size)
 const progressPercent = computed(() =>
   lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
@@ -105,7 +132,7 @@ async function loadLesson() {
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/narration/script`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`, { credentials: 'include' }),
     ])
     if (
       planResponse.status === 401 ||
@@ -122,12 +149,25 @@ async function loadLesson() {
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
     quality.value = (await qualityResponse.json()) as LessonQualityReport
-    narration.value = (await narrationResponse.json()) as NarrationScript
+    const playback = (await narrationResponse.json()) as NarrationPlayback
+    narration.value = playback.script
+    narrationProvider.value = playback.provider
+    narrationDurationMillis.value = playback.durationMillis
+    narrationCues.value = playback.cues
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = restoreLessonProgress(
       localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
       lesson.value.sections.length,
     )
+    const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
+    if (
+      Number.isFinite(restoredNarration) &&
+      restoredNarration >= 0 &&
+      restoredNarration < narrationDurationMillis.value
+    ) {
+      narrationRestoreTarget.value = restoredNarration
+      narrationMillis.value = restoredNarration
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
   } finally {
@@ -138,6 +178,7 @@ async function loadLesson() {
 function selectSection(index: number) {
   progress.value = { ...progress.value, currentIndex: index }
   saveProgress()
+  seekToChapter(index)
 }
 
 function previousSection() {
@@ -153,7 +194,114 @@ function finish(outcome: 'completed' | 'skipped') {
 
 function togglePause() {
   progress.value = { ...progress.value, paused: !progress.value.paused }
+  if (progress.value.paused) narrationPlayer.value?.pause()
   saveProgress()
+}
+
+function narrationPositionKey() {
+  return lesson.value ? `rulepilot:narration-position:${lesson.value.id}` : ''
+}
+
+function saveNarrationPosition() {
+  const key = narrationPositionKey()
+  if (key) localStorage.setItem(key, String(Math.round(narrationMillis.value)))
+}
+
+function onNarrationLoaded() {
+  const player = narrationPlayer.value
+  if (!player) return
+  player.playbackRate = narrationRate.value
+  const restored = Number(localStorage.getItem(narrationPositionKey()))
+  if (Number.isFinite(restored) && restored >= 0 && restored < narrationDurationMillis.value) {
+    narrationRestoreTarget.value = restored
+    narrationMillis.value = restored
+    player.currentTime = restored / 1_000
+  }
+}
+
+function onNarrationTimeUpdate() {
+  const player = narrationPlayer.value
+  if (!player || narrationRestoreTarget.value !== null) return
+  narrationMillis.value = Math.round(player.currentTime * 1_000)
+  if (narrationPlaying.value) saveNarrationPosition()
+}
+
+function onNarrationSeeked() {
+  const player = narrationPlayer.value
+  const target = narrationRestoreTarget.value
+  if (!player || target === null) return
+  const current = Math.round(player.currentTime * 1_000)
+  if (Math.abs(current - target) > 200) return
+  narrationRestoreTarget.value = null
+  narrationMillis.value = current
+}
+
+function onNarrationPaused() {
+  if (narrationPlaying.value) {
+    onNarrationTimeUpdate()
+    saveNarrationPosition()
+  }
+  narrationPlaying.value = false
+}
+
+async function toggleNarration() {
+  const player = narrationPlayer.value
+  if (!player) return
+  if (player.paused) await player.play()
+  else player.pause()
+}
+
+function seekToChapter(index: number) {
+  const cue = narrationCues.value.find((candidate) => candidate.chapterPosition === index + 1)
+  seekToCue(cue)
+}
+
+function seekToSegment(segmentPosition: number) {
+  const cue = narrationCues.value.find(
+    (candidate) =>
+      candidate.chapterPosition === progress.value.currentIndex + 1 &&
+      candidate.segmentPosition === segmentPosition,
+  )
+  seekToCue(cue, true)
+}
+
+function seekToCue(cue: SpeechCue | undefined, play = false) {
+  const player = narrationPlayer.value
+  if (!player || !cue) return
+  narrationRestoreTarget.value = null
+  player.currentTime = cue.startMillis / 1_000
+  narrationMillis.value = cue.startMillis
+  saveNarrationPosition()
+  if (play) void player.play()
+}
+
+function replayCurrentSegment() {
+  const fallback = narrationCues.value.find(
+    (cue) => cue.chapterPosition === progress.value.currentIndex + 1,
+  )
+  seekToCue(activeCue.value ?? fallback, true)
+}
+
+function cycleNarrationRate() {
+  const rates = [0.75, 1, 1.25, 1.5, 2]
+  const currentIndex = rates.indexOf(narrationRate.value)
+  narrationRate.value = rates[(currentIndex + 1) % rates.length] ?? 1
+  if (narrationPlayer.value) narrationPlayer.value.playbackRate = narrationRate.value
+}
+
+function seekNarration(event: Event) {
+  const player = narrationPlayer.value
+  if (!player) return
+  const millis = Number((event.target as HTMLInputElement).value)
+  narrationRestoreTarget.value = null
+  player.currentTime = millis / 1_000
+  narrationMillis.value = millis
+  saveNarrationPosition()
+}
+
+function formatDuration(millis: number) {
+  const seconds = Math.floor(millis / 1_000)
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -281,15 +429,50 @@ onUnmounted(() => {
                 <span class="text-xs">{{ currentNarration.supported ? '引用已保留' : '证据不足，跳过讲解' }}</span>
               </span>
             </summary>
-            <ol class="mt-4 space-y-3 border-t border-indigo/10 pt-4">
-              <li v-for="segment in currentNarration.segments" :key="segment.position" class="text-sm leading-7 text-ink/70">
+            <ol class="mt-4 space-y-3 border-t border-indigo/10 pt-4" aria-label="同步字幕">
+              <li
+                v-for="segment in currentNarration.segments"
+                :key="segment.position"
+                class="rounded-xl border px-3 py-2 text-sm leading-7 transition"
+                :class="activeCue?.chapterPosition === currentNarration.position && activeCue?.segmentPosition === segment.position ? 'border-copper/40 bg-copper/10 text-ink' : 'border-transparent text-ink/70'"
+              >
                 <p>{{ segment.text }}</p>
                 <p v-if="segment.sourcePages.length" class="mt-1 text-xs font-semibold text-indigo">规则书第 {{ segment.sourcePages.join('、') }} 页</p>
+                <button class="mt-1 text-xs font-semibold text-copper" @click="seekToSegment(segment.position)">从本段播放</button>
               </li>
             </ol>
             <div class="mt-5 border-t border-indigo/10 pt-4">
-              <p class="text-xs leading-5 text-ink/50">当前为本地媒体管线测试音轨（非语音）；后续语音 Provider 会复用上方同一份已验证稿件。</p>
-              <audio class="mt-3 h-10 w-full" controls preload="none" :src="narrationAudioUrl">浏览器不支持音频播放。</audio>
+              <p class="text-xs leading-5 text-ink/50">当前为 {{ narrationProvider }} 媒体管线测试音轨（非语音）；字幕和音轨共用同一份已验证稿件。</p>
+              <audio
+                ref="narrationPlayer"
+                class="hidden"
+                preload="metadata"
+                :src="narrationAudioUrl"
+                @loadedmetadata="onNarrationLoaded"
+                @seeked="onNarrationSeeked"
+                @timeupdate="onNarrationTimeUpdate"
+                @play="narrationPlaying = true"
+                @pause="onNarrationPaused"
+                @ended="narrationPlaying = false"
+              >浏览器不支持音频播放。</audio>
+              <input
+                class="mt-4 w-full accent-copper"
+                type="range"
+                min="0"
+                :max="narrationDurationMillis"
+                :value="narrationMillis"
+                aria-label="解说播放位置"
+                @input="seekNarration"
+              >
+              <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45">
+                <span>{{ formatDuration(narrationMillis) }}</span>
+                <span>{{ formatDuration(narrationDurationMillis) }}</span>
+              </div>
+              <div class="mt-3 grid grid-cols-3 gap-2">
+                <button class="min-h-10 rounded-xl bg-indigo px-3 text-sm font-semibold text-white" @click="toggleNarration">{{ narrationPlaying ? '暂停' : '播放' }}</button>
+                <button class="min-h-10 rounded-xl border border-indigo/20 px-3 text-sm font-semibold text-indigo" @click="replayCurrentSegment">重播本段</button>
+                <button class="min-h-10 rounded-xl border border-indigo/20 px-3 text-sm font-semibold text-indigo" @click="cycleNarrationRate">{{ narrationRate }}×</button>
+              </div>
             </div>
           </details>
 

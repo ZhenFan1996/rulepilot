@@ -1,8 +1,10 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.SpeechSynthesisPort;
+import com.rulepilot.teaching.SpeechSynthesisPort.SpeechCue;
 import com.rulepilot.teaching.SpeechSynthesisPort.SynthesizedSpeech;
 import com.rulepilot.teaching.domain.NarrationScript;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -35,5 +37,24 @@ public class NarrationService {
     @Transactional(readOnly = true)
     public SynthesizedSpeech audio(UUID teachingPlanId) {
         return speech.synthesize(script(teachingPlanId));
+    }
+
+    @Transactional(readOnly = true)
+    public NarrationPlayback playback(UUID teachingPlanId) {
+        var script = script(teachingPlanId);
+        var synthesized = speech.synthesize(script);
+        return new NarrationPlayback(
+                script, synthesized.provider(), synthesized.durationMillis(), synthesized.cues());
+    }
+
+    public record NarrationPlayback(
+            NarrationScript script,
+            String provider,
+            long durationMillis,
+            List<SpeechCue> cues) {
+
+        public NarrationPlayback {
+            cues = List.copyOf(cues);
+        }
     }
 }

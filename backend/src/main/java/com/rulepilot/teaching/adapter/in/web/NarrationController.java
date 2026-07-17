@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.NarrationService;
+import com.rulepilot.teaching.application.NarrationService.NarrationPlayback;
 import com.rulepilot.teaching.domain.NarrationScript;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -27,6 +28,11 @@ public class NarrationController {
     @GetMapping("/script")
     NarrationScript script(@PathVariable UUID planId) {
         return narration.script(planId);
+    }
+
+    @GetMapping("/playback")
+    NarrationPlayback playback(@PathVariable UUID planId) {
+        return narration.playback(planId);
     }
 
     @GetMapping("/audio")
