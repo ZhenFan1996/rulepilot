@@ -3,6 +3,10 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
+import com.rulepilot.assistant.EvidenceVerifier;
+import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
+import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
+import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -39,14 +43,17 @@ public class GroundedTeachingAgent {
     private static final int MAX_STEPS_PER_SECTION = 6;
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
+    private final EvidenceVerifier evidenceVerifier;
     private final int maxToolCalls;
 
     public GroundedTeachingAgent(
             AssistantReadTools tools,
             TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
             @Value("${rulepilot.teaching.agent.max-tool-calls:24}") int maxToolCalls) {
         this.tools = tools;
         this.model = model;
+        this.evidenceVerifier = evidenceVerifier;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
@@ -73,6 +80,12 @@ public class GroundedTeachingAgent {
                 continue;
             }
             if (evidence.isEmpty() || toolCalls >= maxToolCalls) {
+                sections.add(insufficient(planned));
+                continue;
+            }
+            if (!evidenceVerifier.verify(new VerificationRequest(
+                            plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
+                    .verified()) {
                 sections.add(insufficient(planned));
                 continue;
             }
@@ -107,15 +120,12 @@ public class GroundedTeachingAgent {
                 : planned.dependencies().isEmpty()
                         ? Set.of(planned.type().name())
                         : planned.dependencies().stream().map(Enum::name).collect(Collectors.toUnmodifiableSet());
-        return tools.searchRuleEvidence(new SearchRuleEvidence(
+        return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
                         query(planned.type()),
                         MAX_EVIDENCE_PER_SECTION,
                         sourceTypes,
-                        planned.type().name()))
-                .stream()
-                .filter(hit -> hit.documentVersionId().equals(documentVersionId))
-                .toList();
+                        planned.type().name())));
     }
 
     private LessonSection compose(
@@ -130,8 +140,17 @@ public class GroundedTeachingAgent {
                 evidence.stream().map(this::toModelEvidence).toList()));
         validateDraft(draft);
 
+        var verification = evidenceVerifier.verify(new VerificationRequest(
+                plan.documentVersionId(),
+                evidence.stream().map(this::toVerifierEvidence).toList(),
+                draft.steps().stream().map(step -> new EvidenceClaim(step.text(), step.citationIds())).toList()));
+        if (!verification.verified()) {
+            throw new IllegalArgumentException("teaching section evidence did not pass policy verification");
+        }
+
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(RuleEvidence::chunkId, Function.identity()));
+                .collect(Collectors.toUnmodifiableMap(
+                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
@@ -186,6 +205,12 @@ public class GroundedTeachingAgent {
                 evidence.excerpt(),
                 evidence.pageFrom(),
                 evidence.pageTo());
+    }
+
+    private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {
+        return new EvidenceSource(
+                evidence.chunkId(), evidence.documentVersionId(), evidence.sectionType(), evidence.excerpt(),
+                evidence.pageFrom(), evidence.pageTo());
     }
 
     private LessonSection insufficient(TeachingPlan.PlannedSection planned) {

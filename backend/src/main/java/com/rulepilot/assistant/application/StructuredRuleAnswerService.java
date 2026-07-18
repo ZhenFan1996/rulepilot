@@ -1,5 +1,10 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.assistant.EvidenceVerifier;
+import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
+import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
+import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
+import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -46,6 +51,7 @@ public class StructuredRuleAnswerService {
     private final RuleAnswerRateLimiter rateLimiter;
     private final RuleDataVersion ruleDataVersion;
     private final ConfirmedRulingLookup confirmedRulings;
+    private final EvidenceVerifier evidenceVerifier;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
@@ -60,6 +66,7 @@ public class StructuredRuleAnswerService {
             RuleAnswerRateLimiter rateLimiter,
             RuleDataVersion ruleDataVersion,
             ConfirmedRulingLookup confirmedRulings,
+            EvidenceVerifier evidenceVerifier,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
@@ -68,6 +75,7 @@ public class StructuredRuleAnswerService {
         this.rateLimiter = rateLimiter;
         this.ruleDataVersion = ruleDataVersion;
         this.confirmedRulings = confirmedRulings;
+        this.evidenceVerifier = evidenceVerifier;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
@@ -106,8 +114,13 @@ public class StructuredRuleAnswerService {
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }
-        if (evidence.stream().anyMatch(hit -> !context.documentVersionId().equals(hit.evidence().documentVersionId()))) {
+        var evidenceVerification = evidenceVerifier.verify(new VerificationRequest(
+                context.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()));
+        if (evidenceVerification.status() == VerificationStatus.VERSION_CONFLICT) {
             return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
+        }
+        if (!evidenceVerification.verified()) {
+            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突或不足，无法可靠回答。");
         }
         ModelDraft draft;
         RuleAnswerRateLimiter.Permit permit =
@@ -176,8 +189,17 @@ public class StructuredRuleAnswerService {
                 || draft.explanation() == null || draft.explanation().isBlank() || draft.citationIds().isEmpty()) {
             throw new IllegalArgumentException("model draft is incomplete");
         }
+        var verification = evidenceVerifier.verify(new VerificationRequest(
+                versionId,
+                evidence.stream().map(this::toVerifierEvidence).toList(),
+                List.of(new EvidenceClaim(
+                        draft.shortVerdict() + "\n" + draft.explanation(), draft.citationIds()))));
+        if (!verification.verified()) {
+            throw new IllegalArgumentException("answer evidence did not pass policy verification");
+        }
         Map<UUID, HybridEvidenceHit> allowed = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(hit -> hit.evidence().chunkId(), Function.identity()));
+                .collect(Collectors.toUnmodifiableMap(
+                        hit -> hit.evidence().chunkId(), Function.identity(), (first, duplicate) -> first));
         List<RuleCitation> citations = draft.citationIds().stream().distinct().map(id -> {
             HybridEvidenceHit hit = allowed.get(id);
             if (hit == null || !versionId.equals(hit.evidence().documentVersionId())) {
@@ -192,6 +214,13 @@ public class StructuredRuleAnswerService {
         return new StructuredRuleAnswer(
                 versionId, AnswerStatus.ANSWERED, draft.shortVerdict(), draft.explanation(), citations,
                 draft.exceptions(), confidence, false, null, null, null);
+    }
+
+    private EvidenceSource toVerifierEvidence(HybridEvidenceHit hit) {
+        var source = hit.evidence();
+        return new EvidenceSource(
+                source.chunkId(), source.documentVersionId(), source.sectionType(), source.excerpt(),
+                source.pageFrom(), source.pageTo());
     }
 
     private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {

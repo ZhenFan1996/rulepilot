@@ -148,6 +148,31 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void refusesConflictingSnapshotsBeforeCallingModel() {
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidenceHit first = new RuleEvidenceHit(
+                chunkId, versionId, "SCORING", "Scoring", "Each coin scores one point.", 8, 8, 0.8);
+        RuleEvidenceHit conflicting = new RuleEvidenceHit(
+                chunkId, versionId, "SCORING", "Scoring", "Each coin scores two points.", 8, 8, 0.7);
+        AtomicBoolean modelCalled = new AtomicBoolean();
+        var service = answerService(
+                (version, query, options) -> List.of(
+                        new HybridEvidenceHit(first, 0.03, 1, null, false),
+                        new HybridEvidenceHit(conflicting, 0.02, 2, null, false)),
+                request -> {
+                    modelCalled.set(true);
+                    return null;
+                });
+
+        var answer = service.answer(
+                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.shortVerdict()).contains("冲突");
+        assertThat(modelCalled).isFalse();
+    }
+
+    @Test
     void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
         UUID rulingId = UUID.randomUUID();
         UUID expansionId = UUID.randomUUID();
@@ -186,6 +211,7 @@ class StructuredRuleAnswerServiceTest {
                 rateLimiter,
                 new MutableRuleDataVersion(),
                 lookup,
+                new PolicyEvidenceVerifier(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -224,6 +250,7 @@ class StructuredRuleAnswerServiceTest {
                 rateLimiter,
                 versions,
                 noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -260,6 +287,7 @@ class StructuredRuleAnswerServiceTest {
                 new RecordingRateLimiter(),
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -297,6 +325,7 @@ class StructuredRuleAnswerServiceTest {
                 unavailableLimiter,
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -310,6 +339,7 @@ class StructuredRuleAnswerServiceTest {
                 understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
                 new SimpleMeterRegistry());
     }
 

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
@@ -33,7 +34,7 @@ class GroundedTeachingAgentTest {
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(tools, model, 4);
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(tools, model, new PolicyEvidenceVerifier(), 4);
 
         var lesson = agent.create(plan(versionId));
 
@@ -53,7 +54,7 @@ class GroundedTeachingAgentTest {
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("捏造的步骤", List.of(UUID.randomUUID()))));
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(retrieval, model, 4);
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), 4);
 
         var lesson = agent.create(plan(versionId));
 
@@ -62,6 +63,24 @@ class GroundedTeachingAgentTest {
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).isEmpty();
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("捏造");
+    }
+
+    @Test
+    void rejectsEvidenceFromAnotherDocumentVersionBeforeComposition() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence wrongVersion = evidence(UUID.randomUUID(), UUID.randomUUID());
+        AssistantReadTools retrieval = request -> List.of(wrongVersion);
+        TeachingLessonModel model = request -> {
+            throw new AssertionError("model must not receive version-conflicting evidence");
+        };
+        GroundedTeachingAgent agent =
+                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), 4);
+
+        var lesson = agent.create(plan(versionId));
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     private TeachingPlan plan(UUID versionId) {

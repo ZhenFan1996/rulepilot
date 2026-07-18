@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.ingestion.RuleStructureCatalog.SectionView;
 import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
@@ -38,7 +39,9 @@ class LessonQualityEvaluatorTest {
                         section.pageNumbers().getFirst(),
                         section.pageNumbers().getLast()))
                 .toList();
-        var lesson = new GroundedTeachingAgent(retrieval, new FakeTeachingLessonModel(), 24).create(plan);
+        var lesson = new GroundedTeachingAgent(
+                        retrieval, new FakeTeachingLessonModel(), new PolicyEvidenceVerifier(), 24)
+                .create(plan);
 
         var report = new LessonQualityEvaluator().evaluate(plan, lesson);
 
