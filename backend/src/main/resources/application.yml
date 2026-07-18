@@ -1,6 +1,15 @@
 spring:
   application:
     name: rulepilot
+  ai:
+    mcp:
+      server:
+        name: rulepilot
+        version: 0.1.0
+        protocol: STATELESS
+        type: SYNC
+        annotation-scanner:
+          enabled: true
   data:
     redis:
       host: ${REDIS_HOST:localhost}

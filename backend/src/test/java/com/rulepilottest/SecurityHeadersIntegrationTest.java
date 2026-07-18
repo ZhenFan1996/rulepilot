@@ -1,6 +1,7 @@
 package com.rulepilottest;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -35,5 +36,13 @@ class SecurityHeadersIntegrationTest {
                         "Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"))
                 .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(header().string("X-Frame-Options", "DENY"));
+    }
+
+    @Test
+    void protectsMcpEndpoint() throws Exception {
+        mockMvc.perform(post("/mcp")
+                        .contentType("application/json")
+                        .content("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"))
+                .andExpect(status().isUnauthorized());
     }
 }

@@ -18,7 +18,16 @@ class GameSessionContextLookupService implements GameSessionContextLookup {
     public java.util.Optional<SessionContext> findOwned(java.util.UUID sessionId, String username) {
         try {
             var session = sessions.get(sessionId, username);
-            return java.util.Optional.of(new SessionContext(session.id(), session.documentVersionId()));
+            return java.util.Optional.of(new SessionContext(
+                    session.id(),
+                    session.editionId(),
+                    session.documentVersionId(),
+                    session.expansionIds(),
+                    session.playerCount(),
+                    session.roundNumber(),
+                    session.phase(),
+                    session.activePlayer(),
+                    session.status().name()));
         } catch (IllegalArgumentException exception) {
             return java.util.Optional.empty();
         }

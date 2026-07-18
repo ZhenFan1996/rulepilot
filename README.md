@@ -70,6 +70,9 @@ RulePilot 是一个 Spring Modulith 模块化单体。业务模块通过公开�
 ```mermaid
 flowchart LR
     UI[Vue PWA] --> API[Spring Security + HTTP API]
+    External[外部 Agent / 桌面助手] --> MCP[认证只读 MCP]
+    MCP --> Session
+    MCP --> Tool
     API --> Catalog[目录与版本]
     API --> Teaching[讲解与答疑]
     API --> Session[对局与裁定]
@@ -105,7 +108,7 @@ flowchart LR
 | 30 题混合检索 | Recall@5 93.3%（28/30）、MRR 0.519、P95 3.637 ms | `make demo-data` |
 | 6 请求、并发 3 的答疑基线 | 冷请求 P95 172.550 ms；热缓存 P95 54.942 ms；热批次模型/Critic 调用 0 次 | `make performance-test` |
 | 五页 PDF 与 PostgreSQL 检索 | PDF 到 READY 2 s；全文 0.057 ms；向量 0.223 ms | `make performance-test` |
-| 当前统一质量门禁 | 74 个后端测试、5 个前端单元测试、3 个浏览器 E2E | `make verify && make e2e` |
+| 当前统一质量门禁 | 78 个后端测试、5 个前端单元测试、3 个浏览器 E2E | `make verify && make e2e` |
 
 耗时会随机器和容器状态变化；性能命令每次都会输出并保存本机的新结果，不应把上表数字当作固定 SLA。
 
@@ -172,6 +175,8 @@ make demo-data
 
 每次讲解和答疑都会创建可查询的执行记录，并限制步骤数、Tool/模型调用数、估算 Token 和总耗时。创建响应中的 `assistantRunId` 可用于读取状态步骤、预算消耗和调用审计；运行中的任务也支持由所属用户请求协作式取消。审计只保存操作名、结果、Token 估算和耗时，不保存完整 Prompt 或规则书正文。
 
+后端同时在 `http://127.0.0.1:8080/mcp` 提供同步、无状态的 Streamable HTTP MCP 兼容入口。客户端使用 `.env` 中的本地用户或管理员账户通过 HTTP Basic 认证，可发现并调用 `search_rules`、`get_rule_page`、`get_confirmed_ruling` 和 `get_session_context`。四个工具均为只读能力，并要求传入当前用户拥有的 `sessionId`；规则版本和扩展范围由该对局在服务端确定，客户端不能跨对局指定。HTTP Basic 只适合本机开发，跨主机部署必须使用 HTTPS，并应改接 OAuth 2.0 Resource Server。
+
 后端通过 OpenTelemetry 导出 HTTP 及关键讲解、答疑工作流 Trace，通过 Prometheus 暴露 JVM、HTTP 和业务指标。Grafana 会自动配置 Prometheus、Tempo 与 `RulePilot Overview` 仪表盘；本地默认完整采样，部署时可通过 `TRACING_SAMPLING_PROBABILITY` 调低采样率。统一异常处理返回的 `traceId` 与当前 Trace 一致，可直接用于故障定位。
 
 也可以分别启动：
@@ -191,6 +196,7 @@ npm run dev
 
 - 前端：http://127.0.0.1:5173
 - 后端健康检查：http://127.0.0.1:8080/actuator/health
+- MCP：http://127.0.0.1:8080/mcp（HTTP Basic，本地开发）
 - PostgreSQL：127.0.0.1:5432
 - Redis：127.0.0.1:6379
 - RabbitMQ：127.0.0.1:5672（管理界面：http://127.0.0.1:15672）
