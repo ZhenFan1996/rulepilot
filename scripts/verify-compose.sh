@@ -48,6 +48,22 @@ require_volume_mount() {
 	echo "PASS $service persistent mount: $destination"
 }
 
+wait_for_http() {
+	url=$1
+	label=$2
+	attempt=1
+	while [ "$attempt" -le 12 ]; do
+		if compose exec -T prometheus wget -qO- "$url" >/dev/null 2>&1; then
+			echo "PASS $label readiness"
+			return
+		fi
+		attempt=$((attempt + 1))
+		sleep 2
+	done
+	echo "FAIL $label did not become ready: $url"
+	exit 1
+}
+
 verify_running_services() {
 	postgres_version=$(compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "SELECT extversion FROM pg_extension WHERE extname = '\''vector'\''"')
 	if [ -z "$postgres_version" ]; then
@@ -69,14 +85,9 @@ verify_running_services() {
 	compose exec -T minio mc ready local >/dev/null
 	echo "PASS MinIO readiness"
 
-	compose exec -T prometheus wget -qO- http://localhost:9090/-/ready >/dev/null
-	echo "PASS Prometheus readiness"
-
-	compose exec -T prometheus wget -qO- http://tempo:3200/ready >/dev/null
-	echo "PASS Tempo readiness"
-
-	compose exec -T prometheus wget -qO- http://grafana:3000/api/health >/dev/null
-	echo "PASS Grafana readiness"
+	wait_for_http http://localhost:9090/-/ready Prometheus
+	wait_for_http http://tempo:3200/ready Tempo
+	wait_for_http http://grafana:3000/api/health Grafana
 
 	require_volume_mount postgres /var/lib/postgresql/data
 	require_volume_mount redis /data
