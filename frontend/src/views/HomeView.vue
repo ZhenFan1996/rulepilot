@@ -31,6 +31,7 @@ function toggleTheme() {
         <div class="flex items-center gap-2">
           <RouterLink :to="{ name: 'teach' }" class="hidden text-sm font-semibold text-ink/65 hover:text-indigo md:inline-flex">导入规则书</RouterLink>
           <RouterLink :to="{ name: 'catalog' }" class="hidden text-sm font-semibold text-ink/65 hover:text-indigo md:inline-flex">游戏目录</RouterLink>
+          <RouterLink :to="{ name: 'model-settings' }" class="hidden text-sm font-semibold text-ink/65 hover:text-indigo lg:inline-flex">模型配置</RouterLink>
           <RouterLink :to="{ name: 'login' }" class="hidden text-sm font-semibold text-ink/65 hover:text-indigo sm:inline-flex">登录</RouterLink>
           <span class="hidden rounded-full border border-ink/10 bg-paper/60 px-3 py-1.5 text-xs font-medium text-ink/55 sm:inline-flex">从规则书到完整讲解</span>
           <BrandButton

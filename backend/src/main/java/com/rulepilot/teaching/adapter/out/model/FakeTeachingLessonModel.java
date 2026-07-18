@@ -3,11 +3,9 @@ package com.rulepilot.teaching.adapter.out.model;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import java.util.List;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(name = "rulepilot.teaching.provider", havingValue = "fake", matchIfMissing = true)
 public class FakeTeachingLessonModel implements TeachingLessonModel {
 
     @Override

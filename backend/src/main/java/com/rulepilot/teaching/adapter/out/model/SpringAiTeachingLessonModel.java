@@ -1,41 +1,43 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.TeachingLessonModel;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
-import java.util.Map;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(name = "rulepilot.teaching.provider", havingValue = "spring-ai")
+@Primary
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
-    private final ChatClient chatClient;
-    private final String providerId;
+    private final RuntimeModelConfiguration models;
+    private final FakeTeachingLessonModel fakeModel;
     private final String systemPrompt;
 
     public SpringAiTeachingLessonModel(
-            Map<String, ChatModel> models,
-            @Value("${rulepilot.teaching.model-provider}") String provider,
+            RuntimeModelConfiguration models,
+            FakeTeachingLessonModel fakeModel,
             @Value("classpath:prompts/teaching-agent-v1.txt") Resource promptResource) throws IOException {
-        this.providerId = providerId(provider);
-        this.chatClient = ChatClient.create(requireModel(models, providerId));
+        this.models = models;
+        this.fakeModel = fakeModel;
         this.systemPrompt = promptResource.getContentAsString(StandardCharsets.UTF_8);
     }
 
     @Override
     public String providerId() {
-        return providerId;
+        return models.providerFor(Role.TEACHING);
     }
 
     @Override
     public SectionDraft compose(SectionRequest request) {
+        if (models.usesFake(Role.TEACHING)) {
+            return fakeModel.compose(request);
+        }
         RuntimeException firstFailure;
         try {
             return composeOnce(request, "");
@@ -51,7 +53,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
-        return chatClient.prompt()
+        return ChatClient.create(models.modelFor(Role.TEACHING)).prompt()
                 .system(systemPrompt)
                 .user(user -> user.text("""
                                 Section: {section}
@@ -68,20 +70,5 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .param("repair", repairInstruction))
                 .call()
                 .entity(SectionDraft.class);
-    }
-
-    private static ChatModel requireModel(Map<String, ChatModel> models, String provider) {
-        ChatModel model = models.get(provider);
-        if (model == null) {
-            throw new IllegalStateException("chat model provider '" + provider + "' is not enabled");
-        }
-        return model;
-    }
-
-    private static String providerId(String provider) {
-        if (provider == null || provider.isBlank()) {
-            throw new IllegalArgumentException("teaching model provider is required");
-        }
-        return provider.trim().toLowerCase(Locale.ROOT);
     }
 }

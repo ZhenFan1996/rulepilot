@@ -2,16 +2,14 @@ package com.rulepilot.assistant.adapter.out.model;
 
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
-import java.util.Locale;
-import java.util.Map;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(name = "rulepilot.critic.provider", havingValue = "spring-ai")
+@Primary
 public class SpringAiContentCriticModel implements ContentCriticModel {
 
     private static final String SYSTEM = """
@@ -21,22 +19,24 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             Every issue must identify one claim position and may cite only supplied evidence chunk IDs.
             Return an empty issues list when no concrete issue is found. Return the requested schema only.
             """;
-    private final ChatClient chatClient;
-    private final String providerId;
+    private final RuntimeModelConfiguration models;
+    private final FakeContentCriticModel fakeModel;
 
-    public SpringAiContentCriticModel(
-            Map<String, ChatModel> models, @Value("${rulepilot.critic.model-provider}") String provider) {
-        this.providerId = providerId(provider);
-        this.chatClient = ChatClient.create(requireModel(models, providerId));
+    public SpringAiContentCriticModel(RuntimeModelConfiguration models, FakeContentCriticModel fakeModel) {
+        this.models = models;
+        this.fakeModel = fakeModel;
     }
 
     @Override
     public String providerId() {
-        return providerId;
+        return models.providerFor(Role.CRITIC);
     }
 
     @Override
     public CritiqueDraft critique(ReviewRequest request) {
+        if (models.usesFake(Role.CRITIC)) {
+            return fakeModel.critique(request);
+        }
         RuntimeException firstFailure;
         try {
             return critiqueOnce(request, "");
@@ -52,7 +52,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     }
 
     private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
-        return chatClient.prompt()
+        return ChatClient.create(models.modelFor(Role.CRITIC)).prompt()
                 .system(SYSTEM)
                 .user(user -> user.text("Content type: {type}\nClaims: {claims}\nEvidence data: {evidence}\n{repair}")
                         .param("type", request.contentType())
@@ -61,20 +61,5 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                         .param("repair", repair))
                 .call()
                 .entity(CritiqueDraft.class);
-    }
-
-    private static ChatModel requireModel(Map<String, ChatModel> models, String provider) {
-        ChatModel model = models.get(provider);
-        if (model == null) {
-            throw new IllegalStateException("chat model provider '" + provider + "' is not enabled");
-        }
-        return model;
-    }
-
-    private static String providerId(String provider) {
-        if (provider == null || provider.isBlank()) {
-            throw new IllegalArgumentException("critic model provider is required");
-        }
-        return provider.trim().toLowerCase(Locale.ROOT);
     }
 }

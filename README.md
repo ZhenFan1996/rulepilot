@@ -191,13 +191,15 @@ make demo-data
 
 ### 配置大模型 API
 
-API Key 填在仓库根目录的 `.env`，不要填写在网页中，也不要提交到 Git。先从模板创建本地配置：
+使用 `.env` 中的管理员账户登录后打开 http://127.0.0.1:5173/settings/models，可以配置 Gemini、OpenAI、DeepSeek 或其他 OpenAI 兼容服务，并分别指定规则讲解、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
+
+网页中保存的密钥仅存在于当前后端进程内存，重启后恢复启动配置。这适合本地开发和单进程演示；跨主机访问必须使用 HTTPS。需要重启后自动恢复时，仍可把配置放在被 Git 忽略的根目录 `.env`：
 
 ```sh
 cp .env.example .env
 ```
 
-每个业务角色可以独立选择模型：`TEACHING_MODEL_PROVIDER` 用于规则讲解，`ANSWER_MODEL_PROVIDER` 用于答疑，`CRITIC_MODEL_PROVIDER` 用于事实审校。可选值为 `gemini`、`openai`、`deepseek` 或 `compatible`。例如全部使用 Gemini：
+每个业务角色可以独立选择模型：`TEACHING_MODEL_PROVIDER` 用于规则讲解，`ANSWER_MODEL_PROVIDER` 用于答疑，`CRITIC_MODEL_PROVIDER` 用于事实审校。可选值为 `gemini`、`openai`、`deepseek` 或 `compatible`。例如让启动配置全部使用 Gemini：
 
 ```dotenv
 GEMINI_ENABLED=true
@@ -241,7 +243,7 @@ TEACHING_PROVIDER=spring-ai
 TEACHING_MODEL_PROVIDER=compatible
 ```
 
-模型名和服务地址都可覆盖，以供应商账户实际开放的模型为准。启用某个真实提供方但遗漏 Key、地址或模型名时，后端会在启动时明确失败；未启用真实提供方时仍使用 fake，不会调用外部 API。修改 `.env` 后重新运行 `make dev`。
+模型名和服务地址都可覆盖，以供应商账户实际开放的模型为准。启用某个真实提供方但遗漏 Key、地址或模型名时，后端会在启动时明确失败；未启用真实提供方时仍使用 Fake，不会调用外部 API。修改 `.env` 后重新运行 `make dev`，网页保存则立即生效。
 
 讲解内答疑支持拍摄卡牌或选择本地图片。Tesseract.js WebAssembly OCR 在浏览器内识别简体中文和英文，用户核对文字后才会将其整理成当前章节的问题并交给既有 RAG 流程；卡牌照片不会上传到后端或第三方。OCR Worker、核心和语言数据由锁定的 npm 依赖在构建时发布为同源资产，首次识别需要联网加载，默认页面和 PWA 应用外壳不会预载这约 8.7 MiB 的可选资源。
 
@@ -271,6 +273,7 @@ npm run dev
 默认入口：
 
 - 前端：http://127.0.0.1:5173
+- 管理员模型配置：http://127.0.0.1:5173/settings/models
 - 后端健康检查：http://127.0.0.1:8080/actuator/health
 - MCP：http://127.0.0.1:8080/mcp（HTTP Basic，本地开发）
 - PostgreSQL：127.0.0.1:5432

@@ -2,19 +2,17 @@ package com.rulepilot.assistant.adapter.out.model;
 
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
-import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(name = "rulepilot.answer.provider", havingValue = "spring-ai")
+@Primary
 public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static final String SYSTEM = """
@@ -24,22 +22,24 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             If evidence does not support a claim, omit it. Return the requested schema only.
             confidence must be HIGH, MEDIUM, or LOW.
             """;
-    private final ChatClient chatClient;
-    private final String providerId;
+    private final RuntimeModelConfiguration models;
+    private final FakeRuleAnswerModel fakeModel;
 
-    public SpringAiRuleAnswerModel(
-            Map<String, ChatModel> models, @Value("${rulepilot.answer.model-provider}") String provider) {
-        this.providerId = providerId(provider);
-        this.chatClient = ChatClient.create(requireModel(models, providerId));
+    public SpringAiRuleAnswerModel(RuntimeModelConfiguration models, FakeRuleAnswerModel fakeModel) {
+        this.models = models;
+        this.fakeModel = fakeModel;
     }
 
     @Override
     public String providerId() {
-        return providerId;
+        return models.providerFor(Role.ANSWER);
     }
 
     @Override
     public ModelDraft compose(ModelRequest request) {
+        if (models.usesFake(Role.ANSWER)) {
+            return fakeModel.compose(request);
+        }
         RuntimeException firstFailure;
         try {
             return composeOnce(request, "");
@@ -61,7 +61,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     }
 
     private ModelDraft composeOnce(ModelRequest request, String repairInstruction) {
-        return chatClient.prompt()
+        return ChatClient.create(models.modelFor(Role.ANSWER)).prompt()
                 .system(SYSTEM)
                 .user(user -> user.text("Question: {question}\nEvidence data: {evidence}\n{repair}")
                         .param("question", request.question())
@@ -85,18 +85,4 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         return false;
     }
 
-    private static ChatModel requireModel(Map<String, ChatModel> models, String provider) {
-        ChatModel model = models.get(provider);
-        if (model == null) {
-            throw new IllegalStateException("chat model provider '" + provider + "' is not enabled");
-        }
-        return model;
-    }
-
-    private static String providerId(String provider) {
-        if (provider == null || provider.isBlank()) {
-            throw new IllegalArgumentException("answer model provider is required");
-        }
-        return provider.trim().toLowerCase(Locale.ROOT);
-    }
 }
