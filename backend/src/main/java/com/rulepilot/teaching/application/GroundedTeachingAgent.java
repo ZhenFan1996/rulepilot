@@ -24,10 +24,12 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.application.TeachingRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -48,6 +50,7 @@ public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
     private static final int MAX_EVIDENCE_PER_SECTION = 6;
+    private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
@@ -81,28 +84,49 @@ public class GroundedTeachingAgent {
                 continue;
             }
 
-            List<RuleEvidence> evidence;
-            try {
+            Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
+            boolean conflictingEvidence = false;
+            for (RetrievalIntent intent : TeachingRetrievalPlanner.forSection(planned.type())) {
+                if (toolCalls >= maxToolCalls) {
+                    break;
+                }
                 toolCalls++;
-                evidence = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.TOOL,
-                        "searchRuleEvidence",
-                        estimateTokens(query(planned.type())),
-                        "Version-scoped rule evidence retrieved",
-                        () -> retrieve(plan.documentVersionId(), planned),
-                        this::evidenceTokens);
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException retrievalFailure) {
-                log.warn(
-                        "Teaching Agent retrieval failed for section {}: {}",
-                        planned.type(),
-                        retrievalFailure.getClass().getSimpleName());
-                sections.add(insufficient(planned));
-                continue;
+                try {
+                    List<RuleEvidence> retrieved = invocations.invoke(
+                            assistantRunId,
+                            ActivityType.TOOL,
+                            "searchRuleEvidence",
+                            estimateTokens(intent.query()),
+                            "Version-scoped rule evidence retrieved",
+                            () -> retrieve(plan.documentVersionId(), planned.type(), intent),
+                            this::evidenceTokens);
+                    for (RuleEvidence source : retrieved) {
+                        RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
+                        if (existing != null && !existing.equals(source)) {
+                            conflictingEvidence = true;
+                            break;
+                        }
+                    }
+                } catch (AgentExecutionStoppedException stopped) {
+                    throw stopped;
+                } catch (RuntimeException retrievalFailure) {
+                    log.warn(
+                            "Teaching Agent retrieval intent failed for section {}: {}",
+                            planned.type(),
+                            retrievalFailure.getClass().getSimpleName());
+                }
+                if (conflictingEvidence) {
+                    log.warn("Teaching Agent retrieved conflicting snapshots for section {}", planned.type());
+                    break;
+                }
             }
-            if (evidence.isEmpty() || toolCalls >= maxToolCalls) {
+            if (conflictingEvidence) {
+                evidenceById.clear();
+            }
+            List<RuleEvidence> evidence = evidenceById.values().stream()
+                    .limit(MAX_EVIDENCE_PER_SECTION)
+                    .toList();
+            if (evidence.isEmpty()) {
                 sections.add(insufficient(planned));
                 continue;
             }
@@ -114,7 +138,6 @@ public class GroundedTeachingAgent {
             }
 
             try {
-                toolCalls++;
                 sections.add(compose(plan, planned, evidence, assistantRunId));
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
@@ -139,18 +162,14 @@ public class GroundedTeachingAgent {
                 Instant.now());
     }
 
-    private List<RuleEvidence> retrieve(UUID documentVersionId, TeachingPlan.PlannedSection planned) {
-        Set<String> sourceTypes = planned.required()
-                ? Set.of(planned.type().name())
-                : planned.dependencies().isEmpty()
-                        ? Set.of(planned.type().name())
-                        : planned.dependencies().stream().map(Enum::name).collect(Collectors.toUnmodifiableSet());
+    private List<RuleEvidence> retrieve(
+            UUID documentVersionId, TeachingSectionType sectionType, RetrievalIntent intent) {
         return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
-                        query(planned.type()),
-                        MAX_EVIDENCE_PER_SECTION,
-                        sourceTypes,
-                        planned.type().name())));
+                        intent.query(),
+                        EVIDENCE_PER_INTENT,
+                        intent.sourceTypes(),
+                        sectionType.name())));
     }
 
     private LessonSection compose(
@@ -279,23 +298,6 @@ public class GroundedTeachingAgent {
                         "规则资料中尚未找到这一节所需的可靠证据。",
                         List.of(),
                         List.of())));
-    }
-
-    private String query(TeachingSectionType type) {
-        return switch (type) {
-            case OBJECTIVE -> "objective victory goal winning condition 游戏目标 胜利条件";
-            case COMPONENTS -> "components contents pieces cards board 组件 配件";
-            case SETUP -> "setup preparation starting layout 开局 设置 布置";
-            case ROUND_STRUCTURE -> "round turn order structure 轮次 回合 顺序";
-            case PHASES -> "phase sequence steps 阶段 流程";
-            case ACTIONS -> "actions player may can action 玩家 行动";
-            case END_CONDITIONS -> "game end ending condition 游戏结束 条件";
-            case SCORING -> "scoring points calculate score 计分 分数";
-            case TIE_BREAKERS -> "tie tied winner tiebreak 同分 平局";
-            case FIRST_ROUND_PRACTICE -> "first round example actions 首轮 演练";
-            case COMMON_MISTAKES -> "important exception cannot remember 注意 例外";
-            case RECAP -> "summary round scoring recap 总结 回顾";
-        };
     }
 
     private String label(TeachingSectionType type) {
