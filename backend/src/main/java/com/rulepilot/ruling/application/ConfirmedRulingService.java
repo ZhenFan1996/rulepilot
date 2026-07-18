@@ -43,7 +43,6 @@ public class ConfirmedRulingService {
 
     @Transactional
     public ConfirmedRuling confirm(
-            UUID editionId,
             UUID documentVersionId,
             Set<UUID> expansionIds,
             String question,
@@ -53,13 +52,10 @@ public class ConfirmedRulingService {
             List<String> exceptions,
             RulingConfidence confidence,
             String username) {
-        var edition = catalog.findEdition(editionId)
-                .orElseThrow(() -> new IllegalArgumentException("game edition does not exist"));
         var version = documents.findVersion(documentVersionId)
                 .orElseThrow(() -> new IllegalArgumentException("document version does not exist"));
-        if (!version.editionId().equals(editionId)) {
-            throw new IllegalArgumentException("document version does not belong to the selected edition");
-        }
+        var edition = catalog.findEdition(version.editionId())
+                .orElseThrow(() -> new IllegalArgumentException("game edition does not exist"));
         if (!"READY".equals(version.processingStatus())) {
             throw new IllegalArgumentException("document version is not ready for a confirmed ruling");
         }
@@ -69,7 +65,7 @@ public class ConfirmedRulingService {
         }
         List<RulingCitation> citations = verifiedCitations(documentVersionId, citationChunkIds);
         ConfirmedRuling ruling = ConfirmedRuling.confirm(
-                RulingApplicability.of(editionId, documentVersionId, selectedExpansions),
+                RulingApplicability.of(version.editionId(), documentVersionId, selectedExpansions),
                 question, shortVerdict, explanation, citations, exceptions,
                 confidence, username, Instant.now(clock));
         if (rulings.existsConfirmed(ruling.applicability(), ruling.normalizedQuestionHash())) {
@@ -86,6 +82,27 @@ public class ConfirmedRulingService {
             throw new IllegalArgumentException("confirmed ruling does not exist");
         }
         return ruling;
+    }
+
+    @Transactional
+    public ConfirmedRuling revise(
+            UUID rulingId,
+            long expectedVersion,
+            String shortVerdict,
+            String explanation,
+            List<UUID> citationChunkIds,
+            List<String> exceptions,
+            RulingConfidence confidence,
+            String username) {
+        ConfirmedRuling current = get(rulingId, username);
+        if (current.version() != expectedVersion) {
+            throw new RulingVersionConflictException(current.version());
+        }
+        List<RulingCitation> citations = verifiedCitations(
+                current.applicability().documentVersionId(), citationChunkIds);
+        ConfirmedRuling revised = current.revise(
+                shortVerdict, explanation, citations, exceptions, confidence, Instant.now(clock));
+        return rulings.update(revised, expectedVersion);
     }
 
     private List<RulingCitation> verifiedCitations(UUID documentVersionId, List<UUID> citationChunkIds) {

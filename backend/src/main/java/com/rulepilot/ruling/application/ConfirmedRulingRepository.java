@@ -11,5 +11,7 @@ public interface ConfirmedRulingRepository {
 
     Optional<ConfirmedRuling> find(UUID rulingId);
 
+    ConfirmedRuling update(ConfirmedRuling ruling, long expectedVersion);
+
     boolean existsConfirmed(RulingApplicability applicability, String normalizedQuestionHash);
 }

@@ -109,6 +109,17 @@ interface RuleCitation {
   pageTo: number
 }
 
+interface ConfirmedRuling {
+  id: string
+  shortVerdict: string
+  explanation: string
+  citations: RuleCitation[]
+  exceptions: string[]
+  confidence: StructuredRuleAnswer['confidence']
+  status: 'CONFIRMED' | 'SUPERSEDED'
+  version: number
+}
+
 interface CsrfResponse {
   headerName: string
   token: string
@@ -161,6 +172,13 @@ const question = ref('')
 const answer = ref<StructuredRuleAnswer | null>(null)
 const answerLoading = ref(false)
 const answerError = ref('')
+const ruling = ref<ConfirmedRuling | null>(null)
+const rulingSaving = ref(false)
+const rulingError = ref('')
+const rulingConflict = ref(false)
+const editingRuling = ref(false)
+const editedVerdict = ref('')
+const editedExplanation = ref('')
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -301,6 +319,10 @@ function selectSection(index: number) {
   question.value = ''
   answer.value = null
   answerError.value = ''
+  ruling.value = null
+  rulingError.value = ''
+  rulingConflict.value = false
+  editingRuling.value = false
   saveProgress()
   seekToChapter(index)
 }
@@ -335,10 +357,107 @@ async function askCurrentSection() {
     }
     if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
     answer.value = (await response.json()) as StructuredRuleAnswer
+    ruling.value = null
+    rulingConflict.value = false
   } catch (error) {
     answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
   } finally {
     answerLoading.value = false
+  }
+}
+
+async function csrfToken() {
+  const response = await fetch('/api/auth/csrf', { credentials: 'include' })
+  if (response.status === 401) {
+    await router.push({ name: 'login' })
+    throw new Error('请先登录。')
+  }
+  if (!response.ok) throw new Error('无法建立安全会话，请稍后重试。')
+  return (await response.json()) as CsrfResponse
+}
+
+function applyRuling(value: ConfirmedRuling) {
+  ruling.value = value
+  editedVerdict.value = value.shortVerdict
+  editedExplanation.value = value.explanation
+  rulingConflict.value = false
+  editingRuling.value = false
+}
+
+async function confirmAnswer() {
+  if (!answer.value || answer.value.status !== 'ANSWERED' || !plan.value || rulingSaving.value) return
+  rulingSaving.value = true
+  rulingError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch('/api/v1/confirmed-rulings', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        documentVersionId: plan.value.documentVersionId,
+        expansionIds: [],
+        question: question.value.trim(),
+        shortVerdict: answer.value.shortVerdict,
+        explanation: answer.value.explanation,
+        citationChunkIds: answer.value.citations.map((citation) => citation.chunkId),
+        exceptions: answer.value.exceptions,
+        confidence: answer.value.confidence,
+      }),
+    })
+    if (!response.ok) throw new Error('无法保存这条裁定，可能已存在相同问题的确认版本。')
+    applyRuling((await response.json()) as ConfirmedRuling)
+  } catch (error) {
+    rulingError.value = error instanceof Error ? error.message : '保存裁定失败。'
+  } finally {
+    rulingSaving.value = false
+  }
+}
+
+async function saveRulingRevision() {
+  if (!ruling.value || rulingSaving.value) return
+  rulingSaving.value = true
+  rulingError.value = ''
+  rulingConflict.value = false
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/confirmed-rulings/${ruling.value.id}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        expectedVersion: ruling.value.version,
+        shortVerdict: editedVerdict.value,
+        explanation: editedExplanation.value,
+        citationChunkIds: ruling.value.citations.map((citation) => citation.chunkId),
+        exceptions: ruling.value.exceptions,
+        confidence: ruling.value.confidence,
+      }),
+    })
+    if (response.status === 409) {
+      rulingConflict.value = true
+      return
+    }
+    if (!response.ok) throw new Error('无法更新这条裁定。')
+    applyRuling((await response.json()) as ConfirmedRuling)
+  } catch (error) {
+    rulingError.value = error instanceof Error ? error.message : '更新裁定失败。'
+  } finally {
+    rulingSaving.value = false
+  }
+}
+
+async function reloadRuling() {
+  if (!ruling.value) return
+  rulingSaving.value = true
+  try {
+    const response = await fetch(`/api/v1/confirmed-rulings/${ruling.value.id}`, { credentials: 'include' })
+    if (!response.ok) throw new Error('无法加载服务器上的最新裁定。')
+    applyRuling((await response.json()) as ConfirmedRuling)
+  } catch (error) {
+    rulingError.value = error instanceof Error ? error.message : '加载最新裁定失败。'
+  } finally {
+    rulingSaving.value = false
   }
 }
 
@@ -831,6 +950,40 @@ onUnmounted(() => {
                   </li>
                 </ol>
               </details>
+
+              <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
+                <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
+                <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
+                  <p class="font-semibold text-amber-950">另一处编辑已经更新了这条裁定</p>
+                  <p class="mt-1 text-sm leading-6 text-amber-900">为避免覆盖他人的修改，请加载服务器版本后重新编辑。</p>
+                  <button class="mt-3 min-h-11 rounded-xl bg-amber-900 px-4 text-sm font-semibold text-white" :disabled="rulingSaving" @click="reloadRuling">加载最新版本</button>
+                </div>
+
+                <div v-else-if="ruling && editingRuling" class="space-y-4">
+                  <div>
+                    <label for="ruling-verdict" class="text-sm font-semibold">一句话裁定</label>
+                    <textarea id="ruling-verdict" v-model="editedVerdict" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                  </div>
+                  <div>
+                    <label for="ruling-explanation" class="text-sm font-semibold">详细解释</label>
+                    <textarea id="ruling-explanation" v-model="editedExplanation" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                  </div>
+                  <div class="flex flex-wrap gap-3">
+                    <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="saveRulingRevision">{{ rulingSaving ? '保存中…' : '保存修改' }}</button>
+                    <button class="min-h-11 rounded-xl border border-ink/15 px-5 text-sm font-semibold" :disabled="rulingSaving" @click="editingRuling = false">取消</button>
+                  </div>
+                </div>
+
+                <div v-else-if="ruling" class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-emerald-50 p-4">
+                  <div>
+                    <p class="font-semibold text-emerald-900">已保存为确认裁定</p>
+                    <p class="mt-1 text-xs text-emerald-800">版本 {{ ruling.version }} · 引用 {{ ruling.citations.length }} 条</p>
+                  </div>
+                  <button class="min-h-11 rounded-xl border border-emerald-700 px-4 text-sm font-semibold text-emerald-900" @click="editingRuling = true">编辑裁定</button>
+                </div>
+
+                <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="confirmAnswer">{{ rulingSaving ? '正在保存…' : '保存为已确认裁定' }}</button>
+              </div>
             </article>
           </section>
         </div>

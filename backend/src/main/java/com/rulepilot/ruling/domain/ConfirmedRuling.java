@@ -74,6 +74,23 @@ public record ConfirmedRuling(
                 confidence, false, RulingStatus.CONFIRMED, createdBy, 0, now, now);
     }
 
+    public ConfirmedRuling revise(
+            String revisedShortVerdict,
+            String revisedExplanation,
+            List<RulingCitation> revisedCitations,
+            List<String> revisedExceptions,
+            RulingConfidence revisedConfidence,
+            Instant now) {
+        if (status != RulingStatus.CONFIRMED) {
+            throw new IllegalStateException("only a confirmed ruling can be revised");
+        }
+        return new ConfirmedRuling(
+                id, applicability, originalQuestion, normalizedQuestion, normalizedQuestionHash,
+                revisedShortVerdict, revisedExplanation, revisedCitations,
+                revisedExceptions == null ? List.of() : revisedExceptions,
+                revisedConfidence, official, status, createdBy, version + 1, createdAt, now);
+    }
+
     private static String normalizeQuestion(String value) {
         return normalized(value, "normalized question", 2000).toLowerCase(Locale.ROOT);
     }

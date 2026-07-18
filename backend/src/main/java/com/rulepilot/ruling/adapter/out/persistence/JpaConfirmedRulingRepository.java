@@ -1,6 +1,7 @@
 package com.rulepilot.ruling.adapter.out.persistence;
 
 import com.rulepilot.ruling.application.ConfirmedRulingRepository;
+import com.rulepilot.ruling.application.RulingVersionConflictException;
 import com.rulepilot.ruling.domain.ConfirmedRuling;
 import com.rulepilot.ruling.domain.RulingApplicability;
 import com.rulepilot.ruling.domain.RulingCitation;
@@ -18,6 +19,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.OrderColumn;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -46,6 +48,24 @@ public class JpaConfirmedRulingRepository implements ConfirmedRulingRepository {
     public Optional<ConfirmedRuling> find(UUID rulingId) {
         return Optional.ofNullable(entityManager.find(ConfirmedRulingEntity.class, rulingId))
                 .map(ConfirmedRulingEntity::toDomain);
+    }
+
+    @Override
+    public ConfirmedRuling update(ConfirmedRuling ruling, long expectedVersion) {
+        ConfirmedRulingEntity entity = entityManager.find(ConfirmedRulingEntity.class, ruling.id());
+        if (entity == null) {
+            throw new IllegalArgumentException("confirmed ruling does not exist");
+        }
+        if (entity.version != expectedVersion) {
+            throw new RulingVersionConflictException(entity.version);
+        }
+        entity.apply(ruling);
+        try {
+            entityManager.flush();
+        } catch (jakarta.persistence.OptimisticLockException exception) {
+            throw new RulingVersionConflictException(expectedVersion + 1);
+        }
+        return entity.toDomain();
     }
 
     @Override
@@ -126,6 +146,7 @@ class ConfirmedRulingEntity {
     @Column(name = "created_by", nullable = false)
     String createdBy;
 
+    @Version
     @Column(nullable = false)
     long version;
 
@@ -169,6 +190,17 @@ class ConfirmedRulingEntity {
                 citations.stream().map(RulingCitationValue::toDomain).toList(), exceptions,
                 RulingConfidence.valueOf(confidence), official, RulingStatus.valueOf(status),
                 createdBy, version, createdAt, updatedAt);
+    }
+
+    void apply(ConfirmedRuling ruling) {
+        shortVerdict = ruling.shortVerdict();
+        explanation = ruling.explanation();
+        citations = ruling.citations().stream()
+                .map(RulingCitationValue::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        exceptions = new ArrayList<>(ruling.exceptions());
+        confidence = ruling.confidence().name();
+        updatedAt = ruling.updatedAt();
     }
 }
 

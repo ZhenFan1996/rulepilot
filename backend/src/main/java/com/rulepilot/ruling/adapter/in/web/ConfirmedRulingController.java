@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,7 +33,7 @@ public class ConfirmedRulingController {
     @ResponseStatus(HttpStatus.CREATED)
     ConfirmedRuling confirm(@RequestBody ConfirmRulingRequest request, Principal principal) {
         return rulings.confirm(
-                request.editionId(), request.documentVersionId(), request.expansionIds(),
+                request.documentVersionId(), request.expansionIds(),
                 request.question(), request.shortVerdict(), request.explanation(), request.citationChunkIds(),
                 request.exceptions(), request.confidence(), principal.getName());
     }
@@ -42,11 +43,26 @@ public class ConfirmedRulingController {
         return rulings.get(rulingId, principal.getName());
     }
 
+    @PatchMapping("/{rulingId}")
+    ConfirmedRuling revise(
+            @PathVariable UUID rulingId, @RequestBody ReviseRulingRequest request, Principal principal) {
+        return rulings.revise(
+                rulingId, request.expectedVersion(), request.shortVerdict(), request.explanation(),
+                request.citationChunkIds(), request.exceptions(), request.confidence(), principal.getName());
+    }
+
     record ConfirmRulingRequest(
-            UUID editionId,
             UUID documentVersionId,
             Set<UUID> expansionIds,
             String question,
+            String shortVerdict,
+            String explanation,
+            List<UUID> citationChunkIds,
+            List<String> exceptions,
+            RulingConfidence confidence) {}
+
+    record ReviseRulingRequest(
+            long expectedVersion,
             String shortVerdict,
             String explanation,
             List<UUID> citationChunkIds,

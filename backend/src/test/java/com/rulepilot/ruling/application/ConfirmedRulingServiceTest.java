@@ -32,7 +32,7 @@ class ConfirmedRulingServiceTest {
         ConfirmedRulingService service = service(repository, Set.of(expansionId), List.of(evidence(chunkId)));
 
         ConfirmedRuling ruling = service.confirm(
-                editionId, versionId, Set.of(expansionId), "  How   are COINS scored? ",
+                versionId, Set.of(expansionId), "  How   are COINS scored? ",
                 "Coins score one point.", "Each remaining coin contributes one point.",
                 List.of(chunkId), List.of("Only remaining coins count."), RulingConfidence.HIGH, "alice");
 
@@ -55,7 +55,7 @@ class ConfirmedRulingServiceTest {
         ConfirmedRulingService missingEvidence = service(repository, Set.of(), List.of());
 
         assertThatThrownBy(() -> missingEvidence.confirm(
-                        editionId, versionId, Set.of(), "How is scoring resolved?",
+                        versionId, Set.of(), "How is scoring resolved?",
                         "One point.", "Each coin scores.", List.of(chunkId), List.of(),
                         RulingConfidence.MEDIUM, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -63,16 +63,38 @@ class ConfirmedRulingServiceTest {
 
         ConfirmedRulingService service = service(repository, Set.of(), List.of(evidence(chunkId)));
         service.confirm(
-                editionId, versionId, Set.of(), "How is scoring resolved?",
+                versionId, Set.of(), "How is scoring resolved?",
                 "One point.", "Each coin scores.", List.of(chunkId), List.of(),
                 RulingConfidence.MEDIUM, "alice");
 
         assertThatThrownBy(() -> service.confirm(
-                        editionId, versionId, Set.of(), "  HOW IS SCORING RESOLVED? ",
+                        versionId, Set.of(), "  HOW IS SCORING RESOLVED? ",
                         "One point.", "Each coin scores.", List.of(chunkId), List.of(),
                         RulingConfidence.MEDIUM, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("already exists");
+    }
+
+    @Test
+    void revisesAtExpectedVersionAndRejectsStaleEditor() {
+        InMemoryRulings repository = new InMemoryRulings();
+        ConfirmedRulingService service = service(repository, Set.of(), List.of(evidence(chunkId)));
+        ConfirmedRuling created = service.confirm(
+                versionId, Set.of(), "How are coins scored?", "One point.", "Each coin scores.",
+                List.of(chunkId), List.of(), RulingConfidence.MEDIUM, "alice");
+
+        ConfirmedRuling revised = service.revise(
+                created.id(), 0, "One point per remaining coin.", "Count coins after play ends.",
+                List.of(chunkId), List.of("Spent coins do not count."), RulingConfidence.HIGH, "alice");
+
+        assertThat(revised.version()).isEqualTo(1);
+        assertThat(revised.shortVerdict()).contains("remaining coin");
+        assertThatThrownBy(() -> service.revise(
+                        created.id(), 0, "Stale edit", "Stale edit", List.of(chunkId), List.of(),
+                        RulingConfidence.LOW, "alice"))
+                .isInstanceOf(RulingVersionConflictException.class)
+                .extracting("currentVersion")
+                .isEqualTo(1L);
     }
 
     private ConfirmedRulingService service(
@@ -107,6 +129,16 @@ class ConfirmedRulingServiceTest {
         @Override
         public Optional<ConfirmedRuling> find(UUID rulingId) {
             return values.stream().filter(ruling -> ruling.id().equals(rulingId)).findFirst();
+        }
+
+        @Override
+        public ConfirmedRuling update(ConfirmedRuling ruling, long expectedVersion) {
+            ConfirmedRuling current = find(ruling.id()).orElseThrow();
+            if (current.version() != expectedVersion) {
+                throw new RulingVersionConflictException(current.version());
+            }
+            values.set(values.indexOf(current), ruling);
+            return ruling;
         }
 
         @Override
