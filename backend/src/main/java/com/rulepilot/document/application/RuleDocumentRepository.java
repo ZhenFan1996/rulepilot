@@ -24,6 +24,10 @@ public interface RuleDocumentRepository {
 
     Optional<DocumentVersion> findVersion(UUID versionId);
 
+    long ruleDataVersion(UUID versionId);
+
+    long incrementRuleDataVersion(UUID versionId);
+
     void update(DocumentVersion version);
 
     void replacePages(UUID versionId, List<DocumentProcessing.ExtractedPage> pages);

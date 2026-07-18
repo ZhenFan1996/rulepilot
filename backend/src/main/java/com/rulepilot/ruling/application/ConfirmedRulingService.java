@@ -2,6 +2,7 @@ package com.rulepilot.ruling.application;
 
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup;
+import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.ruling.domain.ConfirmedRuling;
@@ -28,17 +29,20 @@ public class ConfirmedRulingService {
     private final DocumentVersionScopeLookup documents;
     private final RuleEvidenceLookup evidence;
     private final ConfirmedRulingRepository rulings;
+    private final RuleDataVersion ruleDataVersion;
     private final Clock clock = Clock.systemUTC();
 
     public ConfirmedRulingService(
             CatalogEditionLookup catalog,
             DocumentVersionScopeLookup documents,
             RuleEvidenceLookup evidence,
-            ConfirmedRulingRepository rulings) {
+            ConfirmedRulingRepository rulings,
+            RuleDataVersion ruleDataVersion) {
         this.catalog = catalog;
         this.documents = documents;
         this.evidence = evidence;
         this.rulings = rulings;
+        this.ruleDataVersion = ruleDataVersion;
     }
 
     @Transactional
@@ -71,7 +75,9 @@ public class ConfirmedRulingService {
         if (rulings.existsConfirmed(ruling.applicability(), ruling.normalizedQuestionHash())) {
             throw new IllegalArgumentException("a confirmed ruling already exists for this scope and question");
         }
-        return rulings.save(ruling);
+        ConfirmedRuling saved = rulings.save(ruling);
+        ruleDataVersion.increment(documentVersionId);
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -102,7 +108,9 @@ public class ConfirmedRulingService {
                 current.applicability().documentVersionId(), citationChunkIds);
         ConfirmedRuling revised = current.revise(
                 shortVerdict, explanation, citations, exceptions, confidence, Instant.now(clock));
-        return rulings.update(revised, expectedVersion);
+        ConfirmedRuling saved = rulings.update(revised, expectedVersion);
+        ruleDataVersion.increment(current.applicability().documentVersionId());
+        return saved;
     }
 
     private List<RulingCitation> verifiedCitations(UUID documentVersionId, List<UUID> citationChunkIds) {

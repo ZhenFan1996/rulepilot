@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup;
+import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.ruling.domain.ConfirmedRuling;
@@ -25,6 +26,7 @@ class ConfirmedRulingServiceTest {
     private final UUID versionId = UUID.randomUUID();
     private final UUID expansionId = UUID.randomUUID();
     private final UUID chunkId = UUID.randomUUID();
+    private final MutableRuleDataVersion ruleDataVersion = new MutableRuleDataVersion();
 
     @Test
     void savesConfirmedRulingWithTrustedVersionScopedCitation() {
@@ -40,6 +42,7 @@ class ConfirmedRulingServiceTest {
         assertThat(ruling.normalizedQuestion()).isEqualTo("how are coins scored?");
         assertThat(ruling.official()).isFalse();
         assertThat(ruling.version()).isZero();
+        assertThat(ruleDataVersion.current(versionId)).isEqualTo(2);
         assertThat(ruling.applicability().expansionIds()).containsExactly(expansionId);
         assertThat(ruling.citations()).singleElement().satisfies(citation -> {
             assertThat(citation.chunkId()).isEqualTo(chunkId);
@@ -73,6 +76,7 @@ class ConfirmedRulingServiceTest {
                         RulingConfidence.MEDIUM, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("already exists");
+        assertThat(ruleDataVersion.current(versionId)).isEqualTo(2);
     }
 
     @Test
@@ -88,6 +92,7 @@ class ConfirmedRulingServiceTest {
                 List.of(chunkId), List.of("Spent coins do not count."), RulingConfidence.HIGH, "alice");
 
         assertThat(revised.version()).isEqualTo(1);
+        assertThat(ruleDataVersion.current(versionId)).isEqualTo(3);
         assertThat(revised.shortVerdict()).contains("remaining coin");
         assertThatThrownBy(() -> service.revise(
                         created.id(), 0, "Stale edit", "Stale edit", List.of(chunkId), List.of(),
@@ -95,6 +100,7 @@ class ConfirmedRulingServiceTest {
                 .isInstanceOf(RulingVersionConflictException.class)
                 .extracting("currentVersion")
                 .isEqualTo(1L);
+        assertThat(ruleDataVersion.current(versionId)).isEqualTo(3);
     }
 
     private ConfirmedRulingService service(
@@ -109,7 +115,7 @@ class ConfirmedRulingServiceTest {
                 .filter(hit -> documentVersionId.equals(hit.documentVersionId()))
                 .filter(hit -> chunkIds.contains(hit.chunkId()))
                 .toList();
-        return new ConfirmedRulingService(catalog, documents, evidence, repository);
+        return new ConfirmedRulingService(catalog, documents, evidence, repository, ruleDataVersion);
     }
 
     private RuleEvidenceHit evidence(UUID id) {
@@ -146,6 +152,20 @@ class ConfirmedRulingServiceTest {
             return values.stream().anyMatch(ruling -> ruling.status() == RulingStatus.CONFIRMED
                     && ruling.applicability().equals(applicability)
                     && ruling.normalizedQuestionHash().equals(normalizedQuestionHash));
+        }
+    }
+
+    private static final class MutableRuleDataVersion implements RuleDataVersion {
+        private long value = 1;
+
+        @Override
+        public long current(UUID documentVersionId) {
+            return value;
+        }
+
+        @Override
+        public long increment(UUID documentVersionId) {
+            return ++value;
         }
     }
 }

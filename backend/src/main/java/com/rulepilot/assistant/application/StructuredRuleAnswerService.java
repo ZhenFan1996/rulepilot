@@ -13,6 +13,7 @@ import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
@@ -42,6 +43,7 @@ public class StructuredRuleAnswerService {
     private final RuleAnswerModel model;
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
+    private final RuleDataVersion ruleDataVersion;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
@@ -53,12 +55,14 @@ public class StructuredRuleAnswerService {
             RuleAnswerModel model,
             RuleAnswerCache cache,
             RuleAnswerRateLimiter rateLimiter,
+            RuleDataVersion ruleDataVersion,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
         this.model = model;
         this.cache = cache;
         this.rateLimiter = rateLimiter;
+        this.ruleDataVersion = ruleDataVersion;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
@@ -140,7 +144,8 @@ public class StructuredRuleAnswerService {
 
     private AnswerCacheKey cacheKey(UnderstoodQuestion question, QuestionContext context) {
         return new AnswerCacheKey(
-                context.documentVersionId(), question.normalizedQuestion(), context.currentLessonSection(),
+                context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
+                question.normalizedQuestion(), context.currentLessonSection(),
                 context.gamePhase(), context.playerCount(), context.activeExpansions());
     }
 

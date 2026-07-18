@@ -10,6 +10,7 @@ import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
+import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -146,11 +147,12 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void servesRepeatedValidatedAnswerFromVersionedCacheAndRecordsMetrics() {
+    void naturallyMissesOldCacheEntryAfterRuleDataVersionChanges() {
         RuleEvidenceHit source = evidence("SCORING");
         InMemoryAnswerCache cache = new InMemoryAnswerCache();
         RecordingRateLimiter rateLimiter = new RecordingRateLimiter();
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        MutableRuleDataVersion versions = new MutableRuleDataVersion();
         AtomicInteger modelCalls = new AtomicInteger();
         var service = new StructuredRuleAnswerService(
                 understanding,
@@ -163,18 +165,22 @@ class StructuredRuleAnswerServiceTest {
                 },
                 cache,
                 rateLimiter,
+                versions,
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
         StructuredRuleAnswer first = service.answer("How are coins scored?", context);
         StructuredRuleAnswer second = service.answer("How are coins scored?", context);
+        versions.increment(versionId);
+        StructuredRuleAnswer afterRuleChange = service.answer("How are coins scored?", context);
 
         assertThat(second).isEqualTo(first);
-        assertThat(modelCalls).hasValue(1);
-        assertThat(rateLimiter.userChecks).isEqualTo(2);
-        assertThat(rateLimiter.modelAcquires).isEqualTo(1);
-        assertThat(rateLimiter.releases).isEqualTo(1);
-        assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "miss").count()).isEqualTo(1);
+        assertThat(afterRuleChange).isEqualTo(first);
+        assertThat(modelCalls).hasValue(2);
+        assertThat(rateLimiter.userChecks).isEqualTo(3);
+        assertThat(rateLimiter.modelAcquires).isEqualTo(2);
+        assertThat(rateLimiter.releases).isEqualTo(2);
+        assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "miss").count()).isEqualTo(2);
         assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "hit").count()).isEqualTo(1);
     }
 
@@ -194,6 +200,7 @@ class StructuredRuleAnswerServiceTest {
                 },
                 new UnavailableAnswerCache(),
                 new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -229,6 +236,7 @@ class StructuredRuleAnswerServiceTest {
                 request -> null,
                 new InMemoryAnswerCache(),
                 unavailableLimiter,
+                new MutableRuleDataVersion(),
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -240,6 +248,7 @@ class StructuredRuleAnswerServiceTest {
     private StructuredRuleAnswerService answerService(HybridRuleSearch retrieval, RuleAnswerModel model) {
         return new StructuredRuleAnswerService(
                 understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
                 new SimpleMeterRegistry());
     }
 
@@ -288,6 +297,20 @@ class StructuredRuleAnswerServiceTest {
         public Permit acquireModel(String username, UUID gameSessionId, String providerId) {
             modelAcquires++;
             return () -> releases++;
+        }
+    }
+
+    private static final class MutableRuleDataVersion implements RuleDataVersion {
+        private long value = 1;
+
+        @Override
+        public long current(UUID documentVersionId) {
+            return value;
+        }
+
+        @Override
+        public long increment(UUID documentVersionId) {
+            return ++value;
         }
     }
 }

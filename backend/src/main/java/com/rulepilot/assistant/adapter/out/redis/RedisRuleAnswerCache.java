@@ -22,7 +22,7 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class RedisRuleAnswerCache implements RuleAnswerCache {
 
-    private static final String KEY_PREFIX = "rulepilot:answer:v1:";
+    private static final String KEY_PREFIX = "rulepilot:answer:data-v";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper json = new ObjectMapper();
@@ -85,7 +85,7 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
                 value(key.gamePhase()),
                 key.playerCount() == null ? "" : key.playerCount().toString(),
                 key.activeExpansions().stream().sorted().collect(Collectors.joining(",")));
-        return KEY_PREFIX + key.documentVersionId() + ":" + sha256(canonical);
+        return KEY_PREFIX + key.ruleDataVersion() + ":" + key.documentVersionId() + ":" + sha256(canonical);
     }
 
     private String value(String value) {

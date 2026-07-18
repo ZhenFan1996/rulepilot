@@ -13,6 +13,7 @@ public interface RuleAnswerCache {
 
     record AnswerCacheKey(
             UUID documentVersionId,
+            long ruleDataVersion,
             String normalizedQuestion,
             String currentLessonSection,
             String gamePhase,
@@ -20,7 +21,8 @@ public interface RuleAnswerCache {
             Set<String> activeExpansions) {
 
         public AnswerCacheKey {
-            if (documentVersionId == null || normalizedQuestion == null || normalizedQuestion.isBlank()) {
+            if (documentVersionId == null || ruleDataVersion < 1
+                    || normalizedQuestion == null || normalizedQuestion.isBlank()) {
                 throw new IllegalArgumentException("answer cache key is invalid");
             }
             activeExpansions = activeExpansions == null ? Set.of() : Set.copyOf(activeExpansions);

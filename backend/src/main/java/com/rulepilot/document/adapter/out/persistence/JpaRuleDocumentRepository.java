@@ -96,6 +96,30 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public long ruleDataVersion(UUID versionId) {
+        DocumentVersionEntity version = entityManager.find(DocumentVersionEntity.class, versionId);
+        if (version == null) {
+            throw new IllegalArgumentException("document version does not exist");
+        }
+        return version.ruleDataVersion;
+    }
+
+    @Override
+    public long incrementRuleDataVersion(UUID versionId) {
+        Object updated = entityManager
+                .createNativeQuery("""
+                        UPDATE document_version
+                        SET rule_data_version = rule_data_version + 1
+                        WHERE id = :versionId
+                        RETURNING rule_data_version
+                        """)
+                .setParameter("versionId", versionId)
+                .getSingleResult();
+        entityManager.clear();
+        return ((Number) updated).longValue();
+    }
+
+    @Override
     public void update(DocumentVersion version) {
         DocumentVersionEntity entity = entityManager.find(DocumentVersionEntity.class, version.id());
         if (entity == null) {
@@ -228,6 +252,9 @@ class DocumentVersionEntity {
     @Column(name = "processing_status", nullable = false)
     String processingStatus;
 
+    @Column(name = "rule_data_version", nullable = false)
+    long ruleDataVersion;
+
     @Column(name = "created_at", nullable = false)
     Instant createdAt;
 
@@ -243,6 +270,7 @@ class DocumentVersionEntity {
         this.size = version.size();
         this.contentType = version.contentType();
         this.processingStatus = version.status().name();
+        this.ruleDataVersion = 1;
         this.createdAt = version.createdAt();
     }
 
