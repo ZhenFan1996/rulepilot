@@ -83,6 +83,7 @@ public class GroundedTeachingAgent {
 
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
         List<LessonSection> sections = new ArrayList<>();
+        Map<TeachingSectionType, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int toolCalls = 0;
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
             if (toolCalls >= maxToolCalls) {
@@ -145,7 +146,7 @@ public class GroundedTeachingAgent {
             }
 
             try {
-                sections.add(compose(plan, planned, evidence, assistantRunId));
+                sections.add(compose(plan, planned, pacing.get(planned.type()), evidence, assistantRunId));
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
@@ -183,6 +184,7 @@ public class GroundedTeachingAgent {
     private LessonSection compose(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
+            TeachingPacingPolicy.SectionPacing pacing,
             List<RuleEvidence> evidence,
             UUID assistantRunId) {
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
@@ -190,6 +192,8 @@ public class GroundedTeachingAgent {
                 plan.playerCount(),
                 plan.beginnerCount(),
                 plan.durationMinutes(),
+                pacing.durationSeconds(),
+                pacing.maxSteps(),
                 evidence.stream().map(this::toModelEvidence).toList());
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
@@ -199,7 +203,7 @@ public class GroundedTeachingAgent {
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
-        validateDraft(draft);
+        validateDraft(draft, modelRequest.maxSteps());
 
         List<UUID> allEvidenceIds = evidence.stream().map(RuleEvidence::chunkId).toList();
         List<EvidenceClaim> generatedClaims = new ArrayList<>();
@@ -278,12 +282,12 @@ public class GroundedTeachingAgent {
         return new LessonStep(position, draft.text().strip(), pages, List.copyOf(citationIds));
     }
 
-    private void validateDraft(SectionDraft draft) {
+    private void validateDraft(SectionDraft draft, int maxSteps) {
         if (draft == null || draft.title() == null || draft.title().isBlank() || draft.title().length() > 160
                 || draft.visualKind() == null
                 || draft.visualCaption() == null || draft.visualCaption().isBlank()
                 || draft.visualCaption().length() > 240
-                || draft.steps().isEmpty() || draft.steps().size() > MAX_STEPS_PER_SECTION) {
+                || draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps)) {
             throw new IllegalArgumentException("teaching section output is invalid");
         }
     }

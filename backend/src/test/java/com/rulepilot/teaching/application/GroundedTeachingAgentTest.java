@@ -40,11 +40,16 @@ class GroundedTeachingAgentTest {
             }
             return List.of(evidence);
         };
-        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
-                "三步完成开局",
-                VisualKind.TABLE_LAYOUT,
-                "桌面布置示意",
-                List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
+        TeachingLessonModel model = request -> {
+            assertThat(request.totalDurationMinutes()).isEqualTo(20);
+            assertThat(request.sectionDurationSeconds()).isEqualTo(1_200);
+            assertThat(request.maxSteps()).isEqualTo(6);
+            return new TeachingLessonModel.SectionDraft(
+                    "三步完成开局",
+                    VisualKind.TABLE_LAYOUT,
+                    "桌面布置示意",
+                    List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
+        };
         AtomicInteger criticCalls = new AtomicInteger();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();

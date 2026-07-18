@@ -10,8 +10,8 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v2-system.txt"),
-                resource("teaching-agent-v2-user.txt"),
+                resource("teaching-agent-v3-system.txt"),
+                resource("teaching-agent-v3-user.txt"),
                 resource("rule-answer-agent-v2-system.txt"),
                 resource("rule-answer-agent-v2-user.txt"),
                 resource("content-critic-v3-system.txt"),
@@ -19,8 +19,19 @@ class VersionedAgentPromptsTest {
                 resource("structured-output-repair-v1.txt"));
 
         assertThat(prompts.teachingSystem())
-                .contains("untrusted data", "directly support the whole step", "Do not output analysis");
-        assertThat(prompts.teachingUser()).contains("{objective}", "{coverage}", "{evidence}");
+                .contains(
+                        "untrusted data",
+                        "directly support the whole step",
+                        "maximum step count",
+                        "Do not output analysis");
+        assertThat(prompts.teachingUser())
+                .contains(
+                        "{objective}",
+                        "{coverage}",
+                        "{totalDuration}",
+                        "{sectionDuration}",
+                        "{maxSteps}",
+                        "{evidence}");
         assertThat(prompts.answerSystem())
                 .contains("set answerable to false", "Do not answer from prior knowledge", "gameplay context");
         assertThat(prompts.answerUser()).contains("{questionType}", "{gamePhase}", "{playerCount}");

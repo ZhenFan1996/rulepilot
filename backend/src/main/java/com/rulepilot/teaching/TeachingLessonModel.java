@@ -17,10 +17,14 @@ public interface TeachingLessonModel {
             TeachingSectionType sectionType,
             int playerCount,
             int beginnerCount,
-            int durationMinutes,
+            int totalDurationMinutes,
+            int sectionDurationSeconds,
+            int maxSteps,
             List<EvidenceInput> evidence) {
         public SectionRequest {
-            if (sectionType == null || playerCount < 1 || beginnerCount < 0 || durationMinutes < 1
+            if (sectionType == null || playerCount < 1 || beginnerCount < 0 || totalDurationMinutes < 1
+                    || sectionDurationSeconds < 10 || sectionDurationSeconds > totalDurationMinutes * 60
+                    || maxSteps < 1 || maxSteps > 6
                     || evidence == null || evidence.isEmpty()) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
