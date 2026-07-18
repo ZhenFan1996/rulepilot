@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help bootstrap dev format backend-test frontend-test integration-test e2e verify compose-up compose-down
+.PHONY: help bootstrap dev format backend-test frontend-test integration-test performance-test e2e verify compose-up compose-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -37,6 +37,9 @@ frontend-test: ## Run frontend typecheck, lint, unit tests, and build
 
 integration-test: ## Run local infrastructure integration smoke tests
 	@sh scripts/run-integration-tests.sh
+
+performance-test: ## Run the self-contained local PDF, retrieval, cache, and answer benchmark
+	@sh scripts/run-performance-tests.sh
 
 e2e: ## Run Playwright end-to-end tests
 	@if [ -f frontend/package.json ]; then \
