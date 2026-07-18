@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
+import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { buildCardQuestion } from '@/lib/cardOcr'
 import {
   finishSection,
@@ -16,6 +17,7 @@ import {
   loadOfflineKnowledge,
   type OfflineKnowledgeEntry,
 } from '@/lib/offlineKnowledge'
+import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
 
 interface TeachingPlan {
   id: string
@@ -410,6 +412,12 @@ async function askCurrentSection() {
 function useCardText(text: string) {
   question.value = buildCardQuestion(text)
   cardOcrOpen.value = false
+  answer.value = null
+  answerError.value = ''
+}
+
+function useVoiceTranscript(text: string) {
+  question.value = mergeVoiceQuestion(question.value, text)
   answer.value = null
   answerError.value = ''
 }
@@ -996,14 +1004,17 @@ onUnmounted(() => {
             </div>
 
             <form class="mt-5" @submit.prevent="askCurrentSection">
-              <button
-                type="button"
-                class="mb-3 min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
-                :disabled="answerLoading || !online"
-                @click="cardOcrOpen = true"
-              >
-                拍照识别卡牌文字
-              </button>
+              <div class="mb-3 flex flex-wrap items-start gap-3">
+                <button
+                  type="button"
+                  class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  :disabled="answerLoading || !online"
+                  @click="cardOcrOpen = true"
+                >
+                  拍照识别卡牌文字
+                </button>
+                <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="useVoiceTranscript" />
+              </div>
               <label for="lesson-question" class="sr-only">针对当前讲解章节提问</label>
               <textarea
                 id="lesson-question"
