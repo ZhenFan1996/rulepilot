@@ -30,7 +30,8 @@ class SecurityHeadersIntegrationTest {
                         "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
                                 + "form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; "
                                 + "worker-src 'self' blob:; style-src 'self'; "
-                                + "img-src 'self' data:; font-src 'self'; media-src 'self' blob:; "
+                                + "img-src 'self' data: https://cf.geekdo-images.com; "
+                                + "font-src 'self'; media-src 'self' blob:; "
                                 + "connect-src 'self'"))
                 .andExpect(header().string("Referrer-Policy", "strict-origin-when-cross-origin"))
                 .andExpect(header().string(

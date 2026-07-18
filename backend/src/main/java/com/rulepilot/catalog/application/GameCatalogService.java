@@ -52,7 +52,10 @@ public class GameCatalogService {
     public List<GameCatalogView> listCatalog() {
         return repository.findGames().stream()
                 .map(game -> new GameCatalogView(
-                        game, repository.findEditions(game.id()), repository.findExpansions(game.id())))
+                        game,
+                        repository.findEditions(game.id()),
+                        repository.findExpansions(game.id()),
+                        repository.findBggMetadata(game.id())))
                 .toList();
     }
 

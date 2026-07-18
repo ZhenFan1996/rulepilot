@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.domain.Expansion;
+import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
 import java.util.List;
@@ -15,9 +16,15 @@ public interface CatalogRepository {
 
     Expansion save(Expansion expansion);
 
+    BggGameMetadata save(BggGameMetadata metadata);
+
     Optional<Game> findGame(UUID gameId);
 
     Optional<GameEdition> findEdition(UUID editionId);
+
+    Optional<Game> findGameByBggId(int bggId);
+
+    Optional<BggGameMetadata> findBggMetadata(UUID gameId);
 
     List<Game> findGames();
 

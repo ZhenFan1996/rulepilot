@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
 import com.rulepilot.catalog.application.CatalogRepository;
+import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
@@ -53,6 +54,13 @@ public class JpaCatalogRepository implements CatalogRepository {
     }
 
     @Override
+    public BggGameMetadata save(BggGameMetadata metadata) {
+        entityManager.persist(new BggGameMetadataEntity(metadata));
+        entityManager.flush();
+        return metadata;
+    }
+
+    @Override
     public Optional<Game> findGame(UUID gameId) {
         GameEntity entity = entityManager.find(GameEntity.class, gameId);
         return Optional.ofNullable(entity).map(GameEntity::toDomain);
@@ -62,6 +70,24 @@ public class JpaCatalogRepository implements CatalogRepository {
     public Optional<GameEdition> findEdition(UUID editionId) {
         GameEditionEntity entity = entityManager.find(GameEditionEntity.class, editionId);
         return Optional.ofNullable(entity).map(GameEditionEntity::toDomain);
+    }
+
+    @Override
+    public Optional<Game> findGameByBggId(int bggId) {
+        return entityManager.createQuery(
+                        "select game from CatalogGameEntity game, CatalogBggGameMetadataEntity metadata "
+                                + "where metadata.gameId = game.id and metadata.bggId = :bggId",
+                        GameEntity.class)
+                .setParameter("bggId", bggId)
+                .getResultStream()
+                .findFirst()
+                .map(GameEntity::toDomain);
+    }
+
+    @Override
+    public Optional<BggGameMetadata> findBggMetadata(UUID gameId) {
+        return Optional.ofNullable(entityManager.find(BggGameMetadataEntity.class, gameId))
+                .map(BggGameMetadataEntity::toDomain);
     }
 
     @Override
@@ -101,6 +127,66 @@ public class JpaCatalogRepository implements CatalogRepository {
                         UUID.class)
                 .setParameter("expansionId", expansionId)
                 .getResultList());
+    }
+}
+
+@Entity(name = "CatalogBggGameMetadataEntity")
+@Table(name = "bgg_game_metadata")
+class BggGameMetadataEntity {
+
+    @Id
+    @Column(name = "game_id")
+    UUID gameId;
+
+    @Column(name = "bgg_id", nullable = false, unique = true)
+    int bggId;
+
+    @Column(nullable = false, columnDefinition = "text")
+    String description;
+
+    @Column(name = "thumbnail_url", nullable = false, columnDefinition = "text")
+    String thumbnailUrl;
+
+    @Column(name = "min_players")
+    Integer minPlayers;
+
+    @Column(name = "max_players")
+    Integer maxPlayers;
+
+    @Column(name = "playing_time_minutes")
+    Integer playingTimeMinutes;
+
+    @Column(name = "minimum_age")
+    Integer minimumAge;
+
+    @Column(name = "imported_at", nullable = false)
+    Instant importedAt;
+
+    protected BggGameMetadataEntity() {}
+
+    BggGameMetadataEntity(BggGameMetadata metadata) {
+        gameId = metadata.gameId();
+        bggId = metadata.bggId();
+        description = metadata.description();
+        thumbnailUrl = metadata.thumbnailUrl();
+        minPlayers = metadata.minPlayers();
+        maxPlayers = metadata.maxPlayers();
+        playingTimeMinutes = metadata.playingTimeMinutes();
+        minimumAge = metadata.minimumAge();
+        importedAt = metadata.importedAt();
+    }
+
+    BggGameMetadata toDomain() {
+        return new BggGameMetadata(
+                gameId,
+                bggId,
+                description,
+                thumbnailUrl,
+                minPlayers,
+                maxPlayers,
+                playingTimeMinutes,
+                minimumAge,
+                importedAt);
     }
 }
 

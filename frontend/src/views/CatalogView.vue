@@ -31,6 +31,39 @@ interface GameResponse {
   game: GameDetails
   editions: EditionDetails[]
   expansions: ExpansionDetails[]
+  bggMetadata: BggMetadata | null
+}
+
+interface BggMetadata {
+  bggId: number
+  description: string
+  thumbnailUrl: string
+  minPlayers: number | null
+  maxPlayers: number | null
+  playingTimeMinutes: number | null
+  minimumAge: number | null
+  bggUrl: string
+}
+
+interface BggSearchResult {
+  bggId: number
+  name: string
+  publicationYear: number | null
+  bggUrl: string
+}
+
+interface BggImportResponse {
+  game: GameDetails
+  edition: EditionDetails
+  bggId: number
+  description: string
+  thumbnailUrl: string
+  minPlayers: number | null
+  maxPlayers: number | null
+  playingTimeMinutes: number | null
+  minimumAge: number | null
+  bggUrl: string
+  alreadyImported: boolean
 }
 
 const router = useRouter()
@@ -41,6 +74,13 @@ const loading = ref(true)
 const saving = ref(false)
 const message = ref('')
 const errorMessage = ref('')
+const bggConfigured = ref<boolean | null>(null)
+const bggQuery = ref('')
+const bggResults = ref<BggSearchResult[]>([])
+const bggSearching = ref(false)
+const bggImportingId = ref<number | null>(null)
+const bggError = ref('')
+const importedBgg = ref<BggImportResponse | null>(null)
 
 const gameName = ref('')
 const editionName = ref('')
@@ -67,6 +107,54 @@ async function loadCatalog() {
     errorMessage.value = error instanceof Error ? error.message : '无法读取游戏目录。'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadBggStatus() {
+  try {
+    const response = await fetch('/api/v1/bgg/status', { credentials: 'include' })
+    if (response.status === 401) return
+    if (!response.ok) throw new Error()
+    bggConfigured.value = ((await response.json()) as { configured: boolean }).configured
+  } catch {
+    bggConfigured.value = false
+  }
+}
+
+async function searchBgg() {
+  if (bggQuery.value.trim().length < 2) return
+  bggSearching.value = true
+  bggError.value = ''
+  importedBgg.value = null
+  try {
+    const response = await fetch(`/api/v1/bgg/search?q=${encodeURIComponent(bggQuery.value.trim())}`, { credentials: 'include' })
+    if (response.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (response.status === 503) throw new Error('后端尚未配置 BGG Application Token。')
+    if (!response.ok) throw new Error('BGG 暂时无法完成搜索，请稍后重试。')
+    bggResults.value = (await response.json()) as BggSearchResult[]
+  } catch (error) {
+    bggError.value = error instanceof Error ? error.message : 'BGG 搜索失败。'
+  } finally {
+    bggSearching.value = false
+  }
+}
+
+async function importBggGame(result: BggSearchResult) {
+  bggImportingId.value = result.bggId
+  bggError.value = ''
+  try {
+    const imported = await post<BggImportResponse>(`/api/v1/bgg/games/${result.bggId}/import`, {})
+    importedBgg.value = imported
+    selectedGameId.value = imported.game.id
+    message.value = imported.alreadyImported ? `${imported.game.name} 已在目录中` : `已从 BGG 导入 ${imported.game.name}`
+    await loadCatalog()
+  } catch (error) {
+    bggError.value = error instanceof Error ? error.message : 'BGG 导入失败。'
+  } finally {
+    bggImportingId.value = null
   }
 }
 
@@ -147,7 +235,7 @@ async function createExpansion() {
   })
 }
 
-onMounted(loadCatalog)
+onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
 </script>
 
 <template>
@@ -173,6 +261,60 @@ onMounted(loadCatalog)
           </div>
         </form>
 
+        <section class="mt-5 rounded-3xl border border-copper/20 bg-paper p-5">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-copper">BOARDGAMEGEEK</p>
+              <h2 class="mt-2 font-display text-xl font-semibold">从 BGG 查找游戏</h2>
+            </div>
+            <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by BoardGameGeek">
+              <img src="https://cf.geekdo-images.com/HZy35cmzmmyV9BarSuk6ug__small/img/gbE7sulIurZE_Tx8EQJXnZSKI6w%3D/fit-in/200x150/filters%3Astrip_icc%28%29/pic7779581.png" alt="Powered by BGG" class="h-10 w-auto" referrerpolicy="no-referrer">
+            </a>
+          </div>
+
+          <div v-if="bggConfigured === false" class="mt-4 rounded-2xl bg-copper/8 p-4 text-sm leading-6 text-ink/65">
+            需要先在 BGG 注册应用，并在 `.env` 中填写 `BGG_API_TOKEN`。
+            <a href="https://boardgamegeek.com/applications" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo underline">前往 BGG Applications</a>
+          </div>
+
+          <form v-else class="mt-4 flex gap-3" @submit.prevent="searchBgg">
+            <input v-model="bggQuery" required minlength="2" maxlength="120" placeholder="输入英文或原版游戏名" class="min-w-0 flex-1 rounded-2xl border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
+            <button :disabled="bggSearching" class="rounded-2xl bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? '搜索中…' : '搜索' }}</button>
+          </form>
+
+          <p v-if="bggError" class="mt-4 text-sm text-red-700" role="alert">{{ bggError }}</p>
+          <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-ink/45">没有匹配结果，请尝试原版名称或减少关键词。</p>
+
+          <ul v-if="bggResults.length" class="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
+            <li v-for="result in bggResults" :key="result.bggId" class="flex items-center justify-between gap-3 rounded-2xl border border-ink/8 bg-canvas p-3">
+              <div class="min-w-0">
+                <a :href="result.bggUrl" target="_blank" rel="noopener noreferrer" class="block truncate font-semibold hover:text-indigo">{{ result.name }}</a>
+                <p class="mt-1 text-xs text-ink/45">{{ result.publicationYear ?? '年份未知' }} · BGG #{{ result.bggId }}</p>
+              </div>
+              <button type="button" :disabled="bggImportingId !== null" class="shrink-0 rounded-xl border border-indigo/20 px-3 py-2 text-sm font-semibold text-indigo disabled:opacity-40" @click="importBggGame(result)">
+                {{ bggImportingId === result.bggId ? '读取中…' : '读取并导入' }}
+              </button>
+            </li>
+          </ul>
+
+          <article v-if="importedBgg" class="mt-5 rounded-2xl bg-ink-panel p-4 text-panel-text">
+            <div class="flex gap-4">
+              <img v-if="importedBgg.thumbnailUrl" :src="importedBgg.thumbnailUrl" :alt="`${importedBgg.game.name} 的 BGG 缩略图`" class="h-24 w-24 rounded-xl object-cover" referrerpolicy="no-referrer">
+              <div>
+                <h3 class="font-display text-lg font-semibold">{{ importedBgg.game.name }}</h3>
+                <p class="mt-2 text-xs text-panel-text/55">
+                  {{ importedBgg.minPlayers ?? '?' }}–{{ importedBgg.maxPlayers ?? '?' }} 人 ·
+                  {{ importedBgg.playingTimeMinutes ?? '?' }} 分钟 ·
+                  {{ importedBgg.minimumAge ?? '?' }} 岁以上
+                </p>
+                <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-copper">查看 BGG 原始页面 ↗</a>
+              </div>
+            </div>
+            <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-panel-text/65">{{ importedBgg.description }}</p>
+            <p class="mt-3 text-[0.68rem] text-panel-text/35">BGG 元数据仅用于游戏目录，不会作为 Agent 或 RAG 规则证据。</p>
+          </article>
+        </section>
+
         <p v-if="message" class="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
         <p v-if="errorMessage" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
       </section>
@@ -189,6 +331,24 @@ onMounted(loadCatalog)
           </label>
 
           <div v-if="selectedGame" class="grid gap-6 xl:grid-cols-2">
+            <article v-if="selectedGame.bggMetadata" class="rounded-3xl border border-copper/20 bg-ink-panel p-5 text-panel-text xl:col-span-2">
+              <div class="flex gap-4">
+                <img v-if="selectedGame.bggMetadata.thumbnailUrl" :src="selectedGame.bggMetadata.thumbnailUrl" :alt="`${selectedGame.game.name} 的 BGG 缩略图`" class="h-28 w-28 rounded-2xl object-cover" referrerpolicy="no-referrer">
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-copper">BOARDGAMEGEEK</p>
+                  <h2 class="mt-2 font-display text-2xl font-semibold">{{ selectedGame.game.name }}</h2>
+                  <p class="mt-2 text-sm text-panel-text/60">
+                    {{ selectedGame.bggMetadata.minPlayers ?? '?' }}–{{ selectedGame.bggMetadata.maxPlayers ?? '?' }} 人 ·
+                    {{ selectedGame.bggMetadata.playingTimeMinutes ?? '?' }} 分钟 ·
+                    {{ selectedGame.bggMetadata.minimumAge ?? '?' }} 岁以上
+                  </p>
+                  <a :href="selectedGame.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-copper">查看 BGG 原始页面 ↗</a>
+                </div>
+              </div>
+              <p v-if="selectedGame.bggMetadata.description" class="mt-4 max-h-36 overflow-y-auto text-sm leading-6 text-panel-text/65">{{ selectedGame.bggMetadata.description }}</p>
+              <p class="mt-3 text-[0.68rem] text-panel-text/35">BGG 元数据仅用于游戏目录，不会作为 Agent 或 RAG 规则证据。</p>
+            </article>
+
             <form class="rounded-3xl border border-ink/10 bg-paper p-5" @submit.prevent="createEdition">
               <h2 class="font-display text-xl font-semibold">添加版本</h2>
               <div class="mt-5 space-y-3">

@@ -31,6 +31,9 @@ public record GameEdition(
 
     private static String normalizeLanguage(String language) {
         String normalized = CatalogText.required(language, "language", 20).replace('_', '-');
+        if (normalized.equalsIgnoreCase("und")) {
+            return "und";
+        }
         Locale locale = Locale.forLanguageTag(normalized);
         if (locale.getLanguage().isBlank()) {
             throw new IllegalArgumentException("language must be a valid language tag");

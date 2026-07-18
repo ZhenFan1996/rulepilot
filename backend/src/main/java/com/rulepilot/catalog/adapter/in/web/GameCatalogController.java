@@ -1,7 +1,11 @@
 package com.rulepilot.catalog.adapter.in.web;
 
+import com.rulepilot.catalog.application.BggCatalogImportService;
+import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import com.rulepilot.catalog.application.GameCatalogService;
 import com.rulepilot.catalog.application.GameCatalogView;
+import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
@@ -16,8 +20,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -25,14 +31,33 @@ import org.springframework.web.bind.annotation.RestController;
 public class GameCatalogController {
 
     private final GameCatalogService catalogService;
+    private final BggCatalogImportService bggService;
 
-    public GameCatalogController(GameCatalogService catalogService) {
+    public GameCatalogController(GameCatalogService catalogService, BggCatalogImportService bggService) {
         this.catalogService = catalogService;
+        this.bggService = bggService;
     }
 
     @GetMapping("/games")
     List<GameResponse> listGames() {
         return catalogService.listCatalog().stream().map(GameResponse::from).toList();
+    }
+
+    @GetMapping("/bgg/status")
+    BggStatus bggStatus() {
+        return new BggStatus(bggService.configured());
+    }
+
+    @GetMapping("/bgg/search")
+    List<BggSearchResult> searchBgg(@RequestParam("q") String query) {
+        requireBgg();
+        return bggService.search(query).stream().map(BggSearchResult::from).toList();
+    }
+
+    @PostMapping("/bgg/games/{bggId}/import")
+    BggImportResponse importBggGame(@PathVariable int bggId) {
+        requireBgg();
+        return BggImportResponse.from(bggService.importGame(bggId));
     }
 
     @PostMapping("/games")
@@ -61,12 +86,87 @@ public class GameCatalogController {
 
     record CreateExpansionRequest(String name, Set<UUID> compatibleEditionIds) {}
 
-    record GameResponse(GameDetails game, List<EditionDetails> editions, List<ExpansionDetails> expansions) {
+    private void requireBgg() {
+        if (!bggService.configured()) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE, "BGG application token is not configured");
+        }
+    }
+
+    record BggStatus(boolean configured) {}
+
+    record BggSearchResult(int bggId, String name, Integer publicationYear, String bggUrl) {
+        static BggSearchResult from(SearchResult result) {
+            return new BggSearchResult(
+                    result.bggId(),
+                    result.name(),
+                    result.publicationYear(),
+                    "https://boardgamegeek.com/boardgame/" + result.bggId());
+        }
+    }
+
+    record BggImportResponse(
+            GameDetails game,
+            EditionDetails edition,
+            int bggId,
+            String description,
+            String thumbnailUrl,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer playingTimeMinutes,
+            Integer minimumAge,
+            String bggUrl,
+            boolean alreadyImported) {
+        static BggImportResponse from(ImportedGame imported) {
+            var metadata = imported.metadata();
+            return new BggImportResponse(
+                    GameDetails.from(imported.game()),
+                    EditionDetails.from(imported.edition()),
+                    metadata.bggId(),
+                    metadata.description(),
+                    metadata.thumbnailUrl(),
+                    metadata.minPlayers(),
+                    metadata.maxPlayers(),
+                    metadata.playingTimeMinutes(),
+                    metadata.minimumAge(),
+                    "https://boardgamegeek.com/boardgame/" + metadata.bggId(),
+                    imported.alreadyImported());
+        }
+    }
+
+    record GameResponse(
+            GameDetails game,
+            List<EditionDetails> editions,
+            List<ExpansionDetails> expansions,
+            BggMetadataDetails bggMetadata) {
         static GameResponse from(GameCatalogView view) {
             return new GameResponse(
                     GameDetails.from(view.game()),
                     view.editions().stream().map(EditionDetails::from).toList(),
-                    view.expansions().stream().map(ExpansionDetails::from).toList());
+                    view.expansions().stream().map(ExpansionDetails::from).toList(),
+                    view.bggMetadata().map(BggMetadataDetails::from).orElse(null));
+        }
+    }
+
+    record BggMetadataDetails(
+            int bggId,
+            String description,
+            String thumbnailUrl,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer playingTimeMinutes,
+            Integer minimumAge,
+            String bggUrl) {
+        static BggMetadataDetails from(BggGameMetadata metadata) {
+            return new BggMetadataDetails(
+                    metadata.bggId(),
+                    metadata.description(),
+                    metadata.thumbnailUrl(),
+                    metadata.minPlayers(),
+                    metadata.maxPlayers(),
+                    metadata.playingTimeMinutes(),
+                    metadata.minimumAge(),
+                    "https://boardgamegeek.com/boardgame/" + metadata.bggId());
         }
     }
 
