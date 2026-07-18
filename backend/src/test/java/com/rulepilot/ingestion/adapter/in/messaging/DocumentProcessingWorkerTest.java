@@ -1,5 +1,6 @@
 package com.rulepilot.ingestion.adapter.in.messaging;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -13,6 +14,7 @@ import com.rulepilot.document.DocumentProcessingIdempotency;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -31,6 +33,7 @@ class DocumentProcessingWorkerTest {
         UUID documentVersionId = UUID.randomUUID();
         UUID jobId = UUID.randomUUID();
         UUID eventId = UUID.randomUUID();
+        var metrics = new SimpleMeterRegistry();
         String payload = """
                 {"schemaVersion":1,"documentVersionId":"%s","processingJobId":"%s","pipelineVersion":"v1"}
                 """.formatted(documentVersionId, jobId);
@@ -38,7 +41,7 @@ class DocumentProcessingWorkerTest {
         var command = new DocumentProcessingCommand(1, documentVersionId, jobId, "v1", DocumentProcessingStage.PARSE);
         when(idempotency.begin(command, eventId, 1)).thenReturn(true);
 
-        worker(ingestion, commands, jobs, idempotency, failures).process(message(payload, eventId, 1));
+        worker(ingestion, commands, jobs, idempotency, failures, metrics).process(message(payload, eventId, 1));
 
         verify(idempotency).begin(command, eventId, 1);
         verify(jobs).stageStarted(jobId, DocumentProcessingStage.PARSE);
@@ -46,6 +49,14 @@ class DocumentProcessingWorkerTest {
         verify(commands).publish(new DocumentProcessingCommand(
                 1, documentVersionId, jobId, "v1", DocumentProcessingStage.CHUNK));
         verify(idempotency).complete(command);
+        assertThat(metrics
+                        .counter("rulepilot.document.processing.attempts", "stage", "parse", "outcome", "completed")
+                        .count())
+                .isEqualTo(1);
+        assertThat(metrics
+                        .timer("rulepilot.document.processing.stage.duration", "stage", "parse", "outcome", "completed")
+                        .count())
+                .isEqualTo(1);
     }
 
     @Test
@@ -165,7 +176,18 @@ class DocumentProcessingWorkerTest {
             DocumentProcessingJobs jobs,
             DocumentProcessingIdempotency idempotency,
             DocumentProcessingFailures failures) {
-        return new DocumentProcessingWorker(ingestion, commands, jobs, idempotency, failures, 4);
+        return worker(ingestion, commands, jobs, idempotency, failures, new SimpleMeterRegistry());
+    }
+
+    private DocumentProcessingWorker worker(
+            UploadedDocumentIngestion ingestion,
+            DocumentProcessingCommands commands,
+            DocumentProcessingJobs jobs,
+            DocumentProcessingIdempotency idempotency,
+            DocumentProcessingFailures failures,
+            SimpleMeterRegistry metrics) {
+        return new DocumentProcessingWorker(
+                ingestion, commands, jobs, idempotency, failures, metrics, 4);
     }
 
     private String payload(UUID documentVersionId, UUID jobId, String stage) {

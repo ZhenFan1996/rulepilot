@@ -27,6 +27,7 @@ public class IdentitySecurityConfiguration {
                         .hasRole("EDITOR")
                         .requestMatchers(HttpMethod.POST, "/api/v1/editions/*/documents")
                         .hasRole("EDITOR")
+                        .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions

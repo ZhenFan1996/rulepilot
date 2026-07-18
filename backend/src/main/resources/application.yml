@@ -53,7 +53,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics
   endpoint:
     health:
       show-details: never
@@ -69,6 +69,7 @@ rulepilot:
       dead-letter-queue: ${DOCUMENT_PROCESSING_DLQ:rulepilot.document.processing.dlq.v1}
       max-attempts: ${DOCUMENT_PROCESSING_MAX_ATTEMPTS:4}
       retry-delays: ${DOCUMENT_PROCESSING_RETRY_DELAYS:1s,5s,20s}
+      metrics-fixed-delay: ${DOCUMENT_PROCESSING_METRICS_FIXED_DELAY:5s}
       batch-size: ${OUTBOX_PUBLISH_BATCH_SIZE:20}
       fixed-delay: ${OUTBOX_PUBLISH_FIXED_DELAY:2s}
       confirm-timeout: ${OUTBOX_PUBLISH_CONFIRM_TIMEOUT:5s}

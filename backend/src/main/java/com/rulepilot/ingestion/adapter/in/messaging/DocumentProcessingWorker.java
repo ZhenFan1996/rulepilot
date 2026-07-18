@@ -10,6 +10,8 @@ import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -32,6 +34,7 @@ public class DocumentProcessingWorker {
     private final DocumentProcessingJobs jobs;
     private final DocumentProcessingIdempotency idempotency;
     private final DocumentProcessingFailures failures;
+    private final MeterRegistry metrics;
     private final int maxAttempts;
 
     public DocumentProcessingWorker(
@@ -40,12 +43,14 @@ public class DocumentProcessingWorker {
             DocumentProcessingJobs jobs,
             DocumentProcessingIdempotency idempotency,
             DocumentProcessingFailures failures,
+            MeterRegistry metrics,
             @Value("${rulepilot.document.messaging.max-attempts}") int maxAttempts) {
         this.ingestion = ingestion;
         this.commands = commands;
         this.jobs = jobs;
         this.idempotency = idempotency;
         this.failures = failures;
+        this.metrics = metrics;
         this.maxAttempts = maxAttempts;
     }
 
@@ -90,6 +95,11 @@ public class DocumentProcessingWorker {
 
     private void execute(DocumentProcessingCommand command, UUID eventId, int attempt) {
         if (!idempotency.begin(command, eventId, attempt)) {
+            metrics.counter(
+                            "rulepilot.document.processing.duplicates",
+                            "stage",
+                            command.stage().name().toLowerCase())
+                    .increment();
             LOGGER.info(
                     "Skipping duplicate document processing delivery for documentVersionId={}, stage={}, pipelineVersion={}",
                     command.documentVersionId(),
@@ -97,6 +107,8 @@ public class DocumentProcessingWorker {
                     command.pipelineVersion());
             return;
         }
+        Timer.Sample duration = Timer.start(metrics);
+        String outcome = "internal_error";
         try {
             jobs.stageStarted(command.processingJobId(), command.stage());
             ingestion.process(command.documentVersionId(), command.stage());
@@ -107,6 +119,7 @@ public class DocumentProcessingWorker {
                 commands.publish(next);
             }
             idempotency.complete(command);
+            outcome = "completed";
         } catch (RuntimeException exception) {
             LOGGER.error(
                     "Document processing stage failed for jobId={}, documentVersionId={}, stage={}",
@@ -121,15 +134,30 @@ public class DocumentProcessingWorker {
             idempotency.fail(command, errorCode);
             if (retryable && attempt < maxAttempts) {
                 failures.retry(command, attempt + 1);
+                outcome = "retry_scheduled";
                 return;
             }
             failures.deadLetter(command, attempt, errorCode);
+            outcome = "dead_letter";
             ingestion.fail(command.documentVersionId());
             try {
                 jobs.failed(command.processingJobId(), command.stage());
             } catch (RuntimeException statusException) {
                 LOGGER.error("Could not mark processing job failed for jobId={}", command.processingJobId(), statusException);
             }
+        } finally {
+            metrics.counter(
+                            "rulepilot.document.processing.attempts",
+                            "stage",
+                            command.stage().name().toLowerCase(),
+                            "outcome",
+                            outcome)
+                    .increment();
+            duration.stop(Timer.builder("rulepilot.document.processing.stage.duration")
+                    .description("Document processing stage duration")
+                    .tag("stage", command.stage().name().toLowerCase())
+                    .tag("outcome", outcome)
+                    .register(metrics));
         }
     }
 
