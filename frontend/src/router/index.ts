@@ -51,7 +51,7 @@ const router = createRouter({
       path: '/questions',
       name: 'questions',
       component: PlaceholderView,
-      meta: { eyebrow: 'QUESTIONS AFTER LEARNING', title: '讲解完成后继续答疑', description: '针对讲解步骤或实际对局继续提问，答案沿用已确认的版本、扩展和规则证据。' },
+      meta: { title: '讲解中的问题，都留在原来的位置', description: '打开一份讲解后，可以直接针对当前章节提问。这样不用再次选择游戏和版本。' },
     },
   ],
 })

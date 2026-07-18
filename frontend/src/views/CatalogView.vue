@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import AppShell from '@/components/AppShell.vue'
+
 interface CsrfResponse {
   headerName: string
   token: string
@@ -235,58 +237,57 @@ async function createExpansion() {
   })
 }
 
+function hideBrokenImage(event: Event) {
+  const image = event.currentTarget as HTMLImageElement
+  image.hidden = true
+}
+
 onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
 </script>
 
 <template>
-  <main class="min-h-screen bg-canvas text-ink">
-    <header class="border-b border-ink/10 bg-paper/70 backdrop-blur">
-      <div class="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
-        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold">RulePilot</RouterLink>
-        <p class="text-sm text-ink/50">游戏、版本与扩展</p>
-      </div>
-    </header>
-
-    <div class="mx-auto grid max-w-7xl gap-8 px-5 py-10 sm:px-8 lg:grid-cols-[0.85fr_1.15fr]">
+  <AppShell>
+    <div class="mx-auto grid max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[0.82fr_1.18fr] lg:px-12 lg:py-14">
       <section>
-        <p class="eyebrow">GAME CATALOG</p>
-        <h1 class="mt-4 font-display text-4xl font-semibold tracking-tight sm:text-5xl">先确定规则适用范围</h1>
-        <p class="mt-5 max-w-xl leading-7 text-ink/60">每份规则书都必须绑定游戏版本和语言；扩展只能关联明确兼容的版本。</p>
+        <p class="text-sm font-medium text-copper">游戏库</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">管理游戏和版本</h1>
+        <p class="mt-4 max-w-xl leading-7 text-ink/55">先把要玩的版本记清楚。之后上传的规则书和生成的讲解都会跟随这里的选择。</p>
 
-        <form class="mt-8 rounded-3xl border border-ink/10 bg-paper p-5" @submit.prevent="createGame">
-          <h2 class="font-display text-xl font-semibold">创建游戏</h2>
+        <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createGame">
+          <h2 class="font-display text-xl font-semibold">添加游戏</h2>
           <div class="mt-4 flex gap-3">
-            <input v-model="gameName" required maxlength="120" placeholder="例如：Wingspan" class="min-w-0 flex-1 rounded-2xl border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo">
-            <button :disabled="saving" class="rounded-2xl bg-indigo px-5 font-semibold text-white disabled:opacity-50">创建</button>
+            <input v-model="gameName" required maxlength="120" placeholder="例如：Wingspan" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo">
+            <button :disabled="saving" class="rounded-lg bg-indigo px-5 font-semibold text-white disabled:opacity-50">创建</button>
           </div>
         </form>
 
-        <section class="mt-5 rounded-3xl border border-copper/20 bg-paper p-5">
+        <section class="mt-5 rounded-xl border border-ink/10 bg-paper p-5">
           <div class="flex items-start justify-between gap-4">
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-copper">BOARDGAMEGEEK</p>
-              <h2 class="mt-2 font-display text-xl font-semibold">从 BGG 查找游戏</h2>
+              <p class="text-xs font-semibold text-copper">BoardGameGeek</p>
+              <h2 class="mt-1 font-display text-xl font-semibold">从 BGG 查找</h2>
             </div>
-            <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" aria-label="Powered by BoardGameGeek">
-              <img src="https://cf.geekdo-images.com/HZy35cmzmmyV9BarSuk6ug__small/img/gbE7sulIurZE_Tx8EQJXnZSKI6w%3D/fit-in/200x150/filters%3Astrip_icc%28%29/pic7779581.png" alt="Powered by BGG" class="h-10 w-auto" referrerpolicy="no-referrer">
+            <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 text-xs font-medium text-ink/45" aria-label="Powered by BoardGameGeek">
+              <img src="https://cf.geekdo-images.com/HZy35cmzmmyV9BarSuk6ug__small/img/gbE7sulIurZE_Tx8EQJXnZSKI6w%3D/fit-in/200x150/filters%3Astrip_icc%28%29/pic7779581.png" alt="" class="h-8 w-auto" referrerpolicy="no-referrer" @error="hideBrokenImage">
+              <span>Powered by BGG</span>
             </a>
           </div>
 
-          <div v-if="bggConfigured === false" class="mt-4 rounded-2xl bg-copper/8 p-4 text-sm leading-6 text-ink/65">
+          <div v-if="bggConfigured === false" class="mt-4 rounded-lg bg-copper/8 p-4 text-sm leading-6 text-ink/65">
             需要先在 BGG 注册应用，并在 `.env` 中填写 `BGG_API_TOKEN`。
             <a href="https://boardgamegeek.com/applications" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo underline">前往 BGG Applications</a>
           </div>
 
           <form v-else class="mt-4 flex gap-3" @submit.prevent="searchBgg">
-            <input v-model="bggQuery" required minlength="2" maxlength="120" placeholder="输入英文或原版游戏名" class="min-w-0 flex-1 rounded-2xl border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
-            <button :disabled="bggSearching" class="rounded-2xl bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? '搜索中…' : '搜索' }}</button>
+            <input v-model="bggQuery" required minlength="2" maxlength="120" placeholder="输入英文或原版游戏名" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
+            <button :disabled="bggSearching" class="rounded-lg bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? '搜索中…' : '搜索' }}</button>
           </form>
 
           <p v-if="bggError" class="mt-4 text-sm text-red-700" role="alert">{{ bggError }}</p>
           <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-ink/45">没有匹配结果，请尝试原版名称或减少关键词。</p>
 
           <ul v-if="bggResults.length" class="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
-            <li v-for="result in bggResults" :key="result.bggId" class="flex items-center justify-between gap-3 rounded-2xl border border-ink/8 bg-canvas p-3">
+            <li v-for="result in bggResults" :key="result.bggId" class="flex items-center justify-between gap-3 rounded-lg border border-ink/8 bg-canvas p-3">
               <div class="min-w-0">
                 <a :href="result.bggUrl" target="_blank" rel="noopener noreferrer" class="block truncate font-semibold hover:text-indigo">{{ result.name }}</a>
                 <p class="mt-1 text-xs text-ink/45">{{ result.publicationYear ?? '年份未知' }} · BGG #{{ result.bggId }}</p>
@@ -297,47 +298,47 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
             </li>
           </ul>
 
-          <article v-if="importedBgg" class="mt-5 rounded-2xl bg-ink-panel p-4 text-panel-text">
+          <article v-if="importedBgg" class="mt-5 rounded-xl border border-ink/10 bg-canvas p-4 text-ink">
             <div class="flex gap-4">
               <img v-if="importedBgg.thumbnailUrl" :src="importedBgg.thumbnailUrl" :alt="`${importedBgg.game.name} 的 BGG 缩略图`" class="h-24 w-24 rounded-xl object-cover" referrerpolicy="no-referrer">
               <div>
                 <h3 class="font-display text-lg font-semibold">{{ importedBgg.game.name }}</h3>
-                <p class="mt-2 text-xs text-panel-text/55">
+                <p class="mt-2 text-xs text-ink/50">
                   {{ importedBgg.minPlayers ?? '?' }}–{{ importedBgg.maxPlayers ?? '?' }} 人 ·
                   {{ importedBgg.playingTimeMinutes ?? '?' }} 分钟 ·
                   {{ importedBgg.minimumAge ?? '?' }} 岁以上
                 </p>
-                <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-copper">查看 BGG 原始页面 ↗</a>
+                <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">查看 BGG 页面 ↗</a>
               </div>
             </div>
-            <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-panel-text/65">{{ importedBgg.description }}</p>
-            <p class="mt-3 text-[0.68rem] text-panel-text/35">BGG 元数据仅用于游戏目录，不会作为 Agent 或 RAG 规则证据。</p>
+            <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
+            <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
           </article>
         </section>
 
-        <p v-if="message" class="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
-        <p v-if="errorMessage" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <p v-if="message" class="mt-4 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
+        <p v-if="errorMessage" class="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
       </section>
 
       <section class="space-y-6">
-        <div v-if="loading" class="rounded-3xl border border-ink/10 bg-paper p-8 text-ink/50">正在读取目录…</div>
-        <div v-else-if="games.length === 0" class="rounded-3xl border border-dashed border-ink/20 bg-paper/50 p-8 text-center text-ink/55">还没有游戏。使用左侧表单创建第一个目录条目。</div>
+        <div v-if="loading" class="rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">正在读取游戏库…</div>
+        <div v-else-if="games.length === 0" class="rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">还没有游戏。可以从 BGG 查找，也可以自己添加。</div>
         <template v-else>
           <label class="block text-sm font-semibold">
             当前游戏
-            <select v-model="selectedGameId" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3">
+            <select v-model="selectedGameId" class="mt-2 w-full rounded-lg border border-ink/15 bg-paper px-4 py-3">
               <option v-for="entry in games" :key="entry.game.id" :value="entry.game.id">{{ entry.game.name }}</option>
             </select>
           </label>
 
           <div v-if="selectedGame" class="grid gap-6 xl:grid-cols-2">
-            <article v-if="selectedGame.bggMetadata" class="rounded-3xl border border-copper/20 bg-ink-panel p-5 text-panel-text xl:col-span-2">
+            <article v-if="selectedGame.bggMetadata" class="rounded-xl border border-ink/10 bg-paper p-5 xl:col-span-2">
               <div class="flex gap-4">
-                <img v-if="selectedGame.bggMetadata.thumbnailUrl" :src="selectedGame.bggMetadata.thumbnailUrl" :alt="`${selectedGame.game.name} 的 BGG 缩略图`" class="h-28 w-28 rounded-2xl object-cover" referrerpolicy="no-referrer">
+                <img v-if="selectedGame.bggMetadata.thumbnailUrl" :src="selectedGame.bggMetadata.thumbnailUrl" :alt="`${selectedGame.game.name} 的 BGG 缩略图`" class="h-28 w-28 rounded-lg object-cover" referrerpolicy="no-referrer">
                 <div>
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-copper">BOARDGAMEGEEK</p>
+                  <p class="text-xs font-semibold text-copper">BoardGameGeek</p>
                   <h2 class="mt-2 font-display text-2xl font-semibold">{{ selectedGame.game.name }}</h2>
-                  <p class="mt-2 text-sm text-panel-text/60">
+                  <p class="mt-2 text-sm text-ink/55">
                     {{ selectedGame.bggMetadata.minPlayers ?? '?' }}–{{ selectedGame.bggMetadata.maxPlayers ?? '?' }} 人 ·
                     {{ selectedGame.bggMetadata.playingTimeMinutes ?? '?' }} 分钟 ·
                     {{ selectedGame.bggMetadata.minimumAge ?? '?' }} 岁以上
@@ -345,28 +346,28 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                   <a :href="selectedGame.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-copper">查看 BGG 原始页面 ↗</a>
                 </div>
               </div>
-              <p v-if="selectedGame.bggMetadata.description" class="mt-4 max-h-36 overflow-y-auto text-sm leading-6 text-panel-text/65">{{ selectedGame.bggMetadata.description }}</p>
-              <p class="mt-3 text-[0.68rem] text-panel-text/35">BGG 元数据仅用于游戏目录，不会作为 Agent 或 RAG 规则证据。</p>
+              <p v-if="selectedGame.bggMetadata.description" class="mt-4 max-h-36 overflow-y-auto text-sm leading-6 text-ink/60">{{ selectedGame.bggMetadata.description }}</p>
+              <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
             </article>
 
-            <form class="rounded-3xl border border-ink/10 bg-paper p-5" @submit.prevent="createEdition">
+            <form class="rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createEdition">
               <h2 class="font-display text-xl font-semibold">添加版本</h2>
               <div class="mt-5 space-y-3">
-                <input v-model="editionName" required maxlength="120" placeholder="版本名称" class="w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+                <input v-model="editionName" required maxlength="120" placeholder="版本名称" class="w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
                 <div class="grid grid-cols-2 gap-3">
-                  <input v-model="editionLanguage" required placeholder="语言，如 zh-CN" class="rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
-                  <input v-model="editionYear" type="number" min="1900" max="2200" placeholder="发行年份" class="rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+                  <input v-model="editionLanguage" required placeholder="语言，如 zh-CN" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+                  <input v-model="editionYear" type="number" min="1900" max="2200" placeholder="发行年份" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
                 </div>
-                <button :disabled="saving" class="w-full rounded-2xl bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">保存版本</button>
+                <button :disabled="saving" class="w-full rounded-lg bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">保存版本</button>
               </div>
               <ul class="mt-5 space-y-2 text-sm text-ink/60">
                 <li v-for="edition in selectedGame.editions" :key="edition.id">{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></li>
               </ul>
             </form>
 
-            <form class="rounded-3xl border border-ink/10 bg-paper p-5" @submit.prevent="createExpansion">
+            <form class="rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createExpansion">
               <h2 class="font-display text-xl font-semibold">添加扩展</h2>
-              <input v-model="expansionName" required maxlength="120" placeholder="扩展名称" class="mt-5 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+              <input v-model="expansionName" required maxlength="120" placeholder="扩展名称" class="mt-5 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
               <fieldset class="mt-4 space-y-2">
                 <legend class="text-sm font-semibold">兼容版本</legend>
                 <label v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center gap-2 text-sm text-ink/65">
@@ -375,7 +376,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 </label>
                 <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">请先添加至少一个版本。</p>
               </fieldset>
-              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-2xl bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">保存扩展</button>
+              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">保存扩展</button>
               <ul class="mt-5 space-y-2 text-sm text-ink/60">
                 <li v-for="expansion in selectedGame.expansions" :key="expansion.id">{{ expansion.name }} · {{ expansion.compatibleEditionIds.length }} 个兼容版本</li>
               </ul>
@@ -384,5 +385,5 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
         </template>
       </section>
     </div>
-  </main>
+  </AppShell>
 </template>

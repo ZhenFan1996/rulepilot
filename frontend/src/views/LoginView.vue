@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import ProductMark from '@/components/ProductMark.vue'
+
 interface CsrfResponse {
   headerName: string
   token: string
@@ -47,25 +49,24 @@ async function login() {
 
 <template>
   <main class="grid min-h-screen place-items-center bg-canvas px-5 py-12 text-ink">
-    <section class="w-full max-w-md rounded-[2rem] border border-ink/10 bg-paper p-7 shadow-xl shadow-ink/5 sm:p-9">
-      <RouterLink :to="{ name: 'home' }" class="text-sm font-semibold text-indigo">← 返回 RulePilot</RouterLink>
-      <p class="mt-10 text-xs font-semibold uppercase tracking-[0.22em] text-indigo">LOCAL SESSION</p>
-      <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">登录并继续学习</h1>
-      <p class="mt-4 leading-7 text-ink/60">使用本地账户进入规则书讲解空间。会话由 Redis 保存，退出后立即失效。</p>
+    <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
+      <RouterLink :to="{ name: 'home' }" aria-label="返回 RulePilot 首页"><ProductMark /></RouterLink>
+      <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">欢迎回来</h1>
+      <p class="mt-3 leading-7 text-ink/55">登录后继续整理规则书和讲解。</p>
 
       <form class="mt-8 space-y-5" @submit.prevent="login">
         <label class="block text-sm font-semibold">
           用户名
-          <input v-model="username" name="username" autocomplete="username" required class="mt-2 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
+          <input v-model="username" name="username" autocomplete="username" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
         </label>
         <label class="block text-sm font-semibold">
           密码
-          <input v-model="password" name="password" type="password" autocomplete="current-password" required class="mt-2 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
+          <input v-model="password" name="password" type="password" autocomplete="current-password" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
         </label>
 
-        <p v-if="errorMessage" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <p v-if="errorMessage" class="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
 
-        <button type="submit" :disabled="isSubmitting" class="w-full rounded-2xl bg-indigo px-5 py-3.5 font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50">
+        <button type="submit" :disabled="isSubmitting" class="w-full rounded-lg bg-indigo px-5 py-3.5 font-semibold text-white transition-colors hover:bg-indigo/90 disabled:cursor-not-allowed disabled:opacity-50">
           {{ isSubmitting ? '正在登录…' : '登录' }}
         </button>
       </form>

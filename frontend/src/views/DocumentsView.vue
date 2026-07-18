@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import AppShell from '@/components/AppShell.vue'
+
 interface CsrfResponse {
   headerName: string
   token: string
@@ -293,64 +295,64 @@ onMounted(load)
 </script>
 
 <template>
-  <main class="min-h-screen bg-canvas text-ink">
-    <header class="border-b border-ink/10 bg-paper/70 backdrop-blur">
-      <div class="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
-        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold">RulePilot</RouterLink>
-        <RouterLink :to="{ name: 'catalog' }" class="text-sm font-semibold text-indigo">管理游戏目录</RouterLink>
-      </div>
-    </header>
-
-    <div class="mx-auto grid max-w-7xl gap-8 px-5 py-10 sm:px-8 lg:grid-cols-[0.9fr_1.1fr]">
+  <AppShell>
+    <div class="mx-auto grid max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[0.82fr_1.18fr] lg:px-12 lg:py-14">
       <section>
-        <p class="eyebrow">IMPORT RULEBOOK</p>
-        <h1 class="mt-4 font-display text-4xl font-semibold tracking-tight sm:text-5xl">导入第一份规则资料</h1>
-        <p class="mt-5 max-w-xl leading-7 text-ink/60">先绑定准确的游戏版本和资料类型。文件保存后会进入页级解析，再组织成从 setup 到计分的完整讲解。</p>
+        <p class="text-sm font-medium text-copper">规则书</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">添加一本规则书</h1>
+        <p class="mt-4 max-w-xl leading-7 text-ink/55">选择它对应的游戏版本，再上传 PDF。读取完成后，你可以检查内容并准备一场讲解。</p>
 
-        <form class="mt-8 space-y-4 rounded-3xl border border-ink/10 bg-paper p-6" @submit.prevent="upload">
+        <form class="mt-8 space-y-4 rounded-xl border border-ink/10 bg-paper p-6" @submit.prevent="upload">
           <label class="block text-sm font-semibold">
             游戏版本
-            <select v-model="editionId" required class="mt-2 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+            <select v-model="editionId" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
               <option value="" disabled>请先在目录中创建游戏版本</option>
               <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
             </select>
           </label>
           <label class="block text-sm font-semibold">
             资料标题
-            <input v-model="title" required maxlength="160" placeholder="例如：基础规则书 2026 中文版" class="mt-2 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+            <input v-model="title" required maxlength="160" placeholder="例如：基础规则书 2026 中文版" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
           </label>
           <label class="block text-sm font-semibold">
             资料类型
-            <select v-model="sourceType" class="mt-2 w-full rounded-2xl border border-ink/15 bg-canvas px-4 py-3">
+            <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
               <option v-for="entry in sourceTypes" :key="entry[0]" :value="entry[0]">{{ entry[1] }}</option>
             </select>
           </label>
-          <label class="block text-sm font-semibold">
-            PDF 文件
-            <input required accept="application/pdf,.pdf" type="file" class="mt-2 block w-full rounded-2xl border border-dashed border-ink/20 bg-canvas px-4 py-6 text-sm" @change="selectFile">
-          </label>
-          <button :disabled="uploading || !editionId" class="w-full rounded-2xl bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">
+          <div class="text-sm font-semibold">
+            <span>PDF 文件</span>
+            <label for="rulebook-file" class="mt-2 flex min-h-16 cursor-pointer items-center justify-between gap-3 rounded-lg border border-dashed border-ink/20 bg-canvas px-4 py-3 font-normal hover:border-copper/50">
+              <span class="truncate text-ink/55">{{ file?.name ?? '还没有选择文件' }}</span>
+              <span class="shrink-0 rounded-md border border-ink/15 bg-paper px-3 py-2 text-xs font-semibold text-ink">选择 PDF</span>
+            </label>
+            <input id="rulebook-file" required accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+          </div>
+          <button :disabled="uploading || !editionId" class="w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">
             {{ uploading ? '正在上传…' : '保存规则书' }}
           </button>
         </form>
 
-        <p v-if="message" class="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
-        <p v-if="errorMessage" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <p v-if="message" class="mt-4 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
+        <p v-if="errorMessage" class="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
       </section>
 
       <section>
-        <h2 class="font-display text-2xl font-semibold">当前版本的规则资料</h2>
-        <div v-if="loading" class="mt-5 rounded-3xl border border-ink/10 bg-paper p-8 text-ink/50">正在加载…</div>
-        <div v-else-if="!editionId" class="mt-5 rounded-3xl border border-dashed border-ink/20 p-8 text-center text-ink/55">请先创建游戏版本，再回来导入规则书。</div>
-        <div v-else-if="documents.length === 0" class="mt-5 rounded-3xl border border-dashed border-ink/20 p-8 text-center text-ink/55">这个版本还没有规则资料。</div>
+        <div class="flex items-end justify-between gap-4">
+          <h2 class="font-display text-2xl font-semibold">已添加的资料</h2>
+          <RouterLink :to="{ name: 'catalog' }" class="text-sm font-medium text-indigo">管理游戏版本</RouterLink>
+        </div>
+        <div v-if="loading" class="mt-5 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">正在加载…</div>
+        <div v-else-if="!editionId" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">请先添加游戏和版本。</div>
+        <div v-else-if="documents.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">这个版本还没有规则书。</div>
         <ul v-else class="mt-5 space-y-4">
-          <li v-for="entry in documents" :key="entry.document.id" class="rounded-3xl border border-ink/10 bg-paper p-5">
+          <li v-for="entry in documents" :key="entry.document.id" class="rounded-xl border border-ink/10 bg-paper p-5">
             <div class="flex items-start justify-between gap-4">
               <div>
                 <p class="font-display text-xl font-semibold">{{ entry.document.title }}</p>
                 <p class="mt-2 text-sm text-ink/55">{{ entry.latestVersion.originalFilename }} · v{{ entry.latestVersion.versionNumber }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB</p>
               </div>
-              <span class="rounded-full bg-indigo/10 px-3 py-1.5 text-xs font-semibold text-indigo">{{ entry.latestVersion.status }}</span>
+              <span class="rounded-md bg-indigo/10 px-2.5 py-1 text-xs font-semibold text-indigo">{{ entry.latestVersion.status }}</span>
             </div>
             <div v-if="processingProgress[entry.latestVersion.id]" class="mt-4">
               <div class="h-2 overflow-hidden rounded-full bg-ink/8">
@@ -358,61 +360,63 @@ onMounted(load)
               </div>
               <p class="mt-2 text-xs text-ink/45">{{ processingProgress[entry.latestVersion.id]!.percentage }}% · 已读取 {{ processingProgress[entry.latestVersion.id]!.processedPages }} 页</p>
             </div>
-            <p class="mt-4 truncate font-mono text-xs text-ink/35" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
-            <div class="mt-4 flex flex-wrap gap-4">
-              <button class="text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewStructure(entry.latestVersion.id)">查看讲解结构</button>
-              <button class="text-sm font-semibold text-indigo underline decoration-indigo/30 underline-offset-4" @click="previewPages(entry.latestVersion.id)">查看页级文字</button>
+            <details class="mt-4 text-xs text-ink/40">
+              <summary class="cursor-pointer">文件信息</summary>
+              <p class="mt-2 break-all font-mono" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
+            </details>
+            <div class="mt-4 flex flex-wrap gap-3">
+              <button class="rounded-lg border border-ink/15 px-3 py-2 text-sm font-semibold hover:border-indigo/40" @click="previewStructure(entry.latestVersion.id)">检查规则内容</button>
+              <button class="rounded-lg px-3 py-2 text-sm font-medium text-indigo hover:bg-indigo/5" @click="previewPages(entry.latestVersion.id)">查看原文</button>
             </div>
             <div v-if="structureVersionId === entry.latestVersion.id && ruleStructure" class="mt-5 border-t border-ink/10 pt-5">
               <div class="flex items-center justify-between gap-4">
-                <p class="font-semibold">已识别 {{ ruleStructure.presentSections }} / {{ ruleStructure.requiredSections }} 个必需章节</p>
+                <p class="font-semibold">讲解需要的内容：{{ ruleStructure.presentSections }} / {{ ruleStructure.requiredSections }} 项已找到</p>
                 <span :class="ruleStructure.presentSections === ruleStructure.requiredSections ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1 text-xs font-semibold">
-                  {{ ruleStructure.presentSections === ruleStructure.requiredSections ? '结构完整' : '仍有缺失' }}
+                  {{ ruleStructure.presentSections === ruleStructure.requiredSections ? '可以开始' : '需要补充' }}
                 </span>
               </div>
               <div class="mt-4 grid gap-3 sm:grid-cols-2">
-                <article v-for="section in ruleStructure.sections" :key="section.type" class="rounded-2xl bg-canvas p-4">
+                <article v-for="section in ruleStructure.sections" :key="section.type" class="rounded-lg bg-canvas p-4">
                   <div class="flex items-center justify-between gap-3">
                     <h3 class="font-semibold">{{ section.label }}</h3>
                     <span :class="section.present ? 'text-emerald-700' : 'text-amber-700'" class="text-xs font-semibold">{{ section.present ? '已找到' : '缺失' }}</span>
                   </div>
                   <p v-if="section.present" class="mt-2 text-xs text-ink/45">来源页：{{ section.pageNumbers.join('、') }}</p>
-                  <p v-else class="mt-2 text-sm leading-6 text-ink/50">规则书中暂未识别到该章节，生成讲解前需要补充证据。</p>
+                  <p v-else class="mt-2 text-sm leading-6 text-ink/50">这份规则书里暂时没有找到相关内容。</p>
                   <details v-if="section.present" class="mt-3">
-                    <summary class="cursor-pointer text-sm font-semibold text-indigo">展开证据</summary>
+                    <summary class="cursor-pointer text-sm font-semibold text-indigo">查看找到的原文</summary>
                     <pre class="mt-3 max-h-44 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/65">{{ section.content }}</pre>
                   </details>
                 </article>
               </div>
-              <form class="mt-5 rounded-2xl border border-ink/10 p-4" @submit.prevent="createTeachingPlan(entry.latestVersion.id)">
-                <h3 class="font-semibold">规划这次讲解</h3>
+              <form class="mt-5 rounded-lg border border-ink/10 p-4" @submit.prevent="createTeachingPlan(entry.latestVersion.id)">
+                <h3 class="font-semibold">这次要给谁讲？</h3>
                 <div class="mt-3 grid gap-3 sm:grid-cols-3">
                   <label class="text-sm font-semibold">玩家人数<input v-model.number="planPlayerCount" type="number" min="1" max="20" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
                   <label class="text-sm font-semibold">其中新手<input v-model.number="planBeginnerCount" type="number" min="0" :max="planPlayerCount" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
                   <label class="text-sm font-semibold">讲解分钟<input v-model.number="planDurationMinutes" type="number" min="2" max="180" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
                 </div>
-                <button :disabled="creatingPlan" class="mt-4 rounded-xl bg-copper px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">{{ creatingPlan ? '正在规划…' : '创建教学计划' }}</button>
+                <button :disabled="creatingPlan" class="mt-4 rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{{ creatingPlan ? '正在准备…' : '准备讲解' }}</button>
               </form>
-              <div v-if="teachingPlan" class="mt-5 rounded-2xl bg-indigo/5 p-4">
+              <div v-if="teachingPlan" class="mt-5 rounded-lg bg-indigo/5 p-4">
                 <p class="font-semibold">{{ teachingPlan.playerCount }} 人 · {{ teachingPlan.beginnerCount }} 位新手 · {{ teachingPlan.durationMinutes }} 分钟</p>
                 <ol class="mt-4 space-y-2">
                   <li v-for="section in teachingPlan.sections" :key="section.type" class="flex items-start gap-3 text-sm">
                     <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo text-xs font-semibold text-white">{{ section.position }}</span>
                     <span>
                       <strong>{{ sectionLabels[section.type] ?? section.type }}</strong>
-                      <span v-if="section.required && !section.evidenceAvailable" class="ml-2 text-amber-700">缺少规则证据</span>
-                      <span v-else-if="!section.required && !section.evidenceAvailable" class="ml-2 text-amber-700">按受众加入，待补前置证据</span>
-                      <span v-else-if="!section.required" class="ml-2 text-ink/45">按受众加入</span>
-                      <span v-if="section.dependencies.length" class="mt-1 block text-xs text-ink/45">前置：{{ section.dependencies.map((dependency) => sectionLabels[dependency] ?? dependency).join('、') }}</span>
+                      <span v-if="!section.evidenceAvailable" class="ml-2 text-amber-700">内容不足</span>
+                      <span v-else-if="!section.required" class="ml-2 text-ink/45">按本桌情况加入</span>
+                      <span v-if="section.dependencies.length" class="mt-1 block text-xs text-ink/45">先看：{{ section.dependencies.map((dependency) => sectionLabels[dependency] ?? dependency).join('、') }}</span>
                     </span>
                   </li>
                 </ol>
-                <button :disabled="creatingLesson" class="mt-5 rounded-xl bg-indigo px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" @click="createIllustratedLesson(teachingPlan.id)">{{ creatingLesson ? '正在组织讲解…' : '生成带引用的图文讲解' }}</button>
+                <button :disabled="creatingLesson" class="mt-5 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="createIllustratedLesson(teachingPlan.id)">{{ creatingLesson ? '正在整理…' : '开始整理讲解' }}</button>
               </div>
             </div>
             <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
               <p v-if="pages.length === 0" class="text-sm text-ink/45">尚未提取到页面文字。</p>
-              <article v-for="page in pages" :key="page.pageNumber" class="rounded-2xl bg-canvas p-4">
+              <article v-for="page in pages" :key="page.pageNumber" class="rounded-lg bg-canvas p-4">
                 <div class="flex items-center justify-between text-xs font-semibold text-ink/45">
                   <span>第 {{ page.pageNumber }} 页</span>
                   <span>{{ page.characterCount }} 字符</span>
@@ -424,5 +428,5 @@ onMounted(load)
         </ul>
       </section>
     </div>
-  </main>
+  </AppShell>
 </template>

@@ -136,7 +136,7 @@ onUnmounted(() => {
     >
       <div class="flex items-start justify-between gap-4">
         <div>
-          <p class="eyebrow">LOCAL CARD OCR</p>
+          <p class="text-xs font-semibold text-copper">识别卡牌文字</p>
           <h3 id="card-ocr-title" class="mt-2 font-display text-3xl font-semibold">拍照识别卡牌文字</h3>
           <p class="mt-2 text-sm leading-6 text-ink/60">识别在浏览器内完成；照片不会上传到 RulePilot 或第三方服务。</p>
         </div>

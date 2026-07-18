@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
+import AppShell from '@/components/AppShell.vue'
+
 interface TeachingPlan {
   id: string
   documentVersionId: string
@@ -54,61 +56,55 @@ onMounted(loadPlans)
 </script>
 
 <template>
-  <main class="min-h-screen bg-canvas text-ink">
-    <header class="border-b border-ink/10 bg-paper/70 backdrop-blur">
-      <div class="mx-auto flex max-w-6xl items-center justify-between px-5 py-4 sm:px-8">
-        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold">RulePilot</RouterLink>
-        <RouterLink :to="{ name: 'teach' }" class="rounded-xl bg-copper px-4 py-2 text-sm font-semibold text-white">新建讲解</RouterLink>
-      </div>
-    </header>
-
-    <section class="mx-auto max-w-6xl px-5 py-10 sm:px-8 sm:py-16">
-      <p class="eyebrow">YOUR LESSONS</p>
+  <AppShell>
+    <section class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
+      <p class="text-sm font-medium text-copper">我的讲解</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 class="font-display text-4xl font-semibold tracking-tight sm:text-5xl">继续你的规则讲解</h1>
-          <p class="mt-4 max-w-2xl leading-7 text-ink/60">讲解保存在服务端账户下，可以从任何已登录设备重新打开；章节阅读进度仍只保存在当前浏览器。</p>
+          <h1 class="font-display text-4xl font-semibold tracking-tight">从上次停下的地方继续</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-ink/55">这里保存了你准备过的讲解。阅读位置只留在当前设备。</p>
         </div>
-        <p v-if="plans.length" class="text-sm font-semibold text-ink/50">{{ plans.length }} 份计划 · {{ readyCount }} 份证据完整</p>
+        <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">准备新讲解</RouterLink>
       </div>
 
-      <div v-if="loading" class="mt-10 rounded-3xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">正在读取讲解…</div>
+      <p v-if="plans.length" class="mt-6 text-sm text-ink/45">共 {{ plans.length }} 份，其中 {{ readyCount }} 份可以直接开始。</p>
+
+      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">正在读取讲解…</div>
 
       <div v-else-if="errorMessage" class="mt-10 rounded-3xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>
         <button class="mt-4 text-sm font-semibold underline underline-offset-4" @click="loadPlans">重新加载</button>
       </div>
 
-      <div v-else-if="plans.length === 0" class="mt-10 rounded-[2rem] border border-dashed border-ink/20 bg-paper/45 px-6 py-14 text-center">
-        <p class="text-4xl" aria-hidden="true">⌁</p>
-        <h2 class="mt-5 font-display text-2xl font-semibold">还没有生成过讲解</h2>
-        <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">导入规则书并确认游戏版本后，RulePilot 会从 Setup 一直组织到结束条件、计分和同分处理。</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-xl bg-copper px-5 py-3 font-semibold text-white">导入第一本规则书</RouterLink>
+      <div v-else-if="plans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
+        <h2 class="font-display text-2xl font-semibold">还没有准备过讲解</h2>
+        <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">先添加一本规则书，选择玩家人数和预计时长。</p>
+        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">添加规则书</RouterLink>
       </div>
 
       <ol v-else class="mt-10 grid gap-5 md:grid-cols-2">
-        <li v-for="(plan, index) in plans" :key="plan.id" class="rounded-[1.75rem] border border-ink/10 bg-paper p-6 shadow-sm">
+        <li v-for="plan in plans" :key="plan.id" class="rounded-xl border border-ink/10 bg-paper p-6">
           <div class="flex items-start justify-between gap-4">
             <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-ink/40">讲解计划 {{ String(plans.length - index).padStart(2, '0') }}</p>
-              <h2 class="mt-3 font-display text-2xl font-semibold">{{ plan.playerCount }} 人规则讲解</h2>
+              <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
+              <h2 class="mt-2 font-display text-2xl font-semibold">{{ plan.playerCount }} 人讲解</h2>
             </div>
             <span :class="isReady(plan) ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1.5 text-xs font-semibold">
-              {{ isReady(plan) ? '证据完整' : '需要复核' }}
+              {{ isReady(plan) ? '可以开始' : '内容不足' }}
             </span>
           </div>
           <dl class="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
             <div><dt class="text-ink/45">新手人数</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount }} 人</dd></div>
             <div><dt class="text-ink/45">计划时长</dt><dd class="mt-1 font-semibold">{{ plan.durationMinutes }} 分钟</dd></div>
-            <div class="col-span-2"><dt class="text-ink/45">创建时间</dt><dd class="mt-1 font-semibold">{{ createdLabel(plan.createdAt) }}</dd></div>
+            <div class="col-span-2"><dt class="text-ink/45">适合</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount ? `${plan.beginnerCount} 位新手` : '熟悉桌游的玩家' }}</dd></div>
           </dl>
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">上次打开</span>
-            <span v-else class="font-mono text-[0.65rem] text-ink/30">{{ plan.documentVersionId.slice(0, 8) }}</span>
-            <RouterLink :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-xl bg-indigo px-4 py-2.5 text-sm font-semibold text-white">继续讲解</RouterLink>
+            <span v-else class="text-xs text-ink/35">{{ plan.sections.length }} 个章节</span>
+            <RouterLink :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">打开</RouterLink>
           </div>
         </li>
       </ol>
     </section>
-  </main>
+  </AppShell>
 </template>

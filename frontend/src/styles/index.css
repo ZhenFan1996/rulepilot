@@ -64,16 +64,6 @@ button {
   font: inherit;
 }
 
-@layer components {
-  .eyebrow {
-    color: color-mix(in srgb, var(--color-copper) 85%, var(--color-ink));
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    line-height: 1.2;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
