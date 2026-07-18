@@ -3,7 +3,7 @@ package com.rulepilot.retrieval.application;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.RetrievalEvaluationSet;
-import com.rulepilot.retrieval.domain.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.domain.RetrievalEvaluationReport;
 import com.rulepilot.retrieval.domain.RetrievalEvaluationReport.RetrievalError;
 import com.rulepilot.retrieval.domain.RetrievalEvaluationReport.RetrievedCandidate;

@@ -1,7 +1,7 @@
 package com.rulepilot.retrieval.adapter.in.web;
 
 import com.rulepilot.retrieval.VectorRuleSearch;
-import com.rulepilot.retrieval.domain.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;

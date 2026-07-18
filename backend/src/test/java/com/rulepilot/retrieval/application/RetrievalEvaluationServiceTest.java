@@ -3,7 +3,7 @@ package com.rulepilot.retrieval.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.retrieval.RetrievalEvaluationSet;
-import com.rulepilot.retrieval.domain.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.retrieval.domain.RetrievalEvaluationSample;
 import java.util.List;
 import java.util.Set;

@@ -2,7 +2,7 @@ package com.rulepilot.retrieval.adapter.in.web;
 
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
-import com.rulepilot.retrieval.domain.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;

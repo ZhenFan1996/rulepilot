@@ -25,7 +25,7 @@ class FullTextRuleSearchServiceTest {
         private int limit;
 
         @Override
-        public java.util.List<com.rulepilot.retrieval.domain.RuleEvidenceHit> search(
+        public java.util.List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> search(
                 UUID documentVersionId, String searchQuery, int resultLimit) {
             versionId = documentVersionId;
             query = searchQuery;

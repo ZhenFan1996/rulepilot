@@ -2,7 +2,7 @@ package com.rulepilot.retrieval.adapter.out.postgres;
 
 import com.rulepilot.ingestion.EmbeddingProvider.EmbeddingVector;
 import com.rulepilot.retrieval.application.VectorRuleSearchRepository;
-import com.rulepilot.retrieval.domain.RuleEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;

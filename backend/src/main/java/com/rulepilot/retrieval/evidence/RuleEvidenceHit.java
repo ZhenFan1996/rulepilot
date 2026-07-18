@@ -1,4 +1,4 @@
-package com.rulepilot.retrieval.domain;
+package com.rulepilot.retrieval.evidence;
 
 import java.util.UUID;
 

@@ -23,6 +23,7 @@
         <minio.version>9.0.3</minio.version>
         <okhttp.version>5.3.2</okhttp.version>
         <pdfbox.version>3.0.8</pdfbox.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
     </properties>
 
     <dependencyManagement>
@@ -31,6 +32,13 @@
                 <groupId>org.springframework.modulith</groupId>
                 <artifactId>spring-modulith-bom</artifactId>
                 <version>${spring-modulith.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -61,6 +69,10 @@
         <dependency>
             <groupId>org.springframework.modulith</groupId>
             <artifactId>spring-modulith-starter-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
