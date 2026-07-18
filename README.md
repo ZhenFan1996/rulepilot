@@ -152,6 +152,7 @@ make backend-test
 make frontend-test
 make integration-test
 make performance-test
+make security-test
 make e2e
 make compose-up
 make compose-down
@@ -161,6 +162,8 @@ make verify
 `make verify` 会检查仓库结构，并执行后端与前端的完整验证流程。
 
 `make performance-test` 会临时启动所需服务和后端，生成一份自制的五页规则 PDF，并测量 PDF 处理、PostgreSQL 全文/向量检索、并发冷答疑和缓存热答疑。结果保存在被 Git 忽略的 `.local/performance/`，临时游戏、规则书、对象和 AssistantRun 会在结束时自动删除。可通过 `PERF_REQUESTS`、`PERF_CONCURRENCY` 和 `PERF_MAX_*` 环境变量调整负载与阈值。
+
+`make security-test` 会审计锁定的前端依赖，并通过 OSV 批量检查后端实际运行时 Maven 依赖；该命令需要联网，发现任何已知漏洞都会失败。
 
 ## 仓库结构
 

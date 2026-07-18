@@ -86,6 +86,8 @@ rulepilot:
     max-tokens: ${AGENT_MAX_TOKENS:24000}
     timeout: ${AGENT_TIMEOUT:PT2M}
   document:
+    max-pdf-pages: ${MAX_PDF_PAGES:500}
+    max-extracted-characters: ${MAX_PDF_EXTRACTED_CHARACTERS:5000000}
     messaging:
       exchange: ${DOCUMENT_PROCESSING_EXCHANGE:rulepilot.document.processing}
       queue: ${DOCUMENT_PROCESSING_QUEUE:rulepilot.document.processing.v1}
