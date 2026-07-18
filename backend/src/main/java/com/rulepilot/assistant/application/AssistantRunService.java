@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -24,7 +25,7 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
         AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock));
         repository.insert(run, "Run received");
@@ -32,7 +33,7 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot advance(
             UUID runId,
             long expectedRevision,
@@ -45,7 +46,7 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     @Override
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot fail(UUID runId, long expectedRevision, String errorCode, String stepSummary) {
         AssistantRun current = require(runId, expectedRevision);
         AssistantRun changed = current.fail(errorCode, Instant.now(clock));

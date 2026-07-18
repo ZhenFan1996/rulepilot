@@ -2,11 +2,10 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.ingestion.RuleStructureCatalog.SectionView;
 import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
-import com.rulepilot.retrieval.HybridRuleSearch;
-import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
-import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.domain.LessonQualityReport.CheckStatus;
 import com.rulepilot.teaching.domain.LessonQualityReport.CheckType;
@@ -28,18 +27,16 @@ class LessonQualityEvaluatorTest {
                 9);
         UUID versionId = UUID.randomUUID();
         var plan = new TeachingPlanFactory().create(versionId, 4, 3, 30, "player", structure);
-        HybridRuleSearch retrieval = (requestedVersion, query, options) -> structure.sections().stream()
-                .filter(section -> section.present() && options.sectionTypes().contains(section.type()))
-                .map(section -> new RuleEvidenceHit(
+        AssistantReadTools retrieval = request -> structure.sections().stream()
+                .filter(section -> section.present() && request.sectionTypes().contains(section.type()))
+                .map(section -> new RuleEvidence(
                         UUID.randomUUID(),
                         versionId,
                         section.type(),
                         section.label(),
                         section.content(),
                         section.pageNumbers().getFirst(),
-                        section.pageNumbers().getLast(),
-                        0.9))
-                .map(evidence -> new HybridEvidenceHit(evidence, 0.02, 1, null, true))
+                        section.pageNumbers().getLast()))
                 .toList();
         var lesson = new GroundedTeachingAgent(retrieval, new FakeTeachingLessonModel(), 24).create(plan);
 

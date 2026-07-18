@@ -1,7 +1,9 @@
 package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.IllustratedLessonService;
+import com.rulepilot.teaching.application.IllustratedLessonService.LessonCreation;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -26,8 +28,8 @@ public class IllustratedLessonController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    IllustratedLesson create(@PathVariable UUID planId) {
-        return lessons.create(planId);
+    LessonCreation create(@PathVariable UUID planId, Principal principal) {
+        return lessons.create(planId, principal.getName());
     }
 
     @GetMapping("/latest")

@@ -2,9 +2,8 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.retrieval.HybridRuleSearch;
-import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
-import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
@@ -23,18 +22,18 @@ class GroundedTeachingAgentTest {
     void retrievesVersionScopedEvidenceAndPersistsValidatedStepCitations() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
-        RuleEvidenceHit evidence = evidence(chunkId, versionId);
-        HybridRuleSearch retrieval = (requestedVersion, query, options) -> {
-            assertThat(requestedVersion).isEqualTo(versionId);
-            assertThat(options.sectionTypes()).containsExactly("SETUP");
-            return List.of(new HybridEvidenceHit(evidence, 0.02, 1, null, true));
+        RuleEvidence evidence = evidence(chunkId, versionId);
+        AssistantReadTools tools = request -> {
+            assertThat(request.documentVersionId()).isEqualTo(versionId);
+            assertThat(request.sectionTypes()).containsExactly("SETUP");
+            return List.of(evidence);
         };
         TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
                 "三步完成开局",
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(retrieval, model, 4);
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(tools, model, 4);
 
         var lesson = agent.create(plan(versionId));
 
@@ -47,9 +46,8 @@ class GroundedTeachingAgentTest {
     @Test
     void rejectsModelStepsThatCiteEvidenceOutsideTheRetrievedScope() {
         UUID versionId = UUID.randomUUID();
-        RuleEvidenceHit evidence = evidence(UUID.randomUUID(), versionId);
-        HybridRuleSearch retrieval = (requestedVersion, query, options) ->
-                List.of(new HybridEvidenceHit(evidence, 0.02, 1, null, true));
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        AssistantReadTools retrieval = request -> List.of(evidence);
         TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
                 "开局",
                 VisualKind.TABLE_LAYOUT,
@@ -78,15 +76,14 @@ class GroundedTeachingAgentTest {
                 Instant.now());
     }
 
-    private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {
-        return new RuleEvidenceHit(
+    private RuleEvidence evidence(UUID chunkId, UUID versionId) {
+        return new RuleEvidence(
                 chunkId,
                 versionId,
                 "SETUP",
                 "Setup",
                 "Place the board in the center of the table.",
                 2,
-                3,
-                0.9);
+                3);
     }
 }

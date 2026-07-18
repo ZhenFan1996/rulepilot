@@ -1,8 +1,8 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.retrieval.HybridRuleSearch;
-import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
-import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -37,15 +37,15 @@ public class GroundedTeachingAgent {
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
     private static final int MAX_EVIDENCE_PER_SECTION = 6;
     private static final int MAX_STEPS_PER_SECTION = 6;
-    private final HybridRuleSearch retrieval;
+    private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final int maxToolCalls;
 
     public GroundedTeachingAgent(
-            HybridRuleSearch retrieval,
+            AssistantReadTools tools,
             TeachingLessonModel model,
             @Value("${rulepilot.teaching.agent.max-tool-calls:24}") int maxToolCalls) {
-        this.retrieval = retrieval;
+        this.tools = tools;
         this.model = model;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
@@ -60,7 +60,7 @@ public class GroundedTeachingAgent {
                 continue;
             }
 
-            List<RuleEvidenceHit> evidence;
+            List<RuleEvidence> evidence;
             try {
                 toolCalls++;
                 evidence = retrieve(plan.documentVersionId(), planned);
@@ -101,18 +101,19 @@ public class GroundedTeachingAgent {
                 Instant.now());
     }
 
-    private List<RuleEvidenceHit> retrieve(UUID documentVersionId, TeachingPlan.PlannedSection planned) {
+    private List<RuleEvidence> retrieve(UUID documentVersionId, TeachingPlan.PlannedSection planned) {
         Set<String> sourceTypes = planned.required()
                 ? Set.of(planned.type().name())
                 : planned.dependencies().isEmpty()
                         ? Set.of(planned.type().name())
                         : planned.dependencies().stream().map(Enum::name).collect(Collectors.toUnmodifiableSet());
-        return retrieval.search(
+        return tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
                         query(planned.type()),
-                        new RetrievalOptions(MAX_EVIDENCE_PER_SECTION, sourceTypes, planned.type().name()))
+                        MAX_EVIDENCE_PER_SECTION,
+                        sourceTypes,
+                        planned.type().name()))
                 .stream()
-                .map(hit -> hit.evidence())
                 .filter(hit -> hit.documentVersionId().equals(documentVersionId))
                 .toList();
     }
@@ -120,7 +121,7 @@ public class GroundedTeachingAgent {
     private LessonSection compose(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
-            List<RuleEvidenceHit> evidence) {
+            List<RuleEvidence> evidence) {
         SectionDraft draft = model.compose(new TeachingLessonModel.SectionRequest(
                 planned.type(),
                 plan.playerCount(),
@@ -129,8 +130,8 @@ public class GroundedTeachingAgent {
                 evidence.stream().map(this::toModelEvidence).toList()));
         validateDraft(draft);
 
-        Map<UUID, RuleEvidenceHit> allowedEvidence = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(RuleEvidenceHit::chunkId, Function.identity()));
+        Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
+                .collect(Collectors.toUnmodifiableMap(RuleEvidence::chunkId, Function.identity()));
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
@@ -148,7 +149,7 @@ public class GroundedTeachingAgent {
     private LessonStep validatedStep(
             int position,
             TeachingLessonModel.StepDraft draft,
-            Map<UUID, RuleEvidenceHit> allowedEvidence) {
+            Map<UUID, RuleEvidence> allowedEvidence) {
         if (draft == null || draft.text() == null || draft.text().isBlank() || draft.text().length() > 600
                 || draft.citationIds().isEmpty()) {
             throw new IllegalArgumentException("teaching step is invalid");
@@ -177,7 +178,7 @@ public class GroundedTeachingAgent {
         }
     }
 
-    private EvidenceInput toModelEvidence(RuleEvidenceHit evidence) {
+    private EvidenceInput toModelEvidence(RuleEvidence evidence) {
         return new EvidenceInput(
                 evidence.chunkId(),
                 evidence.sectionType(),
