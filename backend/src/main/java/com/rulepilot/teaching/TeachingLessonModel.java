@@ -20,15 +20,29 @@ public interface TeachingLessonModel {
             int totalDurationMinutes,
             int sectionDurationSeconds,
             int maxSteps,
+            List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence) {
         public SectionRequest {
             if (sectionType == null || playerCount < 1 || beginnerCount < 0 || totalDurationMinutes < 1
                     || sectionDurationSeconds < 10 || sectionDurationSeconds > totalDurationMinutes * 60
                     || maxSteps < 1 || maxSteps > 6
+                    || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
+            priorSections = List.copyOf(priorSections);
             evidence = List.copyOf(evidence);
+        }
+    }
+
+    record PriorSectionContext(TeachingSectionType sectionType, String title, String closingStep) {
+        public PriorSectionContext {
+            if (sectionType == null || title == null || title.isBlank() || title.length() > 160
+                    || closingStep == null || closingStep.isBlank() || closingStep.length() > 600) {
+                throw new IllegalArgumentException("prior teaching section context is invalid");
+            }
+            title = title.strip();
+            closingStep = closingStep.strip();
         }
     }
 

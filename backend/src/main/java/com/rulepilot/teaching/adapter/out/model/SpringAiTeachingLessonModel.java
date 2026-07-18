@@ -63,6 +63,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .param("totalDuration", request.totalDurationMinutes())
                         .param("sectionDuration", request.sectionDurationSeconds())
                         .param("maxSteps", request.maxSteps())
+                        .param("continuity", request.priorSections())
                         .param("evidence", request.evidence())
                         .param("repair", repairInstruction))
                 .call()

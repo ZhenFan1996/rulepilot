@@ -18,6 +18,7 @@ import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,7 @@ class GroundedTeachingAgentTest {
             assertThat(request.totalDurationMinutes()).isEqualTo(20);
             assertThat(request.sectionDurationSeconds()).isEqualTo(1_200);
             assertThat(request.maxSteps()).isEqualTo(6);
+            assertThat(request.priorSections()).isEmpty();
             return new TeachingLessonModel.SectionDraft(
                     "三步完成开局",
                     VisualKind.TABLE_LAYOUT,
@@ -74,6 +76,53 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
         assertThat(retrievalCalls).hasValue(2);
         assertThat(criticCalls).hasValue(1);
+    }
+
+    @Test
+    void carriesOnlyTheTwoMostRecentSupportedChapterEndingsIntoComposition() {
+        UUID versionId = UUID.randomUUID();
+        Map<TeachingSectionType, RuleEvidence> evidence = Map.of(
+                TeachingSectionType.OBJECTIVE,
+                sectionEvidence(TeachingSectionType.OBJECTIVE, "Collect the most stars to win.", versionId),
+                TeachingSectionType.COMPONENTS,
+                sectionEvidence(TeachingSectionType.COMPONENTS, "Each player uses one color of pieces.", versionId),
+                TeachingSectionType.SETUP,
+                sectionEvidence(TeachingSectionType.SETUP, "Place the board in the center.", versionId));
+        AtomicInteger compositions = new AtomicInteger();
+        TeachingLessonModel model = request -> {
+            int call = compositions.getAndIncrement();
+            if (call == 0) {
+                assertThat(request.priorSections()).isEmpty();
+            } else if (call == 1) {
+                assertThat(request.priorSections())
+                        .extracting(TeachingLessonModel.PriorSectionContext::sectionType)
+                        .containsExactly(TeachingSectionType.OBJECTIVE);
+                assertThat(request.priorSections().getFirst().closingStep()).contains("most stars");
+            } else {
+                assertThat(request.priorSections())
+                        .extracting(TeachingLessonModel.PriorSectionContext::sectionType)
+                        .containsExactly(TeachingSectionType.OBJECTIVE, TeachingSectionType.COMPONENTS);
+                assertThat(request.priorSections().getLast().closingStep()).contains("one color");
+            }
+            RuleEvidence source = evidence.get(request.sectionType());
+            return new TeachingLessonModel.SectionDraft(
+                    request.sectionType().name(),
+                    VisualKind.REFERENCE_CARD,
+                    "本节规则提示",
+                    List.of(new TeachingLessonModel.StepDraft(source.excerpt(), List.of(source.chunkId()))));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence.get(TeachingSectionType.valueOf(request.currentSectionType()))),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                6);
+
+        var lesson = agent.create(continuityPlan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(compositions).hasValue(3);
     }
 
     @Test
@@ -264,6 +313,21 @@ class GroundedTeachingAgentTest {
                 Instant.now());
     }
 
+    private TeachingPlan continuityPlan(UUID versionId) {
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                10,
+                List.of(
+                        new PlannedSection(1, TeachingSectionType.OBJECTIVE, true, true, List.of(1), List.of()),
+                        new PlannedSection(2, TeachingSectionType.COMPONENTS, true, true, List.of(2), List.of()),
+                        new PlannedSection(3, TeachingSectionType.SETUP, true, true, List.of(3), List.of())),
+                "player",
+                Instant.now());
+    }
+
     private GeneratedContentCritic acceptedCritic() {
         return (request, risk) -> new GeneratedContentCritic.Review(false, List.of());
     }
@@ -277,5 +341,10 @@ class GroundedTeachingAgentTest {
                 "Place the board in the center of the table.",
                 2,
                 3);
+    }
+
+    private RuleEvidence sectionEvidence(TeachingSectionType type, String excerpt, UUID versionId) {
+        return new RuleEvidence(
+                UUID.randomUUID(), versionId, type.name(), type.name(), excerpt, type.ordinal() + 1, type.ordinal() + 1);
     }
 }

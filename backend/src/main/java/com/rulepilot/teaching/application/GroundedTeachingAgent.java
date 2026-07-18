@@ -18,6 +18,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
+import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -146,7 +147,13 @@ public class GroundedTeachingAgent {
             }
 
             try {
-                sections.add(compose(plan, planned, pacing.get(planned.type()), evidence, assistantRunId));
+                sections.add(compose(
+                        plan,
+                        planned,
+                        pacing.get(planned.type()),
+                        continuityContext(sections),
+                        evidence,
+                        assistantRunId));
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
@@ -185,6 +192,7 @@ public class GroundedTeachingAgent {
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             TeachingPacingPolicy.SectionPacing pacing,
+            List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
             UUID assistantRunId) {
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
@@ -194,6 +202,7 @@ public class GroundedTeachingAgent {
                 plan.durationMinutes(),
                 pacing.durationSeconds(),
                 pacing.maxSteps(),
+                priorSections,
                 evidence.stream().map(this::toModelEvidence).toList());
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
@@ -300,6 +309,17 @@ public class GroundedTeachingAgent {
                 evidence.excerpt(),
                 evidence.pageFrom(),
                 evidence.pageTo());
+    }
+
+    private List<PriorSectionContext> continuityContext(List<LessonSection> sections) {
+        List<LessonSection> supported = sections.stream()
+                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                .toList();
+        int fromIndex = Math.max(0, supported.size() - 2);
+        return supported.subList(fromIndex, supported.size()).stream()
+                .map(section -> new PriorSectionContext(
+                        section.type(), section.title(), section.steps().getLast().text()))
+                .toList();
     }
 
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {
