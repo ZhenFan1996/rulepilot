@@ -27,7 +27,8 @@ public class IdentitySecurityConfiguration {
                 .headers(headers -> headers
                         .contentSecurityPolicy(csp -> csp.policyDirectives(
                                 "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
-                                        + "form-action 'self'; script-src 'self'; style-src 'self'; "
+                                        + "form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+                                        + "worker-src 'self' blob:; style-src 'self'; "
                                         + "img-src 'self' data:; font-src 'self'; media-src 'self' blob:; "
                                         + "connect-src 'self'"))
                         .referrerPolicy(referrer -> referrer.policy(ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))

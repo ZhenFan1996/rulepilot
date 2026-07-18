@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
+import CardOcrCapture from '@/components/CardOcrCapture.vue'
+import { buildCardQuestion } from '@/lib/cardOcr'
 import {
   finishSection,
   initialLessonProgress,
@@ -193,6 +195,7 @@ const editingRuling = ref(false)
 const editedVerdict = ref('')
 const editedExplanation = ref('')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
+const cardOcrOpen = ref(false)
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -402,6 +405,13 @@ async function askCurrentSection() {
   } finally {
     answerLoading.value = false
   }
+}
+
+function useCardText(text: string) {
+  question.value = buildCardQuestion(text)
+  cardOcrOpen.value = false
+  answer.value = null
+  answerError.value = ''
 }
 
 async function csrfToken() {
@@ -986,6 +996,14 @@ onUnmounted(() => {
             </div>
 
             <form class="mt-5" @submit.prevent="askCurrentSection">
+              <button
+                type="button"
+                class="mb-3 min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="answerLoading || !online"
+                @click="cardOcrOpen = true"
+              >
+                拍照识别卡牌文字
+              </button>
               <label for="lesson-question" class="sr-only">针对当前讲解章节提问</label>
               <textarea
                 id="lesson-question"
@@ -1095,5 +1113,7 @@ onUnmounted(() => {
         <button :disabled="progress.paused" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:opacity-35" @click="finish('completed')">{{ progress.currentIndex === lesson.sections.length - 1 ? '完成' : '下一节' }}</button>
       </div>
     </nav>
+
+    <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
   </main>
 </template>

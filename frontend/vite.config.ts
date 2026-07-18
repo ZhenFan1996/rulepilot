@@ -1,14 +1,69 @@
+import { createReadStream, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+
+const ocrAssets = [
+  {
+    fileName: 'ocr-assets/v7/worker.min.js',
+    sourcePath: path.resolve(__dirname, 'node_modules/tesseract.js/dist/worker.min.js'),
+  },
+  {
+    fileName: 'ocr-assets/v7/tesseract-core-lstm.wasm.js',
+    sourcePath: path.resolve(__dirname, 'node_modules/tesseract.js-core/tesseract-core-lstm.wasm.js'),
+  },
+  {
+    fileName: 'ocr-assets/v7/lang/eng.traineddata.gz',
+    sourcePath: path.resolve(
+      __dirname,
+      'node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz',
+    ),
+  },
+  {
+    fileName: 'ocr-assets/v7/lang/chi_sim.traineddata.gz',
+    sourcePath: path.resolve(
+      __dirname,
+      'node_modules/@tesseract.js-data/chi_sim/4.0.0_best_int/chi_sim.traineddata.gz',
+    ),
+  },
+]
+
+function localOcrRuntime(): Plugin {
+  return {
+    name: 'rulepilot-local-ocr-runtime',
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const requestedPath = request.url?.split('?')[0]?.replace(/^\//, '')
+        const asset = ocrAssets.find((candidate) => candidate.fileName === requestedPath)
+        if (!asset) return next()
+        response.setHeader(
+          'Content-Type',
+          asset.fileName.endsWith('.gz') ? 'application/gzip' : 'application/javascript; charset=utf-8',
+        )
+        response.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        createReadStream(asset.sourcePath).pipe(response)
+      })
+    },
+    generateBundle() {
+      for (const asset of ocrAssets) {
+        this.emitFile({
+          type: 'asset',
+          fileName: asset.fileName,
+          source: readFileSync(asset.sourcePath),
+        })
+      }
+    },
+  }
+}
 
 export default defineConfig({
   plugins: [
     vue(),
     tailwindcss(),
+    localOcrRuntime(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['rulepilot-icon.svg'],
@@ -35,6 +90,7 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        globIgnores: ['ocr-assets/**'],
       },
     }),
   ],
