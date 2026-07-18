@@ -3,8 +3,10 @@ package com.rulepilot.retrieval.application;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -24,5 +26,20 @@ class RuleEvidenceLookupService implements RuleEvidenceLookup {
             throw new IllegalArgumentException("document version and evidence chunk ids are required");
         }
         return evidence.findByChunkIds(documentVersionId, Set.copyOf(chunkIds));
+    }
+
+    @Override
+    public List<RuleEvidenceHit> findAdjacent(
+            UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
+        if (documentVersionId == null || anchorChunkIds == null || anchorChunkIds.isEmpty()
+                || anchorChunkIds.size() > 4 || radius < 1 || radius > 2
+                || sectionTypes == null || sectionTypes.isEmpty() || sectionTypes.size() > 6
+                || sectionTypes.stream().anyMatch(value -> value == null || value.isBlank())) {
+            throw new IllegalArgumentException("adjacent evidence lookup is invalid");
+        }
+        return evidence.findAdjacent(
+                documentVersionId, Set.copyOf(anchorChunkIds), radius,
+                sectionTypes.stream().map(String::strip).map(value -> value.toUpperCase(Locale.ROOT))
+                        .collect(Collectors.toUnmodifiableSet()));
     }
 }

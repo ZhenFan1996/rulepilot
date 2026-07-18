@@ -169,7 +169,8 @@ public class GroundedTeachingAgent {
                         intent.query(),
                         EVIDENCE_PER_INTENT,
                         intent.sourceTypes(),
-                        sectionType.name())));
+                        sectionType.name(),
+                        true)));
     }
 
     private LessonSection compose(

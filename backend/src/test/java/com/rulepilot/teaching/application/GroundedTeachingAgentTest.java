@@ -32,6 +32,7 @@ class GroundedTeachingAgentTest {
         AtomicInteger retrievalCalls = new AtomicInteger();
         AssistantReadTools tools = request -> {
             assertThat(request.documentVersionId()).isEqualTo(versionId);
+            assertThat(request.includeAdjacentContext()).isTrue();
             if (retrievalCalls.getAndIncrement() == 0) {
                 assertThat(request.sectionTypes()).containsExactly("SETUP");
             } else {
