@@ -3,10 +3,11 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
-import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.RuleCitation;
@@ -15,6 +16,8 @@ import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -22,8 +25,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import org.springframework.stereotype.Service;
 import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
@@ -32,12 +35,22 @@ public class StructuredRuleAnswerService {
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
     private final RuleAnswerModel model;
+    private final RuleAnswerCache cache;
+    private final Counter cacheHits;
+    private final Counter cacheMisses;
 
     public StructuredRuleAnswerService(
-            QuestionUnderstanding understanding, HybridRuleSearch retrieval, RuleAnswerModel model) {
+            QuestionUnderstanding understanding,
+            HybridRuleSearch retrieval,
+            RuleAnswerModel model,
+            RuleAnswerCache cache,
+            MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
         this.model = model;
+        this.cache = cache;
+        this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
+        this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
     }
 
     public StructuredRuleAnswer answer(String question, QuestionContext context) {
@@ -45,6 +58,13 @@ public class StructuredRuleAnswerService {
         if (understood.needsClarification()) {
             return clarification(understood);
         }
+        AnswerCacheKey cacheKey = cacheKey(understood, context);
+        var cached = cache.find(cacheKey);
+        if (cached.isPresent()) {
+            cacheHits.increment();
+            return cached.get();
+        }
+        cacheMisses.increment();
         List<HybridEvidenceHit> evidence = retrieval.search(
                 context.documentVersionId(),
                 understood.normalizedQuestion(),
@@ -55,13 +75,22 @@ public class StructuredRuleAnswerService {
         if (evidence.stream().anyMatch(hit -> !context.documentVersionId().equals(hit.evidence().documentVersionId()))) {
             return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
         }
+        StructuredRuleAnswer answer;
         try {
-            return validate(context.documentVersionId(), model.compose(toRequest(understood, evidence)), evidence);
+            answer = validate(context.documentVersionId(), model.compose(toRequest(understood, evidence)), evidence);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
+        cache.save(cacheKey, answer);
+        return answer;
+    }
+
+    private AnswerCacheKey cacheKey(UnderstoodQuestion question, QuestionContext context) {
+        return new AnswerCacheKey(
+                context.documentVersionId(), question.normalizedQuestion(), context.currentLessonSection(),
+                context.gamePhase(), context.playerCount(), context.activeExpansions());
     }
 
     private ModelRequest toRequest(UnderstoodQuestion question, List<HybridEvidenceHit> evidence) {

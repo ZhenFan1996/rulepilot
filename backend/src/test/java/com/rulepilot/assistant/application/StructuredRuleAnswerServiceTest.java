@@ -3,15 +3,24 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.StructuredRuleAnswer;
+import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class StructuredRuleAnswerServiceTest {
@@ -22,8 +31,7 @@ class StructuredRuleAnswerServiceTest {
     @Test
     void returnsOnlyValidatedCitationsFromCurrentVersion() {
         RuleEvidenceHit source = evidence("SCORING");
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, 1, false)),
                 request -> new ModelDraft(
                         "Coins score one point.", "Each coin contributes one point.",
@@ -44,8 +52,7 @@ class StructuredRuleAnswerServiceTest {
     @Test
     void rejectsCitationThatWasNotRetrieved() {
         RuleEvidenceHit source = evidence("SCORING");
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
                 request -> new ModelDraft("Unsupported", "Unsupported", List.of(UUID.randomUUID()), List.of(), "HIGH"));
 
@@ -59,8 +66,7 @@ class StructuredRuleAnswerServiceTest {
     @Test
     void missingContextStopsBeforeRetrievalAndModel() {
         AtomicBoolean called = new AtomicBoolean();
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> {
                     called.set(true);
                     return List.of();
@@ -82,8 +88,7 @@ class StructuredRuleAnswerServiceTest {
     @Test
     void refusesWhenNoEvidenceWasRetrieved() {
         AtomicBoolean modelCalled = new AtomicBoolean();
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> List.of(),
                 request -> {
                     modelCalled.set(true);
@@ -102,8 +107,7 @@ class StructuredRuleAnswerServiceTest {
     @Test
     void reportsModelTimeoutWithoutLeakingAnswerContent() {
         RuleEvidenceHit source = evidence("ACTIONS");
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
                 request -> {
                     throw new RuleAnswerModelTimeoutException("provider details", new RuntimeException("secret"));
@@ -124,8 +128,7 @@ class StructuredRuleAnswerServiceTest {
         RuleEvidenceHit wrongVersion = new RuleEvidenceHit(
                 UUID.randomUUID(), otherVersion, "SCORING", "Scoring", "One point.", 2, 2, 0.7);
         AtomicBoolean modelCalled = new AtomicBoolean();
-        var service = new StructuredRuleAnswerService(
-                understanding,
+        var service = answerService(
                 (version, query, options) -> List.of(new HybridEvidenceHit(wrongVersion, 0.03, 1, null, false)),
                 request -> {
                     modelCalled.set(true);
@@ -141,8 +144,55 @@ class StructuredRuleAnswerServiceTest {
         assertThat(modelCalled).isFalse();
     }
 
+    @Test
+    void servesRepeatedValidatedAnswerFromVersionedCacheAndRecordsMetrics() {
+        RuleEvidenceHit source = evidence("SCORING");
+        InMemoryAnswerCache cache = new InMemoryAnswerCache();
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        AtomicInteger modelCalls = new AtomicInteger();
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new ModelDraft(
+                            "Coins score one point.", "Each coin contributes one point.",
+                            List.of(source.chunkId()), List.of(), "HIGH");
+                },
+                cache,
+                metrics);
+        QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
+
+        StructuredRuleAnswer first = service.answer("How are coins scored?", context);
+        StructuredRuleAnswer second = service.answer("How are coins scored?", context);
+
+        assertThat(second).isEqualTo(first);
+        assertThat(modelCalls).hasValue(1);
+        assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "miss").count()).isEqualTo(1);
+        assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "hit").count()).isEqualTo(1);
+    }
+
+    private StructuredRuleAnswerService answerService(HybridRuleSearch retrieval, RuleAnswerModel model) {
+        return new StructuredRuleAnswerService(
+                understanding, retrieval, model, new InMemoryAnswerCache(), new SimpleMeterRegistry());
+    }
+
     private RuleEvidenceHit evidence(String sectionType) {
         return new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, sectionType, "Scoring", "Each coin is worth one point.", 8, 8, 0.8);
+    }
+
+    private static final class InMemoryAnswerCache implements RuleAnswerCache {
+        private final Map<AnswerCacheKey, StructuredRuleAnswer> values = new HashMap<>();
+
+        @Override
+        public Optional<StructuredRuleAnswer> find(AnswerCacheKey key) {
+            return Optional.ofNullable(values.get(key));
+        }
+
+        @Override
+        public void save(AnswerCacheKey key, StructuredRuleAnswer answer) {
+            values.put(key, answer);
+        }
     }
 }

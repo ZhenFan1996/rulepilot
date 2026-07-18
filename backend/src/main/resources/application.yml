@@ -54,6 +54,8 @@ rulepilot:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:
     provider: ${ANSWER_PROVIDER:fake}
+    cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
+    cache-retention-jitter: ${ANSWER_CACHE_RETENTION_JITTER:PT1H}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}
   speech:
