@@ -53,6 +53,8 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                 .system(prompts.criticSystem())
                 .user(user -> user.text(prompts.criticUser())
                         .param("type", request.contentType())
+                        .param("objective", request.taskContext().objective())
+                        .param("coverage", request.taskContext().requiredCoverage())
                         .param("claims", request.claims())
                         .param("evidence", request.evidence())
                         .param("repair", repair))

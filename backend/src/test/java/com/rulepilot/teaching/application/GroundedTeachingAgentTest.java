@@ -45,9 +45,20 @@ class GroundedTeachingAgentTest {
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            criticCalls.incrementAndGet();
+            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            assertThat(request.taskContext().objective()).contains("executable table-ready sequence");
+            assertThat(request.taskContext().requiredCoverage()).contains("starting player");
+            assertThat(request.claims()).hasSize(2);
+            assertThat(request.claims().getFirst().text()).isEqualTo("桌面布置示意");
+            assertThat(request.claims().getFirst().citationIds()).containsExactly(chunkId);
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
         GroundedTeachingAgent agent =
                 new GroundedTeachingAgent(
-                        tools, model, new PolicyEvidenceVerifier(), acceptedCritic(),
+                        tools, model, new PolicyEvidenceVerifier(), critic,
                         new ImmediateAuditedAgentInvocations(), 4);
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
@@ -57,6 +68,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().sourcePages()).containsExactly(2, 3);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
         assertThat(retrievalCalls).hasValue(2);
+        assertThat(criticCalls).hasValue(1);
     }
 
     @Test

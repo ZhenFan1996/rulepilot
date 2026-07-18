@@ -52,6 +52,20 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
+    void reviewsHighImpactContentOutsideEvaluationMode() {
+        AtomicInteger calls = new AtomicInteger();
+        var critic = new ConditionalGeneratedContentCritic(request -> {
+            calls.incrementAndGet();
+            return new CritiqueDraft(List.of());
+        }, new ImmediateAuditedAgentInvocations(), false);
+
+        var review = critic.review(request(), ReviewRisk.HIGH_IMPACT);
+
+        assertThat(review.performed()).isTrue();
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
     void evaluationModeReturnsValidatedBlockingIssues() {
         Issue issue = new Issue(
                 IssueType.MISSING_EXCEPTION, 1, List.of(chunkId), "The cited exception was omitted.");

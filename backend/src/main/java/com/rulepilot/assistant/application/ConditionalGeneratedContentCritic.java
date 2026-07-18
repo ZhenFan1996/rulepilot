@@ -37,7 +37,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk) {
         validateRequest(request);
-        if (!evaluationMode && risk != ReviewRisk.LOW_CONFIDENCE) {
+        if (!evaluationMode && risk != ReviewRisk.LOW_CONFIDENCE && risk != ReviewRisk.HIGH_IMPACT) {
             return new Review(false, List.of());
         }
         var draft = invocations.invoke(
@@ -63,6 +63,10 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     private void validateRequest(ReviewRequest request) {
         if (request == null || request.assistantRunId() == null || request.contentType() == null
+                || request.taskContext() == null
+                || request.taskContext().objective() == null || request.taskContext().objective().isBlank()
+                || request.taskContext().requiredCoverage() == null
+                || request.taskContext().requiredCoverage().isBlank()
                 || request.claims().isEmpty() || request.evidence().isEmpty()
                 || request.claims().stream().anyMatch(claim -> claim == null || claim.position() < 1
                         || claim.text() == null || claim.text().isBlank() || claim.citationIds().isEmpty())

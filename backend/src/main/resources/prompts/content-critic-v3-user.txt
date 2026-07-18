@@ -1,0 +1,14 @@
+<review_scope content_type="{type}">
+  <objective>{objective}</objective>
+  <required_coverage>{coverage}</required_coverage>
+</review_scope>
+
+<untrusted_claims>
+{claims}
+</untrusted_claims>
+
+<untrusted_evidence_data>
+{evidence}
+</untrusted_evidence_data>
+
+{repair}

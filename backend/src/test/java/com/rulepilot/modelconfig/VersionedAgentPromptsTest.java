@@ -14,8 +14,8 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v2-user.txt"),
                 resource("rule-answer-agent-v2-system.txt"),
                 resource("rule-answer-agent-v2-user.txt"),
-                resource("content-critic-v2-system.txt"),
-                resource("content-critic-v2-user.txt"),
+                resource("content-critic-v3-system.txt"),
+                resource("content-critic-v3-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
         assertThat(prompts.teachingSystem())
@@ -25,7 +25,8 @@ class VersionedAgentPromptsTest {
                 .contains("set answerable to false", "Do not answer from prior knowledge", "gameplay context");
         assertThat(prompts.answerUser()).contains("{questionType}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.criticSystem())
-                .contains("MISSING_EXCEPTION", "OVERREACH", "outside knowledge");
+                .contains("MISSING_EXCEPTION", "MISSING_CRITICAL_RULE", "visual description", "outside knowledge");
+        assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }
 

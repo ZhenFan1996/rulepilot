@@ -14,22 +14,41 @@ public interface GeneratedContentCritic {
 
     enum ReviewRisk {
         STANDARD,
-        LOW_CONFIDENCE
+        LOW_CONFIDENCE,
+        HIGH_IMPACT
     }
 
     enum IssueType {
         UNSUPPORTED_CLAIM,
         CONTRADICTION,
         MISSING_EXCEPTION,
+        MISSING_CRITICAL_RULE,
         OVERREACH
     }
 
-    record ReviewRequest(UUID assistantRunId, ContentType contentType, List<Claim> claims, List<Evidence> evidence) {
+    record ReviewRequest(
+            UUID assistantRunId,
+            ContentType contentType,
+            TaskContext taskContext,
+            List<Claim> claims,
+            List<Evidence> evidence) {
         public ReviewRequest {
             claims = claims == null ? List.of() : List.copyOf(claims);
             evidence = evidence == null ? List.of() : List.copyOf(evidence);
         }
+
+        public ReviewRequest(
+                UUID assistantRunId, ContentType contentType, List<Claim> claims, List<Evidence> evidence) {
+            this(
+                    assistantRunId,
+                    contentType,
+                    new TaskContext("Check generated content against supplied evidence.", "All material rule details."),
+                    claims,
+                    evidence);
+        }
     }
+
+    record TaskContext(String objective, String requiredCoverage) {}
 
     record Claim(int position, String text, List<UUID> citationIds) {
         public Claim {

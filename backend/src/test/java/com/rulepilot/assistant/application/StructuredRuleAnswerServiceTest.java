@@ -281,6 +281,8 @@ class StructuredRuleAnswerServiceTest {
         AtomicInteger criticCalls = new AtomicInteger();
         GeneratedContentCritic rejectingCritic = (request, risk) -> {
             criticCalls.incrementAndGet();
+            assertThat(request.taskContext().objective()).contains("how does scoring work?");
+            assertThat(request.taskContext().requiredCoverage()).contains("RULE_QUERY", "player count not provided");
             return new GeneratedContentCritic.Review(true, List.of(new Issue(
                     IssueType.OVERREACH, 1, List.of(source.chunkId()), "The conclusion exceeds the evidence.")));
         };

@@ -15,6 +15,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
+import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -38,6 +39,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -52,6 +54,11 @@ public class GroundedTeachingAgent {
     private static final int MAX_EVIDENCE_PER_SECTION = 6;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
+    private static final Set<TeachingSectionType> HIGH_IMPACT_SECTIONS = Set.of(
+            TeachingSectionType.SETUP,
+            TeachingSectionType.END_CONDITIONS,
+            TeachingSectionType.SCORING,
+            TeachingSectionType.TIE_BREAKERS);
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
@@ -194,28 +201,40 @@ public class GroundedTeachingAgent {
                 result -> estimateTokens(result.toString()));
         validateDraft(draft);
 
+        List<UUID> allEvidenceIds = evidence.stream().map(RuleEvidence::chunkId).toList();
+        List<EvidenceClaim> generatedClaims = new ArrayList<>();
+        generatedClaims.add(new EvidenceClaim(draft.visualCaption(), allEvidenceIds));
+        generatedClaims.addAll(draft.steps().stream()
+                .map(step -> new EvidenceClaim(step.text(), step.citationIds()))
+                .toList());
         var verification = evidenceVerifier.verify(new VerificationRequest(
                 plan.documentVersionId(),
                 evidence.stream().map(this::toVerifierEvidence).toList(),
-                draft.steps().stream().map(step -> new EvidenceClaim(step.text(), step.citationIds())).toList()));
+                generatedClaims));
         if (!verification.verified()) {
             throw new IllegalArgumentException("teaching section evidence did not pass policy verification");
         }
+        var guidance = TeachingSectionKnowledge.forSection(planned.type());
         var review = critic.review(
                 new ReviewRequest(
                         assistantRunId,
                         ContentType.LESSON,
-                        IntStream.range(0, draft.steps().size())
-                                .mapToObj(index -> new Claim(
-                                        index + 1,
-                                        draft.steps().get(index).text(),
-                                        draft.steps().get(index).citationIds()))
+                        new TaskContext(guidance.objective(), guidance.coverageChecklist()),
+                        Stream.concat(
+                                        Stream.of(new Claim(1, draft.visualCaption(), allEvidenceIds)),
+                                        IntStream.range(0, draft.steps().size())
+                                                .mapToObj(index -> new Claim(
+                                                        index + 2,
+                                                        draft.steps().get(index).text(),
+                                                        draft.steps().get(index).citationIds())))
                                 .toList(),
                         evidence.stream()
                                 .map(source -> new GeneratedContentCritic.Evidence(
                                         source.chunkId(), source.excerpt()))
                                 .toList()),
-                ReviewRisk.STANDARD);
+                HIGH_IMPACT_SECTIONS.contains(planned.type())
+                        ? ReviewRisk.HIGH_IMPACT
+                        : ReviewRisk.STANDARD);
         if (!review.accepted()) {
             throw new IllegalArgumentException("teaching section did not pass factual consistency review");
         }
