@@ -46,6 +46,12 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public Optional<RuleDocument> findDocument(UUID documentId) {
+        return Optional.ofNullable(entityManager.find(RuleDocumentEntity.class, documentId))
+                .map(RuleDocumentEntity::toDomain);
+    }
+
+    @Override
     public RuleDocument save(RuleDocument document) {
         entityManager.persist(new RuleDocumentEntity(document));
         entityManager.flush();

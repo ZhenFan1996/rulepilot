@@ -12,6 +12,8 @@ public interface RuleDocumentRepository {
 
     Optional<RuleDocument> findDocument(UUID editionId, String title, DocumentSourceType sourceType);
 
+    Optional<RuleDocument> findDocument(UUID documentId);
+
     RuleDocument save(RuleDocument document);
 
     Optional<DocumentVersion> findVersionByChecksum(UUID documentId, String checksum);
