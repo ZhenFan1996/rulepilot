@@ -89,6 +89,31 @@ interface MediaConsistencyReport {
   }>
 }
 
+interface StructuredRuleAnswer {
+  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT'
+  shortVerdict: string
+  explanation: string
+  citations: RuleCitation[]
+  exceptions: string[]
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  official: boolean
+  clarification: string | null
+}
+
+interface RuleCitation {
+  chunkId: string
+  sectionType: string
+  heading: string
+  excerpt: string
+  pageFrom: number
+  pageTo: number
+}
+
+interface CsrfResponse {
+  headerName: string
+  token: string
+}
+
 interface VideoChapter {
   position: number
   type: string
@@ -132,6 +157,10 @@ const narrationPlaying = ref(false)
 const narrationRate = ref(1)
 const narrationRestoreTarget = ref<number | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
+const question = ref('')
+const answer = ref<StructuredRuleAnswer | null>(null)
+const answerLoading = ref(false)
+const answerError = ref('')
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -269,8 +298,58 @@ async function loadLesson() {
 
 function selectSection(index: number) {
   progress.value = { ...progress.value, currentIndex: index }
+  question.value = ''
+  answer.value = null
+  answerError.value = ''
   saveProgress()
   seekToChapter(index)
+}
+
+async function askCurrentSection() {
+  const text = question.value.trim()
+  if (!text || !plan.value || !currentSection.value || answerLoading.value || !online.value) return
+  answerLoading.value = true
+  answerError.value = ''
+  answer.value = null
+  try {
+    const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
+    if (csrfResponse.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (!csrfResponse.ok) throw new Error('无法建立安全会话，请稍后重试。')
+    const csrf = (await csrfResponse.json()) as CsrfResponse
+    const response = await fetch(`/api/v1/document-versions/${plan.value.documentVersionId}/answers`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        question: text,
+        currentLessonSection: currentSection.value.type,
+        playerCount: plan.value.playerCount,
+      }),
+    })
+    if (response.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
+    answer.value = (await response.json()) as StructuredRuleAnswer
+  } catch (error) {
+    answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
+  } finally {
+    answerLoading.value = false
+  }
+}
+
+function confidenceLabel(confidence: StructuredRuleAnswer['confidence']) {
+  return { HIGH: '高置信度', MEDIUM: '中等置信度', LOW: '低置信度' }[confidence]
+}
+
+function citationPages(citation: RuleCitation) {
+  return citation.pageFrom === citation.pageTo
+    ? `第 ${citation.pageFrom} 页`
+    : `第 ${citation.pageFrom}–${citation.pageTo} 页`
 }
 
 function previousSection() {
@@ -421,6 +500,7 @@ function mediaModeAvailable(mode: MediaMode) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
   if (event.key === 'ArrowLeft') previousSection()
   if (event.key === 'ArrowRight') finish('completed')
 }
@@ -667,6 +747,81 @@ onUnmounted(() => {
           </details>
 
           <div v-if="progress.paused" class="mt-7 rounded-2xl border border-copper/25 bg-copper/8 p-4 text-sm font-semibold" role="status">讲解已暂停。继续后才能完成或跳过当前章节。</div>
+
+          <section class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
+            <p class="eyebrow">ASK ABOUT THIS STEP</p>
+            <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h3 id="lesson-question-title" class="font-display text-2xl font-semibold">关于本节继续追问</h3>
+                <p class="mt-2 text-sm leading-6 text-ink/55">问题会自动沿用“{{ currentSection.title }}”及当前规则版本。</p>
+              </div>
+              <span class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">第 {{ currentSection.position }} 节上下文</span>
+            </div>
+
+            <form class="mt-5" @submit.prevent="askCurrentSection">
+              <label for="lesson-question" class="sr-only">针对当前讲解章节提问</label>
+              <textarea
+                id="lesson-question"
+                v-model="question"
+                rows="3"
+                maxlength="800"
+                :disabled="answerLoading || !online"
+                placeholder="例如：为什么完成目标后才计算这一分？"
+                class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
+              />
+              <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p class="text-xs text-ink/45">{{ question.length }}/800 · 回答必须附带当前版本中的规则依据</p>
+                <button
+                  type="submit"
+                  :disabled="answerLoading || !online || !question.trim()"
+                  class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {{ answerLoading ? '正在查找规则依据…' : online ? '提交问题' : '离线时无法提问' }}
+                </button>
+              </div>
+            </form>
+
+            <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
+            <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
+              <p class="text-sm font-semibold">正在理解问题并核对规则书…</p>
+              <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
+              <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
+            </div>
+
+            <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
+              <div class="p-5 sm:p-6">
+                <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                  <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
+                  <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.official ? '官方来源' : '上传规则资料' }}</span>
+                </div>
+                <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
+
+                <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
+                <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">当前证据不足，系统没有生成未经验证的规则结论。</p>
+
+                <details v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
+                  <summary class="cursor-pointer font-semibold text-indigo">查看详细解释与例外</summary>
+                  <p class="mt-3 leading-7 text-ink/70">{{ answer.explanation }}</p>
+                  <ul v-if="answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
+                    <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
+                  </ul>
+                </details>
+              </div>
+
+              <details v-if="answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6">
+                <summary class="cursor-pointer font-semibold text-indigo">规则出处与页码（{{ answer.citations.length }}）</summary>
+                <ol class="mt-4 space-y-3">
+                  <li v-for="citation in answer.citations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <p class="font-semibold">{{ citation.heading }}</p>
+                      <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
+                    </div>
+                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
+                  </li>
+                </ol>
+              </details>
+            </article>
+          </section>
         </div>
       </section>
     </div>
