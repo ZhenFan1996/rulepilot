@@ -6,14 +6,19 @@ LANTERN RELAY
 OBJECTIVE AND HOW TO WIN
 Lantern Relay is a race to light the harbor before the fifth round ends.
 The player with the most victory points after final scoring wins the game.
+To win, a player must accomplish the highest final score.
+During the game, focus on lighting docks while preserving cards and glass.
 
 COMPONENTS
-The game includes 1 harbor board, 24 lantern cards, 20 glass tokens,
+The following pieces and cards are included in the box:
+1 harbor board, 24 lantern cards, 20 glass tokens,
 12 boat markers, 4 score markers, 1 first-player beacon, and 1 round marker.
 Lantern cards show a color and a value from one to three.
+The board holds docks, tokens pay costs, cards light docks, boats show position,
+score markers track points, and the beacon identifies the first player.
 
 === PAGE 2 ===
-SETUP
+SETUP - HOW TO SET UP THE GAME BEFORE PLAYING
 1. Place the harbor board in the center and the round marker on round one.
 2. Shuffle the lantern cards and place them face down beside the board.
 3. Give each player one boat, one score marker, and two glass tokens.
@@ -23,11 +28,12 @@ SETUP
 
 === PAGE 3 ===
 ROUND STRUCTURE AND PHASES
-Each game round has a Dawn phase, an Action phase, and a Harbor phase.
+A complete round has a Dawn phase, an Action phase, and a Harbor phase.
 During Dawn, reveal one lantern card and add its value to the public light row.
 During the Action phase, players take one turn clockwise from the beacon holder.
 During the Harbor phase, score completed docks, pass the beacon clockwise,
 and advance the round marker. After round five, proceed to the game end.
+The next round begins after Harbor ends and the round marker advances.
 
 ACTIONS
 On a turn, the active player must take exactly one action:

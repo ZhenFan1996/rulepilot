@@ -78,15 +78,10 @@ if [ -z "$edition_id" ]; then
 	edition_id=$(printf '%s' "$edition" | jq -er .id)
 fi
 
-documents=$(curl -fsS -b "$COOKIE_FILE" "$BASE_URL/api/v1/editions/$edition_id/documents")
-document_version_id=$(printf '%s' "$documents" | jq -r --arg title "$DOCUMENT_TITLE" \
-	'.[] | select(.document.title == $title) | .latestVersion.id' | head -n 1)
-if [ -z "$document_version_id" ]; then
-	upload=$(curl -fsS -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" \
-		-F "title=$DOCUMENT_TITLE" -F 'sourceType=BASE_RULEBOOK' \
-		-F "file=@$PDF_FILE;type=application/pdf" "$BASE_URL/api/v1/editions/$edition_id/documents")
-	document_version_id=$(printf '%s' "$upload" | jq -er .version.id)
-fi
+upload=$(curl -fsS -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" \
+	-F "title=$DOCUMENT_TITLE" -F 'sourceType=BASE_RULEBOOK' \
+	-F "file=@$PDF_FILE;type=application/pdf" "$BASE_URL/api/v1/editions/$edition_id/documents")
+document_version_id=$(printf '%s' "$upload" | jq -er .version.id)
 
 attempt=1
 status=''
@@ -119,7 +114,17 @@ if [ "$lesson_status" != 200 ]; then
 		"$BASE_URL/api/v1/teaching-plans/$plan_id/illustrated-lessons"
 fi
 
+evaluation_file="$DEMO_DIR/retrieval-evaluation.json"
+curl -fsS -o "$evaluation_file" -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" -X POST \
+	"$BASE_URL/api/admin/document-versions/$document_version_id/retrieval-evaluation"
+sample_count=$(jq -er .sampleCount "$evaluation_file")
+hit_count=$(jq -er .hitCount "$evaluation_file")
+recall_at_5=$(jq -er '.recallAt5 * 10000 | round / 100' "$evaluation_file")
+mrr=$(jq -er '.meanReciprocalRank * 1000 | round / 1000' "$evaluation_file")
+p95_ms=$(jq -er '.p95LatencyMillis * 1000 | round / 1000' "$evaluation_file")
+
 echo "PASS demo game: $GAME_NAME"
 echo "PASS demo document: READY ($document_version_id)"
 echo "PASS demo teaching plan and cited lesson: $plan_id"
+echo "PASS retrieval evaluation: $hit_count/$sample_count hits, Recall@5 ${recall_at_5}%, MRR $mrr, p95 ${p95_ms}ms"
 echo "Open after signing in as $ADMIN_NAME: $FRONTEND_URL/lesson/$plan_id"

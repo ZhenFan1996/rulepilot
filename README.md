@@ -63,6 +63,52 @@ RulePilot 是一个面向桌游规则书的多媒体规则讲解应用。项目�
 4. 在图文与语音稳定后生成分章节视频。
 5. 基于相同规则证据加入讲解内追问和实时对局答疑。
 
+## 技术主线与架构
+
+RulePilot 是一个 Spring Modulith 模块化单体。业务模块通过公开接口和领域事件协作，领域模型不依赖 Spring、JPA、Redis、HTTP、消息队列或模型 SDK。
+
+```mermaid
+flowchart LR
+    UI[Vue PWA] --> API[Spring Security + HTTP API]
+    API --> Catalog[目录与版本]
+    API --> Teaching[讲解与答疑]
+    API --> Session[对局与裁定]
+    API --> Document[规则文档]
+    Document --> MinIO[(MinIO)]
+    Document --> Outbox[(PostgreSQL Outbox)]
+    Outbox --> MQ[RabbitMQ]
+    MQ --> Pipeline[解析 / 分块 / Embedding]
+    Pipeline --> Rules[(PostgreSQL + pgvector)]
+    Teaching --> Tool[版本隔离只读工具]
+    Tool --> Hybrid[全文 + 向量 RRF]
+    Hybrid --> Rules
+    Teaching --> Model[结构化模型端口]
+    Model --> Guard[Schema + 引用验证 + Critic]
+    Guard --> Lesson[图文 / 语音 / 视频 / 答疑]
+    Session --> Redis[(Redis Session / 缓存 / 限流)]
+    API --> Telemetry[OpenTelemetry / Prometheus / Tempo / Grafana]
+```
+
+三条核心技术主线：
+
+1. 可靠规则摄取：流式上传到 MinIO，事务 Outbox 发布 RabbitMQ 分阶段任务，以业务唯一键保证幂等，最终形成带原始页码的规则 chunk 和向量索引。
+2. 有证据的 Agent 与 RAG：Teaching Agent 和答疑工作流只调用版本隔离的只读工具，使用 PostgreSQL 全文检索、pgvector 与 RRF 融合结果；模型输出必须通过结构、引用白名单、证据策略、条件 Critic 和执行预算后才能发布。
+3. 可运行的产品闭环：Redis 承担会话、可恢复对局上下文、答案缓存和原子限流；已确认裁定绕过模型；PWA 支持安全离线降级，OpenTelemetry、Prometheus、Tempo 和 Grafana 提供端到端可观测性。
+
+## 可复现基线
+
+以下结果均来自 2026-07-18 的本地自制样本和默认 Fake provider，不代表外部大模型或生产硬件性能：
+
+| 验证项 | 实测结果 | 复现命令 |
+|---|---:|---|
+| 演示规则摄取与讲解 | 5 页、9/9 必需规则章节、12/12 带 chunk 引用的讲解步骤 | `make demo-data` |
+| 30 题混合检索 | Recall@5 93.3%（28/30）、MRR 0.519、P95 3.637 ms | `make demo-data` |
+| 6 请求、并发 3 的答疑基线 | 冷请求 P95 172.550 ms；热缓存 P95 54.942 ms；热批次模型/Critic 调用 0 次 | `make performance-test` |
+| 五页 PDF 与 PostgreSQL 检索 | PDF 到 READY 2 s；全文 0.057 ms；向量 0.223 ms | `make performance-test` |
+| 当前统一质量门禁 | 74 个后端测试、5 个前端单元测试、3 个浏览器 E2E | `make verify && make e2e` |
+
+耗时会随机器和容器状态变化；性能命令每次都会输出并保存本机的新结果，不应把上表数字当作固定 SLA。
+
 ## 验收标准
 
 - 同一本规则书可以稳定生成从 setup 到计分的完整讲解，不遗漏结束条件和同分处理。
