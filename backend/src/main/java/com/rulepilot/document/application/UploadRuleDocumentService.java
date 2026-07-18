@@ -23,6 +23,7 @@ public class UploadRuleDocumentService {
     private final RuleDocumentStorageService storageService;
     private final DocumentStorage storage;
     private final RuleDocumentRepository repository;
+    private final DocumentProcessingQueue processingQueue;
     private final ApplicationEventPublisher events;
     private final Clock clock = Clock.systemUTC();
 
@@ -31,11 +32,13 @@ public class UploadRuleDocumentService {
             RuleDocumentStorageService storageService,
             DocumentStorage storage,
             RuleDocumentRepository repository,
+            DocumentProcessingQueue processingQueue,
             ApplicationEventPublisher events) {
         this.catalog = catalog;
         this.storageService = storageService;
         this.storage = storage;
         this.repository = repository;
+        this.processingQueue = processingQueue;
         this.events = events;
     }
 
@@ -76,6 +79,7 @@ public class UploadRuleDocumentService {
                 now);
         try {
             DocumentVersion saved = repository.save(version);
+            processingQueue.enqueue(saved.id(), now);
             events.publishEvent(new DocumentUploaded(saved.id()));
             return new UploadResult(document, saved, false);
         } catch (RuntimeException exception) {
