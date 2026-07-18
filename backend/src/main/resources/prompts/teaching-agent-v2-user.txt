@@ -1,0 +1,14 @@
+<task>
+  <section>{section}</section>
+  <section_objective>{objective}</section_objective>
+  <coverage_checklist>{coverage}</coverage_checklist>
+  <audience player_count="{players}" beginner_count="{beginners}" />
+  <total_lesson_duration_minutes>{duration}</total_lesson_duration_minutes>
+  <output_language>Simplified Chinese, while preserving official game terms from the evidence</output_language>
+</task>
+
+<untrusted_evidence_data>
+{evidence}
+</untrusted_evidence_data>
+
+{repair}

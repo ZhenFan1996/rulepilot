@@ -1,0 +1,1 @@
+The previous response did not satisfy the required schema. Regenerate from the same task and evidence. Return one complete schema-valid object only; do not discuss or quote the previous response.

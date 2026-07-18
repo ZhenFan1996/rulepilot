@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class StructuredRuleAnswerServiceTest {
@@ -54,6 +55,55 @@ class StructuredRuleAnswerServiceTest {
             assertThat(citation.pageFrom()).isEqualTo(8);
         });
         assertThat(answer.official()).isFalse();
+    }
+
+    @Test
+    void passesUnderstoodGameplayContextToTheAnswerModel() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        UUID expansionId = UUID.randomUUID();
+        AtomicReference<RuleAnswerModel.ModelRequest> captured = new AtomicReference<>();
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    captured.set(request);
+                    return new ModelDraft(
+                            "可以执行。", "在行动阶段支付规则所列费用后执行。",
+                            List.of(source.chunkId()), List.of(), "HIGH");
+                });
+
+        var answer = service.answer(
+                "Can I take this action now?",
+                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of(expansionId)));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(captured.get().questionType()).isEqualTo(com.rulepilot.assistant.domain.QuestionType.SITUATION_QUERY);
+        assertThat(captured.get().context().currentLessonSection()).isEqualTo("ACTIONS");
+        assertThat(captured.get().context().gamePhase()).isEqualTo("ACTION_PHASE");
+        assertThat(captured.get().context().playerCount()).isEqualTo(4);
+        assertThat(captured.get().context().activeExpansionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void honorsModelAbstentionWithoutPublishingGeneratedClaims() {
+        RuleEvidenceHit source = evidence("SCORING");
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> new ModelDraft(
+                        false,
+                        "The evidence describes coins but not the requested bonus.",
+                        "",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "LOW"));
+
+        var answer = service.answer(
+                "How is the hidden bonus scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.shortVerdict()).contains("未能直接回答");
+        assertThat(answer.shortVerdict()).doesNotContain("hidden bonus", "coins");
+        assertThat(answer.citations()).isEmpty();
     }
 
     @Test

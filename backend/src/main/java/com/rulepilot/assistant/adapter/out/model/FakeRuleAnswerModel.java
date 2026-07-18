@@ -16,6 +16,8 @@ public class FakeRuleAnswerModel implements RuleAnswerModel {
     public ModelDraft compose(ModelRequest request) {
         EvidenceInput source = request.evidence().getFirst();
         return new ModelDraft(
+                true,
+                null,
                 source.excerpt(),
                 "依据“" + source.heading() + "”中的规则内容：" + source.excerpt(),
                 List.of(source.chunkId()),

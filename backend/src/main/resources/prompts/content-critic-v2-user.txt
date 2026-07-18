@@ -1,0 +1,11 @@
+<review_scope content_type="{type}" />
+
+<untrusted_claims>
+{claims}
+</untrusted_claims>
+
+<untrusted_evidence_data>
+{evidence}
+</untrusted_evidence_data>
+
+{repair}

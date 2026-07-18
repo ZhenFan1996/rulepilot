@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
+import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import org.junit.jupiter.api.Test;
 
 class SpringAiRuleAnswerModelTest {
@@ -15,7 +16,8 @@ class SpringAiRuleAnswerModelTest {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.providerFor(Role.ANSWER)).thenReturn("deepseek");
 
-        SpringAiRuleAnswerModel model = new SpringAiRuleAnswerModel(configuration, new FakeRuleAnswerModel());
+        SpringAiRuleAnswerModel model =
+                new SpringAiRuleAnswerModel(configuration, new FakeRuleAnswerModel(), mock(VersionedAgentPrompts.class));
 
         assertThat(model.providerId()).isEqualTo("deepseek");
     }

@@ -2,13 +2,11 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
+import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import com.rulepilot.teaching.application.TeachingSectionKnowledge;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -17,15 +15,15 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
-    private final String systemPrompt;
+    private final VersionedAgentPrompts prompts;
 
     public SpringAiTeachingLessonModel(
             RuntimeModelConfiguration models,
             FakeTeachingLessonModel fakeModel,
-            @Value("classpath:prompts/teaching-agent-v1.txt") Resource promptResource) throws IOException {
+            VersionedAgentPrompts prompts) {
         this.models = models;
         this.fakeModel = fakeModel;
-        this.systemPrompt = promptResource.getContentAsString(StandardCharsets.UTF_8);
+        this.prompts = prompts;
     }
 
     @Override
@@ -45,7 +43,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             firstFailure = exception;
         }
         try {
-            return composeOnce(request, "The previous output was invalid. Repair it to match the schema exactly.");
+            return composeOnce(request, prompts.structuredOutputRepair());
         } catch (RuntimeException exception) {
             exception.addSuppressed(firstFailure);
             throw exception;
@@ -53,16 +51,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
+        var guidance = TeachingSectionKnowledge.forSection(request.sectionType());
         return ChatClient.create(models.modelFor(Role.TEACHING)).prompt()
-                .system(systemPrompt)
-                .user(user -> user.text("""
-                                Section: {section}
-                                Audience: {players} players, {beginners} beginners
-                                Total lesson duration: {duration} minutes
-                                Evidence data: {evidence}
-                                {repair}
-                                """)
+                .system(prompts.teachingSystem())
+                .user(user -> user.text(prompts.teachingUser())
                         .param("section", request.sectionType().name())
+                        .param("objective", guidance.objective())
+                        .param("coverage", guidance.coverageChecklist())
                         .param("players", request.playerCount())
                         .param("beginners", request.beginnerCount())
                         .param("duration", request.durationMinutes())

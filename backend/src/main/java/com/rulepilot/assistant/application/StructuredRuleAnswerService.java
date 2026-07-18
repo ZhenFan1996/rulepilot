@@ -20,6 +20,7 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
@@ -39,6 +40,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -197,7 +199,7 @@ public class StructuredRuleAnswerService {
         RuleAnswerRateLimiter.Permit permit =
                 rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
-            ModelRequest modelRequest = toRequest(understood, evidence);
+            ModelRequest modelRequest = toRequest(understood, context, evidence);
             draft = invocations.invoke(
                     assistantRunId,
                     ActivityType.MODEL,
@@ -212,6 +214,12 @@ public class StructuredRuleAnswerService {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         } finally {
             permit.close();
+        }
+        if (draft == null) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+        }
+        if (!draft.answerable()) {
+            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
         }
         StructuredRuleAnswer answer;
         try {
@@ -263,9 +271,16 @@ public class StructuredRuleAnswerService {
                 context.gamePhase(), context.playerCount(), context.activeExpansions());
     }
 
-    private ModelRequest toRequest(UnderstoodQuestion question, List<HybridEvidenceHit> evidence) {
+    private ModelRequest toRequest(
+            UnderstoodQuestion question, QuestionContext context, List<HybridEvidenceHit> evidence) {
         return new ModelRequest(
                 question.normalizedQuestion(),
+                question.type(),
+                new AnswerContext(
+                        context.currentLessonSection(),
+                        context.gamePhase(),
+                        context.playerCount(),
+                        context.activeExpansions().size()),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(
@@ -274,15 +289,19 @@ public class StructuredRuleAnswerService {
     }
 
     private StructuredRuleAnswer validate(UUID versionId, ModelDraft draft, List<HybridEvidenceHit> evidence) {
-        if (draft == null || draft.shortVerdict() == null || draft.shortVerdict().isBlank()
-                || draft.explanation() == null || draft.explanation().isBlank() || draft.citationIds().isEmpty()) {
+        if (draft.shortVerdict() == null || draft.shortVerdict().isBlank() || draft.shortVerdict().length() > 240
+                || draft.explanation() == null || draft.explanation().isBlank() || draft.explanation().length() > 1500
+                || draft.citationIds().isEmpty() || draft.exceptions().size() > 6
+                || draft.exceptions().stream()
+                        .anyMatch(exception -> exception == null || exception.isBlank() || exception.length() > 400)) {
             throw new IllegalArgumentException("model draft is incomplete");
         }
+        String completeAnswer = draft.shortVerdict() + "\n" + draft.explanation() + "\n"
+                + String.join("\n", draft.exceptions());
         var verification = evidenceVerifier.verify(new VerificationRequest(
                 versionId,
                 evidence.stream().map(this::toVerifierEvidence).toList(),
-                List.of(new EvidenceClaim(
-                        draft.shortVerdict() + "\n" + draft.explanation(), draft.citationIds()))));
+                List.of(new EvidenceClaim(completeAnswer, draft.citationIds()))));
         if (!verification.verified()) {
             throw new IllegalArgumentException("answer evidence did not pass policy verification");
         }
@@ -314,13 +333,16 @@ public class StructuredRuleAnswerService {
 
     private ReviewRequest toCriticRequest(
             UUID assistantRunId, StructuredRuleAnswer answer, List<HybridEvidenceHit> evidence) {
+        List<UUID> citationIds = answer.citations().stream().map(RuleCitation::chunkId).toList();
+        List<Claim> claims = new ArrayList<>();
+        claims.add(new Claim(1, answer.shortVerdict() + "\n" + answer.explanation(), citationIds));
+        for (int index = 0; index < answer.exceptions().size(); index++) {
+            claims.add(new Claim(index + 2, answer.exceptions().get(index), citationIds));
+        }
         return new ReviewRequest(
                 assistantRunId,
                 ContentType.ANSWER,
-                List.of(new Claim(
-                        1,
-                        answer.shortVerdict() + "\n" + answer.explanation(),
-                        answer.citations().stream().map(RuleCitation::chunkId).toList())),
+                claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(source -> new GeneratedContentCritic.Evidence(source.chunkId(), source.excerpt()))
