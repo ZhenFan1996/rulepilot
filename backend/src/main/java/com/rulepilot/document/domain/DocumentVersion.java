@@ -50,4 +50,18 @@ public record DocumentVersion(
         return new DocumentVersion(
                 id, documentId, versionNumber, originalFilename, objectKey, checksum, size, contentType, next, createdAt);
     }
+
+    public DocumentVersion retryFromFailure(ProcessingStatus resumeFrom) {
+        if (resumeFrom == ProcessingStatus.FAILED || resumeFrom == ProcessingStatus.READY) {
+            throw new IllegalStateException("invalid document retry state");
+        }
+        if (status == resumeFrom) {
+            return this;
+        }
+        if (status != ProcessingStatus.FAILED) {
+            throw new IllegalStateException("only a failed document can be prepared for retry");
+        }
+        return new DocumentVersion(
+                id, documentId, versionNumber, originalFilename, objectKey, checksum, size, contentType, resumeFrom, createdAt);
+    }
 }

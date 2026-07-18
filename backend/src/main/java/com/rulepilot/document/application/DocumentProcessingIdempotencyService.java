@@ -22,19 +22,19 @@ public class DocumentProcessingIdempotencyService implements DocumentProcessingI
 
     @Override
     @Transactional
-    public boolean begin(DocumentProcessingCommand command, UUID eventId) {
-        return executions.begin(command, eventId, Instant.now(clock));
+    public boolean begin(DocumentProcessingCommand command, UUID eventId, int attempt) {
+        return executions.begin(command, eventId, attempt, Instant.now(clock));
     }
 
     @Override
     @Transactional
     public void complete(DocumentProcessingCommand command) {
-        executions.update(command, "COMPLETED", Instant.now(clock));
+        executions.update(command, "COMPLETED", null, Instant.now(clock));
     }
 
     @Override
     @Transactional
-    public void fail(DocumentProcessingCommand command) {
-        executions.update(command, "FAILED", Instant.now(clock));
+    public void fail(DocumentProcessingCommand command, String errorCode) {
+        executions.update(command, "FAILED", errorCode, Instant.now(clock));
     }
 }

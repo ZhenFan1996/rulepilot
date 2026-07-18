@@ -14,6 +14,7 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.hibernate.annotations.ColumnTransformer;
 import org.springframework.context.annotation.Profile;
@@ -100,18 +101,27 @@ public class JpaDocumentProcessingQueue
     }
 
     @Override
-    public boolean begin(DocumentProcessingCommand command, UUID eventId, Instant startedAt) {
+    public boolean begin(DocumentProcessingCommand command, UUID eventId, int attempt, Instant startedAt) {
         int inserted = entityManager
                 .createNativeQuery(
                         """
                         insert into processing_stage_execution (
                             id, document_version_id, processing_job_id, stage, pipeline_version,
-                            first_event_id, status, started_at, updated_at
+                            first_event_id, status, attempt_count, started_at, updated_at
                         ) values (
                             :id, :documentVersionId, :processingJobId, :stage, :pipelineVersion,
-                            :eventId, 'RUNNING', :startedAt, :startedAt
+                            :eventId, 'RUNNING', :attempt, :startedAt, :startedAt
                         )
-                        on conflict (document_version_id, stage, pipeline_version) do nothing
+                        on conflict (document_version_id, stage, pipeline_version) do update
+                        set processing_job_id = excluded.processing_job_id,
+                            first_event_id = excluded.first_event_id,
+                            status = 'RUNNING',
+                            attempt_count = :attempt,
+                            started_at = excluded.started_at,
+                            completed_at = null,
+                            updated_at = excluded.updated_at
+                        where processing_stage_execution.status = 'FAILED'
+                          and (:attempt > 1 or processing_stage_execution.first_event_id = :eventId)
                         """)
                 .setParameter("id", UUID.randomUUID())
                 .setParameter("documentVersionId", command.documentVersionId())
@@ -119,18 +129,20 @@ public class JpaDocumentProcessingQueue
                 .setParameter("stage", command.stage().name())
                 .setParameter("pipelineVersion", command.pipelineVersion())
                 .setParameter("eventId", eventId)
+                .setParameter("attempt", attempt)
                 .setParameter("startedAt", startedAt)
                 .executeUpdate();
         return inserted == 1;
     }
 
     @Override
-    public void update(DocumentProcessingCommand command, String status, Instant completedAt) {
+    public void update(DocumentProcessingCommand command, String status, String errorCode, Instant completedAt) {
         int updated = entityManager
                 .createNativeQuery(
                         """
                         update processing_stage_execution
                         set status = :status,
+                            last_error_code = :errorCode,
                             completed_at = :completedAt,
                             updated_at = :completedAt
                         where document_version_id = :documentVersionId
@@ -139,6 +151,7 @@ public class JpaDocumentProcessingQueue
                           and status = 'RUNNING'
                         """)
                 .setParameter("status", status)
+                .setParameter("errorCode", errorCode)
                 .setParameter("completedAt", completedAt)
                 .setParameter("documentVersionId", command.documentVersionId())
                 .setParameter("stage", command.stage().name())
@@ -146,6 +159,49 @@ public class JpaDocumentProcessingQueue
                 .executeUpdate();
         if (updated != 1) {
             throw new IllegalStateException("document processing stage is not running");
+        }
+    }
+
+    @Override
+    public Optional<DocumentProcessingCommand> findFailed(UUID jobId) {
+        List<?> results = entityManager
+                .createNativeQuery(
+                        """
+                        select document_version_id, processing_job_id, pipeline_version, stage
+                        from processing_stage_execution
+                        where processing_job_id = :jobId and status = 'FAILED'
+                        order by updated_at desc
+                        limit 1
+                        """)
+                .setParameter("jobId", jobId)
+                .getResultList();
+        if (results.isEmpty()) {
+            return Optional.empty();
+        }
+        Object[] row = (Object[]) results.getFirst();
+        return Optional.of(new DocumentProcessingCommand(
+                1,
+                (UUID) row[0],
+                (UUID) row[1],
+                (String) row[2],
+                DocumentProcessingStage.valueOf((String) row[3])));
+    }
+
+    @Override
+    public void resetJob(UUID jobId, String stage, Instant updatedAt) {
+        int updated = entityManager
+                .createNativeQuery(
+                        """
+                        update processing_job
+                        set stage = :stage, status = 'PENDING', updated_at = :updatedAt
+                        where id = :jobId and status in ('FAILED', 'PENDING')
+                        """)
+                .setParameter("stage", stage)
+                .setParameter("updatedAt", updatedAt)
+                .setParameter("jobId", jobId)
+                .executeUpdate();
+        if (updated != 1) {
+            throw new IllegalStateException("failed processing job does not exist");
         }
     }
 

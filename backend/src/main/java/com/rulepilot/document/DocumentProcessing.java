@@ -24,6 +24,8 @@ public interface DocumentProcessing {
 
     void markFailed(UUID documentVersionId);
 
+    void prepareRetry(UUID documentVersionId, DocumentProcessingStage stage);
+
     void replacePages(UUID documentVersionId, List<ExtractedPage> pages);
 
     List<PageView> pages(UUID documentVersionId);

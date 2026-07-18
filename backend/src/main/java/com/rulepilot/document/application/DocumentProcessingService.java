@@ -82,6 +82,17 @@ class DocumentProcessingService implements DocumentProcessing {
     }
 
     @Override
+    @Transactional
+    public void prepareRetry(UUID documentVersionId, com.rulepilot.document.DocumentProcessingStage stage) {
+        ProcessingStatus resumeFrom = switch (stage) {
+            case PARSE -> ProcessingStatus.UPLOADED;
+            case CHUNK -> ProcessingStatus.EXTRACTING;
+            case EMBED -> ProcessingStatus.CHUNKING;
+        };
+        repository.update(requireVersion(documentVersionId).retryFromFailure(resumeFrom));
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void replacePages(UUID documentVersionId, List<ExtractedPage> pages) {
         requireVersion(documentVersionId);
@@ -99,7 +110,13 @@ class DocumentProcessingService implements DocumentProcessing {
     }
 
     private void transition(UUID versionId, ProcessingStatus next) {
-        repository.update(requireVersion(versionId).transitionTo(next));
+        DocumentVersion version = requireVersion(versionId);
+        if (version.status() == next
+                || (version.status() != ProcessingStatus.FAILED
+                        && version.status().ordinal() > next.ordinal())) {
+            return;
+        }
+        repository.update(version.transitionTo(next));
     }
 
     private DocumentVersion requireVersion(UUID versionId) {

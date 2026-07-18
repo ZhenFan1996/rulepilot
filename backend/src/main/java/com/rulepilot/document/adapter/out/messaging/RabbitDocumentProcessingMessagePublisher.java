@@ -36,21 +36,39 @@ public class RabbitDocumentProcessingMessagePublisher implements DocumentProcess
 
     @Override
     public void publish(UUID eventId, String eventType, String payload) {
-        Message message = MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8))
+        send(exchange, routingKey, eventId, eventType, payload, 1, null);
+    }
+
+    void send(
+            String targetExchange,
+            String targetRoutingKey,
+            UUID eventId,
+            String eventType,
+            String payload,
+            int attempt,
+            String errorCode) {
+        var builder = MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8))
                 .setContentType("application/json")
                 .setContentEncoding(StandardCharsets.UTF_8.name())
                 .setDeliveryMode(MessageDeliveryMode.PERSISTENT)
                 .setHeader("rulepilot-event-id", eventId.toString())
                 .setHeader("rulepilot-event-type", eventType)
-                .build();
+                .setHeader("rulepilot-attempt", attempt);
+        if (errorCode != null) {
+            builder.setHeader("rulepilot-error-code", errorCode);
+        }
+        Message message = builder.build();
         CorrelationData correlation = new CorrelationData(eventId.toString());
-        rabbitTemplate.send(exchange, routingKey, message, correlation);
+        rabbitTemplate.send(targetExchange, targetRoutingKey, message, correlation);
         try {
             CorrelationData.Confirm confirm = correlation
                     .getFuture()
                     .get(confirmTimeout.toMillis(), TimeUnit.MILLISECONDS);
             if (!confirm.ack()) {
                 throw new IllegalStateException("RabbitMQ rejected outbox event " + eventId + ": " + confirm.reason());
+            }
+            if (correlation.getReturned() != null) {
+                throw new IllegalStateException("RabbitMQ could not route event " + eventId);
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

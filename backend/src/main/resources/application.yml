@@ -25,6 +25,9 @@ spring:
     username: ${RABBITMQ_USER:rulepilot}
     password: ${RABBITMQ_PASSWORD:change-me-local-only}
     publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   servlet:
     multipart:
       max-file-size: ${MAX_PDF_UPLOAD_SIZE:50MB}
@@ -61,6 +64,11 @@ rulepilot:
       exchange: ${DOCUMENT_PROCESSING_EXCHANGE:rulepilot.document.processing}
       queue: ${DOCUMENT_PROCESSING_QUEUE:rulepilot.document.processing.v1}
       routing-key: ${DOCUMENT_PROCESSING_ROUTING_KEY:document.processing.requested.v1}
+      retry-exchange: ${DOCUMENT_PROCESSING_RETRY_EXCHANGE:rulepilot.document.processing.retry}
+      dead-letter-exchange: ${DOCUMENT_PROCESSING_DLX:rulepilot.document.processing.dlx}
+      dead-letter-queue: ${DOCUMENT_PROCESSING_DLQ:rulepilot.document.processing.dlq.v1}
+      max-attempts: ${DOCUMENT_PROCESSING_MAX_ATTEMPTS:4}
+      retry-delays: ${DOCUMENT_PROCESSING_RETRY_DELAYS:1s,5s,20s}
       batch-size: ${OUTBOX_PUBLISH_BATCH_SIZE:20}
       fixed-delay: ${OUTBOX_PUBLISH_FIXED_DELAY:2s}
       confirm-timeout: ${OUTBOX_PUBLISH_CONFIRM_TIMEOUT:5s}
