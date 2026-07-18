@@ -21,7 +21,8 @@ class GameSessionServiceTest {
     @Test
     void startsAndUpdatesOwnedReadySession() {
         InMemorySessions repository = new InMemorySessions();
-        GameSessionService service = service(repository, Set.of(expansionId), editionId, "READY");
+        InMemoryContexts contexts = new InMemoryContexts();
+        GameSessionService service = service(repository, contexts, Set.of(expansionId), editionId, "READY");
 
         GameSession started = service.start(
                 editionId, versionId, Set.of(expansionId), 4, "SETUP", 1, "alice");
@@ -33,19 +34,36 @@ class GameSessionServiceTest {
         assertThat(updated.phase()).isEqualTo("ACTION");
         assertThat(updated.activePlayer()).isEqualTo(3);
         assertThat(service.get(started.id(), "alice")).isEqualTo(updated);
+        assertThat(contexts.value).isEqualTo(updated);
+    }
+
+    @Test
+    void restoresExpiredContextFromDatabase() {
+        InMemorySessions repository = new InMemorySessions();
+        InMemoryContexts contexts = new InMemoryContexts();
+        GameSessionService service = service(repository, contexts, Set.of(), editionId, "READY");
+        GameSession started = service.start(editionId, versionId, Set.of(), 2, "SETUP", 1, "alice");
+        contexts.value = null;
+
+        GameSession restored = service.get(started.id(), "alice");
+
+        assertThat(restored).isEqualTo(started);
+        assertThat(contexts.value).isEqualTo(started);
     }
 
     @Test
     void rejectsIncompatibleExpansionAndDocumentScope() {
         InMemorySessions repository = new InMemorySessions();
-        GameSessionService noExpansions = service(repository, Set.of(), editionId, "READY");
+        InMemoryContexts contexts = new InMemoryContexts();
+        GameSessionService noExpansions = service(repository, contexts, Set.of(), editionId, "READY");
 
         assertThatThrownBy(() -> noExpansions.start(
                         editionId, versionId, Set.of(expansionId), 4, "SETUP", 1, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("incompatible");
 
-        GameSessionService wrongEdition = service(repository, Set.of(expansionId), UUID.randomUUID(), "READY");
+        GameSessionService wrongEdition =
+                service(repository, contexts, Set.of(expansionId), UUID.randomUUID(), "READY");
         assertThatThrownBy(() -> wrongEdition.start(
                         editionId, versionId, Set.of(), 4, "SETUP", 1, "alice"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -54,6 +72,7 @@ class GameSessionServiceTest {
 
     private GameSessionService service(
             GameSessionRepository repository,
+            GameSessionContextStore contexts,
             Set<UUID> compatibleExpansions,
             UUID documentEditionId,
             String processingStatus) {
@@ -62,7 +81,7 @@ class GameSessionServiceTest {
                         editionId, gameId, "Base", "en", compatibleExpansions));
         DocumentVersionScopeLookup documents = id -> Optional.of(
                 new DocumentVersionScopeLookup.VersionScope(versionId, documentEditionId, processingStatus));
-        return new GameSessionService(catalog, documents, repository);
+        return new GameSessionService(catalog, documents, repository, contexts);
     }
 
     private static final class InMemorySessions implements GameSessionRepository {
@@ -82,6 +101,20 @@ class GameSessionServiceTest {
         @Override
         public void update(GameSession session) {
             value = session;
+        }
+    }
+
+    private static final class InMemoryContexts implements GameSessionContextStore {
+        private GameSession value;
+
+        @Override
+        public void save(GameSession session) {
+            value = session;
+        }
+
+        @Override
+        public Optional<GameSession> find(UUID sessionId) {
+            return value != null && value.id().equals(sessionId) ? Optional.of(value) : Optional.empty();
         }
     }
 }

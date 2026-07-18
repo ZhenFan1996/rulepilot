@@ -18,13 +18,18 @@ public class GameSessionService {
     private final CatalogEditionLookup catalog;
     private final DocumentVersionScopeLookup documents;
     private final GameSessionRepository sessions;
+    private final GameSessionContextStore contexts;
     private final Clock clock = Clock.systemUTC();
 
     public GameSessionService(
-            CatalogEditionLookup catalog, DocumentVersionScopeLookup documents, GameSessionRepository sessions) {
+            CatalogEditionLookup catalog,
+            DocumentVersionScopeLookup documents,
+            GameSessionRepository sessions,
+            GameSessionContextStore contexts) {
         this.catalog = catalog;
         this.documents = documents;
         this.sessions = sessions;
+        this.contexts = contexts;
     }
 
     @Transactional
@@ -50,9 +55,11 @@ public class GameSessionService {
         if (!edition.compatibleExpansionIds().containsAll(selectedExpansions)) {
             throw new IllegalArgumentException("an expansion is incompatible with the selected edition");
         }
-        return sessions.save(GameSession.start(
+        GameSession session = sessions.save(GameSession.start(
                 edition.gameId(), editionId, documentVersionId, selectedExpansions, playerCount,
                 phase, activePlayer, username, Instant.now(clock)));
+        contexts.save(session);
+        return session;
     }
 
     @Transactional(readOnly = true)
@@ -66,15 +73,22 @@ public class GameSessionService {
         GameSession updated = owned(sessionId, username)
                 .updateTurn(roundNumber, phase, activePlayer, Instant.now(clock));
         sessions.update(updated);
+        contexts.save(updated);
         return updated;
     }
 
     private GameSession owned(UUID sessionId, String username) {
-        GameSession session = sessions.find(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("game session does not exist"));
+        GameSession session = contexts.find(sessionId).orElseGet(() -> restore(sessionId));
         if (!session.createdBy().equals(username)) {
             throw new IllegalArgumentException("game session does not exist");
         }
+        return session;
+    }
+
+    private GameSession restore(UUID sessionId) {
+        GameSession session = sessions.find(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("game session does not exist"));
+        contexts.save(session);
         return session;
     }
 }

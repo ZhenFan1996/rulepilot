@@ -50,6 +50,8 @@ management:
       show-details: never
 
 rulepilot:
+  game-session:
+    context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:
     provider: ${ANSWER_PROVIDER:fake}
   embedding:
