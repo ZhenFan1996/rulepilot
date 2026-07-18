@@ -106,6 +106,14 @@ make compose-down
 make dev
 ```
 
+另开一个终端可载入完整演示数据：
+
+```sh
+make demo-data
+```
+
+该命令使用 `.env` 中的本地管理员账户，经由真实 API 创建 `Lantern Relay` 游戏与版本、生成并上传一份项目自制的五页小型规则书，等待异步解析完成，再创建教学计划和 Teaching Agent 图文讲解。命令可重复执行；生成的 PDF、Cookie 和结果只保存在被 Git 忽略的 `.local/demo/`。完成后终端会输出可直接打开的讲解地址。规则样本原文位于 `examples/lantern-relay-rules.txt`，采用 CC0 许可，不包含商业桌游内容；需要连接其他本地实例时可设置 `DEMO_BASE_URL`、`DEMO_ADMIN_NAME` 和 `DEMO_ADMIN_PASSWORD`。
+
 打开 http://127.0.0.1:5173/login，使用 `.env` 中的本地用户登录。登录会话保存在 Redis；本地提供 `USER` 与具备 `EDITOR`、`ADMIN` 权限的管理员账户，不开放公开注册。
 
 使用管理员账户登录后打开 http://127.0.0.1:5173/catalog，可以创建游戏、版本和扩展，并为扩展选择兼容的游戏版本。
@@ -150,6 +158,7 @@ npm run dev
 ```sh
 make help
 make bootstrap
+make demo-data
 make backend-test
 make frontend-test
 make integration-test

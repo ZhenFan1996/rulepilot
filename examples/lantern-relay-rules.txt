@@ -1,0 +1,65 @@
+Lantern Relay - Original RulePilot Demonstration Rules
+License: CC0 1.0. This fictional game and these rules may be reused freely.
+
+=== PAGE 1 ===
+LANTERN RELAY
+OBJECTIVE AND HOW TO WIN
+Lantern Relay is a race to light the harbor before the fifth round ends.
+The player with the most victory points after final scoring wins the game.
+
+COMPONENTS
+The game includes 1 harbor board, 24 lantern cards, 20 glass tokens,
+12 boat markers, 4 score markers, 1 first-player beacon, and 1 round marker.
+Lantern cards show a color and a value from one to three.
+
+=== PAGE 2 ===
+SETUP
+1. Place the harbor board in the center and the round marker on round one.
+2. Shuffle the lantern cards and place them face down beside the board.
+3. Give each player one boat, one score marker, and two glass tokens.
+4. Put every score marker on zero and every boat at the harbor entrance.
+5. Deal three lantern cards to each player. Keep hands secret.
+6. Give the first-player beacon to the player who most recently saw a lighthouse.
+
+=== PAGE 3 ===
+ROUND STRUCTURE AND PHASES
+Each game round has a Dawn phase, an Action phase, and a Harbor phase.
+During Dawn, reveal one lantern card and add its value to the public light row.
+During the Action phase, players take one turn clockwise from the beacon holder.
+During the Harbor phase, score completed docks, pass the beacon clockwise,
+and advance the round marker. After round five, proceed to the game end.
+
+ACTIONS
+On a turn, the active player must take exactly one action:
+- Sail: pay one glass token and move the boat up to two spaces.
+- Light: play one matching lantern card at the boat's current dock.
+- Trade: discard two cards, then draw two cards.
+Resolve all costs before applying an action's effect. A player may not spend
+glass they do not have or move through a dock occupied by another boat.
+
+=== PAGE 4 ===
+GAME END AND SCORING
+The game end is triggered after the Harbor phase of round five, or immediately
+when all six docks are lit. Finish the current round before final scoring.
+Score three victory points for each dock you lit, one point for each remaining
+glass token, and the printed value of each lantern card still in your hand.
+Lose two points for each unlit dock adjacent to your boat.
+
+TIE BREAKER
+In case of a tie, the tied player who lit more docks wins. If still tied,
+the tied player with more glass wins. If still tied, share the victory.
+
+=== PAGE 5 ===
+FIRST ROUND EXAMPLE
+Mira reveals a value-two lantern at Dawn. She spends one glass to Sail two
+spaces. Tao plays a matching lantern to Light the next dock. At Harbor,
+Tao scores that dock, then the beacon and round marker advance.
+
+COMMON MISTAKES
+Do not score a dock during the Action phase. Pay every cost before moving.
+Do not skip the Harbor phase when the sixth dock is lit during an action.
+
+RECAP
+Set up the board, cards, pieces, and starting resources. Each round resolves
+Dawn, one action per player, then Harbor. After the end condition, score docks,
+glass, cards, penalties, and finally apply both tie breakers in order.

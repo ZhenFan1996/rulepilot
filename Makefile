@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help bootstrap dev format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down
+.PHONY: help bootstrap dev demo-data format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -10,10 +10,16 @@ bootstrap: ## Validate the current repository foundation
 
 dev: ## Start backend and frontend development servers
 	@set -e; \
+		set -a; \
+		if [ -f .env ]; then . ./.env; fi; \
+		set +a; \
 		trap 'kill 0' INT TERM EXIT; \
 		(cd backend && ./mvnw spring-boot:run) & \
 		(cd frontend && npm run dev -- --host 127.0.0.1) & \
 		wait
+
+demo-data: ## Load the self-authored demo rulebook into a running local backend
+	@sh scripts/load-demo-data.sh
 
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
