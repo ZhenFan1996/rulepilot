@@ -5,6 +5,10 @@ import java.util.UUID;
 
 public interface RuleAnswerModel {
 
+    default String providerId() {
+        return "unspecified";
+    }
+
     ModelDraft compose(ModelRequest request);
 
     record ModelRequest(String question, List<EvidenceInput> evidence) {

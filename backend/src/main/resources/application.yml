@@ -56,6 +56,12 @@ rulepilot:
     provider: ${ANSWER_PROVIDER:fake}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
     cache-retention-jitter: ${ANSWER_CACHE_RETENTION_JITTER:PT1H}
+    rate-limit:
+      user-requests: ${ANSWER_RATE_USER_REQUESTS:20}
+      user-window: ${ANSWER_RATE_USER_WINDOW:PT1M}
+      session-concurrency: ${ANSWER_RATE_SESSION_CONCURRENCY:1}
+      provider-concurrency: ${ANSWER_RATE_PROVIDER_CONCURRENCY:8}
+      lease: ${ANSWER_RATE_LEASE:PT30S}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}
   speech:

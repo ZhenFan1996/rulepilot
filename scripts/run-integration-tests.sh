@@ -27,4 +27,5 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sh "$ROOT_DIR/scripts/verify-compose.sh" up
+sh "$ROOT_DIR/scripts/verify-answer-rate-limit.sh"
 echo "Infrastructure integration smoke tests passed."

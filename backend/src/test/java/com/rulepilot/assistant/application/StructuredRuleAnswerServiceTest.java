@@ -148,6 +148,7 @@ class StructuredRuleAnswerServiceTest {
     void servesRepeatedValidatedAnswerFromVersionedCacheAndRecordsMetrics() {
         RuleEvidenceHit source = evidence("SCORING");
         InMemoryAnswerCache cache = new InMemoryAnswerCache();
+        RecordingRateLimiter rateLimiter = new RecordingRateLimiter();
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         AtomicInteger modelCalls = new AtomicInteger();
         var service = new StructuredRuleAnswerService(
@@ -160,6 +161,7 @@ class StructuredRuleAnswerServiceTest {
                             List.of(source.chunkId()), List.of(), "HIGH");
                 },
                 cache,
+                rateLimiter,
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -168,13 +170,17 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(second).isEqualTo(first);
         assertThat(modelCalls).hasValue(1);
+        assertThat(rateLimiter.userChecks).isEqualTo(2);
+        assertThat(rateLimiter.modelAcquires).isEqualTo(1);
+        assertThat(rateLimiter.releases).isEqualTo(1);
         assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "miss").count()).isEqualTo(1);
         assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "hit").count()).isEqualTo(1);
     }
 
     private StructuredRuleAnswerService answerService(HybridRuleSearch retrieval, RuleAnswerModel model) {
         return new StructuredRuleAnswerService(
-                understanding, retrieval, model, new InMemoryAnswerCache(), new SimpleMeterRegistry());
+                understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
+                new SimpleMeterRegistry());
     }
 
     private RuleEvidenceHit evidence(String sectionType) {
@@ -193,6 +199,23 @@ class StructuredRuleAnswerServiceTest {
         @Override
         public void save(AnswerCacheKey key, StructuredRuleAnswer answer) {
             values.put(key, answer);
+        }
+    }
+
+    private static final class RecordingRateLimiter implements RuleAnswerRateLimiter {
+        private int userChecks;
+        private int modelAcquires;
+        private int releases;
+
+        @Override
+        public void checkUser(String username) {
+            userChecks++;
+        }
+
+        @Override
+        public Permit acquireModel(String username, UUID gameSessionId, String providerId) {
+            modelAcquires++;
+            return () -> releases++;
         }
     }
 }

@@ -27,6 +27,11 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     }
 
     @Override
+    public String providerId() {
+        return "spring-ai";
+    }
+
+    @Override
     public ModelDraft compose(ModelRequest request) {
         RuntimeException firstFailure;
         try {

@@ -10,6 +10,11 @@ import org.springframework.stereotype.Component;
 public class FakeRuleAnswerModel implements RuleAnswerModel {
 
     @Override
+    public String providerId() {
+        return "fake";
+    }
+
+    @Override
     public ModelDraft compose(ModelRequest request) {
         EvidenceInput source = request.evidence().getFirst();
         return new ModelDraft(

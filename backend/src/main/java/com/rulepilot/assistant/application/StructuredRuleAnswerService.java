@@ -36,6 +36,7 @@ public class StructuredRuleAnswerService {
     private final HybridRuleSearch retrieval;
     private final RuleAnswerModel model;
     private final RuleAnswerCache cache;
+    private final RuleAnswerRateLimiter rateLimiter;
     private final Counter cacheHits;
     private final Counter cacheMisses;
 
@@ -44,20 +45,28 @@ public class StructuredRuleAnswerService {
             HybridRuleSearch retrieval,
             RuleAnswerModel model,
             RuleAnswerCache cache,
+            RuleAnswerRateLimiter rateLimiter,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
         this.model = model;
         this.cache = cache;
+        this.rateLimiter = rateLimiter;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
     }
 
-    public StructuredRuleAnswer answer(String question, QuestionContext context) {
+    StructuredRuleAnswer answer(String question, QuestionContext context) {
+        return answer(question, context, "test-user", null);
+    }
+
+    public StructuredRuleAnswer answer(
+            String question, QuestionContext context, String username, UUID gameSessionId) {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
             return clarification(understood);
         }
+        rateLimiter.checkUser(username);
         AnswerCacheKey cacheKey = cacheKey(understood, context);
         var cached = cache.find(cacheKey);
         if (cached.isPresent()) {
@@ -75,11 +84,21 @@ public class StructuredRuleAnswerService {
         if (evidence.stream().anyMatch(hit -> !context.documentVersionId().equals(hit.evidence().documentVersionId()))) {
             return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
         }
-        StructuredRuleAnswer answer;
+        ModelDraft draft;
+        RuleAnswerRateLimiter.Permit permit =
+                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
-            answer = validate(context.documentVersionId(), model.compose(toRequest(understood, evidence)), evidence);
+            draft = model.compose(toRequest(understood, evidence));
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
+        } catch (RuntimeException exception) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+        } finally {
+            permit.close();
+        }
+        StructuredRuleAnswer answer;
+        try {
+            answer = validate(context.documentVersionId(), draft, evidence);
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
