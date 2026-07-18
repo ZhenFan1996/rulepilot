@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.ingestion.RuleStructureCatalog.SectionView;
 import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
+import com.rulepilot.retrieval.HybridRuleSearch;
+import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.domain.LessonQualityReport.CheckStatus;
 import com.rulepilot.teaching.domain.LessonQualityReport.CheckType;
 import com.rulepilot.teaching.domain.LessonQualityReport.OverallStatus;
@@ -22,8 +26,22 @@ class LessonQualityEvaluatorTest {
                         new SectionView("SCORING", "计分", true, "Each coin scores one point.", List.of(8))),
                 3,
                 9);
-        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 3, 30, "player", structure);
-        var lesson = new IllustratedLessonFactory().create(plan, structure);
+        UUID versionId = UUID.randomUUID();
+        var plan = new TeachingPlanFactory().create(versionId, 4, 3, 30, "player", structure);
+        HybridRuleSearch retrieval = (requestedVersion, query, options) -> structure.sections().stream()
+                .filter(section -> section.present() && options.sectionTypes().contains(section.type()))
+                .map(section -> new RuleEvidenceHit(
+                        UUID.randomUUID(),
+                        versionId,
+                        section.type(),
+                        section.label(),
+                        section.content(),
+                        section.pageNumbers().getFirst(),
+                        section.pageNumbers().getLast(),
+                        0.9))
+                .map(evidence -> new HybridEvidenceHit(evidence, 0.02, 1, null, true))
+                .toList();
+        var lesson = new GroundedTeachingAgent(retrieval, new FakeTeachingLessonModel(), 24).create(plan);
 
         var report = new LessonQualityEvaluator().evaluate(plan, lesson);
 

@@ -150,6 +150,7 @@ class IllustratedLessonStepEntity {
     @Column(nullable = false) int position;
     @Column(name = "step_text", nullable = false, columnDefinition = "text") String stepText;
     @Column(name = "source_pages", nullable = false) String sourcePages;
+    @Column(name = "source_chunk_ids", nullable = false) String sourceChunkIds;
 
     protected IllustratedLessonStepEntity() {}
 
@@ -159,12 +160,16 @@ class IllustratedLessonStepEntity {
         position = step.position();
         stepText = step.text();
         sourcePages = step.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
+        sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
     }
 
     LessonStep toDomain() {
         List<Integer> pages = sourcePages.isBlank()
                 ? List.of()
                 : Arrays.stream(sourcePages.split(",")).map(Integer::valueOf).toList();
-        return new LessonStep(position, stepText, pages);
+        List<UUID> chunkIds = sourceChunkIds.isBlank()
+                ? List.of()
+                : Arrays.stream(sourceChunkIds.split(",")).map(UUID::fromString).toList();
+        return new LessonStep(position, stepText, pages, chunkIds);
     }
 }

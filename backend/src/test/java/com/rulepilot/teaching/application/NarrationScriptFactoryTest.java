@@ -32,12 +32,12 @@ class NarrationScriptFactoryTest {
                                 1,
                                 TeachingSectionType.SETUP,
                                 EvidenceStatus.SUPPORTED,
-                                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(3)))),
+                                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(3), List.of()))),
                         section(
                                 2,
                                 TeachingSectionType.SCORING,
                                 EvidenceStatus.INSUFFICIENT_EVIDENCE,
-                                List.of(new LessonStep(1, "旧的缺口文本不应进入解说。", List.of())))),
+                                List.of(new LessonStep(1, "旧的缺口文本不应进入解说。", List.of(), List.of())))),
                 createdAt);
 
         var script = factory.create(lesson);

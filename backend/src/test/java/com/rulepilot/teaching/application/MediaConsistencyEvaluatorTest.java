@@ -60,7 +60,7 @@ class MediaConsistencyEvaluatorTest {
                         EvidenceStatus.SUPPORTED,
                         VisualKind.TABLE_LAYOUT,
                         "摆放示意",
-                        List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(1))))),
+                        List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(1), List.of())))),
                 Instant.parse("2026-07-18T08:00:00Z"));
     }
 

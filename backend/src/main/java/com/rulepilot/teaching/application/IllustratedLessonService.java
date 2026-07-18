@@ -1,6 +1,5 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.ingestion.RuleStructureCatalog;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.util.Optional;
 import java.util.UUID;
@@ -13,18 +12,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class IllustratedLessonService {
 
     private final TeachingPlanRepository plans;
-    private final RuleStructureCatalog structures;
-    private final IllustratedLessonFactory lessons;
+    private final GroundedTeachingAgent agent;
     private final IllustratedLessonRepository repository;
 
     public IllustratedLessonService(
             TeachingPlanRepository plans,
-            RuleStructureCatalog structures,
-            IllustratedLessonFactory lessons,
+            GroundedTeachingAgent agent,
             IllustratedLessonRepository repository) {
         this.plans = plans;
-        this.structures = structures;
-        this.lessons = lessons;
+        this.agent = agent;
         this.repository = repository;
     }
 
@@ -32,7 +28,7 @@ public class IllustratedLessonService {
     public IllustratedLesson create(UUID teachingPlanId) {
         var plan = plans.findById(teachingPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
-        return repository.save(lessons.create(plan, structures.structure(plan.documentVersionId())));
+        return repository.save(agent.create(plan));
     }
 
     @Transactional(readOnly = true)

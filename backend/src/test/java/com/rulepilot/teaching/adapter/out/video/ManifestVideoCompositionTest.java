@@ -31,13 +31,13 @@ class ManifestVideoCompositionTest {
                                 TeachingSectionType.SETUP,
                                 EvidenceStatus.SUPPORTED,
                                 VisualKind.TABLE_LAYOUT,
-                                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(2)))),
+                                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(2), List.of()))),
                         section(
                                 2,
                                 TeachingSectionType.SCORING,
                                 EvidenceStatus.INSUFFICIENT_EVIDENCE,
                                 VisualKind.SCOREBOARD,
-                                List.of(new LessonStep(1, "不应进入视频。", List.of())))),
+                                List.of(new LessonStep(1, "不应进入视频。", List.of(), List.of())))),
                 Instant.parse("2026-07-18T08:00:00Z"));
         var script = new NarrationScriptFactory().create(lesson);
         var speech = new FakeSpeechSynthesis().synthesize(script);

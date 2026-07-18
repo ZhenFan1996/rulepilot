@@ -52,12 +52,17 @@ public record IllustratedLesson(
         }
     }
 
-    public record LessonStep(int position, String text, List<Integer> sourcePages) {
+    public record LessonStep(
+            int position,
+            String text,
+            List<Integer> sourcePages,
+            List<UUID> sourceChunkIds) {
         public LessonStep {
             if (position < 1 || text == null || text.isBlank()) {
                 throw new IllegalArgumentException("lesson step content is required");
             }
             sourcePages = List.copyOf(sourcePages);
+            sourceChunkIds = List.copyOf(sourceChunkIds);
         }
     }
 }
