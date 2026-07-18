@@ -58,8 +58,8 @@ function toggleTheme() {
             <RouterLink :to="{ name: 'teach' }" :class="buttonVariants({ variant: 'primary', size: 'lg' })">
               导入规则书 <span aria-hidden="true">↗</span>
             </RouterLink>
-            <RouterLink :to="{ name: 'lesson' }" :class="buttonVariants({ variant: 'outline', size: 'lg' })">
-              查看讲解流程
+            <RouterLink :to="{ name: 'lessons' }" :class="buttonVariants({ variant: 'outline', size: 'lg' })">
+              我的讲解
             </RouterLink>
           </div>
           <p class="mt-5 text-xs font-medium text-ink/45">每个讲解步骤保留适用版本、扩展范围与规则页码。</p>
@@ -162,7 +162,7 @@ function toggleTheme() {
     <nav class="fixed inset-x-0 bottom-0 z-10 border-t border-ink/10 bg-canvas/90 px-5 py-3 backdrop-blur sm:hidden" aria-label="主要导航">
       <div class="mx-auto grid max-w-md grid-cols-3 gap-2 text-center text-xs font-medium">
         <RouterLink :to="{ name: 'teach' }" class="rounded-xl bg-ink-panel px-2 py-2 text-panel-text">导入</RouterLink>
-        <RouterLink :to="{ name: 'lesson' }" class="rounded-xl px-2 py-2 text-ink/60 hover:bg-ink/5 hover:text-ink">讲解</RouterLink>
+        <RouterLink :to="{ name: 'lessons' }" class="rounded-xl px-2 py-2 text-ink/60 hover:bg-ink/5 hover:text-ink">讲解</RouterLink>
         <RouterLink :to="{ name: 'questions' }" class="rounded-xl px-2 py-2 text-ink/60 hover:bg-ink/5 hover:text-ink">答疑</RouterLink>
       </div>
     </nav>

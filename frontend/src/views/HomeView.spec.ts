@@ -16,7 +16,7 @@ describe('HomeView', () => {
     })
 
     expect(wrapper.text()).toContain('导入规则书')
-    expect(wrapper.text()).toContain('查看讲解流程')
+    expect(wrapper.text()).toContain('我的讲解')
     expect(wrapper.text()).toContain('讲解后继续答疑')
     expect(wrapper.text()).toContain('结束条件与计分')
   })

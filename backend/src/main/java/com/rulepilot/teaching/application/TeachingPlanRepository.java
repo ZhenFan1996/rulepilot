@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -10,5 +11,9 @@ public interface TeachingPlanRepository {
 
     Optional<TeachingPlan> findById(UUID planId);
 
-    Optional<TeachingPlan> findLatest(UUID documentVersionId);
+    Optional<TeachingPlan> findByIdAndCreatedBy(UUID planId, String createdBy);
+
+    List<TeachingPlan> findAllByCreatedBy(String createdBy);
+
+    Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy);
 }

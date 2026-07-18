@@ -4,6 +4,7 @@ import CatalogView from '@/views/CatalogView.vue'
 import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LessonView from '@/views/LessonView.vue'
+import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
@@ -29,6 +30,11 @@ const router = createRouter({
       path: '/teach',
       name: 'teach',
       component: DocumentsView,
+    },
+    {
+      path: '/lessons',
+      name: 'lessons',
+      component: LessonsView,
     },
     {
       path: '/lesson/:planId?',

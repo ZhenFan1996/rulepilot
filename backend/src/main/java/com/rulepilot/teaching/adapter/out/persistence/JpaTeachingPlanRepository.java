@@ -41,12 +41,39 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     }
 
     @Override
-    public Optional<TeachingPlan> findLatest(UUID documentVersionId) {
+    public Optional<TeachingPlan> findByIdAndCreatedBy(UUID planId, String createdBy) {
         return entityManager
                 .createQuery(
-                        "select p from TeachingPlanEntity p where p.documentVersionId = :versionId order by p.createdAt desc",
+                        "select p from TeachingPlanEntity p where p.id = :planId and p.createdBy = :createdBy",
+                        TeachingPlanEntity.class)
+                .setParameter("planId", planId)
+                .setParameter("createdBy", createdBy)
+                .getResultStream()
+                .findFirst()
+                .map(plan -> plan.toDomain(findSections(plan.id)));
+    }
+
+    @Override
+    public List<TeachingPlan> findAllByCreatedBy(String createdBy) {
+        return entityManager
+                .createQuery(
+                        "select p from TeachingPlanEntity p where p.createdBy = :createdBy order by p.createdAt desc",
+                        TeachingPlanEntity.class)
+                .setParameter("createdBy", createdBy)
+                .getResultList()
+                .stream()
+                .map(plan -> plan.toDomain(findSections(plan.id)))
+                .toList();
+    }
+
+    @Override
+    public Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy) {
+        return entityManager
+                .createQuery(
+                        "select p from TeachingPlanEntity p where p.documentVersionId = :versionId and p.createdBy = :createdBy order by p.createdAt desc",
                         TeachingPlanEntity.class)
                 .setParameter("versionId", documentVersionId)
+                .setParameter("createdBy", createdBy)
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()

@@ -21,19 +21,23 @@ import org.springframework.web.server.ResponseStatusException;
 public class IllustratedLessonController {
 
     private final IllustratedLessonService lessons;
+    private final TeachingPlanOwnerGuard owners;
 
-    public IllustratedLessonController(IllustratedLessonService lessons) {
+    public IllustratedLessonController(IllustratedLessonService lessons, TeachingPlanOwnerGuard owners) {
         this.lessons = lessons;
+        this.owners = owners;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     LessonCreation create(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         return lessons.create(planId, principal.getName());
     }
 
     @GetMapping("/latest")
-    IllustratedLesson latest(@PathVariable UUID planId) {
+    IllustratedLesson latest(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         return lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
     }

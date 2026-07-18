@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.MediaConsistencyService;
 import com.rulepilot.teaching.domain.MediaConsistencyReport;
+import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,13 +16,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class MediaConsistencyController {
 
     private final MediaConsistencyService consistency;
+    private final TeachingPlanOwnerGuard owners;
 
-    public MediaConsistencyController(MediaConsistencyService consistency) {
+    public MediaConsistencyController(MediaConsistencyService consistency, TeachingPlanOwnerGuard owners) {
         this.consistency = consistency;
+        this.owners = owners;
     }
 
     @GetMapping
-    MediaConsistencyReport evaluate(@PathVariable UUID planId) {
+    MediaConsistencyReport evaluate(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         return consistency.evaluate(planId);
     }
 }

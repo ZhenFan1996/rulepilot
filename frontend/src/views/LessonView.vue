@@ -262,14 +262,9 @@ async function loadLesson() {
   narrationMillis.value = 0
   let targetPlanId = planId.value
   if (!targetPlanId) {
-    const remembered = localStorage.getItem('rulepilot:last-plan-id')
-    if (remembered) {
-      await router.replace({ name: 'lesson', params: { planId: remembered } })
-      targetPlanId = remembered
-    } else {
-      loading.value = false
-      return
-    }
+    await router.replace({ name: 'lessons' })
+    loading.value = false
+    return
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
@@ -731,9 +726,12 @@ onUnmounted(() => {
     <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
       <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
         <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold">RulePilot</RouterLink>
-        <div v-if="plan" class="text-right text-xs text-ink/50">
-          <p class="font-semibold text-ink/75">规则版本 {{ plan.documentVersionId.slice(0, 8) }}</p>
-          <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
+        <div class="flex items-center gap-4">
+          <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">我的讲解</RouterLink>
+          <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
+            <p class="font-semibold text-ink/75">规则版本 {{ plan.documentVersionId.slice(0, 8) }}</p>
+            <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
+          </div>
         </div>
       </div>
       <div v-if="lesson" class="h-1 bg-ink/8"><div class="h-full bg-copper transition-all" :style="{ width: `${progressPercent}%` }" /></div>

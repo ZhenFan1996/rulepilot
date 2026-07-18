@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.in.web;
 import com.rulepilot.teaching.application.NarrationService;
 import com.rulepilot.teaching.application.NarrationService.NarrationPlayback;
 import com.rulepilot.teaching.domain.NarrationScript;
+import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.CacheControl;
@@ -20,23 +21,28 @@ import org.springframework.web.bind.annotation.RestController;
 public class NarrationController {
 
     private final NarrationService narration;
+    private final TeachingPlanOwnerGuard owners;
 
-    public NarrationController(NarrationService narration) {
+    public NarrationController(NarrationService narration, TeachingPlanOwnerGuard owners) {
         this.narration = narration;
+        this.owners = owners;
     }
 
     @GetMapping("/script")
-    NarrationScript script(@PathVariable UUID planId) {
+    NarrationScript script(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         return narration.script(planId);
     }
 
     @GetMapping("/playback")
-    NarrationPlayback playback(@PathVariable UUID planId) {
+    NarrationPlayback playback(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         return narration.playback(planId);
     }
 
     @GetMapping("/audio")
-    ResponseEntity<byte[]> audio(@PathVariable UUID planId) {
+    ResponseEntity<byte[]> audio(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
         var audio = narration.audio(planId);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(audio.contentType()))

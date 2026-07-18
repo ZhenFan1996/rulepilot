@@ -38,8 +38,8 @@ public class TeachingPlanController {
     }
 
     @GetMapping("/latest")
-    TeachingPlan latest(@PathVariable UUID versionId) {
-        return plans.latest(versionId)
+    TeachingPlan latest(@PathVariable UUID versionId, Principal principal) {
+        return plans.latest(versionId, principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "teaching plan does not exist"));
     }
 

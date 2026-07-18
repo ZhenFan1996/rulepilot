@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.ingestion.RuleStructureCatalog;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -36,12 +37,22 @@ public class TeachingPlanService {
     }
 
     @Transactional(readOnly = true)
-    public Optional<TeachingPlan> latest(UUID documentVersionId) {
-        return repository.findLatest(documentVersionId);
+    public Optional<TeachingPlan> latest(UUID documentVersionId, String createdBy) {
+        return repository.findLatest(documentVersionId, createdBy);
     }
 
     @Transactional(readOnly = true)
     public Optional<TeachingPlan> find(UUID planId) {
         return repository.findById(planId);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TeachingPlan> findOwned(UUID planId, String createdBy) {
+        return repository.findByIdAndCreatedBy(planId, createdBy);
+    }
+
+    @Transactional(readOnly = true)
+    public List<TeachingPlan> listOwned(String createdBy) {
+        return repository.findAllByCreatedBy(createdBy);
     }
 }

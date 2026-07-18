@@ -52,6 +52,9 @@ public class IllustratedLessonService {
     private LessonCreation createObserved(UUID teachingPlanId, String ownerUsername) {
         var plan = plans.findById(teachingPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
+        if (!plan.createdBy().equals(ownerUsername)) {
+            throw new IllegalArgumentException("teaching plan does not exist");
+        }
         RunSnapshot run = runs.start(AssistantRunMode.TEACHING, teachingPlanId, ownerUsername);
         try {
             run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
