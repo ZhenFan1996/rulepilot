@@ -8,6 +8,12 @@ import {
   restoreLessonProgress,
   type LessonProgress,
 } from '@/lib/lessonProgress'
+import {
+  cacheOfflineAnswer,
+  cacheOfflineRuling,
+  loadOfflineKnowledge,
+  type OfflineKnowledgeEntry,
+} from '@/lib/offlineKnowledge'
 
 interface TeachingPlan {
   id: string
@@ -186,6 +192,7 @@ const rulingConflict = ref(false)
 const editingRuling = ref(false)
 const editedVerdict = ref('')
 const editedExplanation = ref('')
+const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -218,6 +225,10 @@ function progressKey() {
 function saveProgress() {
   const key = progressKey()
   if (key) localStorage.setItem(key, JSON.stringify(progress.value))
+}
+
+function refreshOfflineKnowledge(targetPlanId = planId.value) {
+  offlineKnowledge.value = loadOfflineKnowledge(targetPlanId)
 }
 
 async function optionalFetch(url: string) {
@@ -255,6 +266,7 @@ async function loadLesson() {
       return
     }
   }
+  refreshOfflineKnowledge(targetPlanId)
   try {
     const [planResponse, lessonResponse, qualityResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
@@ -366,6 +378,10 @@ async function askCurrentSection() {
     const creation = (await response.json()) as AnswerCreation
     const received = creation.answer
     answer.value = received
+    if (received.status === 'ANSWERED') {
+      cacheOfflineAnswer(planId.value, text, currentSection.value.title, received)
+      refreshOfflineKnowledge()
+    }
     if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
       applyRuling({
         id: received.confirmedRulingId,
@@ -404,6 +420,13 @@ function applyRuling(value: ConfirmedRuling) {
   editedExplanation.value = value.explanation
   rulingConflict.value = false
   editingRuling.value = false
+  cacheOfflineRuling(
+    planId.value,
+    question.value,
+    currentSection.value?.title ?? '规则答疑',
+    value,
+  )
+  refreshOfflineKnowledge()
 }
 
 async function confirmAnswer() {
@@ -491,6 +514,15 @@ function citationPages(citation: RuleCitation) {
   return citation.pageFrom === citation.pageTo
     ? `第 ${citation.pageFrom} 页`
     : `第 ${citation.pageFrom}–${citation.pageTo} 页`
+}
+
+function cachedAtLabel(value: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
 }
 
 function answerFailureMessage(status: StructuredRuleAnswer['status']) {
@@ -659,6 +691,7 @@ function handleKeydown(event: KeyboardEvent) {
 
 function updateOnlineStatus() {
   online.value = navigator.onLine
+  if (!online.value) refreshOfflineKnowledge()
 }
 
 onMounted(() => {
@@ -688,10 +721,44 @@ onUnmounted(() => {
       <div v-if="lesson" class="h-1 bg-ink/8"><div class="h-full bg-copper transition-all" :style="{ width: `${progressPercent}%` }" /></div>
     </header>
 
-    <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；已加载的讲解和本地进度仍可使用。</p>
+    <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；只能查看本地讲解进度、最近答案和已确认裁定，生成式答疑已停用。</p>
     <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
       <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
     </div>
+
+    <section v-if="!online && offlineKnowledge.length" class="mx-auto max-w-4xl px-5 pt-7 sm:px-8" aria-labelledby="offline-knowledge-title">
+      <div class="rounded-3xl border border-amber-300 bg-amber-50 p-5 sm:p-6">
+        <p class="eyebrow">OFFLINE KNOWLEDGE</p>
+        <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 id="offline-knowledge-title" class="font-display text-2xl font-semibold">本局已缓存规则结论</h2>
+            <p class="mt-2 text-sm leading-6 text-amber-950/70">内容来自此前在线且通过引用校验的回答；离线时不会发起模型请求。</p>
+          </div>
+          <span class="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white">{{ offlineKnowledge.length }} 条</span>
+        </div>
+        <div class="mt-5 space-y-3">
+          <details v-for="entry in offlineKnowledge" :key="`${entry.question}-${entry.cachedAt}`" class="rounded-2xl border border-amber-200 bg-paper p-4">
+            <summary class="cursor-pointer list-none">
+              <span class="flex flex-wrap items-start justify-between gap-3">
+                <span>
+                  <span class="block text-xs font-semibold text-copper">{{ entry.sectionTitle }}</span>
+                  <span class="mt-1 block font-semibold leading-6">{{ entry.question }}</span>
+                </span>
+                <span class="text-xs font-semibold text-ink/45">{{ entry.ruling ? '已确认裁定' : '最近答案' }} · {{ cachedAtLabel(entry.cachedAt) }}</span>
+              </span>
+            </summary>
+            <p class="mt-4 border-t border-ink/10 pt-4 font-display text-lg font-semibold leading-7">{{ entry.ruling?.shortVerdict ?? entry.answer.shortVerdict }}</p>
+            <p class="mt-3 text-sm leading-7 text-ink/70">{{ entry.ruling?.explanation ?? entry.answer.explanation }}</p>
+            <ol class="mt-4 space-y-2">
+              <li v-for="citation in (entry.ruling?.citations ?? entry.answer.citations)" :key="citation.chunkId" class="rounded-xl bg-indigo/5 p-3 text-sm">
+                <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
+                <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
+              </li>
+            </ol>
+          </details>
+        </div>
+      </div>
+    </section>
 
     <div v-if="loading" class="mx-auto max-w-7xl px-5 py-16 sm:px-8" aria-live="polite">
       <div class="h-7 w-44 animate-pulse rounded bg-ink/10" />
@@ -700,8 +767,16 @@ onUnmounted(() => {
 
     <section v-else-if="errorMessage" class="mx-auto max-w-xl px-5 py-20 text-center">
       <p class="font-display text-2xl font-semibold">讲解暂时无法打开</p>
-      <p class="mt-3 text-ink/60" role="alert">{{ errorMessage }}</p>
-      <button class="mt-6 rounded-xl bg-copper px-5 py-3 font-semibold text-white" @click="loadLesson">重新加载</button>
+      <p class="mt-3 text-ink/60" role="alert">
+        {{ online ? errorMessage : '离线时无法加载尚未缓存的讲解，联网后可继续学习。' }}
+      </p>
+      <button
+        v-if="online"
+        class="mt-6 rounded-xl bg-copper px-5 py-3 font-semibold text-white"
+        @click="loadLesson"
+      >
+        重新加载
+      </button>
     </section>
 
     <section v-else-if="!lesson" class="mx-auto max-w-xl px-5 py-20 text-center">

@@ -5,7 +5,7 @@ test('presents rulebook teaching before follow-up questions', async ({ page }) =
 
   await expect(page).toHaveTitle(/RulePilot/)
   await expect(page.getByRole('heading', { level: 1 })).toContainText('读完规则书')
-  await expect(page.getByRole('link', { name: '导入规则书' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '导入规则书' }).last()).toBeVisible()
   await expect(page.getByText('结束条件与计分', { exact: true })).toBeVisible()
 
   const teachingPosition = await page.getByText('组织完整讲解', { exact: true }).evaluate((element) => element.getBoundingClientRect().top)

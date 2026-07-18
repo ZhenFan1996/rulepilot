@@ -114,6 +114,8 @@ make dev
 
 图文讲解由 Teaching Agent 逐章执行版本隔离的混合检索和结构化生成。默认 `TEACHING_PROVIDER=fake` 便于本地无外部费用运行；接入可用的 Spring AI `ChatModel` 后可切换为 `spring-ai`。无论使用哪个模型提供方，引用白名单、长度、章节结构和工具调用预算都由应用层校验。事实 Critic 默认仅审查低置信度回答；设置 `CRITIC_EVALUATION_MODE=true` 可在评测时审查普通回答与讲解步骤，发现无证据主张、矛盾、遗漏例外或过度推断时不会发布该内容。
 
+生产构建可作为 PWA 安装，并缓存应用外壳。断网后仍可打开应用，查看当前教学计划最近的已验证答案和已确认裁定；未缓存的讲解会明确提示需要联网，生成式讲解和答疑不会在离线状态下发起。
+
 每次讲解和答疑都会创建可查询的执行记录，并限制步骤数、Tool/模型调用数、估算 Token 和总耗时。创建响应中的 `assistantRunId` 可用于读取状态步骤、预算消耗和调用审计；运行中的任务也支持由所属用户请求协作式取消。审计只保存操作名、结果、Token 估算和耗时，不保存完整 Prompt 或规则书正文。
 
 后端通过 OpenTelemetry 导出 HTTP 及关键讲解、答疑工作流 Trace，通过 Prometheus 暴露 JVM、HTTP 和业务指标。Grafana 会自动配置 Prometheus、Tempo 与 `RulePilot Overview` 仪表盘；本地默认完整采样，部署时可通过 `TRACING_SAMPLING_PROBABILITY` 调低采样率。统一异常处理返回的 `traceId` 与当前 Trace 一致，可直接用于故障定位。
