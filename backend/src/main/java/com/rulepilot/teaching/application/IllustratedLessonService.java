@@ -8,6 +8,8 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -23,22 +25,31 @@ public class IllustratedLessonService {
     private final IllustratedLessonRepository repository;
     private final AssistantRuns runs;
     private final DocumentVersionScopeLookup documents;
+    private final ObservationRegistry observations;
 
     public IllustratedLessonService(
             TeachingPlanRepository plans,
             GroundedTeachingAgent agent,
             IllustratedLessonRepository repository,
             AssistantRuns runs,
-            DocumentVersionScopeLookup documents) {
+            DocumentVersionScopeLookup documents,
+            ObservationRegistry observations) {
         this.plans = plans;
         this.agent = agent;
         this.repository = repository;
         this.runs = runs;
         this.documents = documents;
+        this.observations = observations;
     }
 
     @Transactional
     public LessonCreation create(UUID teachingPlanId, String ownerUsername) {
+        return Observation.createNotStarted("rulepilot.teaching.workflow", observations)
+                .contextualName("teaching-workflow")
+                .observe(() -> createObserved(teachingPlanId, ownerUsername));
+    }
+
+    private LessonCreation createObserved(UUID teachingPlanId, String ownerUsername) {
         var plan = plans.findById(teachingPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
         RunSnapshot run = runs.start(AssistantRunMode.TEACHING, teachingPlanId, ownerUsername);

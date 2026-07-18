@@ -69,10 +69,22 @@ verify_running_services() {
 	compose exec -T minio mc ready local >/dev/null
 	echo "PASS MinIO readiness"
 
+	compose exec -T prometheus wget -qO- http://localhost:9090/-/ready >/dev/null
+	echo "PASS Prometheus readiness"
+
+	compose exec -T prometheus wget -qO- http://tempo:3200/ready >/dev/null
+	echo "PASS Tempo readiness"
+
+	compose exec -T prometheus wget -qO- http://grafana:3000/api/health >/dev/null
+	echo "PASS Grafana readiness"
+
 	require_volume_mount postgres /var/lib/postgresql/data
 	require_volume_mount redis /data
 	require_volume_mount rabbitmq /var/lib/rabbitmq
 	require_volume_mount minio /data
+	require_volume_mount prometheus /prometheus
+	require_volume_mount tempo /var/tempo
+	require_volume_mount grafana /var/lib/grafana
 }
 
 require_tooling

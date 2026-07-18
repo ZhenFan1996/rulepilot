@@ -63,7 +63,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 		exit 2; \
 	fi
 
-compose-up: ## Start and verify local PostgreSQL, Redis, RabbitMQ, and MinIO
+compose-up: ## Start and verify local data, messaging, storage, and observability services
 	@sh scripts/verify-compose.sh up
 
 compose-down: ## Stop local infrastructure services and retain their data

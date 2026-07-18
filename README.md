@@ -88,7 +88,7 @@ RulePilot 是一个面向桌游规则书的多媒体规则讲解应用。项目�
 cp .env.example .env
 ```
 
-启动 PostgreSQL（含 pgvector）、Redis、RabbitMQ 和 MinIO：
+启动 PostgreSQL（含 pgvector）、Redis、RabbitMQ、MinIO、Prometheus、Tempo 和 Grafana：
 
 ```sh
 make compose-up
@@ -116,6 +116,8 @@ make dev
 
 每次讲解和答疑都会创建可查询的执行记录，并限制步骤数、Tool/模型调用数、估算 Token 和总耗时。创建响应中的 `assistantRunId` 可用于读取状态步骤、预算消耗和调用审计；运行中的任务也支持由所属用户请求协作式取消。审计只保存操作名、结果、Token 估算和耗时，不保存完整 Prompt 或规则书正文。
 
+后端通过 OpenTelemetry 导出 HTTP 及关键讲解、答疑工作流 Trace，通过 Prometheus 暴露 JVM、HTTP 和业务指标。Grafana 会自动配置 Prometheus、Tempo 与 `RulePilot Overview` 仪表盘；本地默认完整采样，部署时可通过 `TRACING_SAMPLING_PROBABILITY` 调低采样率。统一异常处理返回的 `traceId` 与当前 Trace 一致，可直接用于故障定位。
+
 也可以分别启动：
 
 ```sh
@@ -137,6 +139,9 @@ npm run dev
 - Redis：127.0.0.1:6379
 - RabbitMQ：127.0.0.1:5672（管理界面：http://127.0.0.1:15672）
 - MinIO：http://127.0.0.1:9000（控制台：http://127.0.0.1:9001）
+- Prometheus：http://127.0.0.1:9090
+- Tempo：http://127.0.0.1:3200
+- Grafana：http://127.0.0.1:3000（账户来自 `.env` 中的 `GRAFANA_ADMIN_USER` 和 `GRAFANA_ADMIN_PASSWORD`）
 
 ## 常用命令
 

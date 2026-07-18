@@ -244,6 +244,7 @@ class StructuredRuleAnswerServiceTest {
                 acceptedCritic(),
                 null,
                 new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -286,6 +287,7 @@ class StructuredRuleAnswerServiceTest {
                 acceptedCritic(),
                 null,
                 new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -326,6 +328,7 @@ class StructuredRuleAnswerServiceTest {
                 acceptedCritic(),
                 null,
                 new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -367,6 +370,7 @@ class StructuredRuleAnswerServiceTest {
                 acceptedCritic(),
                 null,
                 new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -389,6 +393,7 @@ class StructuredRuleAnswerServiceTest {
                 critic,
                 null,
                 new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
                 new SimpleMeterRegistry());
     }
 

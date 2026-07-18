@@ -21,7 +21,13 @@ public class IdentitySecurityConfiguration {
     SecurityFilterChain identitySecurityFilterChain(HttpSecurity http) throws Exception {
         http
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/actuator/health", "/actuator/info", "/api/auth/csrf", "/api/auth/login", "/error")
+                        .requestMatchers(
+                                "/actuator/health",
+                                "/actuator/info",
+                                "/actuator/prometheus",
+                                "/api/auth/csrf",
+                                "/api/auth/login",
+                                "/error")
                         .permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/games", "/api/v1/games/*/editions", "/api/v1/games/*/expansions")
                         .hasRole("EDITOR")

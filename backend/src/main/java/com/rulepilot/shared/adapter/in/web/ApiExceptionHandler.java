@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.MDC;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -86,6 +87,10 @@ public class ApiExceptionHandler {
     }
 
     private String traceId(HttpServletRequest request) {
+        String currentTraceId = MDC.get("traceId");
+        if (currentTraceId != null && SAFE_TRACE_ID.matcher(currentTraceId).matches()) {
+            return currentTraceId;
+        }
         String candidate = request.getHeader("X-Trace-Id");
         if (candidate != null && SAFE_TRACE_ID.matcher(candidate).matches()) {
             return candidate;

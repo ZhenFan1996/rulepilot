@@ -37,6 +37,8 @@ import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -67,6 +69,7 @@ public class StructuredRuleAnswerService {
     private final GeneratedContentCritic critic;
     private final AssistantRuns runs;
     private final AuditedAgentInvocations invocations;
+    private final ObservationRegistry observations;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
@@ -85,6 +88,7 @@ public class StructuredRuleAnswerService {
             GeneratedContentCritic critic,
             AssistantRuns runs,
             AuditedAgentInvocations invocations,
+            ObservationRegistry observations,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
@@ -97,6 +101,7 @@ public class StructuredRuleAnswerService {
         this.critic = critic;
         this.runs = runs;
         this.invocations = invocations;
+        this.observations = observations;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
@@ -109,6 +114,13 @@ public class StructuredRuleAnswerService {
     }
 
     public AnswerCreation answerWithRun(
+            String question, QuestionContext context, String username, UUID gameSessionId) {
+        return Observation.createNotStarted("rulepilot.answer.workflow", observations)
+                .contextualName("answer-workflow")
+                .observe(() -> answerWithRunObserved(question, context, username, gameSessionId));
+    }
+
+    private AnswerCreation answerWithRunObserved(
             String question, QuestionContext context, String username, UUID gameSessionId) {
         RunSnapshot run = runs.start(
                 AssistantRunMode.QUESTION_ANSWER,

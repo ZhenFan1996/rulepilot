@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.rulepilot.shared.adapter.in.web.ApiExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -36,6 +37,18 @@ class ApiExceptionHandlerWebTest {
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.traceId").value("trace-test-001"))
                 .andExpect(jsonPath("$.detail").value("The request could not be accepted."));
+    }
+
+    @Test
+    void prefersCurrentTelemetryTraceOverClientHeader() throws Exception {
+        MDC.put("traceId", "0123456789abcdef0123456789abcdef");
+        try {
+            mockMvc.perform(get("/test/invalid").header("X-Trace-Id", "client-controlled"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.traceId").value("0123456789abcdef0123456789abcdef"));
+        } finally {
+            MDC.remove("traceId");
+        }
     }
 
     @RestController
