@@ -1,6 +1,8 @@
 package com.rulepilot.document.adapter.out.persistence;
 
+import com.rulepilot.document.DocumentProcessingCommand;
 import com.rulepilot.document.DocumentProcessingStage;
+import com.rulepilot.document.application.DocumentProcessingDeduplicationStore;
 import com.rulepilot.document.application.DocumentOutboxStore;
 import com.rulepilot.document.application.DocumentProcessingJobStore;
 import com.rulepilot.document.application.DocumentProcessingQueue;
@@ -20,7 +22,10 @@ import org.springframework.stereotype.Repository;
 @Repository
 @Profile("!test")
 public class JpaDocumentProcessingQueue
-        implements DocumentProcessingQueue, DocumentOutboxStore, DocumentProcessingJobStore {
+        implements DocumentProcessingQueue,
+                DocumentOutboxStore,
+                DocumentProcessingJobStore,
+                DocumentProcessingDeduplicationStore {
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -91,6 +96,56 @@ public class JpaDocumentProcessingQueue
                 .executeUpdate();
         if (updated != 1) {
             throw new IllegalArgumentException("document processing job does not exist");
+        }
+    }
+
+    @Override
+    public boolean begin(DocumentProcessingCommand command, UUID eventId, Instant startedAt) {
+        int inserted = entityManager
+                .createNativeQuery(
+                        """
+                        insert into processing_stage_execution (
+                            id, document_version_id, processing_job_id, stage, pipeline_version,
+                            first_event_id, status, started_at, updated_at
+                        ) values (
+                            :id, :documentVersionId, :processingJobId, :stage, :pipelineVersion,
+                            :eventId, 'RUNNING', :startedAt, :startedAt
+                        )
+                        on conflict (document_version_id, stage, pipeline_version) do nothing
+                        """)
+                .setParameter("id", UUID.randomUUID())
+                .setParameter("documentVersionId", command.documentVersionId())
+                .setParameter("processingJobId", command.processingJobId())
+                .setParameter("stage", command.stage().name())
+                .setParameter("pipelineVersion", command.pipelineVersion())
+                .setParameter("eventId", eventId)
+                .setParameter("startedAt", startedAt)
+                .executeUpdate();
+        return inserted == 1;
+    }
+
+    @Override
+    public void update(DocumentProcessingCommand command, String status, Instant completedAt) {
+        int updated = entityManager
+                .createNativeQuery(
+                        """
+                        update processing_stage_execution
+                        set status = :status,
+                            completed_at = :completedAt,
+                            updated_at = :completedAt
+                        where document_version_id = :documentVersionId
+                          and stage = :stage
+                          and pipeline_version = :pipelineVersion
+                          and status = 'RUNNING'
+                        """)
+                .setParameter("status", status)
+                .setParameter("completedAt", completedAt)
+                .setParameter("documentVersionId", command.documentVersionId())
+                .setParameter("stage", command.stage().name())
+                .setParameter("pipelineVersion", command.pipelineVersion())
+                .executeUpdate();
+        if (updated != 1) {
+            throw new IllegalStateException("document processing stage is not running");
         }
     }
 

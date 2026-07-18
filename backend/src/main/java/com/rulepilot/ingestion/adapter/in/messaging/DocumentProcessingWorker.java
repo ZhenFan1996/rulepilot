@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.document.DocumentProcessingCommand;
 import com.rulepilot.document.DocumentProcessingCommands;
 import com.rulepilot.document.DocumentProcessingJobs;
+import com.rulepilot.document.DocumentProcessingIdempotency;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import java.io.IOException;
@@ -26,23 +27,34 @@ public class DocumentProcessingWorker {
     private final UploadedDocumentIngestion ingestion;
     private final DocumentProcessingCommands commands;
     private final DocumentProcessingJobs jobs;
+    private final DocumentProcessingIdempotency idempotency;
 
     public DocumentProcessingWorker(
             UploadedDocumentIngestion ingestion,
             DocumentProcessingCommands commands,
-            DocumentProcessingJobs jobs) {
+            DocumentProcessingJobs jobs,
+            DocumentProcessingIdempotency idempotency) {
         this.ingestion = ingestion;
         this.commands = commands;
         this.jobs = jobs;
+        this.idempotency = idempotency;
     }
 
     @RabbitListener(queues = "${rulepilot.document.messaging.queue}")
     public void process(Message message) {
         try {
-            execute(readCommand(message));
+            execute(readCommand(message), eventId(message));
         } catch (IOException exception) {
             throw new IllegalArgumentException("Document processing message is not valid JSON", exception);
         }
+    }
+
+    private UUID eventId(Message message) {
+        String value = message.getMessageProperties().getHeader("rulepilot-event-id");
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Document processing message is missing event id");
+        }
+        return UUID.fromString(value);
     }
 
     private DocumentProcessingCommand readCommand(Message message) throws IOException {
@@ -56,9 +68,17 @@ public class DocumentProcessingWorker {
                 DocumentProcessingStage.valueOf(stage));
     }
 
-    private void execute(DocumentProcessingCommand command) {
-        jobs.stageStarted(command.processingJobId(), command.stage());
+    private void execute(DocumentProcessingCommand command, UUID eventId) {
+        if (!idempotency.begin(command, eventId)) {
+            LOGGER.info(
+                    "Skipping duplicate document processing delivery for documentVersionId={}, stage={}, pipelineVersion={}",
+                    command.documentVersionId(),
+                    command.stage(),
+                    command.pipelineVersion());
+            return;
+        }
         try {
+            jobs.stageStarted(command.processingJobId(), command.stage());
             ingestion.process(command.documentVersionId(), command.stage());
             var next = command.nextStage();
             if (next == null) {
@@ -66,6 +86,7 @@ public class DocumentProcessingWorker {
             } else {
                 commands.publish(next);
             }
+            idempotency.complete(command);
         } catch (RuntimeException exception) {
             LOGGER.error(
                     "Document processing stage failed for jobId={}, documentVersionId={}, stage={}",
@@ -74,7 +95,11 @@ public class DocumentProcessingWorker {
                     command.stage(),
                     exception);
             ingestion.fail(command.documentVersionId());
-            jobs.failed(command.processingJobId(), command.stage());
+            try {
+                jobs.failed(command.processingJobId(), command.stage());
+            } finally {
+                idempotency.fail(command);
+            }
         }
     }
 
