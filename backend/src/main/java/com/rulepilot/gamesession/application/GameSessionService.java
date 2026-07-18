@@ -5,8 +5,11 @@ import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.gamesession.domain.GameSession;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,6 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Profile("!test")
 public class GameSessionService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(GameSessionService.class);
 
     private final CatalogEditionLookup catalog;
     private final DocumentVersionScopeLookup documents;
@@ -58,7 +63,7 @@ public class GameSessionService {
         GameSession session = sessions.save(GameSession.start(
                 edition.gameId(), editionId, documentVersionId, selectedExpansions, playerCount,
                 phase, activePlayer, username, Instant.now(clock)));
-        contexts.save(session);
+        saveContext(session);
         return session;
     }
 
@@ -73,12 +78,12 @@ public class GameSessionService {
         GameSession updated = owned(sessionId, username)
                 .updateTurn(roundNumber, phase, activePlayer, Instant.now(clock));
         sessions.update(updated);
-        contexts.save(updated);
+        saveContext(updated);
         return updated;
     }
 
     private GameSession owned(UUID sessionId, String username) {
-        GameSession session = contexts.find(sessionId).orElseGet(() -> restore(sessionId));
+        GameSession session = findContext(sessionId).orElseGet(() -> restore(sessionId));
         if (!session.createdBy().equals(username)) {
             throw new IllegalArgumentException("game session does not exist");
         }
@@ -88,7 +93,24 @@ public class GameSessionService {
     private GameSession restore(UUID sessionId) {
         GameSession session = sessions.find(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("game session does not exist"));
-        contexts.save(session);
+        saveContext(session);
         return session;
+    }
+
+    private Optional<GameSession> findContext(UUID sessionId) {
+        try {
+            return contexts.find(sessionId);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Game session context unavailable; restoring session {} from PostgreSQL", sessionId);
+            return Optional.empty();
+        }
+    }
+
+    private void saveContext(GameSession session) {
+        try {
+            contexts.save(session);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Game session context unavailable; session {} remains persisted in PostgreSQL", session.id());
+        }
     }
 }

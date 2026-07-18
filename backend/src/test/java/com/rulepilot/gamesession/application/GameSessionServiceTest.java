@@ -52,6 +52,21 @@ class GameSessionServiceTest {
     }
 
     @Test
+    void continuesFromPostgreSqlWhenContextStoreIsUnavailable() {
+        InMemorySessions repository = new InMemorySessions();
+        GameSessionService service = service(
+                repository, new UnavailableContexts(), Set.of(), editionId, "READY");
+
+        GameSession started = service.start(editionId, versionId, Set.of(), 2, "SETUP", 1, "alice");
+        GameSession restored = service.get(started.id(), "alice");
+        GameSession updated = service.updateTurn(started.id(), 2, "ACTION", 2, "alice");
+
+        assertThat(restored).isEqualTo(started);
+        assertThat(updated.roundNumber()).isEqualTo(2);
+        assertThat(repository.value).isEqualTo(updated);
+    }
+
+    @Test
     void rejectsIncompatibleExpansionAndDocumentScope() {
         InMemorySessions repository = new InMemorySessions();
         InMemoryContexts contexts = new InMemoryContexts();
@@ -115,6 +130,18 @@ class GameSessionServiceTest {
         @Override
         public Optional<GameSession> find(UUID sessionId) {
             return value != null && value.id().equals(sessionId) ? Optional.of(value) : Optional.empty();
+        }
+    }
+
+    private static final class UnavailableContexts implements GameSessionContextStore {
+        @Override
+        public void save(GameSession session) {
+            throw new IllegalStateException("Redis unavailable");
+        }
+
+        @Override
+        public Optional<GameSession> find(UUID sessionId) {
+            throw new IllegalStateException("Redis unavailable");
         }
     }
 }

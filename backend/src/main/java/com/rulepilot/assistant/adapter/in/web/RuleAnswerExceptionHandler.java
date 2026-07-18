@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.adapter.in.web;
 
 import com.rulepilot.assistant.application.RuleAnswerRateLimitExceededException;
+import com.rulepilot.assistant.application.RuleAnswerRateLimitUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.util.UUID;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class RuleAnswerExceptionHandler {
 
     private static final URI TYPE = URI.create("urn:rulepilot:problem:rule-answer-rate-limit");
+    private static final URI UNAVAILABLE_TYPE = URI.create("urn:rulepilot:problem:rule-answer-rate-limit-unavailable");
     private static final Pattern SAFE_TRACE_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
 
     @ExceptionHandler(RuleAnswerRateLimitExceededException.class)
@@ -29,6 +31,21 @@ public class RuleAnswerExceptionHandler {
         problem.setProperty("dimension", exception.dimension().name());
         problem.setProperty("traceId", traceId(request));
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", Long.toString(exception.retryAfterSeconds()))
+                .body(problem);
+    }
+
+    @ExceptionHandler(RuleAnswerRateLimitUnavailableException.class)
+    public ResponseEntity<ProblemDetail> handleRateLimitUnavailable(
+            RuleAnswerRateLimitUnavailableException exception, HttpServletRequest request) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE, "Rule answers are temporarily unavailable. Retry later.");
+        problem.setType(UNAVAILABLE_TYPE);
+        problem.setTitle("Rule answers temporarily unavailable");
+        problem.setInstance(URI.create(request.getRequestURI()));
+        problem.setProperty("code", "RULE_ANSWER_RATE_LIMIT_UNAVAILABLE");
+        problem.setProperty("traceId", traceId(request));
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .header("Retry-After", Long.toString(exception.retryAfterSeconds()))
                 .body(problem);
     }

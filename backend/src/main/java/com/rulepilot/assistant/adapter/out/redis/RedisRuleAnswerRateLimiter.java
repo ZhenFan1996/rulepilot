@@ -3,6 +3,7 @@ package com.rulepilot.assistant.adapter.out.redis;
 import com.rulepilot.assistant.application.RuleAnswerRateLimitExceededException;
 import com.rulepilot.assistant.application.RuleAnswerRateLimitExceededException.Dimension;
 import com.rulepilot.assistant.application.RuleAnswerRateLimiter;
+import com.rulepilot.assistant.application.RuleAnswerRateLimitUnavailableException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -11,6 +12,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.ClassPathResource;
@@ -21,6 +24,9 @@ import org.springframework.stereotype.Repository;
 @Repository
 @Profile("!test")
 public class RedisRuleAnswerRateLimiter implements RuleAnswerRateLimiter {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(RedisRuleAnswerRateLimiter.class);
+    private static final long UNAVAILABLE_RETRY_SECONDS = 5;
 
     private static final RedisScript<List> USER_LIMIT = RedisScript.of(
             new ClassPathResource("redis/answer-user-rate-limit.lua"), List.class);
@@ -57,14 +63,21 @@ public class RedisRuleAnswerRateLimiter implements RuleAnswerRateLimiter {
 
     @Override
     public void checkUser(String username) {
-        List<?> result = redis.execute(
-                USER_LIMIT,
-                List.of("rulepilot:limit:answer:user:" + digest(required(username, "username"))),
-                Integer.toString(userLimit),
-                Long.toString(userWindow.toMillis()));
-        requireResult(result, 2);
-        if (number(result, 0) == 0) {
-            throw new RuleAnswerRateLimitExceededException(Dimension.USER, retrySeconds(number(result, 1)));
+        String key = "rulepilot:limit:answer:user:" + digest(required(username, "username"));
+        try {
+            List<?> result = redis.execute(
+                    USER_LIMIT,
+                    List.of(key),
+                    Integer.toString(userLimit),
+                    Long.toString(userWindow.toMillis()));
+            requireResult(result, 2);
+            if (number(result, 0) == 0) {
+                throw new RuleAnswerRateLimitExceededException(Dimension.USER, retrySeconds(number(result, 1)));
+            }
+        } catch (RuleAnswerRateLimitExceededException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new RuleAnswerRateLimitUnavailableException(UNAVAILABLE_RETRY_SECONDS, exception);
         }
     }
 
@@ -77,19 +90,25 @@ public class RedisRuleAnswerRateLimiter implements RuleAnswerRateLimiter {
                 "rulepilot:limit:answer:concurrency:" + sessionScope,
                 "rulepilot:limit:answer:concurrency:provider:" + digest(required(providerId, "provider")));
         String token = UUID.randomUUID().toString();
-        List<?> result = redis.execute(
-                ACQUIRE_MODEL,
-                keys,
-                Integer.toString(sessionConcurrency),
-                Integer.toString(providerConcurrency),
-                Long.toString(lease.toMillis()),
-                token);
-        requireResult(result, 3);
-        if (number(result, 0) == 0) {
-            Dimension dimension = number(result, 1) == 1 ? Dimension.GAME_SESSION : Dimension.MODEL_PROVIDER;
-            throw new RuleAnswerRateLimitExceededException(dimension, retrySeconds(number(result, 2)));
+        try {
+            List<?> result = redis.execute(
+                    ACQUIRE_MODEL,
+                    keys,
+                    Integer.toString(sessionConcurrency),
+                    Integer.toString(providerConcurrency),
+                    Long.toString(lease.toMillis()),
+                    token);
+            requireResult(result, 3);
+            if (number(result, 0) == 0) {
+                Dimension dimension = number(result, 1) == 1 ? Dimension.GAME_SESSION : Dimension.MODEL_PROVIDER;
+                throw new RuleAnswerRateLimitExceededException(dimension, retrySeconds(number(result, 2)));
+            }
+            return new RedisPermit(redis, keys, token);
+        } catch (RuleAnswerRateLimitExceededException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new RuleAnswerRateLimitUnavailableException(UNAVAILABLE_RETRY_SECONDS, exception);
         }
-        return new RedisPermit(redis, keys, token);
     }
 
     private void requireResult(List<?> result, int expectedSize) {
@@ -141,7 +160,11 @@ public class RedisRuleAnswerRateLimiter implements RuleAnswerRateLimiter {
         @Override
         public void close() {
             if (released.compareAndSet(false, true)) {
-                redis.execute(RELEASE_MODEL, keys, token);
+                try {
+                    redis.execute(RELEASE_MODEL, keys, token);
+                } catch (RuntimeException exception) {
+                    LOGGER.warn("Rule answer concurrency lease release failed; the lease will expire automatically");
+                }
             }
         }
     }

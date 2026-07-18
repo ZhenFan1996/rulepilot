@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -177,6 +178,65 @@ class StructuredRuleAnswerServiceTest {
         assertThat(metrics.counter("rulepilot.answer.cache.requests", "result", "hit").count()).isEqualTo(1);
     }
 
+    @Test
+    void retrievesAndReturnsValidatedAnswerWhenCacheIsUnavailable() {
+        RuleEvidenceHit source = evidence("SCORING");
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        AtomicInteger modelCalls = new AtomicInteger();
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new ModelDraft(
+                            "Coins score one point.", "Each coin contributes one point.",
+                            List.of(source.chunkId()), List.of(), "HIGH");
+                },
+                new UnavailableAnswerCache(),
+                new RecordingRateLimiter(),
+                metrics);
+
+        StructuredRuleAnswer answer = service.answer(
+                "How are coins scored?", new QuestionContext(versionId, "SCORING", null, 3, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).hasSize(1);
+        assertThat(modelCalls).hasValue(1);
+        assertThat(metrics.counter("rulepilot.answer.cache.errors", "operation", "read").count()).isEqualTo(1);
+        assertThat(metrics.counter("rulepilot.answer.cache.errors", "operation", "write").count()).isEqualTo(1);
+    }
+
+    @Test
+    void stopsBeforeRetrievalWhenRateLimitStorageIsUnavailable() {
+        AtomicBoolean retrievalCalled = new AtomicBoolean();
+        RuleAnswerRateLimiter unavailableLimiter = new RuleAnswerRateLimiter() {
+            @Override
+            public void checkUser(String username) {
+                throw new RuleAnswerRateLimitUnavailableException(5, new IllegalStateException("Redis unavailable"));
+            }
+
+            @Override
+            public Permit acquireModel(String username, UUID gameSessionId, String providerId) {
+                throw new AssertionError("model permit must not be acquired");
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> {
+                    retrievalCalled.set(true);
+                    return List.of();
+                },
+                request -> null,
+                new InMemoryAnswerCache(),
+                unavailableLimiter,
+                new SimpleMeterRegistry());
+
+        assertThatThrownBy(() -> service.answer(
+                        "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of())))
+                .isInstanceOf(RuleAnswerRateLimitUnavailableException.class);
+        assertThat(retrievalCalled).isFalse();
+    }
+
     private StructuredRuleAnswerService answerService(HybridRuleSearch retrieval, RuleAnswerModel model) {
         return new StructuredRuleAnswerService(
                 understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
@@ -199,6 +259,18 @@ class StructuredRuleAnswerServiceTest {
         @Override
         public void save(AnswerCacheKey key, StructuredRuleAnswer answer) {
             values.put(key, answer);
+        }
+    }
+
+    private static final class UnavailableAnswerCache implements RuleAnswerCache {
+        @Override
+        public Optional<StructuredRuleAnswer> find(AnswerCacheKey key) {
+            throw new IllegalStateException("Redis unavailable");
+        }
+
+        @Override
+        public void save(AnswerCacheKey key, StructuredRuleAnswer answer) {
+            throw new IllegalStateException("Redis unavailable");
         }
     }
 

@@ -21,16 +21,21 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
 public class StructuredRuleAnswerService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
 
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
@@ -39,6 +44,8 @@ public class StructuredRuleAnswerService {
     private final RuleAnswerRateLimiter rateLimiter;
     private final Counter cacheHits;
     private final Counter cacheMisses;
+    private final Counter cacheReadErrors;
+    private final Counter cacheWriteErrors;
 
     public StructuredRuleAnswerService(
             QuestionUnderstanding understanding,
@@ -54,6 +61,8 @@ public class StructuredRuleAnswerService {
         this.rateLimiter = rateLimiter;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
+        this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
+        this.cacheWriteErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "write");
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
@@ -68,7 +77,7 @@ public class StructuredRuleAnswerService {
         }
         rateLimiter.checkUser(username);
         AnswerCacheKey cacheKey = cacheKey(understood, context);
-        var cached = cache.find(cacheKey);
+        var cached = findCached(cacheKey);
         if (cached.isPresent()) {
             cacheHits.increment();
             return cached.get();
@@ -102,8 +111,31 @@ public class StructuredRuleAnswerService {
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
-        cache.save(cacheKey, answer);
+        saveCached(cacheKey, answer);
         return answer;
+    }
+
+    private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
+        try {
+            return cache.find(key);
+        } catch (RuntimeException exception) {
+            cacheReadErrors.increment();
+            LOGGER.warn(
+                    "Rule answer cache read failed for document version {}; using source retrieval",
+                    key.documentVersionId());
+            return Optional.empty();
+        }
+    }
+
+    private void saveCached(AnswerCacheKey key, StructuredRuleAnswer answer) {
+        try {
+            cache.save(key, answer);
+        } catch (RuntimeException exception) {
+            cacheWriteErrors.increment();
+            LOGGER.warn(
+                    "Rule answer cache write failed for document version {}; returning the validated answer",
+                    key.documentVersionId());
+        }
     }
 
     private AnswerCacheKey cacheKey(UnderstoodQuestion question, QuestionContext context) {
