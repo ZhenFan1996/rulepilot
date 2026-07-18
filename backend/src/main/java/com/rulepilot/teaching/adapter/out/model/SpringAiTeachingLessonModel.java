@@ -3,6 +3,8 @@ package com.rulepilot.teaching.adapter.out.model;
 import com.rulepilot.teaching.TeachingLessonModel;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.Map;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,18 +17,21 @@ import org.springframework.stereotype.Component;
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private final ChatClient chatClient;
+    private final String providerId;
     private final String systemPrompt;
 
     public SpringAiTeachingLessonModel(
-            ChatModel chatModel,
+            Map<String, ChatModel> models,
+            @Value("${rulepilot.teaching.model-provider}") String provider,
             @Value("classpath:prompts/teaching-agent-v1.txt") Resource promptResource) throws IOException {
-        this.chatClient = ChatClient.create(chatModel);
+        this.providerId = providerId(provider);
+        this.chatClient = ChatClient.create(requireModel(models, providerId));
         this.systemPrompt = promptResource.getContentAsString(StandardCharsets.UTF_8);
     }
 
     @Override
     public String providerId() {
-        return "spring-ai";
+        return providerId;
     }
 
     @Override
@@ -63,5 +68,20 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .param("repair", repairInstruction))
                 .call()
                 .entity(SectionDraft.class);
+    }
+
+    private static ChatModel requireModel(Map<String, ChatModel> models, String provider) {
+        ChatModel model = models.get(provider);
+        if (model == null) {
+            throw new IllegalStateException("chat model provider '" + provider + "' is not enabled");
+        }
+        return model;
+    }
+
+    private static String providerId(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new IllegalArgumentException("teaching model provider is required");
+        }
+        return provider.trim().toLowerCase(Locale.ROOT);
     }
 }

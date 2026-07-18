@@ -187,7 +187,61 @@ make demo-data
 
 登录后打开 http://127.0.0.1:5173/lessons 可以查看当前账户创建的全部教学计划并重新进入讲解，不依赖某一台设备保存的“最后打开”指针。计划、图文讲解、质量报告、语音与视频接口都会校验计划所有者；其他账户访问同一 `planId` 时返回 404，避免泄露计划是否存在。章节阅读位置仍保存在当前浏览器，服务端资料库不会伪装成跨设备进度同步。
 
-图文讲解由 Teaching Agent 逐章执行版本隔离的混合检索和结构化生成。默认 `TEACHING_PROVIDER=fake` 便于本地无外部费用运行；接入可用的 Spring AI `ChatModel` 后可切换为 `spring-ai`。无论使用哪个模型提供方，引用白名单、长度、章节结构和工具调用预算都由应用层校验。事实 Critic 默认仅审查低置信度回答；设置 `CRITIC_EVALUATION_MODE=true` 可在评测时审查普通回答与讲解步骤，发现无证据主张、矛盾、遗漏例外或过度推断时不会发布该内容。
+图文讲解由 Teaching Agent 逐章执行版本隔离的混合检索和结构化生成。默认 `TEACHING_PROVIDER=fake` 便于本地无外部费用运行。无论使用哪个模型提供方，引用白名单、长度、章节结构和工具调用预算都由应用层校验。事实 Critic 默认仅审查低置信度回答；设置 `CRITIC_EVALUATION_MODE=true` 可在评测时审查普通回答与讲解步骤，发现无证据主张、矛盾、遗漏例外或过度推断时不会发布该内容。
+
+### 配置大模型 API
+
+API Key 填在仓库根目录的 `.env`，不要填写在网页中，也不要提交到 Git。先从模板创建本地配置：
+
+```sh
+cp .env.example .env
+```
+
+每个业务角色可以独立选择模型：`TEACHING_MODEL_PROVIDER` 用于规则讲解，`ANSWER_MODEL_PROVIDER` 用于答疑，`CRITIC_MODEL_PROVIDER` 用于事实审校。可选值为 `gemini`、`openai`、`deepseek` 或 `compatible`。例如全部使用 Gemini：
+
+```dotenv
+GEMINI_ENABLED=true
+GEMINI_API_KEY=你的_Gemini_API_Key
+GEMINI_MODEL=gemini-2.5-flash
+
+TEACHING_PROVIDER=spring-ai
+TEACHING_MODEL_PROVIDER=gemini
+ANSWER_PROVIDER=spring-ai
+ANSWER_MODEL_PROVIDER=gemini
+CRITIC_PROVIDER=spring-ai
+CRITIC_MODEL_PROVIDER=gemini
+```
+
+也可以混合使用多个服务：
+
+```dotenv
+GEMINI_ENABLED=true
+GEMINI_API_KEY=你的_Gemini_API_Key
+OPENAI_ENABLED=true
+OPENAI_API_KEY=你的_OpenAI_API_Key
+DEEPSEEK_ENABLED=true
+DEEPSEEK_API_KEY=你的_DeepSeek_API_Key
+
+TEACHING_PROVIDER=spring-ai
+TEACHING_MODEL_PROVIDER=gemini
+ANSWER_PROVIDER=spring-ai
+ANSWER_MODEL_PROVIDER=deepseek
+CRITIC_PROVIDER=spring-ai
+CRITIC_MODEL_PROVIDER=openai
+```
+
+对于提供 OpenAI 兼容 Chat Completions API 的其他模型服务（包括本地服务），使用通用入口：
+
+```dotenv
+COMPATIBLE_MODEL_ENABLED=true
+COMPATIBLE_MODEL_API_KEY=服务需要时填写；本地服务可填占位值
+COMPATIBLE_MODEL_BASE_URL=http://localhost:11434/v1
+COMPATIBLE_MODEL_NAME=你的模型名称
+TEACHING_PROVIDER=spring-ai
+TEACHING_MODEL_PROVIDER=compatible
+```
+
+模型名和服务地址都可覆盖，以供应商账户实际开放的模型为准。启用某个真实提供方但遗漏 Key、地址或模型名时，后端会在启动时明确失败；未启用真实提供方时仍使用 fake，不会调用外部 API。修改 `.env` 后重新运行 `make dev`。
 
 讲解内答疑支持拍摄卡牌或选择本地图片。Tesseract.js WebAssembly OCR 在浏览器内识别简体中文和英文，用户核对文字后才会将其整理成当前章节的问题并交给既有 RAG 流程；卡牌照片不会上传到后端或第三方。OCR Worker、核心和语言数据由锁定的 npm 依赖在构建时发布为同源资产，首次识别需要联网加载，默认页面和 PWA 应用外壳不会预载这约 8.7 MiB 的可选资源。
 

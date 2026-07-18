@@ -4,9 +4,12 @@ import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -22,14 +25,17 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             confidence must be HIGH, MEDIUM, or LOW.
             """;
     private final ChatClient chatClient;
+    private final String providerId;
 
-    public SpringAiRuleAnswerModel(ChatModel chatModel) {
-        this.chatClient = ChatClient.create(chatModel);
+    public SpringAiRuleAnswerModel(
+            Map<String, ChatModel> models, @Value("${rulepilot.answer.model-provider}") String provider) {
+        this.providerId = providerId(provider);
+        this.chatClient = ChatClient.create(requireModel(models, providerId));
     }
 
     @Override
     public String providerId() {
-        return "spring-ai";
+        return providerId;
     }
 
     @Override
@@ -77,5 +83,20 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             current = current.getCause();
         }
         return false;
+    }
+
+    private static ChatModel requireModel(Map<String, ChatModel> models, String provider) {
+        ChatModel model = models.get(provider);
+        if (model == null) {
+            throw new IllegalStateException("chat model provider '" + provider + "' is not enabled");
+        }
+        return model;
+    }
+
+    private static String providerId(String provider) {
+        if (provider == null || provider.isBlank()) {
+            throw new IllegalArgumentException("answer model provider is required");
+        }
+        return provider.trim().toLowerCase(Locale.ROOT);
     }
 }

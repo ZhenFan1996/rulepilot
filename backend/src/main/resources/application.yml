@@ -115,12 +115,14 @@ rulepilot:
       confirm-timeout: ${OUTBOX_PUBLISH_CONFIRM_TIMEOUT:5s}
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
+    model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
     agent:
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:24}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:
     provider: ${ANSWER_PROVIDER:fake}
+    model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
     cache-retention-jitter: ${ANSWER_CACHE_RETENTION_JITTER:PT1H}
     rate-limit:
@@ -131,7 +133,28 @@ rulepilot:
       lease: ${ANSWER_RATE_LEASE:PT30S}
   critic:
     provider: ${CRITIC_PROVIDER:fake}
+    model-provider: ${CRITIC_MODEL_PROVIDER:gemini}
     evaluation-mode: ${CRITIC_EVALUATION_MODE:false}
+  models:
+    openai:
+      enabled: ${OPENAI_ENABLED:false}
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+      model: ${OPENAI_MODEL:gpt-5-mini}
+    gemini:
+      enabled: ${GEMINI_ENABLED:false}
+      api-key: ${GEMINI_API_KEY:}
+      model: ${GEMINI_MODEL:gemini-2.5-flash}
+    deepseek:
+      enabled: ${DEEPSEEK_ENABLED:false}
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
+    compatible:
+      enabled: ${COMPATIBLE_MODEL_ENABLED:false}
+      api-key: ${COMPATIBLE_MODEL_API_KEY:}
+      base-url: ${COMPATIBLE_MODEL_BASE_URL:http://localhost:11434/v1}
+      model: ${COMPATIBLE_MODEL_NAME:local-model}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}
   speech:
