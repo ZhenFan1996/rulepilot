@@ -1,5 +1,8 @@
 package com.rulepilot.document.adapter.out.persistence;
 
+import com.rulepilot.document.DocumentProcessingStage;
+import com.rulepilot.document.application.DocumentOutboxStore;
+import com.rulepilot.document.application.DocumentProcessingJobStore;
 import com.rulepilot.document.application.DocumentProcessingQueue;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -8,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.hibernate.annotations.ColumnTransformer;
 import org.springframework.context.annotation.Profile;
@@ -15,7 +19,8 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 @Profile("!test")
-public class JpaDocumentProcessingQueue implements DocumentProcessingQueue {
+public class JpaDocumentProcessingQueue
+        implements DocumentProcessingQueue, DocumentOutboxStore, DocumentProcessingJobStore {
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -30,6 +35,63 @@ public class JpaDocumentProcessingQueue implements DocumentProcessingQueue {
                 "DocumentProcessingRequested",
                 payload(documentVersionId, jobId),
                 occurredAt));
+    }
+
+    @Override
+    public List<PendingEvent> findReady(Instant now, int limit) {
+        return entityManager
+                .createQuery(
+                        """
+                        select event
+                        from OutboxEventEntity event
+                        where event.publishedAt is null
+                          and event.nextAttemptAt <= :now
+                        order by event.occurredAt, event.id
+                        """,
+                        OutboxEventEntity.class)
+                .setParameter("now", now)
+                .setMaxResults(limit)
+                .getResultList()
+                .stream()
+                .map(event -> new PendingEvent(event.id, event.eventType, event.payload))
+                .toList();
+    }
+
+    @Override
+    public void markPublished(UUID eventId, Instant publishedAt) {
+        entityManager
+                .createQuery(
+                        """
+                        update OutboxEventEntity event
+                        set event.publishedAt = :publishedAt,
+                            event.publishAttempts = event.publishAttempts + 1
+                        where event.id = :eventId
+                          and event.publishedAt is null
+                        """)
+                .setParameter("publishedAt", publishedAt)
+                .setParameter("eventId", eventId)
+                .executeUpdate();
+    }
+
+    @Override
+    public void update(UUID jobId, DocumentProcessingStage stage, String status, Instant updatedAt) {
+        int updated = entityManager
+                .createQuery(
+                        """
+                        update DocumentProcessingJobEntity job
+                        set job.stage = :stage,
+                            job.status = :status,
+                            job.updatedAt = :updatedAt
+                        where job.id = :jobId
+                        """)
+                .setParameter("stage", stage.name())
+                .setParameter("status", status)
+                .setParameter("updatedAt", updatedAt)
+                .setParameter("jobId", jobId)
+                .executeUpdate();
+        if (updated != 1) {
+            throw new IllegalArgumentException("document processing job does not exist");
+        }
     }
 
     private String payload(UUID documentVersionId, UUID jobId) {

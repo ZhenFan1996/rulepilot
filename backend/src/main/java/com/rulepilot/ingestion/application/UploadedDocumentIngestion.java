@@ -1,14 +1,12 @@
 package com.rulepilot.ingestion.application;
 
 import com.rulepilot.document.DocumentProcessing;
-import com.rulepilot.document.DocumentUploaded;
+import com.rulepilot.document.DocumentProcessingStage;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
 @Service
 @Profile("!test")
@@ -35,40 +33,55 @@ public class UploadedDocumentIngestion {
         this.embeddings = embeddings;
     }
 
-    @Async("ingestionTaskExecutor")
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void extractPages(DocumentUploaded event) {
-        try {
-            progress.update(event.documentVersionId(), "VALIDATING", 15, 0, false);
-            documents.markValidating(event.documentVersionId());
-            progress.update(event.documentVersionId(), "EXTRACTING", 30, 0, false);
-            documents.markExtracting(event.documentVersionId());
-            var pages = extractor.extract(documents.open(event.documentVersionId()));
-            progress.update(event.documentVersionId(), "EXTRACTING", 65, pages.size(), false);
-            documents.replacePages(event.documentVersionId(), pages);
-            documents.markStructuring(event.documentVersionId());
-            progress.update(event.documentVersionId(), "STRUCTURING", 75, pages.size(), false);
-            structures.organize(event.documentVersionId(), pages);
-            documents.markChunking(event.documentVersionId());
-            progress.update(event.documentVersionId(), "CHUNKING", 85, pages.size(), false);
-            documents.markEmbedding(event.documentVersionId());
-            progress.update(event.documentVersionId(), "EMBEDDING", 90, pages.size(), false);
-            embeddings.index(event.documentVersionId());
-            documents.markIndexing(event.documentVersionId());
-            progress.update(event.documentVersionId(), "INDEXING", 95, pages.size(), false);
-            documents.markReady(event.documentVersionId());
-            progress.update(event.documentVersionId(), "READY", 100, pages.size(), true);
-        } catch (RuntimeException exception) {
-            LOGGER.error("Rulebook ingestion failed for documentVersionId={}", event.documentVersionId(), exception);
-            try {
-                documents.markFailed(event.documentVersionId());
-                progress.update(event.documentVersionId(), "FAILED", 100, 0, true);
-            } catch (RuntimeException statusException) {
-                LOGGER.error(
-                        "Could not persist PDF extraction failure for documentVersionId={}",
-                        event.documentVersionId(),
-                        statusException);
-            }
+    public void process(UUID documentVersionId, DocumentProcessingStage stage) {
+        switch (stage) {
+            case PARSE -> parse(documentVersionId);
+            case CHUNK -> chunk(documentVersionId);
+            case EMBED -> embed(documentVersionId);
         }
+    }
+
+    public void fail(UUID documentVersionId) {
+        try {
+            documents.markFailed(documentVersionId);
+            progress.update(documentVersionId, "FAILED", 100, 0, true);
+        } catch (RuntimeException statusException) {
+            LOGGER.error(
+                    "Could not persist ingestion failure for documentVersionId={}",
+                    documentVersionId,
+                    statusException);
+        }
+    }
+
+    private void parse(UUID documentVersionId) {
+        progress.update(documentVersionId, "VALIDATING", 15, 0, false);
+        documents.markValidating(documentVersionId);
+        progress.update(documentVersionId, "EXTRACTING", 30, 0, false);
+        documents.markExtracting(documentVersionId);
+        var pages = extractor.extract(documents.open(documentVersionId));
+        documents.replacePages(documentVersionId, pages);
+        progress.update(documentVersionId, "EXTRACTING", 65, pages.size(), false);
+    }
+
+    private void chunk(UUID documentVersionId) {
+        var pages = documents.pages(documentVersionId).stream()
+                .map(page -> new DocumentProcessing.ExtractedPage(page.pageNumber(), page.text()))
+                .toList();
+        documents.markStructuring(documentVersionId);
+        progress.update(documentVersionId, "STRUCTURING", 75, pages.size(), false);
+        structures.organize(documentVersionId, pages);
+        documents.markChunking(documentVersionId);
+        progress.update(documentVersionId, "CHUNKING", 85, pages.size(), false);
+    }
+
+    private void embed(UUID documentVersionId) {
+        int pageCount = documents.pages(documentVersionId).size();
+        documents.markEmbedding(documentVersionId);
+        progress.update(documentVersionId, "EMBEDDING", 90, pageCount, false);
+        embeddings.index(documentVersionId);
+        documents.markIndexing(documentVersionId);
+        progress.update(documentVersionId, "INDEXING", 95, pageCount, false);
+        documents.markReady(documentVersionId);
+        progress.update(documentVersionId, "READY", 100, pageCount, true);
     }
 }

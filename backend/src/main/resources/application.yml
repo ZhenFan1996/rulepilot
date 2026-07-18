@@ -19,6 +19,12 @@ spring:
           time_zone: UTC
   flyway:
     locations: classpath:db/migration
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:rulepilot}
+    password: ${RABBITMQ_PASSWORD:change-me-local-only}
+    publisher-confirm-type: correlated
   servlet:
     multipart:
       max-file-size: ${MAX_PDF_UPLOAD_SIZE:50MB}
@@ -50,6 +56,14 @@ management:
       show-details: never
 
 rulepilot:
+  document:
+    messaging:
+      exchange: ${DOCUMENT_PROCESSING_EXCHANGE:rulepilot.document.processing}
+      queue: ${DOCUMENT_PROCESSING_QUEUE:rulepilot.document.processing.v1}
+      routing-key: ${DOCUMENT_PROCESSING_ROUTING_KEY:document.processing.requested.v1}
+      batch-size: ${OUTBOX_PUBLISH_BATCH_SIZE:20}
+      fixed-delay: ${OUTBOX_PUBLISH_FIXED_DELAY:2s}
+      confirm-timeout: ${OUTBOX_PUBLISH_CONFIRM_TIMEOUT:5s}
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
     agent:

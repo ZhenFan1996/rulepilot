@@ -1,7 +1,6 @@
 package com.rulepilot.document.application;
 
 import com.rulepilot.catalog.CatalogEditionLookup;
-import com.rulepilot.document.DocumentUploaded;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.RuleDocument;
@@ -11,7 +10,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,7 +22,6 @@ public class UploadRuleDocumentService {
     private final DocumentStorage storage;
     private final RuleDocumentRepository repository;
     private final DocumentProcessingQueue processingQueue;
-    private final ApplicationEventPublisher events;
     private final Clock clock = Clock.systemUTC();
 
     public UploadRuleDocumentService(
@@ -32,14 +29,12 @@ public class UploadRuleDocumentService {
             RuleDocumentStorageService storageService,
             DocumentStorage storage,
             RuleDocumentRepository repository,
-            DocumentProcessingQueue processingQueue,
-            ApplicationEventPublisher events) {
+            DocumentProcessingQueue processingQueue) {
         this.catalog = catalog;
         this.storageService = storageService;
         this.storage = storage;
         this.repository = repository;
         this.processingQueue = processingQueue;
-        this.events = events;
     }
 
     @Transactional
@@ -80,7 +75,6 @@ public class UploadRuleDocumentService {
         try {
             DocumentVersion saved = repository.save(version);
             processingQueue.enqueue(saved.id(), now);
-            events.publishEvent(new DocumentUploaded(saved.id()));
             return new UploadResult(document, saved, false);
         } catch (RuntimeException exception) {
             storage.delete(stored.objectKey());
