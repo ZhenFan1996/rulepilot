@@ -89,6 +89,9 @@ rulepilot:
       session-concurrency: ${ANSWER_RATE_SESSION_CONCURRENCY:1}
       provider-concurrency: ${ANSWER_RATE_PROVIDER_CONCURRENCY:8}
       lease: ${ANSWER_RATE_LEASE:PT30S}
+  critic:
+    provider: ${CRITIC_PROVIDER:fake}
+    evaluation-mode: ${CRITIC_EVALUATION_MODE:false}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}
   speech:

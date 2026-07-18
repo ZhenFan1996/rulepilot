@@ -7,6 +7,11 @@ import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
+import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.Claim;
+import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -44,16 +49,19 @@ public class GroundedTeachingAgent {
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
+    private final GeneratedContentCritic critic;
     private final int maxToolCalls;
 
     public GroundedTeachingAgent(
             AssistantReadTools tools,
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
             @Value("${rulepilot.teaching.agent.max-tool-calls:24}") int maxToolCalls) {
         this.tools = tools;
         this.model = model;
         this.evidenceVerifier = evidenceVerifier;
+        this.critic = critic;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
@@ -146,6 +154,23 @@ public class GroundedTeachingAgent {
                 draft.steps().stream().map(step -> new EvidenceClaim(step.text(), step.citationIds())).toList()));
         if (!verification.verified()) {
             throw new IllegalArgumentException("teaching section evidence did not pass policy verification");
+        }
+        var review = critic.review(
+                new ReviewRequest(
+                        ContentType.LESSON,
+                        IntStream.range(0, draft.steps().size())
+                                .mapToObj(index -> new Claim(
+                                        index + 1,
+                                        draft.steps().get(index).text(),
+                                        draft.steps().get(index).citationIds()))
+                                .toList(),
+                        evidence.stream()
+                                .map(source -> new GeneratedContentCritic.Evidence(
+                                        source.chunkId(), source.excerpt()))
+                                .toList()),
+                ReviewRisk.STANDARD);
+        if (!review.accepted()) {
+            throw new IllegalArgumentException("teaching section did not pass factual consistency review");
         }
 
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()

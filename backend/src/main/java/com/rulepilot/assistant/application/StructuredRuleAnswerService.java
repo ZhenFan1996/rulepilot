@@ -5,6 +5,11 @@ import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
+import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.Claim;
+import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -52,6 +57,7 @@ public class StructuredRuleAnswerService {
     private final RuleDataVersion ruleDataVersion;
     private final ConfirmedRulingLookup confirmedRulings;
     private final EvidenceVerifier evidenceVerifier;
+    private final GeneratedContentCritic critic;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
@@ -67,6 +73,7 @@ public class StructuredRuleAnswerService {
             RuleDataVersion ruleDataVersion,
             ConfirmedRulingLookup confirmedRulings,
             EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
@@ -76,6 +83,7 @@ public class StructuredRuleAnswerService {
         this.ruleDataVersion = ruleDataVersion;
         this.confirmedRulings = confirmedRulings;
         this.evidenceVerifier = evidenceVerifier;
+        this.critic = critic;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
@@ -139,6 +147,16 @@ public class StructuredRuleAnswerService {
             answer = validate(context.documentVersionId(), draft, evidence);
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+        }
+        try {
+            ReviewRisk risk = answer.confidence() == AnswerConfidence.LOW
+                    ? ReviewRisk.LOW_CONFIDENCE
+                    : ReviewRisk.STANDARD;
+            if (!critic.review(toCriticRequest(answer, evidence), risk).accepted()) {
+                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
+            }
+        } catch (RuntimeException exception) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
         }
         saveCached(cacheKey, answer);
         return answer;
@@ -221,6 +239,19 @@ public class StructuredRuleAnswerService {
         return new EvidenceSource(
                 source.chunkId(), source.documentVersionId(), source.sectionType(), source.excerpt(),
                 source.pageFrom(), source.pageTo());
+    }
+
+    private ReviewRequest toCriticRequest(StructuredRuleAnswer answer, List<HybridEvidenceHit> evidence) {
+        return new ReviewRequest(
+                ContentType.ANSWER,
+                List.of(new Claim(
+                        1,
+                        answer.shortVerdict() + "\n" + answer.explanation(),
+                        answer.citations().stream().map(RuleCitation::chunkId).toList())),
+                evidence.stream()
+                        .map(HybridEvidenceHit::evidence)
+                        .map(source -> new GeneratedContentCritic.Evidence(source.chunkId(), source.excerpt()))
+                        .toList());
     }
 
     private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {

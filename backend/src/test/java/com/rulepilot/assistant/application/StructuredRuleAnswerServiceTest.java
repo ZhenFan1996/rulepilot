@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.Issue;
+import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
@@ -173,6 +176,31 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void blocksLowConfidenceAnswerRejectedByCritic() {
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic rejectingCritic = (request, risk) -> {
+            criticCalls.incrementAndGet();
+            return new GeneratedContentCritic.Review(true, List.of(new Issue(
+                    IssueType.OVERREACH, 1, List.of(source.chunkId()), "The conclusion exceeds the evidence.")));
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> new ModelDraft(
+                        "Coins always decide the winner.", "Coins decide every tie.",
+                        List.of(source.chunkId()), List.of(), "LOW"),
+                rejectingCritic);
+
+        var answer = service.answer(
+                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).contains("一致性审查");
+        assertThat(answer.citations()).isEmpty();
+        assertThat(criticCalls).hasValue(1);
+    }
+
+    @Test
     void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
         UUID rulingId = UUID.randomUUID();
         UUID expansionId = UUID.randomUUID();
@@ -212,6 +240,7 @@ class StructuredRuleAnswerServiceTest {
                 new MutableRuleDataVersion(),
                 lookup,
                 new PolicyEvidenceVerifier(),
+                acceptedCritic(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -251,6 +280,7 @@ class StructuredRuleAnswerServiceTest {
                 versions,
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
+                acceptedCritic(),
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -288,6 +318,7 @@ class StructuredRuleAnswerServiceTest {
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
+                acceptedCritic(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -326,6 +357,7 @@ class StructuredRuleAnswerServiceTest {
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
+                acceptedCritic(),
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -335,12 +367,22 @@ class StructuredRuleAnswerServiceTest {
     }
 
     private StructuredRuleAnswerService answerService(HybridRuleSearch retrieval, RuleAnswerModel model) {
+        return answerService(retrieval, model, acceptedCritic());
+    }
+
+    private StructuredRuleAnswerService answerService(
+            HybridRuleSearch retrieval, RuleAnswerModel model, GeneratedContentCritic critic) {
         return new StructuredRuleAnswerService(
                 understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
                 new MutableRuleDataVersion(),
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
+                critic,
                 new SimpleMeterRegistry());
+    }
+
+    private GeneratedContentCritic acceptedCritic() {
+        return (request, risk) -> new GeneratedContentCritic.Review(false, List.of());
     }
 
     private ConfirmedRulingLookup noConfirmedRulings() {

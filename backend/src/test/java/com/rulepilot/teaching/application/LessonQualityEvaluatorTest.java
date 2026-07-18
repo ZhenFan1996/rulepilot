@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.ingestion.RuleStructureCatalog.SectionView;
 import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
@@ -40,7 +41,7 @@ class LessonQualityEvaluatorTest {
                         section.pageNumbers().getLast()))
                 .toList();
         var lesson = new GroundedTeachingAgent(
-                        retrieval, new FakeTeachingLessonModel(), new PolicyEvidenceVerifier(), 24)
+                        retrieval, new FakeTeachingLessonModel(), new PolicyEvidenceVerifier(), acceptedCritic(), 24)
                 .create(plan);
 
         var report = new LessonQualityEvaluator().evaluate(plan, lesson);
@@ -55,5 +56,9 @@ class LessonQualityEvaluatorTest {
                 .filteredOn(check -> check.type() == CheckType.PLAYER_COUNT_SCOPE)
                 .extracting(check -> check.status())
                 .containsExactly(CheckStatus.NOT_EVALUATED);
+    }
+
+    private GeneratedContentCritic acceptedCritic() {
+        return (request, risk) -> new GeneratedContentCritic.Review(false, List.of());
     }
 }

@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.GeneratedContentCritic.Issue;
+import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -34,7 +37,8 @@ class GroundedTeachingAgentTest {
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(tools, model, new PolicyEvidenceVerifier(), 4);
+        GroundedTeachingAgent agent =
+                new GroundedTeachingAgent(tools, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
 
         var lesson = agent.create(plan(versionId));
 
@@ -54,7 +58,8 @@ class GroundedTeachingAgentTest {
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("捏造的步骤", List.of(UUID.randomUUID()))));
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), 4);
+        GroundedTeachingAgent agent =
+                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
 
         var lesson = agent.create(plan(versionId));
 
@@ -74,13 +79,38 @@ class GroundedTeachingAgentTest {
             throw new AssertionError("model must not receive version-conflicting evidence");
         };
         GroundedTeachingAgent agent =
-                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), 4);
+                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
 
         var lesson = agent.create(plan(versionId));
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void degradesSectionRejectedByEvaluationCritic() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AssistantReadTools retrieval = request -> List.of(evidence(chunkId, versionId));
+        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+                "开局",
+                VisualKind.TABLE_LAYOUT,
+                "桌面布置示意",
+                List.of(new TeachingLessonModel.StepDraft("玩家可以任意放置棋盘。", List.of(chunkId))));
+        GeneratedContentCritic rejectingCritic = (request, risk) -> new GeneratedContentCritic.Review(
+                true,
+                List.of(new Issue(
+                        IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
+        GroundedTeachingAgent agent =
+                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), rejectingCritic, 4);
+
+        var lesson = agent.create(plan(versionId));
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("任意放置");
     }
 
     private TeachingPlan plan(UUID versionId) {
@@ -93,6 +123,10 @@ class GroundedTeachingAgentTest {
                 List.of(new PlannedSection(1, TeachingSectionType.SETUP, true, true, List.of(2, 3), List.of())),
                 "player",
                 Instant.now());
+    }
+
+    private GeneratedContentCritic acceptedCritic() {
+        return (request, risk) -> new GeneratedContentCritic.Review(false, List.of());
     }
 
     private RuleEvidence evidence(UUID chunkId, UUID versionId) {
