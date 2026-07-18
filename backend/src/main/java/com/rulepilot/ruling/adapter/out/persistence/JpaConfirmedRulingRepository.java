@@ -51,6 +51,33 @@ public class JpaConfirmedRulingRepository implements ConfirmedRulingRepository {
     }
 
     @Override
+    public Optional<ConfirmedRuling> findConfirmed(
+            UUID editionId,
+            UUID documentVersionId,
+            String expansionSetHash,
+            String normalizedQuestionHash,
+            String createdBy) {
+        return entityManager
+                .createQuery("""
+                        SELECT r FROM ConfirmedRulingEntity r
+                        WHERE r.editionId = :editionId
+                          AND r.documentVersionId = :documentVersionId
+                          AND r.expansionSetHash = :expansionSetHash
+                          AND r.normalizedQuestionHash = :questionHash
+                          AND r.createdBy = :createdBy
+                          AND r.status = 'CONFIRMED'
+                        """, ConfirmedRulingEntity.class)
+                .setParameter("documentVersionId", documentVersionId)
+                .setParameter("editionId", editionId)
+                .setParameter("expansionSetHash", expansionSetHash)
+                .setParameter("questionHash", normalizedQuestionHash)
+                .setParameter("createdBy", createdBy)
+                .getResultStream()
+                .findFirst()
+                .map(ConfirmedRulingEntity::toDomain);
+    }
+
+    @Override
     public ConfirmedRuling update(ConfirmedRuling ruling, long expectedVersion) {
         ConfirmedRulingEntity entity = entityManager.find(ConfirmedRulingEntity.class, ruling.id());
         if (entity == null) {

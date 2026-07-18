@@ -42,7 +42,7 @@ public class QuestionUnderstandingController {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            Set<String> activeExpansions) {}
+            Set<UUID> activeExpansions) {}
 
     record QuestionResponse(
             UUID documentVersionId,

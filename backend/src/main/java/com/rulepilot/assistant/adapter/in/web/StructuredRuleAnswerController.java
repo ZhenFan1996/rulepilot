@@ -57,6 +57,6 @@ public class StructuredRuleAnswerController {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            Set<String> activeExpansions,
+            Set<UUID> activeExpansions,
             UUID gameSessionId) {}
 }

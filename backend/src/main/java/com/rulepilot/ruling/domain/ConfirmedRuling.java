@@ -91,6 +91,10 @@ public record ConfirmedRuling(
                 revisedConfidence, official, status, createdBy, version + 1, createdAt, now);
     }
 
+    public static String normalizedQuestionHash(String question) {
+        return hash(normalizeQuestion(question));
+    }
+
     private static String normalizeQuestion(String value) {
         return normalized(value, "normalized question", 2000).toLowerCase(Locale.ROOT);
     }

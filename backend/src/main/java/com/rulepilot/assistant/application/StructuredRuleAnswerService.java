@@ -17,6 +17,7 @@ import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import com.rulepilot.ruling.ConfirmedRulingLookup;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
@@ -44,10 +45,12 @@ public class StructuredRuleAnswerService {
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
     private final RuleDataVersion ruleDataVersion;
+    private final ConfirmedRulingLookup confirmedRulings;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
     private final Counter cacheWriteErrors;
+    private final Counter confirmedRulingHits;
 
     public StructuredRuleAnswerService(
             QuestionUnderstanding understanding,
@@ -56,6 +59,7 @@ public class StructuredRuleAnswerService {
             RuleAnswerCache cache,
             RuleAnswerRateLimiter rateLimiter,
             RuleDataVersion ruleDataVersion,
+            ConfirmedRulingLookup confirmedRulings,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
@@ -63,10 +67,12 @@ public class StructuredRuleAnswerService {
         this.cache = cache;
         this.rateLimiter = rateLimiter;
         this.ruleDataVersion = ruleDataVersion;
+        this.confirmedRulings = confirmedRulings;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
         this.cacheWriteErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "write");
+        this.confirmedRulingHits = metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling");
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
@@ -78,6 +84,12 @@ public class StructuredRuleAnswerService {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
             return clarification(understood);
+        }
+        var confirmed = confirmedRulings.find(
+                context.documentVersionId(), context.activeExpansions(), understood.normalizedQuestion(), username);
+        if (confirmed.isPresent()) {
+            confirmedRulingHits.increment();
+            return fromConfirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
         AnswerCacheKey cacheKey = cacheKey(understood, context);
@@ -179,7 +191,17 @@ public class StructuredRuleAnswerService {
         AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
         return new StructuredRuleAnswer(
                 versionId, AnswerStatus.ANSWERED, draft.shortVerdict(), draft.explanation(), citations,
-                draft.exceptions(), confidence, false, null);
+                draft.exceptions(), confidence, false, null, null, null);
+    }
+
+    private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {
+        List<RuleCitation> citations = ruling.citations().stream().map(citation -> new RuleCitation(
+                citation.chunkId(), citation.documentVersionId(), citation.sectionType(), citation.heading(),
+                citation.excerpt(), citation.pageFrom(), citation.pageTo())).toList();
+        return new StructuredRuleAnswer(
+                ruling.documentVersionId(), AnswerStatus.ANSWERED, ruling.shortVerdict(), ruling.explanation(),
+                citations, ruling.exceptions(), AnswerConfidence.valueOf(ruling.confidence()), ruling.official(),
+                ruling.rulingId(), ruling.version(), null);
     }
 
     private StructuredRuleAnswer clarification(UnderstoodQuestion question) {
@@ -187,11 +209,12 @@ public class StructuredRuleAnswerService {
         return new StructuredRuleAnswer(
                 question.documentVersionId(), AnswerStatus.CLARIFICATION_REQUIRED,
                 "需要补充上下文后才能查证规则。", "缺少信息：" + missing, List.of(), List.of(),
-                AnswerConfidence.LOW, false, "请补充 " + missing + "。");
+                AnswerConfidence.LOW, false, null, null, "请补充 " + missing + "。");
     }
 
     private StructuredRuleAnswer safe(UUID versionId, AnswerStatus status, String message) {
         return new StructuredRuleAnswer(
-                versionId, status, message, message, List.of(), List.of(), AnswerConfidence.LOW, false, null);
+                versionId, status, message, message, List.of(), List.of(), AnswerConfidence.LOW,
+                false, null, null, null);
     }
 }

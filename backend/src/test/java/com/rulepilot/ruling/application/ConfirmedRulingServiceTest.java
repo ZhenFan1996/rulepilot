@@ -50,6 +50,13 @@ class ConfirmedRulingServiceTest {
             assertThat(citation.pageFrom()).isEqualTo(8);
         });
         assertThat(service.get(ruling.id(), "alice")).isEqualTo(ruling);
+        assertThat(service.find(versionId, Set.of(expansionId), "HOW ARE COINS SCORED?", "alice"))
+                .hasValueSatisfying(answer -> {
+                    assertThat(answer.rulingId()).isEqualTo(ruling.id());
+                    assertThat(answer.citations()).hasSize(1);
+                });
+        assertThat(service.find(versionId, Set.of(), "How are coins scored?", "alice")).isEmpty();
+        assertThat(service.find(versionId, Set.of(expansionId), "How are coins scored?", "bob")).isEmpty();
     }
 
     @Test
@@ -135,6 +142,21 @@ class ConfirmedRulingServiceTest {
         @Override
         public Optional<ConfirmedRuling> find(UUID rulingId) {
             return values.stream().filter(ruling -> ruling.id().equals(rulingId)).findFirst();
+        }
+
+        @Override
+        public Optional<ConfirmedRuling> findConfirmed(
+                UUID editionId,
+                UUID documentVersionId,
+                String expansionSetHash,
+                String normalizedQuestionHash,
+                String createdBy) {
+            return values.stream().filter(ruling -> ruling.applicability().editionId().equals(editionId)
+                    && ruling.applicability().documentVersionId().equals(documentVersionId)
+                    && ruling.applicability().expansionSetHash().equals(expansionSetHash)
+                    && ruling.normalizedQuestionHash().equals(normalizedQuestionHash)
+                    && ruling.createdBy().equals(createdBy)
+                    && ruling.status() == RulingStatus.CONFIRMED).findFirst();
         }
 
         @Override

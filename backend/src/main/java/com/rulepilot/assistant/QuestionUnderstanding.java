@@ -13,7 +13,7 @@ public interface QuestionUnderstanding {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            Set<String> activeExpansions) {
+            Set<UUID> activeExpansions) {
 
         public QuestionContext {
             if (documentVersionId == null || playerCount != null && playerCount < 1) {
@@ -24,8 +24,7 @@ public interface QuestionUnderstanding {
             activeExpansions = activeExpansions == null
                     ? Set.of()
                     : activeExpansions.stream()
-                            .filter(value -> value != null && !value.isBlank())
-                            .map(String::strip)
+                            .filter(java.util.Objects::nonNull)
                             .collect(java.util.stream.Collectors.toUnmodifiableSet());
         }
 

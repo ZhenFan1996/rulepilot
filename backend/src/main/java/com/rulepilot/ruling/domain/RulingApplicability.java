@@ -19,10 +19,7 @@ public record RulingApplicability(
             throw new IllegalArgumentException("ruling applicability is invalid");
         }
         expansionIds = Set.copyOf(expansionIds);
-        String expectedHash = hash(expansionIds.stream()
-                .map(UUID::toString)
-                .sorted()
-                .collect(Collectors.joining(",")));
+        String expectedHash = expansionSetHash(expansionIds);
         if (expansionSetHash == null) {
             expansionSetHash = expectedHash;
         } else if (!expansionSetHash.equals(expectedHash)) {
@@ -33,6 +30,14 @@ public record RulingApplicability(
     public static RulingApplicability of(
             UUID editionId, UUID documentVersionId, Set<UUID> expansionIds) {
         return new RulingApplicability(editionId, documentVersionId, expansionIds, null);
+    }
+
+    public static String expansionSetHash(Set<UUID> expansionIds) {
+        Set<UUID> safeIds = expansionIds == null ? Set.of() : Set.copyOf(expansionIds);
+        return hash(safeIds.stream()
+                .map(UUID::toString)
+                .sorted()
+                .collect(Collectors.joining(",")));
     }
 
     private static String hash(String value) {

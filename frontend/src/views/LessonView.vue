@@ -97,6 +97,8 @@ interface StructuredRuleAnswer {
   exceptions: string[]
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   official: boolean
+  confirmedRulingId: string | null
+  confirmedRulingVersion: number | null
   clarification: string | null
 }
 
@@ -356,8 +358,22 @@ async function askCurrentSection() {
       return
     }
     if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
-    answer.value = (await response.json()) as StructuredRuleAnswer
-    ruling.value = null
+    const received = (await response.json()) as StructuredRuleAnswer
+    answer.value = received
+    if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
+      applyRuling({
+        id: received.confirmedRulingId,
+        shortVerdict: received.shortVerdict,
+        explanation: received.explanation,
+        citations: received.citations,
+        exceptions: received.exceptions,
+        confidence: received.confidence,
+        status: 'CONFIRMED',
+        version: received.confirmedRulingVersion,
+      })
+    } else {
+      ruling.value = null
+    }
     rulingConflict.value = false
   } catch (error) {
     answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
@@ -922,7 +938,7 @@ onUnmounted(() => {
               <div class="p-5 sm:p-6">
                 <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                   <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
-                  <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.official ? '官方来源' : '上传规则资料' }}</span>
+                  <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
                 </div>
                 <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
 

@@ -5,6 +5,7 @@ import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.ruling.ConfirmedRulingLookup;
 import com.rulepilot.ruling.domain.ConfirmedRuling;
 import com.rulepilot.ruling.domain.RulingApplicability;
 import com.rulepilot.ruling.domain.RulingCitation;
@@ -23,7 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
-public class ConfirmedRulingService {
+public class ConfirmedRulingService implements ConfirmedRulingLookup {
 
     private final CatalogEditionLookup catalog;
     private final DocumentVersionScopeLookup documents;
@@ -90,6 +91,22 @@ public class ConfirmedRulingService {
         return ruling;
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.Optional<ConfirmedAnswer> find(
+            UUID documentVersionId,
+            Set<UUID> expansionIds,
+            String question,
+            String username) {
+        return documents.findVersion(documentVersionId).flatMap(version -> rulings.findConfirmed(
+                        version.editionId(),
+                        documentVersionId,
+                        RulingApplicability.expansionSetHash(expansionIds),
+                        ConfirmedRuling.normalizedQuestionHash(question),
+                        username))
+                .map(this::toConfirmedAnswer);
+    }
+
     @Transactional
     public ConfirmedRuling revise(
             UUID rulingId,
@@ -129,5 +146,20 @@ public class ConfirmedRulingService {
         return requestedIds.stream().map(trusted::get).map(hit -> new RulingCitation(
                 hit.chunkId(), hit.documentVersionId(), hit.sectionType(), hit.heading(), hit.excerpt(),
                 hit.pageFrom(), hit.pageTo())).toList();
+    }
+
+    private ConfirmedAnswer toConfirmedAnswer(ConfirmedRuling ruling) {
+        return new ConfirmedAnswer(
+                ruling.id(),
+                ruling.applicability().documentVersionId(),
+                ruling.shortVerdict(),
+                ruling.explanation(),
+                ruling.citations().stream().map(citation -> new Citation(
+                        citation.chunkId(), citation.documentVersionId(), citation.sectionType(), citation.heading(),
+                        citation.excerpt(), citation.pageFrom(), citation.pageTo())).toList(),
+                ruling.exceptions(),
+                ruling.confidence().name(),
+                ruling.official(),
+                ruling.version());
     }
 }

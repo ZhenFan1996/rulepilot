@@ -18,7 +18,7 @@ public interface RuleAnswerCache {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            Set<String> activeExpansions) {
+            Set<UUID> activeExpansions) {
 
         public AnswerCacheKey {
             if (documentVersionId == null || ruleDataVersion < 1

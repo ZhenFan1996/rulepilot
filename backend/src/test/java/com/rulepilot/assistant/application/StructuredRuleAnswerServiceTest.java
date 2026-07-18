@@ -14,6 +14,7 @@ import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.ruling.ConfirmedRulingLookup;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.HashMap;
 import java.util.List;
@@ -147,6 +148,62 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
+        UUID rulingId = UUID.randomUUID();
+        UUID expansionId = UUID.randomUUID();
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicBoolean downstreamCalled = new AtomicBoolean();
+        RecordingRateLimiter rateLimiter = new RecordingRateLimiter();
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        ConfirmedRulingLookup lookup = (documentVersionId, expansionIds, question, username) -> {
+            assertThat(documentVersionId).isEqualTo(versionId);
+            assertThat(expansionIds).containsExactly(expansionId);
+            assertThat(question).isEqualTo("how are coins scored?");
+            assertThat(username).isEqualTo("alice");
+            return Optional.of(new ConfirmedRulingLookup.ConfirmedAnswer(
+                    rulingId,
+                    versionId,
+                    "Use the confirmed score.",
+                    "Each remaining coin scores one point.",
+                    List.of(new ConfirmedRulingLookup.Citation(
+                            source.chunkId(), versionId, source.sectionType(), source.heading(), source.excerpt(), 8, 8)),
+                    List.of(),
+                    "HIGH",
+                    false,
+                    4));
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> {
+                    downstreamCalled.set(true);
+                    return List.of();
+                },
+                request -> {
+                    downstreamCalled.set(true);
+                    return null;
+                },
+                new InMemoryAnswerCache(),
+                rateLimiter,
+                new MutableRuleDataVersion(),
+                lookup,
+                metrics);
+
+        StructuredRuleAnswer answer = service.answer(
+                "How are coins scored?",
+                new QuestionContext(versionId, "SCORING", null, 3, Set.of(expansionId)),
+                "alice",
+                null);
+
+        assertThat(answer.shortVerdict()).isEqualTo("Use the confirmed score.");
+        assertThat(answer.confirmedRulingId()).isEqualTo(rulingId);
+        assertThat(answer.confirmedRulingVersion()).isEqualTo(4);
+        assertThat(downstreamCalled).isFalse();
+        assertThat(rateLimiter.userChecks).isZero();
+        assertThat(metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling").count())
+                .isEqualTo(1);
+    }
+
+    @Test
     void naturallyMissesOldCacheEntryAfterRuleDataVersionChanges() {
         RuleEvidenceHit source = evidence("SCORING");
         InMemoryAnswerCache cache = new InMemoryAnswerCache();
@@ -166,6 +223,7 @@ class StructuredRuleAnswerServiceTest {
                 cache,
                 rateLimiter,
                 versions,
+                noConfirmedRulings(),
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -201,6 +259,7 @@ class StructuredRuleAnswerServiceTest {
                 new UnavailableAnswerCache(),
                 new RecordingRateLimiter(),
                 new MutableRuleDataVersion(),
+                noConfirmedRulings(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -237,6 +296,7 @@ class StructuredRuleAnswerServiceTest {
                 new InMemoryAnswerCache(),
                 unavailableLimiter,
                 new MutableRuleDataVersion(),
+                noConfirmedRulings(),
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -249,7 +309,12 @@ class StructuredRuleAnswerServiceTest {
         return new StructuredRuleAnswerService(
                 understanding, retrieval, model, new InMemoryAnswerCache(), new RecordingRateLimiter(),
                 new MutableRuleDataVersion(),
+                noConfirmedRulings(),
                 new SimpleMeterRegistry());
+    }
+
+    private ConfirmedRulingLookup noConfirmedRulings() {
+        return (documentVersionId, expansionIds, question, username) -> Optional.empty();
     }
 
     private RuleEvidenceHit evidence(String sectionType) {
