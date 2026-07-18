@@ -88,6 +88,9 @@ management:
         enabled: false
 
 rulepilot:
+  runtime:
+    api-enabled: true
+    worker-enabled: true
   agent:
     max-steps: ${AGENT_MAX_STEPS:40}
     max-tool-calls: ${AGENT_MAX_TOOL_CALLS:24}

@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help bootstrap dev demo-data format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down
+.PHONY: help bootstrap dev dev-split demo-data format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -15,6 +15,18 @@ dev: ## Start backend and frontend development servers
 		set +a; \
 		trap 'kill 0' INT TERM EXIT; \
 		(cd backend && ./mvnw spring-boot:run) & \
+		(cd frontend && npm run dev -- --host 127.0.0.1) & \
+		wait
+
+dev-split: ## Start separate API and worker processes plus the frontend
+	@set -e; \
+		set -a; \
+		if [ -f .env ]; then . ./.env; fi; \
+		set +a; \
+		(cd backend && ./mvnw -q -DskipTests package); \
+		trap 'kill 0' INT TERM EXIT; \
+		java -jar backend/target/rulepilot-backend-0.1.0-SNAPSHOT.jar --spring.profiles.active=api & \
+		java -jar backend/target/rulepilot-backend-0.1.0-SNAPSHOT.jar --spring.profiles.active=worker & \
 		(cd frontend && npm run dev -- --host 127.0.0.1) & \
 		wait
 
@@ -61,6 +73,7 @@ e2e: ## Run Playwright end-to-end tests
 verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-foundation.sh
 	@sh scripts/verify-compose.sh config
+	@sh scripts/run-deployment.sh config
 	@sh scripts/verify-architecture.sh
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
@@ -80,3 +93,9 @@ compose-up: ## Start and verify local data, messaging, storage, and observabilit
 
 compose-down: ## Stop local infrastructure services and retain their data
 	@sh scripts/verify-compose.sh down
+
+deployment-up: ## Build and start separate API and worker containers with local dependencies
+	@sh scripts/run-deployment.sh up
+
+deployment-down: ## Stop the split API/worker deployment and retain named-volume data
+	@sh scripts/run-deployment.sh down

@@ -155,6 +155,22 @@ make compose-down
 make dev
 ```
 
+`make dev` 为快速本地开发保留单进程后端。需要验证生产式进程边界时，先启动依赖，再用同一后端制品分别运行 API 和无 Web 端口的 RabbitMQ Worker：
+
+```sh
+make compose-up
+make dev-split
+```
+
+也可以让 Compose 构建同一镜像并启动独立的 `api` 与 `worker` 容器：
+
+```sh
+make deployment-up
+make deployment-down
+```
+
+`api` 角色负责 HTTP、Outbox 发布和队列指标，不消费文档任务；`worker` 角色只消费幂等的解析、切片与 Embedding 阶段，不启动 HTTP 服务或重复发布 Outbox。两种角色仍来自同一个模块化单体制品，不拆分业务代码仓库。
+
 另开一个终端可载入完整演示数据：
 
 ```sh

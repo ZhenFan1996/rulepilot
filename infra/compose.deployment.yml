@@ -1,0 +1,60 @@
+services:
+  api:
+    build:
+      context: ../backend
+    command: ["--spring.profiles.active=api"]
+    environment: &backend-environment
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-rulepilot}
+      POSTGRES_USER: ${POSTGRES_USER:-rulepilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      REDIS_HOST: redis
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_USER:-rulepilot}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-change-me-local-only}
+      MINIO_HOST: minio
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-rulepilot}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change-me-local-only}
+      RULEPILOT_USER_USERNAME: ${RULEPILOT_USER_USERNAME:-player}
+      RULEPILOT_USER_PASSWORD: ${RULEPILOT_USER_PASSWORD:-rulepilot-local}
+      RULEPILOT_ADMIN_USERNAME: ${RULEPILOT_ADMIN_USERNAME:-admin}
+      RULEPILOT_ADMIN_PASSWORD: ${RULEPILOT_ADMIN_PASSWORD:-rulepilot-admin-local}
+      TEACHING_PROVIDER: ${TEACHING_PROVIDER:-fake}
+      ANSWER_PROVIDER: ${ANSWER_PROVIDER:-fake}
+      CRITIC_PROVIDER: ${CRITIC_PROVIDER:-fake}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-fake}
+      SPEECH_PROVIDER: ${SPEECH_PROVIDER:-fake}
+      VIDEO_PROVIDER: ${VIDEO_PROVIDER:-manifest}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://tempo:4318/v1/traces
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../backend
+    command: ["--spring.profiles.active=worker"]
+    environment: *backend-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tempo:
+        condition: service_started
+    restart: unless-stopped

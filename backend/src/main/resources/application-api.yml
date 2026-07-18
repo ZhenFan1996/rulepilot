@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: rulepilot-api
+
+rulepilot:
+  runtime:
+    api-enabled: true
+    worker-enabled: false

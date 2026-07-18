@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: rulepilot-worker
+  main:
+    web-application-type: none
+  ai:
+    mcp:
+      server:
+        enabled: false
+        annotation-scanner:
+          enabled: false
+
+rulepilot:
+  runtime:
+    api-enabled: false
+    worker-enabled: true

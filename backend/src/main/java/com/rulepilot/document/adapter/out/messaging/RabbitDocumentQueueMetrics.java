@@ -8,12 +8,14 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
 @Profile("!test")
+@ConditionalOnProperty(name = "rulepilot.runtime.api-enabled", havingValue = "true", matchIfMissing = true)
 public class RabbitDocumentQueueMetrics {
 
     private final RabbitAdmin rabbitAdmin;
