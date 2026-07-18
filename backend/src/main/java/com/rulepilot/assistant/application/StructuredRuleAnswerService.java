@@ -25,6 +25,7 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import com.rulepilot.assistant.application.AnswerRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -41,6 +42,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -173,17 +175,11 @@ public class StructuredRuleAnswerService {
             return cached.get();
         }
         cacheMisses.increment();
-        List<HybridEvidenceHit> evidence = invocations.invoke(
-                assistantRunId,
-                ActivityType.TOOL,
-                "hybridRuleSearch",
-                estimateTokens(understood.normalizedQuestion()),
-                "Version-scoped answer evidence retrieved",
-                () -> retrieval.search(
-                        context.documentVersionId(),
-                        understood.normalizedQuestion(),
-                        new RetrievalOptions(5, Set.of(), context.currentLessonSection())),
-                this::evidenceTokens);
+        RetrievalResult retrievalResult = retrieveEvidence(assistantRunId, understood, context);
+        List<HybridEvidenceHit> evidence = retrievalResult.evidence();
+        if (retrievalResult.conflicting()) {
+            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突，无法可靠回答。");
+        }
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }
@@ -269,6 +265,60 @@ public class StructuredRuleAnswerService {
                 context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
                 question.normalizedQuestion(), context.currentLessonSection(),
                 context.gamePhase(), context.playerCount(), context.activeExpansions());
+    }
+
+    private RetrievalResult retrieveEvidence(
+            UUID assistantRunId, UnderstoodQuestion question, QuestionContext context) {
+        Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
+        boolean conflicting = false;
+        for (RetrievalIntent intent : AnswerRetrievalPlanner.plan(question, context)) {
+            try {
+                List<HybridEvidenceHit> retrieved = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "hybridRuleSearch",
+                        estimateTokens(intent.query()),
+                        "Version-scoped answer evidence retrieved",
+                        () -> retrieval.search(
+                                context.documentVersionId(),
+                                intent.query(),
+                                new RetrievalOptions(3, intent.sectionTypes(), intent.currentSectionType())),
+                        this::evidenceTokens);
+                for (HybridEvidenceHit hit : retrieved) {
+                    HybridEvidenceHit existing = evidenceById.putIfAbsent(hit.evidence().chunkId(), hit);
+                    if (existing != null && !sameEvidenceSnapshot(existing, hit)) {
+                        conflicting = true;
+                        break;
+                    }
+                }
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException retrievalFailure) {
+                LOGGER.warn(
+                        "Answer retrieval intent failed for document version {}: {}",
+                        context.documentVersionId(),
+                        retrievalFailure.getClass().getSimpleName());
+            }
+            if (conflicting) {
+                break;
+            }
+        }
+        if (conflicting) {
+            return new RetrievalResult(List.of(), true);
+        }
+        return new RetrievalResult(evidenceById.values().stream().limit(5).toList(), false);
+    }
+
+    private boolean sameEvidenceSnapshot(HybridEvidenceHit first, HybridEvidenceHit second) {
+        var left = first.evidence();
+        var right = second.evidence();
+        return left.chunkId().equals(right.chunkId())
+                && left.documentVersionId().equals(right.documentVersionId())
+                && left.sectionType().equals(right.sectionType())
+                && left.heading().equals(right.heading())
+                && left.excerpt().equals(right.excerpt())
+                && left.pageFrom() == right.pageFrom()
+                && left.pageTo() == right.pageTo();
     }
 
     private ModelRequest toRequest(
@@ -393,6 +443,8 @@ public class StructuredRuleAnswerService {
     }
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
+
+    private record RetrievalResult(List<HybridEvidenceHit> evidence, boolean conflicting) {}
 
     private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {
         List<RuleCitation> citations = ruling.citations().stream().map(citation -> new RuleCitation(

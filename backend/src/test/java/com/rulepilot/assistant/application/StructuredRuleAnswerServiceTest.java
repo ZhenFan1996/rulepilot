@@ -162,6 +162,55 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void answersFromContextualSupplementaryRetrievalWhenPrimaryHasNoMatch() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicInteger retrievalCalls = new AtomicInteger();
+        var service = answerService(
+                (version, query, options) -> {
+                    if (retrievalCalls.getAndIncrement() == 0) {
+                        assertThat(options.sectionTypes()).isEmpty();
+                        return List.of();
+                    }
+                    assertThat(query).contains("legal action", "ACTION PHASE", "4 players");
+                    assertThat(options.sectionTypes()).contains("ACTIONS");
+                    return List.of(new HybridEvidenceHit(source, 0.03, 1, null, true));
+                },
+                request -> new ModelDraft(
+                        "可以执行。", "行动阶段允许执行该行动。",
+                        List.of(source.chunkId()), List.of(), "MEDIUM"));
+
+        var answer = service.answer(
+                "Can I take this action now?",
+                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(retrievalCalls).hasValue(2);
+    }
+
+    @Test
+    void keepsPrimaryEvidenceWhenSupplementaryRetrievalFails() {
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicInteger retrievalCalls = new AtomicInteger();
+        var service = answerService(
+                (version, query, options) -> {
+                    if (retrievalCalls.getAndIncrement() == 0) {
+                        return List.of(new HybridEvidenceHit(source, 0.03, 1, null, false));
+                    }
+                    throw new IllegalStateException("supplementary retrieval unavailable");
+                },
+                request -> new ModelDraft(
+                        "每枚硬币一分。", "计算最终分数时，每枚硬币计一分。",
+                        List.of(source.chunkId()), List.of(), "HIGH"));
+
+        var answer = service.answer(
+                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).hasSize(1);
+        assertThat(retrievalCalls).hasValue(2);
+    }
+
+    @Test
     void reportsModelTimeoutWithoutLeakingAnswerContent() {
         RuleEvidenceHit source = evidence("ACTIONS");
         var service = answerService(
