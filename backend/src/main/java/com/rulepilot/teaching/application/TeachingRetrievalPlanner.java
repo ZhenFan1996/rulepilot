@@ -12,11 +12,17 @@ import static com.rulepilot.teaching.domain.TeachingSectionType.TIE_BREAKERS;
 
 import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class TeachingRetrievalPlanner {
+
+    private static final int MAX_QUERY_LENGTH = 500;
+    private static final int MAX_ANCHOR_HEADINGS = 2;
+    private static final int MAX_HEADING_LENGTH = 80;
 
     private TeachingRetrievalPlanner() {}
 
@@ -61,6 +67,41 @@ public final class TeachingRetrievalPlanner {
         };
     }
 
+    static RetrievalIntent refineWithAnchorHeadings(RetrievalIntent intent, List<String> headings) {
+        if (intent == null || headings == null) {
+            throw new IllegalArgumentException("teaching retrieval refinement input is required");
+        }
+        StringBuilder query = new StringBuilder(intent.query());
+        String normalizedQuery = intent.query().toLowerCase(Locale.ROOT);
+        LinkedHashSet<String> anchors = new LinkedHashSet<>();
+        for (String heading : headings) {
+            String anchor = normalizedHeading(heading);
+            if (!anchor.isEmpty() && !normalizedQuery.contains(anchor.toLowerCase(Locale.ROOT))) {
+                anchors.add(anchor);
+            }
+            if (anchors.size() == MAX_ANCHOR_HEADINGS) {
+                break;
+            }
+        }
+        for (String anchor : anchors) {
+            if (query.length() + anchor.length() + 1 > MAX_QUERY_LENGTH) {
+                break;
+            }
+            query.append(' ').append(anchor);
+        }
+        return new RetrievalIntent(query.toString(), intent.sourceTypes());
+    }
+
+    private static String normalizedHeading(String heading) {
+        if (heading == null || heading.isBlank()) {
+            return "";
+        }
+        String normalized = heading.replaceAll("\\p{Cntrl}", " ").replaceAll("\\s+", " ").strip();
+        return normalized.length() <= MAX_HEADING_LENGTH
+                ? normalized
+                : normalized.substring(0, MAX_HEADING_LENGTH).strip();
+    }
+
     private static List<RetrievalIntent> intents(RetrievalIntent primary, RetrievalIntent supplementary) {
         return List.of(primary, supplementary);
     }
@@ -73,7 +114,8 @@ public final class TeachingRetrievalPlanner {
 
     public record RetrievalIntent(String query, Set<String> sourceTypes) {
         public RetrievalIntent {
-            if (query == null || query.isBlank() || sourceTypes == null || sourceTypes.isEmpty()) {
+            if (query == null || query.isBlank() || query.length() > MAX_QUERY_LENGTH
+                    || sourceTypes == null || sourceTypes.isEmpty()) {
                 throw new IllegalArgumentException("teaching retrieval intent is invalid");
             }
             query = query.strip();

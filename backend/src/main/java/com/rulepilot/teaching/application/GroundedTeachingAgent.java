@@ -95,10 +95,16 @@ public class GroundedTeachingAgent {
 
             Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
             boolean conflictingEvidence = false;
-            for (RetrievalIntent intent : TeachingRetrievalPlanner.forSection(planned.type())) {
+            List<RetrievalIntent> retrievalIntents = TeachingRetrievalPlanner.forSection(planned.type());
+            for (int intentIndex = 0; intentIndex < retrievalIntents.size(); intentIndex++) {
                 if (toolCalls >= maxToolCalls) {
                     break;
                 }
+                RetrievalIntent plannedIntent = retrievalIntents.get(intentIndex);
+                RetrievalIntent intent = intentIndex == 0
+                        ? plannedIntent
+                        : TeachingRetrievalPlanner.refineWithAnchorHeadings(
+                                plannedIntent, evidenceById.values().stream().map(RuleEvidence::heading).toList());
                 toolCalls++;
                 try {
                     List<RuleEvidence> retrieved = invocations.invoke(

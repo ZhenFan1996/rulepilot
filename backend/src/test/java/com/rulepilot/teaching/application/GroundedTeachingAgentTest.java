@@ -38,6 +38,7 @@ class GroundedTeachingAgentTest {
                 assertThat(request.sectionTypes()).containsExactly("SETUP");
             } else {
                 assertThat(request.sectionTypes()).containsExactly("SETUP");
+                assertThat(request.query()).contains("Setup");
             }
             return List.of(evidence);
         };
