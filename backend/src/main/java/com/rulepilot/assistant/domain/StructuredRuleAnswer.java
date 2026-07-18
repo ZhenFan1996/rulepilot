@@ -21,5 +21,11 @@ public record StructuredRuleAnswer(
         }
         citations = List.copyOf(citations);
         exceptions = List.copyOf(exceptions);
+        if (status == AnswerStatus.ANSWERED && citations.isEmpty()) {
+            throw new IllegalArgumentException("answered rule response requires citations");
+        }
+        if (status != AnswerStatus.ANSWERED && !citations.isEmpty()) {
+            throw new IllegalArgumentException("non-answered rule response cannot contain citations");
+        }
     }
 }

@@ -1,6 +1,10 @@
 package com.rulepilot.assistant.adapter.out.model;
 
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
+import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -28,11 +32,17 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         try {
             return composeOnce(request, "");
         } catch (RuntimeException exception) {
+            if (isTimeout(exception)) {
+                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
+            }
             firstFailure = exception;
         }
         try {
             return composeOnce(request, "The previous output was invalid. Repair it to match the schema exactly.");
         } catch (RuntimeException exception) {
+            if (isTimeout(exception)) {
+                throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
+            }
             exception.addSuppressed(firstFailure);
             throw exception;
         }
@@ -47,5 +57,19 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("repair", repairInstruction))
                 .call()
                 .entity(ModelDraft.class);
+    }
+
+    private boolean isTimeout(Throwable failure) {
+        Throwable current = failure;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException
+                    || current instanceof HttpTimeoutException
+                    || current instanceof TimeoutException
+                    || current.getClass().getSimpleName().toLowerCase(java.util.Locale.ROOT).contains("timeout")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }

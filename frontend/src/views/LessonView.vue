@@ -90,7 +90,7 @@ interface MediaConsistencyReport {
 }
 
 interface StructuredRuleAnswer {
-  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT'
+  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
   shortVerdict: string
   explanation: string
   citations: RuleCitation[]
@@ -350,6 +350,17 @@ function citationPages(citation: RuleCitation) {
   return citation.pageFrom === citation.pageTo
     ? `第 ${citation.pageFrom} 页`
     : `第 ${citation.pageFrom}–${citation.pageTo} 页`
+}
+
+function answerFailureMessage(status: StructuredRuleAnswer['status']) {
+  return {
+    ANSWERED: '',
+    CLARIFICATION_REQUIRED: '',
+    INSUFFICIENT_EVIDENCE: '当前规则资料没有足够依据，系统没有生成推测性结论。',
+    MODEL_TIMEOUT: '回答生成超时。你可以重新提交，已加载的讲解和原始规则证据不受影响。',
+    INVALID_MODEL_OUTPUT: '生成结果未通过结构或引用校验，未经验证的内容没有显示。',
+    VERSION_CONFLICT: '检索证据与当前规则版本不一致，请返回讲解并确认所选版本。',
+  }[status]
 }
 
 function previousSection() {
@@ -797,7 +808,7 @@ onUnmounted(() => {
                 <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
 
                 <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
-                <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">当前证据不足，系统没有生成未经验证的规则结论。</p>
+                <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
 
                 <details v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
                   <summary class="cursor-pointer font-semibold text-indigo">查看详细解释与例外</summary>

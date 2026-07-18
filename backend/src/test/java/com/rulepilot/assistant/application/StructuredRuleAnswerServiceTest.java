@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -76,6 +77,68 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
         assertThat(answer.clarification()).contains("GAME_PHASE", "SITUATION_DETAILS");
         assertThat(called).isFalse();
+    }
+
+    @Test
+    void refusesWhenNoEvidenceWasRetrieved() {
+        AtomicBoolean modelCalled = new AtomicBoolean();
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(),
+                request -> {
+                    modelCalled.set(true);
+                    return null;
+                });
+
+        var answer = service.answer(
+                "What does this unknown symbol do?",
+                new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.citations()).isEmpty();
+        assertThat(modelCalled).isFalse();
+    }
+
+    @Test
+    void reportsModelTimeoutWithoutLeakingAnswerContent() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    throw new RuleAnswerModelTimeoutException("provider details", new RuntimeException("secret"));
+                });
+
+        var answer = service.answer(
+                "Which actions are available during a turn?",
+                new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
+        assertThat(answer.shortVerdict()).doesNotContain("provider details", "secret");
+        assertThat(answer.citations()).isEmpty();
+    }
+
+    @Test
+    void rejectsVersionConflictBeforeCallingModel() {
+        UUID otherVersion = UUID.randomUUID();
+        RuleEvidenceHit wrongVersion = new RuleEvidenceHit(
+                UUID.randomUUID(), otherVersion, "SCORING", "Scoring", "One point.", 2, 2, 0.7);
+        AtomicBoolean modelCalled = new AtomicBoolean();
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(wrongVersion, 0.03, 1, null, false)),
+                request -> {
+                    modelCalled.set(true);
+                    return null;
+                });
+
+        var answer = service.answer(
+                "How does scoring work?",
+                new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.VERSION_CONFLICT);
+        assertThat(answer.citations()).isEmpty();
+        assertThat(modelCalled).isFalse();
     }
 
     private RuleEvidenceHit evidence(String sectionType) {

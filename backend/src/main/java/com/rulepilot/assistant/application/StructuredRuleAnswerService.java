@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
@@ -51,8 +52,13 @@ public class StructuredRuleAnswerService {
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }
+        if (evidence.stream().anyMatch(hit -> !context.documentVersionId().equals(hit.evidence().documentVersionId()))) {
+            return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
+        }
         try {
             return validate(context.documentVersionId(), model.compose(toRequest(understood, evidence)), evidence);
+        } catch (RuleAnswerModelTimeoutException exception) {
+            return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
