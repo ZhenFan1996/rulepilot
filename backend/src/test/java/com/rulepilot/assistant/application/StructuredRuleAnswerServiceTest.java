@@ -7,6 +7,7 @@ import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
+import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
@@ -241,6 +242,8 @@ class StructuredRuleAnswerServiceTest {
                 lookup,
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -281,6 +284,8 @@ class StructuredRuleAnswerServiceTest {
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
                 metrics);
         QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
 
@@ -319,6 +324,8 @@ class StructuredRuleAnswerServiceTest {
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
@@ -358,6 +365,8 @@ class StructuredRuleAnswerServiceTest {
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
@@ -378,6 +387,8 @@ class StructuredRuleAnswerServiceTest {
                 noConfirmedRulings(),
                 new PolicyEvidenceVerifier(),
                 critic,
+                null,
+                new ImmediateAuditedAgentInvocations(),
                 new SimpleMeterRegistry());
     }
 

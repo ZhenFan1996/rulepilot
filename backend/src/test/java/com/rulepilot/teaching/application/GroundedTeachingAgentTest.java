@@ -7,6 +7,7 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
+import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -38,9 +39,11 @@ class GroundedTeachingAgentTest {
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
         GroundedTeachingAgent agent =
-                new GroundedTeachingAgent(tools, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
+                new GroundedTeachingAgent(
+                        tools, model, new PolicyEvidenceVerifier(), acceptedCritic(),
+                        new ImmediateAuditedAgentInvocations(), 4);
 
-        var lesson = agent.create(plan(versionId));
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
@@ -59,9 +62,11 @@ class GroundedTeachingAgentTest {
                 "桌面布置示意",
                 List.of(new TeachingLessonModel.StepDraft("捏造的步骤", List.of(UUID.randomUUID()))));
         GroundedTeachingAgent agent =
-                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
+                new GroundedTeachingAgent(
+                        retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(),
+                        new ImmediateAuditedAgentInvocations(), 4);
 
-        var lesson = agent.create(plan(versionId));
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus())
@@ -79,9 +84,11 @@ class GroundedTeachingAgentTest {
             throw new AssertionError("model must not receive version-conflicting evidence");
         };
         GroundedTeachingAgent agent =
-                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(), 4);
+                new GroundedTeachingAgent(
+                        retrieval, model, new PolicyEvidenceVerifier(), acceptedCritic(),
+                        new ImmediateAuditedAgentInvocations(), 4);
 
-        var lesson = agent.create(plan(versionId));
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus())
@@ -103,9 +110,11 @@ class GroundedTeachingAgentTest {
                 List.of(new Issue(
                         IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
         GroundedTeachingAgent agent =
-                new GroundedTeachingAgent(retrieval, model, new PolicyEvidenceVerifier(), rejectingCritic, 4);
+                new GroundedTeachingAgent(
+                        retrieval, model, new PolicyEvidenceVerifier(), rejectingCritic,
+                        new ImmediateAuditedAgentInvocations(), 4);
 
-        var lesson = agent.create(plan(versionId));
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus())

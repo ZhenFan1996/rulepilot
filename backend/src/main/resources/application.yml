@@ -59,6 +59,12 @@ management:
       show-details: never
 
 rulepilot:
+  agent:
+    max-steps: ${AGENT_MAX_STEPS:40}
+    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:24}
+    max-model-calls: ${AGENT_MAX_MODEL_CALLS:16}
+    max-tokens: ${AGENT_MAX_TOKENS:24000}
+    timeout: ${AGENT_TIMEOUT:PT2M}
   document:
     messaging:
       exchange: ${DOCUMENT_PROCESSING_EXCHANGE:rulepilot.document.processing}

@@ -24,7 +24,7 @@ public interface GeneratedContentCritic {
         OVERREACH
     }
 
-    record ReviewRequest(ContentType contentType, List<Claim> claims, List<Evidence> evidence) {
+    record ReviewRequest(UUID assistantRunId, ContentType contentType, List<Claim> claims, List<Evidence> evidence) {
         public ReviewRequest {
             claims = claims == null ? List.of() : List.copyOf(claims);
             evidence = evidence == null ? List.of() : List.copyOf(evidence);

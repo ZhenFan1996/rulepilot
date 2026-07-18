@@ -2,7 +2,7 @@ package com.rulepilot.assistant.adapter.in.web;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService;
-import com.rulepilot.assistant.domain.StructuredRuleAnswer;
+import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
 import com.rulepilot.gamesession.GameSessionContextLookup;
 import java.security.Principal;
 import java.util.Set;
@@ -29,10 +29,10 @@ public class StructuredRuleAnswerController {
     }
 
     @PostMapping
-    StructuredRuleAnswer answer(
+    AnswerCreation answer(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
         validateSession(request.gameSessionId(), versionId, principal.getName());
-        return answers.answer(
+        return answers.answerWithRun(
                 request.question(),
                 new QuestionContext(
                         versionId, request.currentLessonSection(), request.gamePhase(),

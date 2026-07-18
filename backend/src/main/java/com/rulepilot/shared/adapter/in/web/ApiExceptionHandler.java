@@ -1,5 +1,6 @@
 package com.rulepilot.shared.adapter.in.web;
 
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.util.UUID;
@@ -18,6 +19,7 @@ public class ApiExceptionHandler {
     private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
     private static final URI INVALID_REQUEST_TYPE = URI.create("urn:rulepilot:problem:invalid-request");
     private static final URI INTERNAL_ERROR_TYPE = URI.create("urn:rulepilot:problem:internal-error");
+    private static final URI AGENT_STOPPED_TYPE = URI.create("urn:rulepilot:problem:agent-execution-stopped");
     private static final Pattern SAFE_TRACE_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -30,6 +32,24 @@ public class ApiExceptionHandler {
                 "INVALID_REQUEST",
                 "The request could not be accepted.",
                 request));
+    }
+
+    @ExceptionHandler(AgentExecutionStoppedException.class)
+    public ResponseEntity<ProblemDetail> handleAgentStopped(
+            AgentExecutionStoppedException exception, HttpServletRequest request) {
+        HttpStatus status = switch (exception.reason()) {
+            case CANCELLED -> HttpStatus.CONFLICT;
+            case TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            default -> HttpStatus.TOO_MANY_REQUESTS;
+        };
+        ProblemDetail problem = problem(
+                status,
+                AGENT_STOPPED_TYPE,
+                "Assistant execution stopped",
+                "AGENT_" + exception.reason().name(),
+                "The assistant run stopped at a configured execution boundary.",
+                request);
+        return ResponseEntity.status(status).body(problem);
     }
 
     @ExceptionHandler(Exception.class)

@@ -102,6 +102,11 @@ interface StructuredRuleAnswer {
   clarification: string | null
 }
 
+interface AnswerCreation {
+  assistantRunId: string
+  answer: StructuredRuleAnswer
+}
+
 interface RuleCitation {
   chunkId: string
   sectionType: string
@@ -358,7 +363,8 @@ async function askCurrentSection() {
       return
     }
     if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
-    const received = (await response.json()) as StructuredRuleAnswer
+    const creation = (await response.json()) as AnswerCreation
+    const received = creation.answer
     answer.value = received
     if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
       applyRuling({

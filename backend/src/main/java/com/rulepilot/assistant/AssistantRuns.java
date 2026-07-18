@@ -13,6 +13,8 @@ public interface AssistantRuns {
 
     RunSnapshot fail(UUID runId, long expectedRevision, String errorCode, String stepSummary);
 
+    void requestCancellation(UUID runId, String ownerUsername);
+
     Optional<RunDetails> findOwned(UUID runId, String ownerUsername);
 
     record RunSnapshot(
@@ -34,9 +36,14 @@ public interface AssistantRuns {
             String summary,
             Instant occurredAt) {}
 
-    record RunDetails(RunSnapshot run, List<StepSnapshot> steps) {
+    record RunDetails(
+            RunSnapshot run,
+            List<StepSnapshot> steps,
+            AgentExecutionControl.BudgetSnapshot budget,
+            List<AgentExecutionControl.ActivitySnapshot> activities) {
         public RunDetails {
             steps = List.copyOf(steps);
+            activities = List.copyOf(activities);
         }
     }
 }

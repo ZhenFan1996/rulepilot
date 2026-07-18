@@ -10,6 +10,13 @@ import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AssistantRunMode;
+import com.rulepilot.assistant.AssistantRunState;
+import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
@@ -58,6 +65,8 @@ public class StructuredRuleAnswerService {
     private final ConfirmedRulingLookup confirmedRulings;
     private final EvidenceVerifier evidenceVerifier;
     private final GeneratedContentCritic critic;
+    private final AssistantRuns runs;
+    private final AuditedAgentInvocations invocations;
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter cacheReadErrors;
@@ -74,6 +83,8 @@ public class StructuredRuleAnswerService {
             ConfirmedRulingLookup confirmedRulings,
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
+            AssistantRuns runs,
+            AuditedAgentInvocations invocations,
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
@@ -84,6 +95,8 @@ public class StructuredRuleAnswerService {
         this.confirmedRulings = confirmedRulings;
         this.evidenceVerifier = evidenceVerifier;
         this.critic = critic;
+        this.runs = runs;
+        this.invocations = invocations;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
         this.cacheMisses = metrics.counter("rulepilot.answer.cache.requests", "result", "miss");
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
@@ -92,17 +105,48 @@ public class StructuredRuleAnswerService {
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
-        return answer(question, context, "test-user", null);
+        return answerInternal(question, context, "test-user", null, UUID.randomUUID());
     }
 
-    public StructuredRuleAnswer answer(
+    public AnswerCreation answerWithRun(
             String question, QuestionContext context, String username, UUID gameSessionId) {
+        RunSnapshot run = runs.start(
+                AssistantRunMode.QUESTION_ANSWER,
+                gameSessionId == null ? context.documentVersionId() : gameSessionId,
+                username);
+        try {
+            StructuredRuleAnswer answer = answerInternal(question, context, username, gameSessionId, run.id());
+            run = finishRun(run, answer);
+            return new AnswerCreation(run.id(), answer);
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
+            throw stopped;
+        } catch (RuntimeException exception) {
+            failRun(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
+            throw exception;
+        }
+    }
+
+    StructuredRuleAnswer answer(
+            String question, QuestionContext context, String username, UUID gameSessionId) {
+        return answerInternal(question, context, username, gameSessionId, UUID.randomUUID());
+    }
+
+    private StructuredRuleAnswer answerInternal(
+            String question, QuestionContext context, String username, UUID gameSessionId, UUID assistantRunId) {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
             return clarification(understood);
         }
-        var confirmed = confirmedRulings.find(
-                context.documentVersionId(), context.activeExpansions(), understood.normalizedQuestion(), username);
+        var confirmed = invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "searchConfirmedRulings",
+                estimateTokens(understood.normalizedQuestion()),
+                "Confirmed ruling lookup completed",
+                () -> confirmedRulings.find(
+                        context.documentVersionId(), context.activeExpansions(), understood.normalizedQuestion(), username),
+                result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
             return fromConfirmedRuling(confirmed.get());
@@ -115,10 +159,17 @@ public class StructuredRuleAnswerService {
             return cached.get();
         }
         cacheMisses.increment();
-        List<HybridEvidenceHit> evidence = retrieval.search(
-                context.documentVersionId(),
-                understood.normalizedQuestion(),
-                new RetrievalOptions(5, Set.of(), context.currentLessonSection()));
+        List<HybridEvidenceHit> evidence = invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "hybridRuleSearch",
+                estimateTokens(understood.normalizedQuestion()),
+                "Version-scoped answer evidence retrieved",
+                () -> retrieval.search(
+                        context.documentVersionId(),
+                        understood.normalizedQuestion(),
+                        new RetrievalOptions(5, Set.of(), context.currentLessonSection())),
+                this::evidenceTokens);
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }
@@ -134,7 +185,15 @@ public class StructuredRuleAnswerService {
         RuleAnswerRateLimiter.Permit permit =
                 rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
-            draft = model.compose(toRequest(understood, evidence));
+            ModelRequest modelRequest = toRequest(understood, evidence);
+            draft = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "composeRuleAnswer",
+                    estimateTokens(modelRequest.toString()),
+                    "Rule answer model output received",
+                    () -> model.compose(modelRequest),
+                    result -> estimateTokens(result.toString()));
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
@@ -152,7 +211,7 @@ public class StructuredRuleAnswerService {
             ReviewRisk risk = answer.confidence() == AnswerConfidence.LOW
                     ? ReviewRisk.LOW_CONFIDENCE
                     : ReviewRisk.STANDARD;
-            if (!critic.review(toCriticRequest(answer, evidence), risk).accepted()) {
+            if (!critic.review(toCriticRequest(assistantRunId, answer, evidence), risk).accepted()) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
             }
         } catch (RuntimeException exception) {
@@ -241,8 +300,10 @@ public class StructuredRuleAnswerService {
                 source.pageFrom(), source.pageTo());
     }
 
-    private ReviewRequest toCriticRequest(StructuredRuleAnswer answer, List<HybridEvidenceHit> evidence) {
+    private ReviewRequest toCriticRequest(
+            UUID assistantRunId, StructuredRuleAnswer answer, List<HybridEvidenceHit> evidence) {
         return new ReviewRequest(
+                assistantRunId,
                 ContentType.ANSWER,
                 List.of(new Claim(
                         1,
@@ -253,6 +314,51 @@ public class StructuredRuleAnswerService {
                         .map(source -> new GeneratedContentCritic.Evidence(source.chunkId(), source.excerpt()))
                         .toList());
     }
+
+    private RunSnapshot finishRun(RunSnapshot run, StructuredRuleAnswer answer) {
+        run = advance(run, AssistantRunState.QUESTION_UNDERSTANDING, "Question context is normalized");
+        if (answer.status() == AnswerStatus.CLARIFICATION_REQUIRED) {
+            return advance(run, AssistantRunState.NEED_CLARIFICATION, "Question requires additional context");
+        }
+        run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Answer evidence scope is planned");
+        run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed answer source lookup completed");
+        run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Answer source scope is policy checked");
+        if (answer.status() == AnswerStatus.INSUFFICIENT_EVIDENCE || answer.status() == AnswerStatus.VERSION_CONFLICT) {
+            return advance(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Answer evidence is insufficient");
+        }
+        run = advance(run, AssistantRunState.ANSWER_COMPOSITION, "Structured cited answer is composed");
+        if (answer.status() != AnswerStatus.ANSWERED) {
+            return advance(run, AssistantRunState.DEGRADED, "Answer generation degraded safely");
+        }
+        if (answer.confidence() == AnswerConfidence.LOW) {
+            run = advance(run, AssistantRunState.CRITIQUING, "Low-confidence answer critique completed");
+        }
+        return advance(run, AssistantRunState.COMPLETED, "Question workflow completed");
+    }
+
+    private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
+        return runs.advance(run.id(), run.revision(), state, summary);
+    }
+
+    private void failRun(RunSnapshot run, String errorCode, String summary, RuntimeException exception) {
+        if (!run.state().terminal()) {
+            try {
+                runs.fail(run.id(), run.revision(), errorCode, summary);
+            } catch (RuntimeException trackingFailure) {
+                exception.addSuppressed(trackingFailure);
+            }
+        }
+    }
+
+    private int evidenceTokens(List<HybridEvidenceHit> evidence) {
+        return evidence.stream().mapToInt(hit -> estimateTokens(hit.evidence().excerpt())).sum();
+    }
+
+    private int estimateTokens(String value) {
+        return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
+    public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
 
     private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {
         List<RuleCitation> citations = ruling.citations().stream().map(citation -> new RuleCitation(

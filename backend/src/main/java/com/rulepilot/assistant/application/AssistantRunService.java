@@ -3,12 +3,16 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.domain.AssistantRun;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,10 +22,21 @@ import org.springframework.transaction.annotation.Transactional;
 public class AssistantRunService implements AssistantRuns {
 
     private final AssistantRunRepository repository;
+    private final AgentExecutionControl execution;
+    private final BudgetLimits limits;
     private final Clock clock = Clock.systemUTC();
 
-    public AssistantRunService(AssistantRunRepository repository) {
+    public AssistantRunService(
+            AssistantRunRepository repository,
+            AgentExecutionControl execution,
+            @Value("${rulepilot.agent.max-steps:40}") int maxSteps,
+            @Value("${rulepilot.agent.max-tool-calls:24}") int maxToolCalls,
+            @Value("${rulepilot.agent.max-model-calls:16}") int maxModelCalls,
+            @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
+            @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout) {
         this.repository = repository;
+        this.execution = execution;
+        this.limits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
     }
 
     @Override
@@ -29,6 +44,7 @@ public class AssistantRunService implements AssistantRuns {
     public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
         AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock));
         repository.insert(run, "Run received");
+        execution.initialize(run.id(), limits, run.createdAt());
         return snapshot(run);
     }
 
@@ -41,6 +57,7 @@ public class AssistantRunService implements AssistantRuns {
             String stepSummary) {
         AssistantRun current = require(runId, expectedRevision);
         AssistantRun changed = current.advance(nextState, Instant.now(clock));
+        execution.assertStepAllowed(runId, changed.revision());
         persist(current, changed, stepSummary);
         return snapshot(changed);
     }
@@ -62,7 +79,18 @@ public class AssistantRunService implements AssistantRuns {
         }
         return repository.find(runId)
                 .filter(run -> run.ownerUsername().equals(ownerUsername))
-                .map(run -> new RunDetails(snapshot(run), repository.steps(runId)));
+                .map(run -> new RunDetails(
+                        snapshot(run), repository.steps(runId), execution.budget(runId), execution.activities(runId)));
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void requestCancellation(UUID runId, String ownerUsername) {
+        execution.requestCancellation(runId, ownerUsername);
+        AssistantRun current = repository.find(runId)
+                .orElseThrow(() -> new IllegalArgumentException("active assistant run does not exist"));
+        AssistantRun cancelled = current.fail("AGENT_CANCELLED", Instant.now(clock));
+        persist(current, cancelled, "Cancellation requested by run owner");
     }
 
     private AssistantRun require(UUID runId, long expectedRevision) {

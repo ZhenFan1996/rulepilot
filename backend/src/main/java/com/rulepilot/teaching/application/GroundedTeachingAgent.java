@@ -3,6 +3,9 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
@@ -50,6 +53,7 @@ public class GroundedTeachingAgent {
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
     private final GeneratedContentCritic critic;
+    private final AuditedAgentInvocations invocations;
     private final int maxToolCalls;
 
     public GroundedTeachingAgent(
@@ -57,15 +61,17 @@ public class GroundedTeachingAgent {
             TeachingLessonModel model,
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
             @Value("${rulepilot.teaching.agent.max-tool-calls:24}") int maxToolCalls) {
         this.tools = tools;
         this.model = model;
         this.evidenceVerifier = evidenceVerifier;
         this.critic = critic;
+        this.invocations = invocations;
         this.maxToolCalls = Math.max(1, maxToolCalls);
     }
 
-    public IllustratedLesson create(TeachingPlan plan) {
+    public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
         List<LessonSection> sections = new ArrayList<>();
         int toolCalls = 0;
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
@@ -78,7 +84,16 @@ public class GroundedTeachingAgent {
             List<RuleEvidence> evidence;
             try {
                 toolCalls++;
-                evidence = retrieve(plan.documentVersionId(), planned);
+                evidence = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "searchRuleEvidence",
+                        estimateTokens(query(planned.type())),
+                        "Version-scoped rule evidence retrieved",
+                        () -> retrieve(plan.documentVersionId(), planned),
+                        this::evidenceTokens);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
             } catch (RuntimeException retrievalFailure) {
                 log.warn(
                         "Teaching Agent retrieval failed for section {}: {}",
@@ -100,7 +115,9 @@ public class GroundedTeachingAgent {
 
             try {
                 toolCalls++;
-                sections.add(compose(plan, planned, evidence));
+                sections.add(compose(plan, planned, evidence, assistantRunId));
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
                 log.warn(
                         "Teaching Agent model {} failed validation for section {}: {}",
@@ -139,13 +156,22 @@ public class GroundedTeachingAgent {
     private LessonSection compose(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence) {
-        SectionDraft draft = model.compose(new TeachingLessonModel.SectionRequest(
+            List<RuleEvidence> evidence,
+            UUID assistantRunId) {
+        TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.type(),
                 plan.playerCount(),
                 plan.beginnerCount(),
                 plan.durationMinutes(),
-                evidence.stream().map(this::toModelEvidence).toList()));
+                evidence.stream().map(this::toModelEvidence).toList());
+        SectionDraft draft = invocations.invoke(
+                assistantRunId,
+                ActivityType.MODEL,
+                "composeTeachingSection",
+                estimateTokens(modelRequest.toString()),
+                "Teaching section model output received",
+                () -> model.compose(modelRequest),
+                result -> estimateTokens(result.toString()));
         validateDraft(draft);
 
         var verification = evidenceVerifier.verify(new VerificationRequest(
@@ -157,6 +183,7 @@ public class GroundedTeachingAgent {
         }
         var review = critic.review(
                 new ReviewRequest(
+                        assistantRunId,
                         ContentType.LESSON,
                         IntStream.range(0, draft.steps().size())
                                 .mapToObj(index -> new Claim(
@@ -273,5 +300,13 @@ public class GroundedTeachingAgent {
 
     private String label(TeachingSectionType type) {
         return type.name().replace('_', ' ');
+    }
+
+    private int evidenceTokens(List<RuleEvidence> evidence) {
+        return evidence.stream().mapToInt(source -> estimateTokens(source.excerpt())).sum();
+    }
+
+    private int estimateTokens(String value) {
+        return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
     }
 }

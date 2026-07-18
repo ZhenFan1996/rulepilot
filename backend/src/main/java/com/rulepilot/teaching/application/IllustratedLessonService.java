@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
@@ -51,7 +52,7 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
-            IllustratedLesson lesson = repository.save(agent.create(plan));
+            IllustratedLesson lesson = repository.save(agent.create(plan, run.id()));
             run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             if (lesson.status() == LessonStatus.INCOMPLETE) {
                 run = advance(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Required lesson evidence is incomplete");
@@ -60,15 +61,22 @@ public class IllustratedLessonService {
                 run = advance(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
             }
             return new LessonCreation(run.id(), lesson);
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
+            throw stopped;
         } catch (RuntimeException exception) {
-            if (!run.state().terminal()) {
-                try {
-                    runs.fail(run.id(), run.revision(), "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely");
-                } catch (RuntimeException trackingFailure) {
-                    exception.addSuppressed(trackingFailure);
-                }
-            }
+            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
             throw exception;
+        }
+    }
+
+    private void failRun(RunSnapshot run, String errorCode, String summary, RuntimeException exception) {
+        if (!run.state().terminal()) {
+            try {
+                runs.fail(run.id(), run.revision(), errorCode, summary);
+            } catch (RuntimeException trackingFailure) {
+                exception.addSuppressed(trackingFailure);
+            }
         }
     }
 

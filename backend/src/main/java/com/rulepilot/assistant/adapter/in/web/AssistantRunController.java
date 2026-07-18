@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
@@ -26,5 +28,11 @@ public class AssistantRunController {
     AssistantRuns.RunDetails get(@PathVariable UUID runId, Principal principal) {
         return runs.findOwned(runId, principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "assistant run does not exist"));
+    }
+
+    @PostMapping("/{runId}/cancellation")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    void cancel(@PathVariable UUID runId, Principal principal) {
+        runs.requestCancellation(runId, principal.getName());
     }
 }

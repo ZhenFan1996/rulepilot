@@ -11,6 +11,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
+import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,7 +27,7 @@ class ConditionalGeneratedContentCriticTest {
         var critic = new ConditionalGeneratedContentCritic(request -> {
             calls.incrementAndGet();
             return new CritiqueDraft(List.of());
-        }, false);
+        }, new ImmediateAuditedAgentInvocations(), false);
 
         var review = critic.review(request(), ReviewRisk.STANDARD);
 
@@ -41,7 +42,7 @@ class ConditionalGeneratedContentCriticTest {
         var critic = new ConditionalGeneratedContentCritic(request -> {
             calls.incrementAndGet();
             return new CritiqueDraft(List.of());
-        }, false);
+        }, new ImmediateAuditedAgentInvocations(), false);
 
         var review = critic.review(request(), ReviewRisk.LOW_CONFIDENCE);
 
@@ -55,7 +56,7 @@ class ConditionalGeneratedContentCriticTest {
         Issue issue = new Issue(
                 IssueType.MISSING_EXCEPTION, 1, List.of(chunkId), "The cited exception was omitted.");
         var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(issue)), true);
+                request -> new CritiqueDraft(List.of(issue)), new ImmediateAuditedAgentInvocations(), true);
 
         var review = critic.review(request(), ReviewRisk.STANDARD);
 
@@ -69,7 +70,7 @@ class ConditionalGeneratedContentCriticTest {
         Issue invalid = new Issue(
                 IssueType.OVERREACH, 2, List.of(UUID.randomUUID()), "Out of scope.");
         var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(invalid)), true);
+                request -> new CritiqueDraft(List.of(invalid)), new ImmediateAuditedAgentInvocations(), true);
 
         assertThatThrownBy(() -> critic.review(request(), ReviewRisk.STANDARD))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -78,6 +79,7 @@ class ConditionalGeneratedContentCriticTest {
 
     private ReviewRequest request() {
         return new ReviewRequest(
+                UUID.randomUUID(),
                 ContentType.ANSWER,
                 List.of(new Claim(1, "Each coin scores one point.", List.of(chunkId))),
                 List.of(new Evidence(chunkId, "Each coin scores one point.")));

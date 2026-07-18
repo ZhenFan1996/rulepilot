@@ -1,0 +1,110 @@
+package com.rulepilot.assistant.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+class BudgetedAgentInvocationsTest {
+
+    @Test
+    void reservesAndAuditsSuccessfulInvocation() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        UUID runId = UUID.randomUUID();
+
+        String result = invocations.invoke(
+                runId, AgentExecutionControl.ActivityType.TOOL, "searchRuleEvidence", 7,
+                "Evidence retrieved", () -> "four tokens", value -> 4);
+
+        assertThat(result).isEqualTo("four tokens");
+        assertThat(control.reservation.runId()).isEqualTo(runId);
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.SUCCEEDED);
+        assertThat(control.outputTokens).isEqualTo(4);
+        assertThat(control.summary).isEqualTo("Evidence retrieved");
+    }
+
+    @Test
+    void auditsFailureWithoutReplacingOriginalException() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.MODEL, "composeRuleAnswer", 5,
+                        "Answer composed", () -> {
+                            throw new IllegalStateException("provider failed");
+                        }, value -> 0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("provider failed");
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.FAILED);
+        assertThat(control.summary).isEqualTo("composeRuleAnswer failed safely");
+    }
+
+    @Test
+    void budgetRejectionStopsBeforeInvocation() {
+        RecordingControl control = new RecordingControl();
+        control.stopOnReserve = true;
+        var invocations = new BudgetedAgentInvocations(control);
+
+        assertThatThrownBy(() -> invocations.invoke(
+                        UUID.randomUUID(), AgentExecutionControl.ActivityType.TOOL, "searchRuleEvidence", 2,
+                        "Evidence retrieved", () -> "must not run", value -> 1))
+                .isInstanceOf(AgentExecutionStoppedException.class)
+                .extracting("reason")
+                .isEqualTo(StopReason.TOOL_BUDGET);
+        assertThat(control.outcome).isNull();
+    }
+
+    private static final class RecordingControl implements AgentExecutionControl {
+        private InvocationReservation reservation;
+        private ActivityOutcome outcome;
+        private int outputTokens;
+        private String summary;
+        private boolean stopOnReserve;
+
+        @Override
+        public void initialize(UUID runId, BudgetLimits limits, Instant startedAt) {}
+
+        @Override
+        public void assertStepAllowed(UUID runId, long nextStep) {}
+
+        @Override
+        public InvocationReservation reserve(
+                UUID runId, ActivityType type, String operation, int estimatedInputTokens) {
+            if (stopOnReserve) throw new AgentExecutionStoppedException(StopReason.TOOL_BUDGET);
+            reservation = new InvocationReservation(UUID.randomUUID(), runId, type, operation, estimatedInputTokens);
+            return reservation;
+        }
+
+        @Override
+        public void complete(
+                InvocationReservation reservation,
+                ActivityOutcome outcome,
+                int estimatedOutputTokens,
+                long latencyMs,
+                String summary) {
+            this.outcome = outcome;
+            this.outputTokens = estimatedOutputTokens;
+            this.summary = summary;
+        }
+
+        @Override
+        public void requestCancellation(UUID runId, String ownerUsername) {}
+
+        @Override
+        public BudgetSnapshot budget(UUID runId) {
+            return null;
+        }
+
+        @Override
+        public List<ActivitySnapshot> activities(UUID runId) {
+            return List.of();
+        }
+    }
+}
