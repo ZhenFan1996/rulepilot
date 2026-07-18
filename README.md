@@ -122,7 +122,7 @@ flowchart LR
 
 ## 技术栈
 
-- 后端：Java 21、Spring Boot 4.1、Maven Wrapper
+- 后端：Java 21 编译基线、Java 21/25 CI Matrix、Spring Boot 4.1、Maven Wrapper
 - 前端：Vue 3、TypeScript、Vite、Tailwind CSS
 - 测试：JUnit、Spring MVC Test、Vitest、Vue Test Utils
 

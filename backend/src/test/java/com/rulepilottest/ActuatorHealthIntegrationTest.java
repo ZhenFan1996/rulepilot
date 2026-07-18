@@ -12,7 +12,9 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.ActiveProfiles;
 
-@SpringBootTest(classes = RulePilotApplication.class, properties = "management.health.redis.enabled=false")
+@SpringBootTest(
+        classes = RulePilotApplication.class,
+        properties = {"management.health.redis.enabled=false", "management.health.rabbit.enabled=false"})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class ActuatorHealthIntegrationTest {
