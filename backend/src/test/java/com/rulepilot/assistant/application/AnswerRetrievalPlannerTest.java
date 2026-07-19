@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.List;
 import java.util.Set;
@@ -121,5 +122,54 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.getLast().query())
                 .contains("完成主要行动后还能执行自由行动吗", "那还能再做一次吗");
         assertThat(intents.getLast().currentSectionType()).isEqualTo("ACTIONS");
+    }
+
+    @Test
+    void scopesAnExampleRequestAndSearchesForExecutableDetails() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "请走一个具体例子。",
+                "请走一个具体例子。",
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                List.of(),
+                Set.of(),
+                "ACTIONS");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.EXAMPLE));
+
+        assertThat(intents.getFirst().sectionTypes()).containsExactly("ACTIONS");
+        assertThat(intents.getFirst().currentSectionType()).isEqualTo("ACTIONS");
+        assertThat(intents.getLast().query()).contains("worked example", "cost", "result");
+    }
+
+    @Test
+    void mapsAgentGeneratedLessonTopicsBackToAnAllowedRuleScope() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "请讲简单一点。",
+                "请讲简单一点。",
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                List.of(),
+                Set.of(),
+                "turn-structure 回合结构与自由行动 core_loop first_round");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(
+                        versionId,
+                        "turn-structure 回合结构与自由行动 core_loop first_round",
+                        null,
+                        4,
+                        Set.of(),
+                        null,
+                        LearningIntent.SIMPLIFY));
+
+        assertThat(intents).allSatisfy(intent ->
+                assertThat(intent.sectionTypes()).containsExactly("ROUND_STRUCTURE"));
     }
 }

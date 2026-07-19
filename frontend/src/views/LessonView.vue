@@ -132,7 +132,10 @@ interface AnswerCreation {
 interface AnswerTurn {
   question: string
   answer: StructuredRuleAnswer
+  learningIntent: LearningIntent | null
 }
+
+type LearningIntent = 'SIMPLIFY' | 'EXAMPLE' | 'WHY' | 'EXCEPTIONS'
 
 interface RuleCitation {
   chunkId: string
@@ -206,6 +209,7 @@ const question = ref('')
 const answer = ref<StructuredRuleAnswer | null>(null)
 const answeredQuestion = ref('')
 const answerTurns = ref<AnswerTurn[]>([])
+const activeLearningIntent = ref<LearningIntent | null>(null)
 const answerLoading = ref(false)
 const answerError = ref('')
 const ruling = ref<ConfirmedRuling | null>(null)
@@ -252,6 +256,7 @@ const supportedSectionCount = computed(
   () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
 )
 const previousAnswerTurns = computed(() => answerTurns.value.slice(0, -1))
+const currentAnswerTurn = computed(() => answerTurns.value[answerTurns.value.length - 1] ?? null)
 
 const teachingMoveMeta = {
   UNDERSTAND: { label: '先理解', marker: '想', tone: 'bg-indigo/10 text-indigo' },
@@ -408,10 +413,36 @@ function selectSection(index: number) {
   seekToChapter(index)
 }
 
-async function askCurrentSection() {
-  const text = question.value.trim()
+function learningIntentLabel(intent: LearningIntent | null) {
+  if (intent === null) return '规则答疑'
+  return {
+    SIMPLIFY: '换个简单说法',
+    EXAMPLE: '走一个具体例子',
+    WHY: '梳理前后关系',
+    EXCEPTIONS: '查找例外和限制',
+  }[intent]
+}
+
+function learningPrompt(intent: LearningIntent) {
+  const title = currentSection.value?.title ?? '这一节'
+  return {
+    SIMPLIFY: `请用更简单的话重新讲解“${title}”，告诉我现在最需要记住什么。`,
+    EXAMPLE: `请根据“${title}”的规则，走一个具体、合法的桌面例子。`,
+    WHY: `请说明“${title}”里的步骤前后怎么衔接：哪一步完成后必须做什么，只讲规则明确写出的关系。`,
+    EXCEPTIONS: `请整理“${title}”中规则明确写出的时机、限制、禁止和例外。`,
+  }[intent]
+}
+
+function currentLessonContext() {
+  const section = currentSection.value
+  if (!section) return null
+  return [section.topicKey, section.title, ...section.coverageTags].join(' ')
+}
+
+async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
   if (!text || !plan.value || !currentSection.value || answerLoading.value || !online.value) return
   answerLoading.value = true
+  activeLearningIntent.value = learningIntent
   answerError.value = ''
   answer.value = null
   try {
@@ -429,9 +460,10 @@ async function askCurrentSection() {
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({
         question: text,
-        currentLessonSection: currentSection.value.topicKey,
+        currentLessonSection: currentLessonContext(),
         playerCount: plan.value.playerCount,
         previousQuestion: previousTurn?.question,
+        learningIntent,
       }),
     })
     if (response.status === 401) {
@@ -443,7 +475,7 @@ async function askCurrentSection() {
     const received = creation.answer
     answer.value = received
     answeredQuestion.value = text
-    answerTurns.value.push({ question: text, answer: received })
+    answerTurns.value.push({ question: text, answer: received, learningIntent })
     if (received.status === 'ANSWERED') {
       cacheOfflineAnswer(planId.value, text, currentSection.value.title, received)
       refreshOfflineKnowledge()
@@ -467,12 +499,18 @@ async function askCurrentSection() {
     answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
   } finally {
     answerLoading.value = false
+    activeLearningIntent.value = null
   }
 }
 
-function prepareFollowUp(text: string) {
-  question.value = text
-  answerError.value = ''
+async function askCurrentSection() {
+  await submitQuestion(question.value.trim(), null)
+}
+
+async function requestLearningHelp(intent: LearningIntent) {
+  const prompt = learningPrompt(intent)
+  question.value = prompt
+  await submitQuestion(prompt, intent)
 }
 
 function useCardText(text: string) {
@@ -1136,11 +1174,22 @@ onUnmounted(() => {
 
                 <ol v-if="previousAnswerTurns.length" class="mt-5 space-y-3" aria-label="本节之前的问答">
                   <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
-                    <p class="text-xs font-semibold text-ink/45">你问</p>
+                    <p class="text-xs font-semibold text-ink/45">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : '你问' }}</p>
                     <p class="mt-1 text-sm leading-6">{{ turn.question }}</p>
                     <p class="mt-3 border-l-2 border-copper pl-3 text-sm font-semibold leading-6">{{ turn.answer.shortVerdict }}</p>
                   </li>
                 </ol>
+
+                <div class="mt-5 rounded-2xl bg-copper/[0.07] p-4">
+                  <p class="text-sm font-semibold">哪里还没弄明白？</p>
+                  <p class="mt-1 text-xs leading-5 text-ink/50">选择一种方式，规则助手会重新查这一节的依据再讲一次。</p>
+                  <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/20 bg-paper px-3 text-sm font-semibold disabled:opacity-40" @click="requestLearningHelp('SIMPLIFY')">讲简单点</button>
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/20 bg-paper px-3 text-sm font-semibold disabled:opacity-40" @click="requestLearningHelp('EXAMPLE')">走个例子</button>
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/20 bg-paper px-3 text-sm font-semibold disabled:opacity-40" @click="requestLearningHelp('WHY')">前后怎么接</button>
+                    <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/20 bg-paper px-3 text-sm font-semibold disabled:opacity-40" @click="requestLearningHelp('EXCEPTIONS')">例外和限制</button>
+                  </div>
+                </div>
 
                 <form class="mt-5" @submit.prevent="askCurrentSection">
                   <div class="mb-3 flex flex-wrap items-start gap-3">
@@ -1178,7 +1227,7 @@ onUnmounted(() => {
 
                 <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
                 <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
-                  <p class="text-sm font-semibold">正在理解这次追问并重新核对规则书…</p>
+                  <p class="text-sm font-semibold">正在{{ activeLearningIntent ? learningIntentLabel(activeLearningIntent) : '理解这次追问' }}并重新核对规则书…</p>
                   <p class="text-xs leading-5 text-ink/50">上一问只帮助理解“它、这样、再一次”指什么；结论仍会重新查找并验证规则依据。</p>
                   <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
                   <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
@@ -1186,7 +1235,7 @@ onUnmounted(() => {
 
                 <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
                   <div class="p-5 sm:p-6">
-                    <p class="text-xs font-semibold text-ink/45">你问：{{ answeredQuestion }}</p>
+                    <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : '你问' }}：{{ answeredQuestion }}</p>
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                       <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
                       <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
@@ -1205,9 +1254,9 @@ onUnmounted(() => {
                     </details>
 
                     <div v-if="answer.status === 'ANSWERED'" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" aria-label="继续追问">
-                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('为什么要这样做？')">为什么？</button>
-                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('请用一个具体回合举例说明。')">走个例子</button>
-                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('这条规则有哪些例外或限制？')">例外和限制</button>
+                      <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="requestLearningHelp('WHY')">前后怎么接</button>
+                      <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="requestLearningHelp('EXAMPLE')">走个例子</button>
+                      <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="requestLearningHelp('EXCEPTIONS')">例外和限制</button>
                     </div>
                   </div>
 

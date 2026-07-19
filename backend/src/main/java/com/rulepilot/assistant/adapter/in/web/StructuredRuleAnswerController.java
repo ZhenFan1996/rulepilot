@@ -36,7 +36,8 @@ public class StructuredRuleAnswerController {
                 request.question(),
                 new QuestionContext(
                         versionId, request.currentLessonSection(), request.gamePhase(),
-                        request.playerCount(), request.activeExpansions(), request.previousQuestion()),
+                        request.playerCount(), request.activeExpansions(), request.previousQuestion(),
+                        request.learningIntent()),
                 principal.getName(),
                 request.gameSessionId());
     }
@@ -59,5 +60,6 @@ public class StructuredRuleAnswerController {
             Integer playerCount,
             Set<UUID> activeExpansions,
             UUID gameSessionId,
-            String previousQuestion) {}
+            String previousQuestion,
+            com.rulepilot.assistant.domain.LearningIntent learningIntent) {}
 }

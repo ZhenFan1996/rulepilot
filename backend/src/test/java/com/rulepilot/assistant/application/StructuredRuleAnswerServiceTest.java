@@ -13,6 +13,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
@@ -361,6 +362,95 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(capturedRisk.get()).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+    }
+
+    @Test
+    void passesThePlayerLearningIntentToCompositionAndCritique() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicReference<RuleAnswerModel.ModelRequest> modelRequest = new AtomicReference<>();
+        AtomicReference<GeneratedContentCritic.ReviewRequest> criticRequest = new AtomicReference<>();
+        AtomicReference<GeneratedContentCritic.ReviewRisk> criticRisk = new AtomicReference<>();
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, true)),
+                request -> {
+                    modelRequest.set(request);
+                    return new ModelDraft(
+                            "记住一个重点。", "先支付费用，再执行行动结果。",
+                            List.of(source.chunkId()), List.of(), "HIGH");
+                },
+                (request, risk) -> {
+                    criticRequest.set(request);
+                    criticRisk.set(risk);
+                    return new GeneratedContentCritic.Review(false, List.of());
+                });
+
+        var answer = service.answer(
+                "请讲简单一点。",
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.SIMPLIFY));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(modelRequest.get().context().learningIntent()).isEqualTo(LearningIntent.SIMPLIFY);
+        assertThat(criticRequest.get().taskContext().requiredCoverage()).contains("SIMPLIFY");
+        assertThat(criticRisk.get()).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+    }
+
+    @Test
+    void revisesRejectedLearningResponseWithBoundedCriticFeedback() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicInteger compositions = new AtomicInteger();
+        AtomicInteger revisions = new AtomicInteger();
+        AtomicReference<List<String>> revisionFeedback = new AtomicReference<>();
+        RuleAnswerModel adaptiveModel = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                compositions.incrementAndGet();
+                return new ModelDraft(
+                        "可以不限次数执行。", "可以在主要行动后任意次执行自由行动。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                revisionFeedback.set(feedback);
+                return new ModelDraft(
+                        "自由行动可以在主要行动后执行。",
+                        "规则只说明自由行动的时机；现有证据没有说明可重复多少次。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic correctingCritic = (request, risk) -> {
+            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            if (criticCalls.getAndIncrement() == 0) {
+                return new GeneratedContentCritic.Review(true, List.of(new Issue(
+                        IssueType.OVERREACH,
+                        1,
+                        List.of(source.chunkId()),
+                        "Evidence establishes timing but not unlimited frequency.")));
+            }
+            assertThat(request.claims()).extracting(GeneratedContentCritic.Claim::text)
+                    .noneMatch(claim -> claim.contains("不限次数") || claim.contains("任意次"));
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, true)),
+                adaptiveModel,
+                correctingCritic);
+
+        var answer = service.answer(
+                "请讲简单一点。",
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.SIMPLIFY));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.explanation()).contains("没有说明可重复多少次");
+        assertThat(compositions).hasValue(1);
+        assertThat(revisions).hasValue(1);
+        assertThat(criticCalls).hasValue(2);
+        assertThat(revisionFeedback.get()).containsExactly(
+                "OVERREACH: Evidence establishes timing but not unlimited frequency.");
     }
 
     @Test

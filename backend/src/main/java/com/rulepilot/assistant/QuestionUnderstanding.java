@@ -1,6 +1,7 @@
 package com.rulepilot.assistant;
 
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import com.rulepilot.assistant.domain.LearningIntent;
 import java.util.Set;
 import java.util.UUID;
 
@@ -14,7 +15,8 @@ public interface QuestionUnderstanding {
             String gamePhase,
             Integer playerCount,
             Set<UUID> activeExpansions,
-            String previousQuestion) {
+            String previousQuestion,
+            LearningIntent learningIntent) {
 
         public QuestionContext(
                 UUID documentVersionId,
@@ -22,7 +24,17 @@ public interface QuestionUnderstanding {
                 String gamePhase,
                 Integer playerCount,
                 Set<UUID> activeExpansions) {
-            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, null);
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, null, null);
+        }
+
+        public QuestionContext(
+                UUID documentVersionId,
+                String currentLessonSection,
+                String gamePhase,
+                Integer playerCount,
+                Set<UUID> activeExpansions,
+                String previousQuestion) {
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, previousQuestion, null);
         }
 
         public QuestionContext {

@@ -8,6 +8,7 @@ import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
+import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
@@ -193,10 +194,11 @@ public class StructuredRuleAnswerService {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突或不足，无法可靠回答。");
         }
         ModelDraft draft;
+        ModelRequest modelRequest;
         RuleAnswerRateLimiter.Permit permit =
                 rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
-            ModelRequest modelRequest = toRequest(understood, context, evidence);
+            modelRequest = toRequest(understood, context, evidence);
             draft = invocations.invoke(
                     assistantRunId,
                     ActivityType.MODEL,
@@ -225,20 +227,77 @@ public class StructuredRuleAnswerService {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
         try {
-            ReviewRisk risk = context.previousQuestion() != null
+            ReviewRisk risk = context.previousQuestion() != null || context.learningIntent() != null
                     ? ReviewRisk.HIGH_IMPACT
                     : answer.confidence() == AnswerConfidence.LOW
                             ? ReviewRisk.LOW_CONFIDENCE
                             : ReviewRisk.STANDARD;
-            if (!critic.review(toCriticRequest(assistantRunId, understood, context, answer, evidence), risk)
-                    .accepted()) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
+            Review review = critic.review(
+                    toCriticRequest(assistantRunId, understood, context, answer, evidence), risk);
+            if (!review.accepted()) {
+                if (context.learningIntent() == null) {
+                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
+                }
+                answer = reviseLearningResponse(
+                        assistantRunId, understood, context, username, gameSessionId,
+                        modelRequest, draft, review, evidence);
+                Review revisionReview = critic.review(
+                        toCriticRequest(assistantRunId, understood, context, answer, evidence),
+                        ReviewRisk.HIGH_IMPACT);
+                if (!revisionReview.accepted()) {
+                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "局部重讲仍未通过事实一致性审查。");
+                }
             }
+        } catch (RuleAnswerModelTimeoutException exception) {
+            return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
+        } catch (AgentExecutionStoppedException exception) {
+            throw exception;
         } catch (RuntimeException exception) {
+            LOGGER.warn(
+                    "Adaptive answer validation failed for run {}: {} ({})",
+                    assistantRunId,
+                    exception.getMessage(),
+                    exception.getClass().getSimpleName());
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
         }
         saveCached(cacheKey, answer);
         return answer;
+    }
+
+    private StructuredRuleAnswer reviseLearningResponse(
+            UUID assistantRunId,
+            UnderstoodQuestion understood,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft previousDraft,
+            Review review,
+            List<HybridEvidenceHit> evidence) {
+        List<String> feedback = review.issues().stream()
+                .map(issue -> issue.type().name() + ": " + issue.summary())
+                .toList();
+        ModelDraft revised;
+        RuleAnswerRateLimiter.Permit permit =
+                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
+        try {
+            revised = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "reviseLearningResponse",
+                    estimateTokens(modelRequest.toString()) + estimateTokens(feedback.toString()),
+                    "Learning response revised from bounded critic feedback",
+                    () -> model.revise(modelRequest, previousDraft, feedback),
+                    result -> estimateTokens(result.toString()));
+        } catch (RuleAnswerModelTimeoutException exception) {
+            throw exception;
+        } finally {
+            permit.close();
+        }
+        if (revised == null || !revised.answerable()) {
+            throw new IllegalArgumentException("revised learning response is not answerable");
+        }
+        return validate(context.documentVersionId(), revised, evidence);
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
@@ -268,6 +327,9 @@ public class StructuredRuleAnswerService {
         String conversationScopedQuestion = context.previousQuestion() == null
                 ? question.normalizedQuestion()
                 : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
+        if (context.learningIntent() != null) {
+            conversationScopedQuestion = context.learningIntent().name() + ":" + conversationScopedQuestion;
+        }
         return new AnswerCacheKey(
                 context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
                 conversationScopedQuestion, context.currentLessonSection(),
@@ -358,7 +420,8 @@ public class StructuredRuleAnswerService {
                         context.gamePhase(),
                         context.playerCount(),
                         context.activeExpansions().size(),
-                        context.previousQuestion()),
+                        context.previousQuestion(),
+                        context.learningIntent()),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(
@@ -433,6 +496,7 @@ public class StructuredRuleAnswerService {
                                 + contextValue(context.currentLessonSection()) + ", game phase "
                                 + contextValue(context.gamePhase()) + ", and player count "
                                 + contextValue(context.playerCount())
+                                + ", and learning intent " + contextValue(context.learningIntent())
                                 + ". For an 'again' follow-up, reject any repeatability claim not explicitly supported by evidence."),
                 claims,
                 evidence.stream()

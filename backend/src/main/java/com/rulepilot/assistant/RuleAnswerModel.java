@@ -1,5 +1,6 @@
 package com.rulepilot.assistant;
 
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
 import java.util.UUID;
@@ -11,6 +12,10 @@ public interface RuleAnswerModel {
     }
 
     ModelDraft compose(ModelRequest request);
+
+    default ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+        return compose(request);
+    }
 
     record ModelRequest(String question, QuestionType questionType, AnswerContext context, List<EvidenceInput> evidence) {
         public ModelRequest {
@@ -27,14 +32,24 @@ public interface RuleAnswerModel {
             String gamePhase,
             Integer playerCount,
             int activeExpansionCount,
-            String previousQuestion) {
+            String previousQuestion,
+            LearningIntent learningIntent) {
 
         public AnswerContext(
                 String currentLessonSection,
                 String gamePhase,
                 Integer playerCount,
                 int activeExpansionCount) {
-            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, null);
+            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, null, null);
+        }
+
+        public AnswerContext(
+                String currentLessonSection,
+                String gamePhase,
+                Integer playerCount,
+                int activeExpansionCount,
+                String previousQuestion) {
+            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, previousQuestion, null);
         }
 
         public AnswerContext {
@@ -52,6 +67,10 @@ public interface RuleAnswerModel {
 
         public String playerCountForPrompt() {
             return playerCount == null ? "not provided" : playerCount.toString();
+        }
+
+        public String learningIntentForPrompt() {
+            return learningIntent == null ? "GENERAL_QUESTION" : learningIntent.name();
         }
     }
 

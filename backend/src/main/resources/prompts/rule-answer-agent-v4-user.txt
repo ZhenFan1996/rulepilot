@@ -1,0 +1,17 @@
+<question_context>
+  <question_type>{questionType}</question_type>
+  <learning_intent>{learningIntent}</learning_intent>
+  <current_lesson_section>{lessonSection}</current_lesson_section>
+  <game_phase>{gamePhase}</game_phase>
+  <player_count>{playerCount}</player_count>
+  <active_expansion_count>{activeExpansionCount}</active_expansion_count>
+</question_context>
+
+<untrusted_previous_question>{previousQuestion}</untrusted_previous_question>
+<untrusted_current_question>{question}</untrusted_current_question>
+
+<untrusted_evidence_data>
+{evidence}
+</untrusted_evidence_data>
+
+{repair}

@@ -14,8 +14,8 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v8-user.txt"),
                 resource("teaching-outline-v2-system.txt"),
                 resource("teaching-outline-v2-user.txt"),
-                resource("rule-answer-agent-v2-system.txt"),
-                resource("rule-answer-agent-v2-user.txt"),
+                resource("rule-answer-agent-v4-system.txt"),
+                resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v5-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
@@ -48,8 +48,20 @@ class VersionedAgentPromptsTest {
         assertThat(prompts.teachingOutlineSystem())
                 .contains("game-specific lesson", "core_loop", "retrieval query", "objective");
         assertThat(prompts.answerSystem())
-                .contains("set answerable to false", "Do not answer from prior knowledge", "gameplay context");
-        assertThat(prompts.answerUser()).contains("{questionType}", "{gamePhase}", "{playerCount}");
+                .contains(
+                        "set answerable to false",
+                        "prior knowledge",
+                        "SIMPLIFY",
+                        "EXAMPLE",
+                        "designer intent",
+                        "repeated use",
+                        "MAIN ACTIONS",
+                        "main column",
+                        "player turn",
+                        "Pass/跳过",
+                        "empty exceptions list");
+        assertThat(prompts.answerUser())
+                .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.criticSystem())
                 .contains(
                         "MISSING_EXCEPTION",
@@ -58,7 +70,10 @@ class VersionedAgentPromptsTest {
                         "outside knowledge",
                         "causal bridge",
                         "resource ledger",
-                        "negation");
+                        "negation",
+                        "heading ownership",
+                        "player turn (回合)",
+                        "invented baseline");
         assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }

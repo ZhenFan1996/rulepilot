@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,10 +43,15 @@ public final class AnswerRetrievalPlanner {
         List<RetrievalIntent> intents = new ArrayList<>();
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
+        Set<String> learningScope = context.learningIntent() != null && currentSection != null
+                ? Set.of(currentSection)
+                : Set.of();
         if (parts.size() == 1) {
-            intents.add(new RetrievalIntent(expandSearchTerms(question.normalizedQuestion()), Set.of(), null));
+            intents.add(new RetrievalIntent(
+                    expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection));
         } else {
-            parts.forEach(part -> intents.add(new RetrievalIntent(expandSearchTerms(part), Set.of(), null)));
+            parts.forEach(part -> intents.add(new RetrievalIntent(
+                    expandSearchTerms(part), learningScope, currentSection)));
         }
         intents.add(new RetrievalIntent(
                 supplementaryQuery(question, context),
@@ -126,7 +132,20 @@ public final class AnswerRetrievalPlanner {
         if (context.playerCount() != null) {
             append(query, context.playerCount() + " players " + context.playerCount() + "人");
         }
+        append(query, learningFacets(context.learningIntent()));
         return bounded(query.toString());
+    }
+
+    private static String learningFacets(LearningIntent intent) {
+        if (intent == null) {
+            return null;
+        }
+        return switch (intent) {
+            case SIMPLIFY -> "core rule sequence must remember 核心规则 顺序 必须记住";
+            case EXAMPLE -> "worked example legal sequence cost result 具体示例 合法步骤 费用 结果";
+            case WHY -> "rule prerequisite consequence order 前置条件 规则后果 执行顺序";
+            case EXCEPTIONS -> "restriction timing limit exception cannot 限制 时机 次数 例外 禁止";
+        };
     }
 
     private static String facets(QuestionType type) {
@@ -175,7 +194,23 @@ public final class AnswerRetrievalPlanner {
             return null;
         }
         String normalized = value.strip().toUpperCase(Locale.ROOT);
-        return KNOWN_SECTIONS.contains(normalized) ? normalized : null;
+        if (KNOWN_SECTIONS.contains(normalized)) {
+            return normalized;
+        }
+        if (containsAny(normalized, "SETUP", "设置", "布置")) return "SETUP";
+        if (containsAny(normalized, "SCOR", "计分", "得分")) return "SCORING";
+        if (containsAny(normalized, "TIE", "同分", "平局")) return "TIE_BREAKERS";
+        if (containsAny(normalized, "END", "结束")) return "END_CONDITIONS";
+        if (containsAny(normalized, "TURN", "ROUND", "PASS", "FIRST_ROUND", "回合", "轮次")) {
+            return "ROUND_STRUCTURE";
+        }
+        if (containsAny(
+                normalized, "ACTION", "PROBE", "SCAN", "ANALYZE", "CARD", "TECH", "CORE_LOOP", "行动")) {
+            return "ACTIONS";
+        }
+        if (containsAny(normalized, "COMPONENT", "组件", "配件")) return "COMPONENTS";
+        if (containsAny(normalized, "GOAL", "OBJECTIVE", "WINNER", "目标", "胜利")) return "OBJECTIVE";
+        return null;
     }
 
     private static void append(StringBuilder target, String value) {
