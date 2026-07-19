@@ -4,18 +4,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
+import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
+import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
+import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
+import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
@@ -160,7 +167,94 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
-        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v4");
+        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v5");
+    }
+
+    @Test
+    void persistsValidatedVisualFocusFromAnAttachedCitedPage() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Assemble the main board and place it in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4);
+                return new SectionDraft(
+                        "照图拼好主棋盘",
+                        VisualKind.TABLE_LAYOUT,
+                        "主棋盘由三块弧形板拼接后放在桌面中央。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "找到三块主板",
+                                TeachingMove.VISUAL,
+                                "先在图中找到拼接后的主棋盘，再按同样关系摆到桌面中央。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(4, "拼接后的主棋盘", 430, 80, 550, 720))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
+                .isEqualTo(new VisualFocus(4, "拼接后的主棋盘", 430, 80, 550, 720));
+    }
+
+    @Test
+    void withholdsStoredPageImagesFromATextOnlyTeachingModel() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Place the board in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1}, 1_086, 1_511)));
+        TeachingLessonModel textOnlyModel = request -> {
+            assertThat(request.pageImages()).isEmpty();
+            return new TeachingLessonModel.SectionDraft(
+                    "开局位置",
+                    VisualKind.REFERENCE_CARD,
+                    "把主棋盘放在桌面中央。",
+                    List.of(chunkId),
+                    List.of(new TeachingLessonModel.StepDraft(
+                            "放置主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(chunkId))));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                textOnlyModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
     }
 
     @Test

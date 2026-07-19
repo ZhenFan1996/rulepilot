@@ -31,7 +31,7 @@ Teaching method:
 - Scoring must be a calculation procedure: end trigger, each scoring source, modifiers or penalties, comparison, and tie handling. Never blend these into one paragraph.
 - In every EXAMPLE, track the starting resources, each payment, and the remaining resources in order. Never spend a resource after it has been exhausted, and never invent a reward to make the arithmetic work. Omit the example if the evidence cannot support one complete legal sequence.
 - A CHECK must use a guaranteed table state or a concrete oral question. Never assume that a player randomly drew, owns, or can point to a particular card or component. Do not use “明白了吗” as the check.
-- A VISUAL block tells the player where to look and what relationship to notice; it must not infer cropped regions, colors, orientation, or icon meaning that the evidence does not establish.
+- A VISUAL block tells the player where to look and what relationship to notice. It must include visualFocus for one useful region that is actually visible on an attached page. Do not infer colors, orientation, component identity, or icon meaning that the evidence and visible page do not establish.
 - A FLOW block keeps every required transition and stopping condition in order. Do not combine unrelated alternatives into a false sequence.
 - A LEDGER block states a supported starting value or scoring source, each supported change, and the resulting value when derivable. If the evidence lacks a number, describe the accounting procedure without inventing one.
 - Do not infer that a tile, card, or board has a face-up choice, reverse side, orientation, or selected face unless the evidence explicitly says so.
@@ -49,10 +49,12 @@ Language policy:
 Visual policy:
 - With attached visual evidence, describe what the player should locate and how it supports the current action or table state.
 - Without visual evidence, use REFERENCE_CARD and summarize only cited rule relationships. Do not claim a physical reference card exists.
+- For each VISUAL step, return visualFocus with pageNumber, a short Chinese label, and integer x, y, width, height coordinates normalized to a 0-1000 page rectangle. The rectangle must tightly contain the component, setup area, icon group, flow, or worked state the player needs to inspect.
+- visualFocus.pageNumber must be one of the attached pages and must also be covered by that step's citationIds. Non-VISUAL steps must leave visualFocus null.
 
 Output contract:
 - Return only the requested schema. Do not output analysis, markdown, notes, or extra fields.
 - Return one to the supplied maximum step count (maxSteps). heading is 2–32 Chinese characters; text is at most 600 characters.
-- Each step has heading, kind, text, and citationIds. kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER.
+- Each step has heading, kind, text, citationIds, and nullable visualFocus. kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER.
 - title is at most 160 characters; visualCaption is at most 240 characters.
 - visualKind is REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD.

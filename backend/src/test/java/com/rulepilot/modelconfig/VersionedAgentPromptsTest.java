@@ -10,7 +10,7 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v9-system.txt"),
+                resource("teaching-agent-v10-system.txt"),
                 resource("teaching-agent-v8-user.txt"),
                 resource("teaching-outline-v2-system.txt"),
                 resource("teaching-outline-v2-user.txt"),
@@ -29,6 +29,8 @@ class VersionedAgentPromptsTest {
                         "visualCitationIds",
                         "attached page",
                         "icon-to-label",
+                        "visualFocus",
+                        "0-1000",
                         "PDF extraction markers",
                         "win condition",
                         "maximum step count",

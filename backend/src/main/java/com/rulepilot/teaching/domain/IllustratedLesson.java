@@ -110,7 +110,8 @@ public record IllustratedLesson(
             TeachingMove kind,
             String text,
             List<Integer> sourcePages,
-            List<UUID> sourceChunkIds) {
+            List<UUID> sourceChunkIds,
+            VisualFocus visualFocus) {
         public LessonStep {
             if (position < 1 || heading == null || heading.isBlank() || kind == null
                     || text == null || text.isBlank()) {
@@ -121,7 +122,35 @@ public record IllustratedLesson(
         }
 
         public LessonStep(int position, String text, List<Integer> sourcePages, List<UUID> sourceChunkIds) {
-            this(position, "照着做", TeachingMove.DO, text, sourcePages, sourceChunkIds);
+            this(position, "照着做", TeachingMove.DO, text, sourcePages, sourceChunkIds, null);
+        }
+
+        public LessonStep(
+                int position,
+                String heading,
+                TeachingMove kind,
+                String text,
+                List<Integer> sourcePages,
+                List<UUID> sourceChunkIds) {
+            this(position, heading, kind, text, sourcePages, sourceChunkIds, null);
+        }
+    }
+
+    public record VisualFocus(
+            int pageNumber,
+            String label,
+            int x,
+            int y,
+            int width,
+            int height) {
+        public VisualFocus {
+            if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
+                    || x < 0 || x > 980 || y < 0 || y > 980
+                    || width < 20 || width > 1_000 - x
+                    || height < 20 || height > 1_000 - y) {
+                throw new IllegalArgumentException("lesson visual focus is invalid");
+            }
+            label = label.strip();
         }
     }
 }

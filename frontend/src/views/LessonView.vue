@@ -53,6 +53,14 @@ interface LessonSection {
     kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER'
     text: string
     sourcePages: number[]
+    visualFocus: {
+      pageNumber: number
+      label: string
+      x: number
+      y: number
+      width: number
+      height: number
+    } | null
   }>
 }
 
@@ -234,6 +242,15 @@ const currentVisualPageUrl = computed(() => {
 function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
+}
+
+function visualFocusStyle(focus: NonNullable<LessonSection['steps'][number]['visualFocus']>) {
+  return {
+    left: `${focus.x / 10}%`,
+    top: `${focus.y / 10}%`,
+    width: `${focus.width / 10}%`,
+    height: `${focus.height / 10}%`,
+  }
 }
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
 const currentVideoChapter = computed(() => video.value?.chapters[progress.value.currentIndex] ?? null)
@@ -1084,7 +1101,7 @@ onUnmounted(() => {
             </section>
 
             <div v-if="mediaMode !== 'VIDEO' && !hasVisualBlock" class="mt-7 rounded-3xl bg-indigo/8 p-4 sm:p-5">
-              <p class="text-xs font-semibold text-indigo">先看桌面 · {{ visualKindLabel(currentSection.visualKind) }}</p>
+              <p class="text-xs font-semibold text-indigo">对应原文页 · {{ visualKindLabel(currentSection.visualKind) }}</p>
               <figure v-if="currentVisualPageUrl && !visualImageFailed" class="my-5 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
                 <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开大图">
                   <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentSection.visualSourcePages[0]} 页，${currentSection.visualCaption}`" class="max-h-[26rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
@@ -1098,9 +1115,9 @@ onUnmounted(() => {
                 <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
                 <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
               </div>
-              <p class="text-sm leading-6 text-ink/65"><span class="font-semibold text-ink/80">看图时找：</span>{{ currentSection.visualCaption }}</p>
+              <p class="text-sm leading-6 text-ink/65"><span class="font-semibold text-ink/80">本节规则关系：</span>{{ currentSection.visualCaption }}</p>
               <p v-if="currentSection.visualSourcePages.length" class="mt-2 text-xs font-semibold text-indigo">
-                图示依据：规则书第 {{ currentSection.visualSourcePages.join('、') }} 页
+                原文页：规则书第 {{ currentSection.visualSourcePages.join('、') }} 页
               </p>
             </div>
 
@@ -1124,11 +1141,15 @@ onUnmounted(() => {
                 <div>
                   <p class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</p>
                   <h3 class="mt-1 font-display text-xl font-semibold leading-7">{{ step.heading || `第 ${step.position} 步` }}</h3>
-                  <figure v-if="step.kind === 'VISUAL' && pageImageUrl(step.sourcePages[0]) && !visualImageFailed" class="mt-4 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
-                    <a :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" title="打开规则书大图">
-                      <img :src="pageImageUrl(step.sourcePages[0])" :alt="`规则书第 ${step.sourcePages[0]} 页，${step.text}`" class="max-h-[26rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
+                  <figure v-if="step.kind === 'VISUAL' && step.visualFocus && pageImageUrl(step.visualFocus.pageNumber) && !visualImageFailed" class="mt-4 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
+                    <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
+                      <img :src="pageImageUrl(step.visualFocus.pageNumber)" :alt="`规则书第 ${step.visualFocus.pageNumber} 页，${step.text}`" class="block h-auto w-full" loading="lazy" @error="visualImageFailed = true">
+                      <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(step.visualFocus)" aria-hidden="true" />
                     </a>
-                    <figcaption class="border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">配合第 {{ step.sourcePages[0] }} 页定位</figcaption>
+                    <figcaption class="flex flex-wrap items-center justify-between gap-2 border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">
+                      <span>框选位置：{{ step.visualFocus.label }}</span>
+                      <span>第 {{ step.visualFocus.pageNumber }} 页</span>
+                    </figcaption>
                   </figure>
                   <p class="mt-2 text-base leading-8 text-ink/75">{{ step.text }}</p>
                   <details v-if="step.sourcePages.length" class="mt-3">

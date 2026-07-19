@@ -11,6 +11,10 @@ public interface TeachingLessonModel {
         return "unspecified";
     }
 
+    default boolean supportsVisualEvidence() {
+        return false;
+    }
+
     SectionDraft compose(SectionRequest request);
 
     default SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
@@ -124,13 +128,34 @@ public interface TeachingLessonModel {
         }
     }
 
-    record StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
+    record StepDraft(
+            String heading,
+            TeachingMove kind,
+            String text,
+            List<UUID> citationIds,
+            VisualFocusDraft visualFocus) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
         }
 
+        public StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
+            this(heading, kind, text, citationIds, null);
+        }
+
         public StepDraft(String text, List<UUID> citationIds) {
-            this("照着做", TeachingMove.DO, text, citationIds);
+            this("照着做", TeachingMove.DO, text, citationIds, null);
+        }
+    }
+
+    record VisualFocusDraft(
+            int pageNumber,
+            String label,
+            int x,
+            int y,
+            int width,
+            int height) {
+        public VisualFocusDraft {
+            label = label == null ? "" : label.strip();
         }
     }
 }

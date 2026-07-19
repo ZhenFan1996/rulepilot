@@ -20,6 +20,7 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
+import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -27,6 +28,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -52,8 +54,9 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v4";
-    private static final Set<String> REUSABLE_GENERATOR_VERSIONS = Set.of("adaptive-teaching-v3", GENERATOR_VERSION);
+    static final String GENERATOR_VERSION = "adaptive-teaching-v5";
+    private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
+            Set.of("adaptive-teaching-v3", "adaptive-teaching-v4", GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
@@ -280,7 +283,7 @@ public class GroundedTeachingAgent {
                 pacing.maxSteps(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                evidence.stream()
+                (model.supportsVisualEvidence() ? evidence.stream() : Stream.<RuleEvidence>empty())
                         .flatMap(source -> source.pageImages().stream())
                         .collect(Collectors.toMap(
                                 com.rulepilot.assistant.AssistantReadTools.RulePageImage::pageNumber,
@@ -441,6 +444,12 @@ public class GroundedTeachingAgent {
                 .collect(Collectors.toUnmodifiableSet());
         for (TeachingLessonModel.StepDraft step : draft.steps()) {
             if (step.kind() != TeachingMove.VISUAL) continue;
+            VisualFocusDraft focus = step.visualFocus();
+            if (focus == null || !attachedPages.contains(focus.pageNumber())) {
+                throw new IllegalArgumentException(
+                        "VISUAL teaching blocks must identify a focus region on an attached rulebook page.");
+            }
+            validatedFocus(focus);
             boolean citesAttachedPage = step.citationIds().stream()
                     .map(allowedEvidence::get)
                     .filter(java.util.Objects::nonNull)
@@ -449,6 +458,15 @@ public class GroundedTeachingAgent {
             if (!citesAttachedPage) {
                 throw new IllegalArgumentException(
                         "VISUAL teaching blocks must cite evidence from an attached rulebook page.");
+            }
+            boolean citesFocusPage = step.citationIds().stream()
+                    .map(allowedEvidence::get)
+                    .filter(java.util.Objects::nonNull)
+                    .anyMatch(source -> focus.pageNumber() >= source.pageFrom()
+                            && focus.pageNumber() <= source.pageTo());
+            if (!citesFocusPage) {
+                throw new IllegalArgumentException(
+                        "VISUAL focus page must be covered by the block's cited evidence.");
             }
         }
     }
@@ -478,7 +496,27 @@ public class GroundedTeachingAgent {
                 draft.kind(),
                 draft.text().strip(),
                 pages,
-                List.copyOf(citationIds));
+                List.copyOf(citationIds),
+                validatedVisualFocus(draft));
+    }
+
+    private VisualFocus validatedVisualFocus(TeachingLessonModel.StepDraft draft) {
+        VisualFocusDraft focus = draft.visualFocus();
+        if (draft.kind() != TeachingMove.VISUAL) {
+            if (focus != null) {
+                throw new IllegalArgumentException("Only VISUAL teaching blocks may define a visual focus.");
+            }
+            return null;
+        }
+        if (focus == null) {
+            throw new IllegalArgumentException("VISUAL teaching blocks require a visual focus.");
+        }
+        return validatedFocus(focus);
+    }
+
+    private VisualFocus validatedFocus(VisualFocusDraft focus) {
+        return new VisualFocus(
+                focus.pageNumber(), focus.label(), focus.x(), focus.y(), focus.width(), focus.height());
     }
 
     private void validateDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
@@ -501,6 +539,14 @@ public class GroundedTeachingAgent {
         if (request.pageImages().isEmpty()
                 && draft.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) {
             throw new IllegalArgumentException("VISUAL teaching blocks require attached rulebook page evidence.");
+        }
+        if (draft.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL
+                && step.visualFocus() == null)) {
+            throw new IllegalArgumentException("VISUAL teaching blocks require a visual focus region.");
+        }
+        if (draft.steps().stream().anyMatch(step -> step.kind() != TeachingMove.VISUAL
+                && step.visualFocus() != null)) {
+            throw new IllegalArgumentException("Only VISUAL teaching blocks may define a visual focus region.");
         }
         if (UNRESOLVED_PDF_MARKER.matcher(draft.visualCaption()).find()
                 || draft.steps().stream().anyMatch(step -> step != null && step.text() != null

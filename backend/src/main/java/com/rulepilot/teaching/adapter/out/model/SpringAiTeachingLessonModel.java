@@ -4,6 +4,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.util.LinkedHashMap;
@@ -38,6 +39,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public String providerId() {
         return models.providerFor(Role.TEACHING);
+    }
+
+    @Override
+    public boolean supportsVisualEvidence() {
+        return models.supportsVision(Role.TEACHING);
     }
 
     @Override
@@ -157,7 +163,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
                                 step.heading(), step.kind(), step.text(),
-                                step.citationIds().stream().map(references::get).toList()))
+                                step.citationIds().stream().map(references::get).toList(),
+                                step.visualFocus()))
                         .toList());
     }
 
@@ -189,7 +196,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.steps().stream()
                         .map(step -> new StepDraft(
                                 step.heading(), step.kind(), step.text(),
-                                resolveReferences(step.citationIds(), evidenceIds)))
+                                resolveReferences(step.citationIds(), evidenceIds),
+                                step.visualFocus()))
                         .toList());
     }
 
@@ -232,7 +240,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             String heading,
             TeachingMove kind,
             String text,
-            List<String> citationIds) {
+            List<String> citationIds,
+            VisualFocusDraft visualFocus) {
         private ModelStepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
         }

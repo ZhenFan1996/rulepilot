@@ -8,6 +8,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -173,6 +174,12 @@ class IllustratedLessonStepEntity {
     @Column(name = "step_text", nullable = false, columnDefinition = "text") String stepText;
     @Column(name = "source_pages", nullable = false) String sourcePages;
     @Column(name = "source_chunk_ids", nullable = false) String sourceChunkIds;
+    @Column(name = "visual_page") Integer visualPage;
+    @Column(name = "visual_label") String visualLabel;
+    @Column(name = "visual_x") Integer visualX;
+    @Column(name = "visual_y") Integer visualY;
+    @Column(name = "visual_width") Integer visualWidth;
+    @Column(name = "visual_height") Integer visualHeight;
 
     protected IllustratedLessonStepEntity() {}
 
@@ -185,6 +192,14 @@ class IllustratedLessonStepEntity {
         stepText = step.text();
         sourcePages = step.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
         sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
+        if (step.visualFocus() != null) {
+            visualPage = step.visualFocus().pageNumber();
+            visualLabel = step.visualFocus().label();
+            visualX = step.visualFocus().x();
+            visualY = step.visualFocus().y();
+            visualWidth = step.visualFocus().width();
+            visualHeight = step.visualFocus().height();
+        }
     }
 
     LessonStep toDomain() {
@@ -195,6 +210,15 @@ class IllustratedLessonStepEntity {
                 ? List.of()
                 : Arrays.stream(sourceChunkIds.split(",")).map(UUID::fromString).toList();
         return new LessonStep(
-                position, stepHeading, TeachingMove.valueOf(teachingMove), stepText, pages, chunkIds);
+                position,
+                stepHeading,
+                TeachingMove.valueOf(teachingMove),
+                stepText,
+                pages,
+                chunkIds,
+                visualPage == null
+                        ? null
+                        : new VisualFocus(
+                                visualPage, visualLabel, visualX, visualY, visualWidth, visualHeight));
     }
 }
