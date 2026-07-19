@@ -117,7 +117,7 @@ public class GroundedTeachingAgent {
                     List<RuleEvidence> retrieved = invocations.invoke(
                             assistantRunId,
                             ActivityType.TOOL,
-                            "searchRuleEvidence",
+                            operationName("searchRuleEvidence", planned.position()),
                             estimateTokens(query),
                             "Version-scoped rule evidence retrieved",
                             () -> retrieve(plan.documentVersionId(), planned.topicKey(), query),
@@ -295,7 +295,7 @@ public class GroundedTeachingAgent {
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
-                "composeTeachingSection",
+                operationName("composeTeachingSection", planned.position()),
                 estimateTokens(modelRequest.toString()),
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
@@ -320,7 +320,7 @@ public class GroundedTeachingAgent {
                 draft = invocations.invoke(
                         assistantRunId,
                         ActivityType.MODEL,
-                        "reviseTeachingSection",
+                        operationName("reviseTeachingSection", planned.position()),
                         estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
                                 + estimateTokens(feedback.toString()),
                         "Teaching section revised from validation feedback",
@@ -532,5 +532,9 @@ public class GroundedTeachingAgent {
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
+    private String operationName(String operation, int sectionPosition) {
+        return operation + "|" + sectionPosition;
     }
 }

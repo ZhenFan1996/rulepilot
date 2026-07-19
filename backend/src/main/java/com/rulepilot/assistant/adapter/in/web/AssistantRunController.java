@@ -1,12 +1,14 @@
 package com.rulepilot.assistant.adapter.in.web;
 
 import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AssistantRunMode;
 import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,6 +29,15 @@ public class AssistantRunController {
     @GetMapping("/{runId}")
     AssistantRuns.RunDetails get(@PathVariable UUID runId, Principal principal) {
         return runs.findOwned(runId, principal.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "assistant run does not exist"));
+    }
+
+    @GetMapping("/latest")
+    AssistantRuns.RunDetails latest(
+            @RequestParam AssistantRunMode mode,
+            @RequestParam UUID subjectId,
+            Principal principal) {
+        return runs.findLatestOwned(mode, subjectId, principal.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "assistant run does not exist"));
     }
 

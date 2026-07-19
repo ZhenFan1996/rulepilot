@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -13,7 +13,28 @@ interface DocumentResponse {
   document: { id: string; title: string }
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
-interface TeachingPlanResponse { id: string }
+interface TeachingPlanResponse {
+  id: string
+  sections: Array<{ position: number; topicKey: string; title: string }>
+}
+interface AssistantRunDetails {
+  run: {
+    id: string
+    state: string
+    createdAt: string
+    updatedAt: string
+    completedAt: string | null
+    lastErrorCode: string | null
+  }
+  activities: Array<{
+    sequence: number
+    type: 'TOOL' | 'MODEL' | 'CRITIC'
+    operation: string
+    outcome: 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+    summary: string
+    occurredAt: string
+  }>
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -33,6 +54,12 @@ const processingVersionId = ref('')
 const message = ref('')
 const errorMessage = ref('')
 const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
+const generationPlan = ref<TeachingPlanResponse | null>(null)
+const generationRun = ref<AssistantRunDetails | null>(null)
+const generationElapsedSeconds = ref(0)
+let generationPollTimer: ReturnType<typeof setTimeout> | undefined
+let generationClockTimer: ReturnType<typeof setInterval> | undefined
+let generationStartedAt = 0
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
@@ -40,6 +67,67 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
 }))))
 const selectedEdition = computed(() => editionOptions.value.find((item) => item.id === editionId.value))
 const canUpload = computed(() => Boolean(file.value && editionId.value && !uploading.value && !preparingVersionId.value))
+const terminalRunStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
+const generationSectionIdentifier = computed(() => {
+  const activities = generationRun.value?.activities ?? []
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const identifier = activities[index]!.operation.split('|')[1]
+    if (identifier) return identifier
+  }
+  return ''
+})
+const generationSectionIndex = computed(() => {
+  const sections = generationPlan.value?.sections ?? []
+  const index = sections.findIndex((section) =>
+    section.topicKey === generationSectionIdentifier.value
+    || String(section.position) === generationSectionIdentifier.value)
+  return index >= 0 ? index : 0
+})
+const generationSection = computed(() => generationPlan.value?.sections[generationSectionIndex.value] ?? null)
+const generationStatus = computed(() => {
+  const run = generationRun.value
+  const section = generationSection.value
+  if (!run) return '正在启动讲解流程…'
+  if (run.run.state === 'FAILED') return '生成遇到问题，正在结束本次任务。'
+  if (terminalRunStates.has(run.run.state)) return '章节已经处理完毕，正在打开讲解。'
+  const latest = run.activities.at(-1)
+  if (!latest) return '正在确认规则书和讲解范围…'
+  const operation = latest.operation.split('|')[0]
+  const title = section ? `“${section.title}”` : '当前章节'
+  if (operation === 'searchRuleEvidence') return `已找到${title}的规则依据，正在继续整理…`
+  if (operation === 'composeTeachingSection') return `${title}的初稿已完成，正在核对规则…`
+  if (operation === 'reviseTeachingSection') return `${title}已按核对结果修正，正在复核…`
+  if (operation === 'reviewGeneratedContent') return `刚完成${title}的一次规则核对，正在处理结果…`
+  return '讲解仍在继续生成…'
+})
+const generationActivityItems = computed(() => {
+  const activities = generationRun.value?.activities ?? []
+  return activities.slice(-4).reverse().map((activity, reverseIndex) => {
+    const originalIndex = activities.length - 1 - reverseIndex
+    const operation = activity.operation.split('|')[0] ?? ''
+    let sectionIdentifier = activity.operation.split('|')[1] ?? ''
+    if (!sectionIdentifier) {
+      for (let index = originalIndex - 1; index >= 0; index -= 1) {
+        sectionIdentifier = activities[index]!.operation.split('|')[1] ?? ''
+        if (sectionIdentifier) break
+      }
+    }
+    const title = generationPlan.value?.sections.find((section) =>
+      section.topicKey === sectionIdentifier || String(section.position) === sectionIdentifier)?.title
+    const labels: Record<string, string> = {
+      searchRuleEvidence: title ? `找到“${title}”的规则依据` : '找到一组规则依据',
+      composeTeachingSection: title ? `写完“${title}”的讲解初稿` : '写完一节讲解初稿',
+      reviseTeachingSection: title ? `修正“${title}”的讲解` : '修正一节讲解',
+      reviewGeneratedContent: title ? `核对“${title}”的规则内容` : '完成一次规则核对',
+    }
+    return { sequence: activity.sequence, label: labels[operation] ?? '完成一项讲解处理' }
+  })
+})
+const generationElapsed = computed(() => {
+  const minutes = Math.floor(generationElapsedSeconds.value / 60)
+  const seconds = generationElapsedSeconds.value % 60
+  return minutes > 0 ? `${minutes} 分 ${seconds.toString().padStart(2, '0')} 秒` : `${seconds} 秒`
+})
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
@@ -113,16 +201,52 @@ async function startLesson(versionId: string) {
     if (!planResponse.ok) throw new Error('规则书已读取，但讲解目录生成失败。')
     const plan = await planResponse.json() as TeachingPlanResponse
     message.value = '目录已经准备好，正在逐节核对并生成讲解…'
-    const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
+    const lessonRequest = checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
       method: 'POST',
       headers: { [csrf.headerName]: csrf.token },
     })
+    startGenerationFeedback(plan)
+    const lessonResponse = await lessonRequest
     if (!lessonResponse.ok) throw new Error('讲解生成没有完成，可以稍后从“我的讲解”继续。')
     localStorage.setItem('rulepilot:last-plan-id', plan.id)
     await router.push({ name: 'lesson', params: { planId: plan.id } })
   } finally {
+    stopGenerationFeedback()
     preparingVersionId.value = ''
   }
+}
+
+function startGenerationFeedback(plan: TeachingPlanResponse) {
+  stopGenerationFeedback()
+  generationPlan.value = plan
+  generationRun.value = null
+  generationElapsedSeconds.value = 0
+  generationStartedAt = Date.now()
+  generationClockTimer = setInterval(() => {
+    generationElapsedSeconds.value = Math.floor((Date.now() - generationStartedAt) / 1000)
+  }, 1000)
+  void pollGenerationRun(plan.id)
+}
+
+async function pollGenerationRun(planId: string) {
+  try {
+    const response = await checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId)}`)
+    if (response.ok) generationRun.value = await response.json() as AssistantRunDetails
+  } catch {
+    // The generation request remains authoritative; progress polling is best-effort.
+  }
+  if (generationPlan.value?.id === planId) {
+    generationPollTimer = setTimeout(() => void pollGenerationRun(planId), 1000)
+  }
+}
+
+function stopGenerationFeedback() {
+  if (generationPollTimer) clearTimeout(generationPollTimer)
+  if (generationClockTimer) clearInterval(generationClockTimer)
+  generationPollTimer = undefined
+  generationClockTimer = undefined
+  generationPlan.value = null
+  generationRun.value = null
 }
 
 function watchProgress(versionId: string) {
@@ -185,6 +309,7 @@ watch(editionId, () => {
   })
 })
 onMounted(load)
+onBeforeUnmount(stopGenerationFeedback)
 </script>
 
 <template>
@@ -243,10 +368,54 @@ onMounted(load)
           </button>
         </form>
 
-        <p v-if="message" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
+        <p v-if="message && !generationPlan" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
         <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
-        <div v-if="preparingVersionId || processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
-          <div class="h-full bg-copper transition-all" :class="preparingVersionId ? 'animate-pulse' : ''" :style="{ width: preparingVersionId ? '100%' : `${progress[processingVersionId]?.percentage ?? 0}%` }" />
+        <section v-if="generationPlan" class="mt-5 rounded-xl border border-copper/25 bg-paper p-5 text-left shadow-sm" aria-live="polite" aria-busy="true">
+          <div class="flex items-start gap-3">
+            <span class="mt-1 size-4 shrink-0 animate-spin rounded-full border-2 border-copper/25 border-t-copper" aria-hidden="true" />
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <h2 class="font-display text-xl font-semibold">正在把规则整理成讲解</h2>
+                <span class="text-xs tabular-nums text-ink/45">已用时 {{ generationElapsed }}</span>
+              </div>
+              <p class="mt-2 text-sm font-medium leading-6 text-ink/75">{{ generationStatus }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/45">复杂规则书和严格核对可能需要几分钟，请保持此页打开。</p>
+            </div>
+          </div>
+
+          <div class="mt-5 flex items-center justify-between gap-3 text-xs text-ink/45">
+            <span>讲解章节</span>
+            <span v-if="generationSection">第 {{ generationSectionIndex + 1 }} / {{ generationPlan.sections.length }} 节</span>
+          </div>
+          <ol class="mt-2 flex flex-wrap gap-2" aria-label="讲解章节生成进度">
+            <li
+              v-for="(section, index) in generationPlan.sections"
+              :key="section.topicKey"
+              class="flex min-h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs"
+              :class="index < generationSectionIndex
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : index === generationSectionIndex
+                  ? 'border-copper/40 bg-copper/10 font-semibold text-copper'
+                  : 'border-ink/10 text-ink/35'"
+              :aria-current="index === generationSectionIndex ? 'step' : undefined"
+              :title="section.title"
+            >
+              <span aria-hidden="true">{{ index < generationSectionIndex ? '✓' : section.position }}</span>
+              <span class="max-w-32 truncate">{{ section.title }}</span>
+            </li>
+          </ol>
+
+          <div v-if="generationActivityItems.length" class="mt-5 border-t border-ink/10 pt-4">
+            <p class="text-xs font-semibold uppercase tracking-wider text-ink/35">刚刚完成</p>
+            <ul class="mt-2 space-y-1.5 text-sm text-ink/60">
+              <li v-for="item in generationActivityItems" :key="item.sequence" class="flex gap-2">
+                <span class="text-copper" aria-hidden="true">·</span><span>{{ item.label }}</span>
+              </li>
+            </ul>
+          </div>
+        </section>
+        <div v-if="processingVersionId && !generationPlan" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
+          <div class="h-full bg-copper transition-all" :style="{ width: `${progress[processingVersionId]?.percentage ?? 0}%` }" />
         </div>
       </section>
 

@@ -91,6 +91,19 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<RunDetails> findLatestOwned(
+            AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        if (mode == null || subjectId == null || ownerUsername == null || ownerUsername.isBlank()) {
+            return Optional.empty();
+        }
+        return repository.findLatest(mode, subjectId, ownerUsername.strip())
+                .map(run -> new RunDetails(
+                        snapshot(run), repository.steps(run.id()), execution.budget(run.id()),
+                        execution.activities(run.id())));
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void requestCancellation(UUID runId, String ownerUsername) {
         execution.requestCancellation(runId, ownerUsername);

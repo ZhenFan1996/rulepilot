@@ -17,6 +17,8 @@ public interface AssistantRuns {
 
     Optional<RunDetails> findOwned(UUID runId, String ownerUsername);
 
+    Optional<RunDetails> findLatestOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername);
+
     record RunSnapshot(
             UUID id,
             AssistantRunMode mode,

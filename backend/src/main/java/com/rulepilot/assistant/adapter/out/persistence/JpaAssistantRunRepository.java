@@ -91,18 +91,27 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
         if (rows.isEmpty()) {
             return Optional.empty();
         }
-        Object[] row = (Object[]) rows.getFirst();
-        return Optional.of(new AssistantRun(
-                (UUID) row[0],
-                AssistantRunMode.valueOf((String) row[1]),
-                (UUID) row[2],
-                (String) row[3],
-                AssistantRunState.valueOf((String) row[4]),
-                ((Number) row[5]).longValue(),
-                (Instant) row[6],
-                (Instant) row[7],
-                (Instant) row[8],
-                (String) row[9]));
+        return Optional.of(run((Object[]) rows.getFirst()));
+    }
+
+    @Override
+    public Optional<AssistantRun> findLatest(
+            AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        List<?> rows = entityManager
+                .createNativeQuery(
+                        """
+                        select id, mode, subject_id, owner_username, state, revision,
+                               created_at, updated_at, completed_at, last_error_code
+                        from assistant_run
+                        where mode = :mode and subject_id = :subjectId and owner_username = :owner
+                        order by created_at desc
+                        fetch first 1 row only
+                        """)
+                .setParameter("mode", mode.name())
+                .setParameter("subjectId", subjectId)
+                .setParameter("owner", ownerUsername)
+                .getResultList();
+        return rows.isEmpty() ? Optional.empty() : Optional.of(run((Object[]) rows.getFirst()));
     }
 
     @Override
@@ -155,5 +164,19 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 AssistantRunState.valueOf((String) row[2]),
                 (String) row[3],
                 (Instant) row[4]);
+    }
+
+    private AssistantRun run(Object[] row) {
+        return new AssistantRun(
+                (UUID) row[0],
+                AssistantRunMode.valueOf((String) row[1]),
+                (UUID) row[2],
+                (String) row[3],
+                AssistantRunState.valueOf((String) row[4]),
+                ((Number) row[5]).longValue(),
+                (Instant) row[6],
+                (Instant) row[7],
+                (Instant) row[8],
+                (String) row[9]);
     }
 }

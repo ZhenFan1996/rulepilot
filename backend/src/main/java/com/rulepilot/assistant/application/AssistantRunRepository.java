@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.AssistantRuns.StepSnapshot;
+import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.domain.AssistantRun;
 import java.util.List;
 import java.util.Optional;
@@ -13,6 +14,8 @@ public interface AssistantRunRepository {
     boolean update(AssistantRun previous, AssistantRun changed, String summary);
 
     Optional<AssistantRun> find(UUID runId);
+
+    Optional<AssistantRun> findLatest(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 
     List<StepSnapshot> steps(UUID runId);
 }
