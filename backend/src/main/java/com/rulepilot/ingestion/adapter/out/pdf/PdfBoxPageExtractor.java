@@ -30,7 +30,6 @@ import org.springframework.stereotype.Component;
 public class PdfBoxPageExtractor implements PdfPageExtractor {
 
     private static final Set<COSName> ACTIVE_CONTENT_KEYS = Set.of(
-            COSName.OPEN_ACTION,
             COSName.AA,
             COSName.JS,
             COSName.JAVA_SCRIPT,

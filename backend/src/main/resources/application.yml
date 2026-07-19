@@ -118,6 +118,7 @@ rulepilot:
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
     agent:
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:24}
+      timeout: ${TEACHING_AGENT_TIMEOUT:PT5M}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:

@@ -1,5 +1,6 @@
 package com.rulepilot.ingestion.adapter.out.pdf;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.ByteArrayInputStream;
@@ -23,11 +24,29 @@ class PdfBoxPageExtractorTest {
     }
 
     @Test
-    void rejectsPdfOpenActionsBeforeTextExtraction() throws IOException {
+    void allowsPassiveGoToOpenAction() throws IOException {
         byte[] pdf;
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             document.addPage(new PDPage());
-            document.getDocumentCatalog().getCOSObject().setItem(COSName.OPEN_ACTION, new COSDictionary());
+            COSDictionary openAction = new COSDictionary();
+            openAction.setName(COSName.S, "GoTo");
+            document.getDocumentCatalog().getCOSObject().setItem(COSName.OPEN_ACTION, openAction);
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        assertThat(new PdfBoxPageExtractor(10, 10_000).extract(new ByteArrayInputStream(pdf)))
+                .hasSize(1);
+    }
+
+    @Test
+    void rejectsJavaScriptOpenActionBeforeTextExtraction() throws IOException {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            document.addPage(new PDPage());
+            COSDictionary openAction = new COSDictionary();
+            openAction.setName(COSName.S, "JavaScript");
+            document.getDocumentCatalog().getCOSObject().setItem(COSName.OPEN_ACTION, openAction);
             document.save(output);
             pdf = output.toByteArray();
         }

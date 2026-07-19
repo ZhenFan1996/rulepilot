@@ -26,6 +26,7 @@ test-results/
 .local/
 local-data/
 uploads/
+rulebooks/
 *.log
 
 # IDE files

@@ -23,7 +23,8 @@ public class AssistantRunService implements AssistantRuns {
 
     private final AssistantRunRepository repository;
     private final AgentExecutionControl execution;
-    private final BudgetLimits limits;
+    private final BudgetLimits defaultLimits;
+    private final BudgetLimits teachingLimits;
     private final Clock clock = Clock.systemUTC();
 
     public AssistantRunService(
@@ -33,10 +34,12 @@ public class AssistantRunService implements AssistantRuns {
             @Value("${rulepilot.agent.max-tool-calls:24}") int maxToolCalls,
             @Value("${rulepilot.agent.max-model-calls:16}") int maxModelCalls,
             @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
-            @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout) {
+            @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
+            @Value("${rulepilot.teaching.agent.timeout:PT5M}") Duration teachingTimeout) {
         this.repository = repository;
         this.execution = execution;
-        this.limits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
+        this.defaultLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
+        this.teachingLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, teachingTimeout);
     }
 
     @Override
@@ -44,7 +47,7 @@ public class AssistantRunService implements AssistantRuns {
     public RunSnapshot start(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
         AssistantRun run = AssistantRun.start(mode, subjectId, ownerUsername, Instant.now(clock));
         repository.insert(run, "Run received");
-        execution.initialize(run.id(), limits, run.createdAt());
+        execution.initialize(run.id(), limitsFor(mode), run.createdAt());
         return snapshot(run);
     }
 
@@ -100,6 +103,10 @@ public class AssistantRunService implements AssistantRuns {
             throw new AssistantRunVersionConflictException();
         }
         return current;
+    }
+
+    private BudgetLimits limitsFor(AssistantRunMode mode) {
+        return mode == AssistantRunMode.TEACHING ? teachingLimits : defaultLimits;
     }
 
     private void persist(AssistantRun current, AssistantRun changed, String summary) {
