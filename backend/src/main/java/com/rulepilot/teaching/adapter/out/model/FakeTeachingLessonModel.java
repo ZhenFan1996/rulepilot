@@ -23,6 +23,7 @@ public class FakeTeachingLessonModel implements TeachingLessonModel {
                 label(request.sectionType()),
                 visual(request.sectionType()),
                 "按引用证据逐步完成本节操作",
+                List.of(request.evidence().getFirst().chunkId()),
                 steps);
     }
 

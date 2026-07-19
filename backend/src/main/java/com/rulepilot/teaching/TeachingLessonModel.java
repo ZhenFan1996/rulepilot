@@ -58,8 +58,10 @@ public interface TeachingLessonModel {
             String title,
             VisualKind visualKind,
             String visualCaption,
+            List<UUID> visualCitationIds,
             List<StepDraft> steps) {
         public SectionDraft {
+            visualCitationIds = visualCitationIds == null ? List.of() : List.copyOf(visualCitationIds);
             steps = steps == null ? List.of() : List.copyOf(steps);
         }
     }

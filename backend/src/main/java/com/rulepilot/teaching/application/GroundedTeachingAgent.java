@@ -241,9 +241,12 @@ public class GroundedTeachingAgent {
                 result -> estimateTokens(result.toString()));
         validateDraft(draft, modelRequest.maxSteps());
 
-        List<UUID> allEvidenceIds = evidence.stream().map(RuleEvidence::chunkId).toList();
+        Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
+        List<UUID> visualCitationIds = validatedVisualCitationIds(draft, allowedEvidence);
         List<EvidenceClaim> generatedClaims = new ArrayList<>();
-        generatedClaims.add(new EvidenceClaim(draft.visualCaption(), allEvidenceIds));
+        generatedClaims.add(new EvidenceClaim(draft.visualCaption(), visualCitationIds));
         generatedClaims.addAll(draft.steps().stream()
                 .map(step -> new EvidenceClaim(step.text(), step.citationIds()))
                 .toList());
@@ -261,7 +264,7 @@ public class GroundedTeachingAgent {
                         ContentType.LESSON,
                         new TaskContext(guidance.objective(), guidance.coverageChecklist()),
                         Stream.concat(
-                                        Stream.of(new Claim(1, draft.visualCaption(), allEvidenceIds)),
+                                        Stream.of(new Claim(1, draft.visualCaption(), visualCitationIds)),
                                         IntStream.range(0, draft.steps().size())
                                                 .mapToObj(index -> new Claim(
                                                         index + 2,
@@ -279,13 +282,11 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException("teaching section did not pass factual consistency review");
         }
 
-        Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(
-                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
-        List<Integer> visualSourcePages = evidence.stream()
+        List<Integer> visualSourcePages = visualCitationIds.stream()
+                .map(allowedEvidence::get)
                 .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
                 .distinct()
                 .sorted()
@@ -300,8 +301,19 @@ public class GroundedTeachingAgent {
                 draft.visualKind(),
                 draft.visualCaption().strip(),
                 visualSourcePages,
-                allEvidenceIds,
+                visualCitationIds,
                 steps);
+    }
+
+    private List<UUID> validatedVisualCitationIds(
+            SectionDraft draft,
+            Map<UUID, RuleEvidence> allowedEvidence) {
+        LinkedHashSet<UUID> citationIds = new LinkedHashSet<>(draft.visualCitationIds());
+        if (citationIds.isEmpty() || citationIds.contains(null)
+                || !allowedEvidence.keySet().containsAll(citationIds)) {
+            throw new IllegalArgumentException("teaching visual cites evidence outside retrieval scope");
+        }
+        return List.copyOf(citationIds);
     }
 
     private LessonStep validatedStep(
@@ -331,6 +343,7 @@ public class GroundedTeachingAgent {
                 || draft.visualKind() == null
                 || draft.visualCaption() == null || draft.visualCaption().isBlank()
                 || draft.visualCaption().length() > 240
+                || draft.visualCitationIds().isEmpty()
                 || draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps)) {
             throw new IllegalArgumentException("teaching section output is invalid");
         }

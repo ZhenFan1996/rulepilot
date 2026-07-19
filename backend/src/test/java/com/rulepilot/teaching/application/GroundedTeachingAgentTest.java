@@ -51,6 +51,7 @@ class GroundedTeachingAgentTest {
                     "三步完成开局",
                     VisualKind.TABLE_LAYOUT,
                     "桌面布置示意",
+                    List.of(chunkId),
                     List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
         };
         AtomicInteger criticCalls = new AtomicInteger();
@@ -112,6 +113,7 @@ class GroundedTeachingAgentTest {
                     request.sectionType().name(),
                     VisualKind.REFERENCE_CARD,
                     "本节规则提示",
+                    List.of(source.chunkId()),
                     List.of(new TeachingLessonModel.StepDraft(source.excerpt(), List.of(source.chunkId()))));
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -151,6 +153,7 @@ class GroundedTeachingAgentTest {
                     "完成开局",
                     VisualKind.TABLE_LAYOUT,
                     "桌面布置示意",
+                    List.of(supplementary.chunkId()),
                     List.of(new TeachingLessonModel.StepDraft(
                             "将棋盘放在中央，每位玩家拿取自己的玩家板和五枚硬币。",
                             List.of(primary.chunkId(), supplementary.chunkId()))));
@@ -163,6 +166,9 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(retrievalCalls).hasValue(2);
+        assertThat(lesson.sections().getFirst().visualSourcePages()).containsExactly(3);
+        assertThat(lesson.sections().getFirst().visualSourceChunkIds())
+                .containsExactly(supplementary.chunkId());
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds())
                 .containsExactly(primary.chunkId(), supplementary.chunkId());
     }
@@ -197,6 +203,7 @@ class GroundedTeachingAgentTest {
                     "平衡证据开局",
                     VisualKind.TABLE_LAYOUT,
                     "桌面布置示意",
+                    List.of(supplementary.getFirst().chunkId()),
                     List.of(new TeachingLessonModel.StepDraft("按规则完成开局。", expectedOrder)));
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -228,6 +235,7 @@ class GroundedTeachingAgentTest {
                 "完成开局",
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
+                List.of(primary.chunkId()),
                 List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(primary.chunkId()))));
 
         GroundedTeachingAgent withFailedSupplement = new GroundedTeachingAgent(
@@ -263,6 +271,7 @@ class GroundedTeachingAgentTest {
                 "开局",
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
+                List.of(evidence.chunkId()),
                 List.of(new TeachingLessonModel.StepDraft("捏造的步骤", List.of(UUID.randomUUID()))));
         GroundedTeachingAgent agent =
                 new GroundedTeachingAgent(
@@ -276,6 +285,33 @@ class GroundedTeachingAgentTest {
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).isEmpty();
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("捏造");
+    }
+
+    @Test
+    void rejectsVisualCitationsOutsideTheRetrievedScope() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+                "开局",
+                VisualKind.TABLE_LAYOUT,
+                "桌面布置示意",
+                List.of(UUID.randomUUID()),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "将棋盘放在桌面中央。", List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.sections().getFirst().visualSourceChunkIds()).isEmpty();
     }
 
     @Test
@@ -332,6 +368,7 @@ class GroundedTeachingAgentTest {
                 "开局",
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
+                List.of(chunkId),
                 List.of(new TeachingLessonModel.StepDraft("玩家可以任意放置棋盘。", List.of(chunkId))));
         GeneratedContentCritic rejectingCritic = (request, risk) -> new GeneratedContentCritic.Review(
                 true,
