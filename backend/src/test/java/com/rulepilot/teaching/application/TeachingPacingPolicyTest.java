@@ -53,6 +53,7 @@ class TeachingPacingPolicyTest {
                         types.get(index).name(),
                         "Explain topic",
                         types.get(index).required(),
+                        false,
                         List.of(types.get(index).name()),
                         List.of(tag(types.get(index)))))
                 .toList();

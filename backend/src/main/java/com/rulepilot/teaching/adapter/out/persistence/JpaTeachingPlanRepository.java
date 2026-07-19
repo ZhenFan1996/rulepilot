@@ -176,6 +176,9 @@ class TeachingPlanSectionEntity {
     @Column(nullable = false)
     boolean required;
 
+    @Column(name = "visual_evidence_recommended", nullable = false)
+    boolean visualEvidenceRecommended;
+
     @Column(name = "retrieval_queries", nullable = false, columnDefinition = "text")
     String retrievalQueries;
 
@@ -192,6 +195,7 @@ class TeachingPlanSectionEntity {
         this.title = section.title();
         this.objective = section.objective();
         this.required = section.required();
+        this.visualEvidenceRecommended = section.visualEvidenceRecommended();
         this.retrievalQueries = String.join("\n", section.retrievalQueries());
         this.coverageTags = String.join(",", section.coverageTags());
     }
@@ -203,6 +207,7 @@ class TeachingPlanSectionEntity {
                 title,
                 objective,
                 required,
+                visualEvidenceRecommended,
                 retrievalQueries.lines().filter(value -> !value.isBlank()).toList(),
                 coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")));
     }

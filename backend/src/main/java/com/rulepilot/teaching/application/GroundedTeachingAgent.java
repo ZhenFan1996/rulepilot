@@ -328,7 +328,7 @@ public class GroundedTeachingAgent {
 
     private List<TeachingLessonModel.PageImageInput> selectedPageImages(
             TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
-        if (!model.supportsVisualEvidence()) return List.of();
+        if (!planned.visualEvidenceRecommended() || !model.supportsVisualEvidence()) return List.of();
         Map<Integer, com.rulepilot.assistant.AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         Map<Integer, Integer> scores = new LinkedHashMap<>();
         Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();

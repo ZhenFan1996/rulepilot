@@ -12,8 +12,8 @@ class VersionedAgentPromptsTest {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
                 resource("teaching-agent-v10-system.txt"),
                 resource("teaching-agent-v8-user.txt"),
-                resource("teaching-outline-v2-system.txt"),
-                resource("teaching-outline-v2-user.txt"),
+                resource("teaching-outline-v3-system.txt"),
+                resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v5-system.txt"),
@@ -48,7 +48,14 @@ class VersionedAgentPromptsTest {
                         "{visualPages}",
                         "{repair}");
         assertThat(prompts.teachingOutlineSystem())
-                .contains("game-specific lesson", "core_loop", "retrieval query", "objective");
+                .contains(
+                        "game-specific lesson",
+                        "core_loop",
+                        "retrieval query",
+                        "objective",
+                        "visualEvidenceRecommended",
+                        "page artwork",
+                        "page prose is sufficient");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",

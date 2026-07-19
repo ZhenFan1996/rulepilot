@@ -258,6 +258,53 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void withholdsPageImagesWhenTheOutlineAgentSaysProseIsSufficient() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence pageBackedEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Round end",
+                "Advance the round marker after every player has passed.",
+                7,
+                7,
+                List.of(new RulePageImage(7, "image/jpeg", new byte[] {7}, 1_086, 1_511)));
+        TeachingLessonModel visionModel = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).isEmpty();
+                return new SectionDraft(
+                        "一轮如何结束",
+                        VisualKind.FLOW_DIAGRAM,
+                        "所有玩家跳过后推进轮次标记。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "推进轮次",
+                                TeachingMove.FLOW,
+                                "所有玩家都跳过后，将轮次标记推进一格。",
+                                List.of(chunkId))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(pageBackedEvidence),
+                visionModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(nonVisualPlan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+    }
+
+    @Test
     void ranksPagesByTopicEvidenceCoverageInsteadOfFirstImageOrder() {
         UUID versionId = UUID.randomUUID();
         RulePageImage componentPage = new RulePageImage(2, "image/jpeg", new byte[] {2}, 1_086, 1_511);
@@ -683,6 +730,28 @@ class GroundedTeachingAgentTest {
                 Instant.now());
     }
 
+    private TeachingPlan nonVisualPlan(UUID versionId) {
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        TeachingSectionType.ROUND_STRUCTURE.name(),
+                        "一轮如何结束",
+                        "Explain round progression",
+                        true,
+                        false,
+                        List.of("round end", "pass"),
+                        List.of("core_loop"))),
+                "player",
+                Instant.now());
+    }
+
     private PlannedSection topic(int position, TeachingSectionType type) {
         String tag = switch (type) {
             case SETUP -> "setup";
@@ -697,6 +766,7 @@ class GroundedTeachingAgentTest {
                 type.name(),
                 "Explain " + type.name(),
                 true,
+                type == TeachingSectionType.SETUP || type == TeachingSectionType.COMPONENTS,
                 List.of(type.name(), "More " + type.name()),
                 List.of(tag));
     }

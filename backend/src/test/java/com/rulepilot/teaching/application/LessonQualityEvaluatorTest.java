@@ -53,7 +53,7 @@ class LessonQualityEvaluatorTest {
     }
 
     private TopicDraft topic(String key, String title, List<String> tags, String query) {
-        return new TopicDraft(key, title, "Explain " + title, true, List.of(query), tags);
+        return new TopicDraft(key, title, "Explain " + title, true, false, List.of(query), tags);
     }
 
     private GeneratedContentCritic acceptedCritic() {

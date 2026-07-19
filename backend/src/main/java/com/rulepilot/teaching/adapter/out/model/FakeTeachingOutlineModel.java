@@ -20,11 +20,12 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                                 "Finish the game and determine the winner",
                                 "Explain the end trigger and every final scoring step.",
                                 true,
+                                false,
                                 List.of("end game final round", "final scoring winner"),
                                 List.of("end", "scoring"))));
     }
 
     private TopicDraft topic(String key, String title, String objective, String tag, String query) {
-        return new TopicDraft(key, title, objective, true, List.of(query), List.of(tag));
+        return new TopicDraft(key, title, objective, true, "setup".equals(tag), List.of(query), List.of(tag));
     }
 }

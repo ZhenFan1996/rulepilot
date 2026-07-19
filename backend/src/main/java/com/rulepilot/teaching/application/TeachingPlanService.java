@@ -49,7 +49,8 @@ public class TeachingPlanService {
                 documentVersionId,
                 outline.gameTitle(),
                 outline.topics().stream()
-                        .map(topic -> topic.key() + " tags=" + topic.coverageTags() + " queries=" + topic.retrievalQueries())
+                        .map(topic -> topic.key() + " visual=" + topic.visualEvidenceRecommended()
+                                + " tags=" + topic.coverageTags() + " queries=" + topic.retrievalQueries())
                         .toList());
         return repository.save(plans.create(
                 documentVersionId,

@@ -43,6 +43,7 @@ public class TeachingPlanFactory {
                             topic.title(),
                             topic.objective(),
                             topic.required(),
+                            topic.visualEvidenceRecommended(),
                             normalizedQueries(topic.retrievalQueries()),
                             normalizedTags(topic.coverageTags()));
                 })

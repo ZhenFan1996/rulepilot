@@ -49,6 +49,7 @@ public record TeachingPlan(
             String title,
             String objective,
             boolean required,
+            boolean visualEvidenceRecommended,
             List<String> retrievalQueries,
             List<String> coverageTags) {
         public PlannedSection {

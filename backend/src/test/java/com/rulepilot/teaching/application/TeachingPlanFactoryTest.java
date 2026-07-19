@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -16,9 +17,9 @@ class TeachingPlanFactoryTest {
                 "SETI",
                 "Lead a scientific institution searching for alien life.",
                 List.of(
-                        topic("build-the-solar-system", "Build the rotating solar system", List.of("setup")),
-                        topic("launch-and-listen", "Launch probes and listen for signals", List.of("core_loop")),
-                        topic("close-the-fifth-round", "Close round five and score", List.of("end", "scoring"))));
+                        topic("build-the-solar-system", "Build the rotating solar system", true, List.of("setup")),
+                        topic("launch-and-listen", "Launch probes and listen for signals", false, List.of("core_loop")),
+                        topic("close-the-fifth-round", "Close round five and score", false, List.of("end", "scoring"))));
 
         var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 3, 30, "player", outline);
 
@@ -26,9 +27,26 @@ class TeachingPlanFactoryTest {
         assertThat(plan.sections()).extracting(section -> section.title()).containsExactly(
                 "Build the rotating solar system", "Launch probes and listen for signals", "Close round five and score");
         assertThat(plan.sections()).extracting(section -> section.topicKey()).doesNotContain("objective", "components");
+        assertThat(plan.sections()).extracting(section -> section.visualEvidenceRecommended())
+                .containsExactly(true, false, false);
     }
 
-    private TopicDraft topic(String key, String title, List<String> tags) {
-        return new TopicDraft(key, title, "Explain " + title, true, List.of(title), tags);
+    @Test
+    void rejectsInvalidTopicShapeAtTheModelBoundarySoStructuredRepairCanRun() {
+        assertThatThrownBy(() -> new TopicDraft(
+                        "setup",
+                        "Setup",
+                        "x".repeat(601),
+                        true,
+                        true,
+                        List.of("setup"),
+                        List.of("setup")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("teaching outline topic is invalid");
+    }
+
+    private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {
+        return new TopicDraft(
+                key, title, "Explain " + title, true, visualEvidenceRecommended, List.of(title), tags);
     }
 }
