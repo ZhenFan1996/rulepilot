@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -86,7 +87,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ModelSectionDraft draft = ChatClient.create(models.modelFor(Role.TEACHING)).prompt()
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.TEACHING)).prompt();
+        if (models.usesDeepSeekNonThinkingGeneration(Role.TEACHING)) {
+            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            prompt = prompt.options(options);
+        }
+        ModelSectionDraft draft = prompt
                 .system(prompts.teachingSystem())
                 .user(user -> {
                     user.text(prompts.teachingUser())

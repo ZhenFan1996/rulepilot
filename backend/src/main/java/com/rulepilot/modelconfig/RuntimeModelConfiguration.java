@@ -32,6 +32,7 @@ public class RuntimeModelConfiguration {
 
     private final ChatModelFactory factory;
     private final State startupState;
+    private final boolean deepSeekGenerationThinking;
     private final ConcurrentMap<String, AtomicReference<State>> userStates = new ConcurrentHashMap<>();
 
     public RuntimeModelConfiguration(
@@ -42,8 +43,10 @@ public class RuntimeModelConfiguration {
             @Value("${rulepilot.answer.provider:fake}") String answerAdapter,
             @Value("${rulepilot.answer.model-provider:gemini}") String answerProvider,
             @Value("${rulepilot.critic.provider:fake}") String criticAdapter,
-            @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider) {
+            @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider,
+            @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking) {
         this.factory = factory;
+        this.deepSeekGenerationThinking = deepSeekGenerationThinking;
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>();
         addStartupProvider(providers, "gemini", properties.gemini());
         addStartupProvider(providers, "openai", properties.openai());
@@ -70,6 +73,12 @@ public class RuntimeModelConfiguration {
 
     public boolean usesFake(Role role) {
         return "fake".equals(providerFor(role));
+    }
+
+    public boolean usesDeepSeekNonThinkingGeneration(Role role) {
+        return !deepSeekGenerationThinking
+                && (role == Role.TEACHING || role == Role.ANSWER)
+                && "deepseek".equals(providerFor(role));
     }
 
     public String providerFor(Role role) {

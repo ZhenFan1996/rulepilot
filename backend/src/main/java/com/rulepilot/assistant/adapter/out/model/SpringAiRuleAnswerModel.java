@@ -7,8 +7,10 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -90,7 +92,13 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
     }
 
     private ModelDraft composeOnce(ModelRequest request, String repairInstruction) {
-        return ChatClient.create(models.modelFor(Role.ANSWER)).prompt()
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
+        if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            prompt = prompt.options(options);
+        }
+        return prompt
                 .system(prompts.answerSystem())
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())

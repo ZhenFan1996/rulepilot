@@ -300,13 +300,16 @@ public class GroundedTeachingAgent {
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
+        String previousRejection = null;
         for (int revision = 0; ; revision++) {
             try {
                 return acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
             } catch (IllegalArgumentException rejectedDraft) {
-                if (revision == MAX_REVISION_ATTEMPTS) {
+                String rejection = rejectionFingerprint(rejectedDraft);
+                if (revision == MAX_REVISION_ATTEMPTS || rejection.equals(previousRejection)) {
                     throw rejectedDraft;
                 }
+                previousRejection = rejection;
                 List<String> feedback = List.of(rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
                         : rejectedDraft.getMessage());
@@ -378,7 +381,16 @@ public class GroundedTeachingAgent {
                         ? ReviewRisk.HIGH_IMPACT
                         : ReviewRisk.LOW_CONFIDENCE);
         if (!review.accepted()) {
-            throw new IllegalArgumentException("Factual review rejected the draft: " + review.issues().stream()
+            String fingerprint = review.issues().stream()
+                    .map(issue -> issue.type() + ":" + issue.claimPosition() + ":" + issue.evidenceIds().stream()
+                            .map(UUID::toString)
+                            .sorted()
+                            .collect(Collectors.joining(",")))
+                    .sorted()
+                    .collect(Collectors.joining(";"));
+            throw new RejectedTeachingDraftException(
+                    fingerprint,
+                    "Factual review rejected the draft: " + review.issues().stream()
                     .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
                     .collect(Collectors.joining("; ")));
         }
@@ -468,6 +480,26 @@ public class GroundedTeachingAgent {
                         && UNRESOLVED_PDF_MARKER.matcher(step.text()).find())) {
             throw new IllegalArgumentException(
                     "Replace unresolved PDF icon markers with natural Simplified Chinese terms.");
+        }
+    }
+
+    private String rejectionFingerprint(IllegalArgumentException rejection) {
+        if (rejection instanceof RejectedTeachingDraftException criticRejection) {
+            return "critic:" + criticRejection.fingerprint();
+        }
+        return "validation:" + (rejection.getMessage() == null ? rejection.getClass().getName() : rejection.getMessage());
+    }
+
+    private static final class RejectedTeachingDraftException extends IllegalArgumentException {
+        private final String fingerprint;
+
+        private RejectedTeachingDraftException(String fingerprint, String message) {
+            super(message);
+            this.fingerprint = fingerprint;
+        }
+
+        private String fingerprint() {
+            return fingerprint;
         }
     }
 

@@ -418,16 +418,24 @@ class GroundedTeachingAgentTest {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools retrieval = request -> List.of(evidence(chunkId, versionId));
-        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+        AtomicInteger modelCalls = new AtomicInteger();
+        TeachingLessonModel model = request -> {
+            modelCalls.incrementAndGet();
+            return new TeachingLessonModel.SectionDraft(
                 "开局",
                 VisualKind.TABLE_LAYOUT,
                 "桌面布置示意",
                 List.of(chunkId),
                 List.of(new TeachingLessonModel.StepDraft("玩家可以任意放置棋盘。", List.of(chunkId))));
-        GeneratedContentCritic rejectingCritic = (request, risk) -> new GeneratedContentCritic.Review(
-                true,
-                List.of(new Issue(
-                        IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
+        };
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic rejectingCritic = (request, risk) -> {
+            criticCalls.incrementAndGet();
+            return new GeneratedContentCritic.Review(
+                    true,
+                    List.of(new Issue(
+                            IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
+        };
         GroundedTeachingAgent agent =
                 new GroundedTeachingAgent(
                         retrieval, model, new PolicyEvidenceVerifier(), rejectingCritic,
@@ -439,6 +447,8 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("任意放置");
+        assertThat(modelCalls).hasValue(2);
+        assertThat(criticCalls).hasValue(2);
     }
 
     private TeachingPlan plan(UUID versionId) {

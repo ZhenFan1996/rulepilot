@@ -29,7 +29,8 @@ class RuntimeModelConfigurationTest {
                 "fake",
                 "gemini",
                 "fake",
-                "gemini");
+                "gemini",
+                false);
 
         RuntimeModelConfiguration.Snapshot configured = configuration.configure(
                 "player", "deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash");
@@ -45,6 +46,12 @@ class RuntimeModelConfigurationTest {
                             UsernamePasswordAuthenticationToken.authenticated("player", "", java.util.List.of()));
             assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING)).isEqualTo("deepseek");
             assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER)).isSameAs(model);
+            assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.TEACHING))
+                    .isTrue();
+            assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.ANSWER))
+                    .isTrue();
+            assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
+                    .isFalse();
         } finally {
             SecurityContextHolder.clearContext();
         }
