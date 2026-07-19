@@ -51,7 +51,10 @@ public record IllustratedLesson(
         DO,
         EXAMPLE,
         WATCH,
-        CHECK
+        CHECK,
+        VISUAL,
+        FLOW,
+        LEDGER
     }
 
     public record LessonSection(

@@ -50,7 +50,7 @@ class GroundedTeachingAgentTest {
                 plan.id(),
                 LessonStatus.COMPLETE,
                 List.of(verified),
-                GroundedTeachingAgent.GENERATOR_VERSION,
+                "adaptive-teaching-v3",
                 Instant.now());
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> {
@@ -132,6 +132,65 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.DO);
         assertThat(retrievalCalls).hasValue(2);
         assertThat(criticCalls).hasValue(1);
+    }
+
+    @Test
+    void preservesAgentSelectedDynamicTeachingBlockKind() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
+        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+                "按顺序完成开局",
+                VisualKind.FLOW_DIAGRAM,
+                "沿着规则书中的开局顺序检查桌面。",
+                List.of(chunkId),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "开局流程",
+                        TeachingMove.FLOW,
+                        "先放置版图，再领取起始组件。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
+        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v4");
+    }
+
+    @Test
+    void rejectsVisualBlockWhenNoPageImageReachedTheModel() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
+        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+                "找到开局区域",
+                VisualKind.TABLE_LAYOUT,
+                "找到版图中央区域。",
+                List.of(chunkId),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "看版图中央",
+                        TeachingMove.VISUAL,
+                        "找到版图中央的放置区域。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test

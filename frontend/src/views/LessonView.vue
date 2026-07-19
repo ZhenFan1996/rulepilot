@@ -50,7 +50,7 @@ interface LessonSection {
   steps: Array<{
     position: number
     heading: string
-    kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK'
+    kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK' | 'VISUAL' | 'FLOW' | 'LEDGER'
     text: string
     sourcePages: number[]
   }>
@@ -228,9 +228,13 @@ const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
 const currentVisualPageUrl = computed(() => {
   const page = currentSection.value?.visualSourcePages[0]
+  return pageImageUrl(page)
+})
+
+function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
-})
+}
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
 const currentVideoChapter = computed(() => video.value?.chapters[progress.value.currentIndex] ?? null)
 const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
@@ -264,7 +268,12 @@ const teachingMoveMeta = {
   EXAMPLE: { label: '走一遍', marker: '例', tone: 'bg-emerald-100 text-emerald-800' },
   WATCH: { label: '别弄错', marker: '注', tone: 'bg-amber-100 text-amber-900' },
   CHECK: { label: '检查一下', marker: '验', tone: 'bg-ink-panel text-panel-text' },
+  VISUAL: { label: '看桌面', marker: '图', tone: 'bg-indigo/10 text-indigo' },
+  FLOW: { label: '顺着走', marker: '→', tone: 'bg-sky-100 text-sky-800' },
+  LEDGER: { label: '算清楚', marker: '账', tone: 'bg-emerald-100 text-emerald-800' },
 } as const
+
+const hasVisualBlock = computed(() => currentSection.value?.steps.some((step) => step.kind === 'VISUAL') ?? false)
 
 function lessonOutcome(section: LessonSection) {
   const tags = new Set(section.coverageTags)
@@ -1074,7 +1083,7 @@ onUnmounted(() => {
               </nav>
             </section>
 
-            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 rounded-3xl bg-indigo/8 p-4 sm:p-5">
+            <div v-if="mediaMode !== 'VIDEO' && !hasVisualBlock" class="mt-7 rounded-3xl bg-indigo/8 p-4 sm:p-5">
               <p class="text-xs font-semibold text-indigo">先看桌面 · {{ visualKindLabel(currentSection.visualKind) }}</p>
               <figure v-if="currentVisualPageUrl && !visualImageFailed" class="my-5 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
                 <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开大图">
@@ -1100,7 +1109,13 @@ onUnmounted(() => {
                 v-for="step in currentSection.steps"
                 :key="step.position"
                 class="grid gap-3 rounded-2xl border p-4 sm:grid-cols-[3rem_1fr] sm:p-5"
-                :class="step.kind === 'CHECK' ? 'border-ink/20 bg-ink/[0.035]' : 'border-ink/8'"
+                :class="{
+                  'border-ink/20 bg-ink/[0.035]': step.kind === 'CHECK',
+                  'border-indigo/20 bg-indigo/[0.035]': step.kind === 'VISUAL',
+                  'border-sky-200 bg-sky-50/60': step.kind === 'FLOW',
+                  'border-emerald-200 bg-emerald-50/60': step.kind === 'LEDGER',
+                  'border-ink/8': !['CHECK', 'VISUAL', 'FLOW', 'LEDGER'].includes(step.kind),
+                }"
               >
                 <div class="flex items-center gap-2 sm:block">
                   <span class="grid size-10 place-items-center rounded-xl text-sm font-bold" :class="moveMeta(step.kind).tone">{{ moveMeta(step.kind).marker }}</span>
@@ -1109,6 +1124,12 @@ onUnmounted(() => {
                 <div>
                   <p class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</p>
                   <h3 class="mt-1 font-display text-xl font-semibold leading-7">{{ step.heading || `第 ${step.position} 步` }}</h3>
+                  <figure v-if="step.kind === 'VISUAL' && pageImageUrl(step.sourcePages[0]) && !visualImageFailed" class="mt-4 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
+                    <a :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" title="打开规则书大图">
+                      <img :src="pageImageUrl(step.sourcePages[0])" :alt="`规则书第 ${step.sourcePages[0]} 页，${step.text}`" class="max-h-[26rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
+                    </a>
+                    <figcaption class="border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">配合第 {{ step.sourcePages[0] }} 页定位</figcaption>
+                  </figure>
                   <p class="mt-2 text-base leading-8 text-ink/75">{{ step.text }}</p>
                   <details v-if="step.sourcePages.length" class="mt-3">
                     <summary class="cursor-pointer text-sm font-semibold text-indigo">核对第 {{ step.sourcePages.join('、') }} 页</summary>

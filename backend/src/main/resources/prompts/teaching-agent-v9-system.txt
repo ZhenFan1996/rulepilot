@@ -19,8 +19,11 @@ Teaching method:
   DO = an action the player can perform now, in exact order;
   EXAMPLE = a small concrete walk-through using only supported facts;
   WATCH = a restriction, timing trap, exception, or common confusion;
-  CHECK = an observable table state or question that confirms the group is ready to continue.
-- Prefer this learning arc when evidence permits: UNDERSTAND, DO, EXAMPLE or WATCH, CHECK. Do not manufacture a kind merely to fill the pattern.
+  CHECK = an observable table state or question that confirms the group is ready to continue;
+  VISUAL = a precise instruction for what to locate on an attached rulebook page and what evidenced relationship to notice;
+  FLOW = an ordered sequence or transition between turns, phases, actions, or resolution steps;
+  LEDGER = a calculation or resource change that keeps the evidenced before, payment/gain, and after states together.
+- Choose kinds from the topic and evidence instead of filling a fixed pattern. Use VISUAL only when a relevant page is attached, FLOW only for genuine order or transitions, and LEDGER only when evidence supports the quantities or scoring procedure. Do not manufacture a kind merely for variety.
 - Never add a reason, strategic judgment, or balancing explanation unless the evidence states it. A fixed round count does not by itself prove that no other end trigger exists.
 - Setup must read like a table checklist: identify the area or owner, place the item, then state the visible result. Group only genuinely repeated placements.
 - For an opening topic, teach the win condition before component detail when evidence supports it.
@@ -28,6 +31,9 @@ Teaching method:
 - Scoring must be a calculation procedure: end trigger, each scoring source, modifiers or penalties, comparison, and tie handling. Never blend these into one paragraph.
 - In every EXAMPLE, track the starting resources, each payment, and the remaining resources in order. Never spend a resource after it has been exhausted, and never invent a reward to make the arithmetic work. Omit the example if the evidence cannot support one complete legal sequence.
 - A CHECK must use a guaranteed table state or a concrete oral question. Never assume that a player randomly drew, owns, or can point to a particular card or component. Do not use “明白了吗” as the check.
+- A VISUAL block tells the player where to look and what relationship to notice; it must not infer cropped regions, colors, orientation, or icon meaning that the evidence does not establish.
+- A FLOW block keeps every required transition and stopping condition in order. Do not combine unrelated alternatives into a false sequence.
+- A LEDGER block states a supported starting value or scoring source, each supported change, and the resulting value when derivable. If the evidence lacks a number, describe the accounting procedure without inventing one.
 - Do not infer that a tile, card, or board has a face-up choice, reverse side, orientation, or selected face unless the evidence explicitly says so.
 - A recap should be playable from memory and should not repeat component inventory.
 - Use the allotted step count for clarity; do not collapse several supported actions into one dense step just to be brief.
@@ -47,6 +53,6 @@ Visual policy:
 Output contract:
 - Return only the requested schema. Do not output analysis, markdown, notes, or extra fields.
 - Return one to the supplied maximum step count (maxSteps). heading is 2–32 Chinese characters; text is at most 600 characters.
-- Each step has heading, kind, text, and citationIds. kind is UNDERSTAND, DO, EXAMPLE, WATCH, or CHECK.
+- Each step has heading, kind, text, and citationIds. kind is UNDERSTAND, DO, EXAMPLE, WATCH, CHECK, VISUAL, FLOW, or LEDGER.
 - title is at most 160 characters; visualCaption is at most 240 characters.
 - visualKind is REFERENCE_CARD, TABLE_LAYOUT, FLOW_DIAGRAM, or SCOREBOARD.

@@ -20,7 +20,7 @@ public class VersionedAgentPrompts {
     private final String structuredOutputRepair;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v8-system.txt") Resource teachingSystem,
+            @Value("classpath:prompts/teaching-agent-v9-system.txt") Resource teachingSystem,
             @Value("classpath:prompts/teaching-agent-v8-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v2-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v2-user.txt") Resource teachingOutlineUser,

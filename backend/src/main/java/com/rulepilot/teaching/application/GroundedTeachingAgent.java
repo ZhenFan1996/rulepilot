@@ -52,7 +52,8 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v3";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v4";
+    private static final Set<String> REUSABLE_GENERATOR_VERSIONS = Set.of("adaptive-teaching-v3", GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
@@ -195,7 +196,7 @@ public class GroundedTeachingAgent {
             TeachingPlan plan, IllustratedLesson previousLesson) {
         if (previousLesson == null
                 || !plan.id().equals(previousLesson.teachingPlanId())
-                || !GENERATOR_VERSION.equals(previousLesson.generatorVersion())) {
+                || !REUSABLE_GENERATOR_VERSIONS.contains(previousLesson.generatorVersion())) {
             return Map.of();
         }
         Set<String> currentTopics = plan.sections().stream()
@@ -340,11 +341,12 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             TeachingLessonModel.SectionRequest modelRequest,
             SectionDraft draft) {
-        validateDraft(draft, modelRequest.maxSteps());
+        validateDraft(draft, modelRequest);
 
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
                 .collect(Collectors.toUnmodifiableMap(
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
+        validateVisualBlockEvidence(draft, modelRequest, allowedEvidence);
         List<UUID> visualCitationIds = validatedVisualCitationIds(draft, allowedEvidence);
         List<EvidenceClaim> generatedClaims = new ArrayList<>();
         generatedClaims.add(new EvidenceClaim(draft.visualCaption(), visualCitationIds));
@@ -430,6 +432,27 @@ public class GroundedTeachingAgent {
         return List.copyOf(citationIds);
     }
 
+    private void validateVisualBlockEvidence(
+            SectionDraft draft,
+            TeachingLessonModel.SectionRequest request,
+            Map<UUID, RuleEvidence> allowedEvidence) {
+        Set<Integer> attachedPages = request.pageImages().stream()
+                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
+        for (TeachingLessonModel.StepDraft step : draft.steps()) {
+            if (step.kind() != TeachingMove.VISUAL) continue;
+            boolean citesAttachedPage = step.citationIds().stream()
+                    .map(allowedEvidence::get)
+                    .filter(java.util.Objects::nonNull)
+                    .anyMatch(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                            .anyMatch(attachedPages::contains));
+            if (!citesAttachedPage) {
+                throw new IllegalArgumentException(
+                        "VISUAL teaching blocks must cite evidence from an attached rulebook page.");
+            }
+        }
+    }
+
     private LessonStep validatedStep(
             int position,
             TeachingLessonModel.StepDraft draft,
@@ -458,7 +481,7 @@ public class GroundedTeachingAgent {
                 List.copyOf(citationIds));
     }
 
-    private void validateDraft(SectionDraft draft, int maxSteps) {
+    private void validateDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
         if (draft == null) throw new IllegalArgumentException("The draft is missing.");
         if (draft.title() == null || draft.title().isBlank() || draft.title().length() > 160)
             throw new IllegalArgumentException("The title is missing or longer than 160 characters.");
@@ -467,13 +490,17 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException("The visual caption is missing or longer than 240 characters.");
         if (draft.visualCitationIds().isEmpty())
             throw new IllegalArgumentException("The visual caption has no evidence citation.");
-        if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps))
+        if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, request.maxSteps()))
             throw new IllegalArgumentException("The draft must contain between 1 and "
-                    + Math.min(MAX_STEPS_PER_SECTION, maxSteps) + " steps.");
+                    + Math.min(MAX_STEPS_PER_SECTION, request.maxSteps()) + " steps.");
         if (draft.steps().stream().anyMatch(step -> step == null
                 || step.heading() == null || step.heading().isBlank() || step.heading().length() > 32
                 || step.kind() == null)) {
             throw new IllegalArgumentException("Every step needs a short heading and a teaching kind.");
+        }
+        if (request.pageImages().isEmpty()
+                && draft.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) {
+            throw new IllegalArgumentException("VISUAL teaching blocks require attached rulebook page evidence.");
         }
         if (UNRESOLVED_PDF_MARKER.matcher(draft.visualCaption()).find()
                 || draft.steps().stream().anyMatch(step -> step != null && step.text() != null
