@@ -19,7 +19,7 @@ interface TeachingPlanResponse {
 }
 interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
-  assignments: { teaching: string }
+  assignments: { teaching: string; visual: string }
 }
 interface AssistantRunDetails {
   run: {
@@ -72,17 +72,17 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
 }))))
 const selectedEdition = computed(() => editionOptions.value.find((item) => item.id === editionId.value))
 const canUpload = computed(() => Boolean(file.value && editionId.value && !uploading.value && !preparingVersionId.value))
-const teachingProvider = computed(() => modelConfiguration.value?.providers.find(
-  (provider) => provider.id === modelConfiguration.value?.assignments.teaching,
+const visualProvider = computed(() => modelConfiguration.value?.providers.find(
+  (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
-const teachingVisionCapable = computed(() => teachingProvider.value?.visionCapable === true)
-const teachingProviderLabel = computed(() => ({
+const visualVisionCapable = computed(() => visualProvider.value?.visionCapable === true)
+const visualProviderLabel = computed(() => ({
   gemini: 'Gemini',
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
   compatible: '兼容模型',
   fake: '内置演示',
-}[modelConfiguration.value?.assignments.teaching ?? 'fake'] ?? '当前模型'))
+}[modelConfiguration.value?.assignments.visual ?? 'fake'] ?? '当前模型'))
 const terminalRunStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 const generationSectionIdentifier = computed(() => {
   const activities = generationRun.value?.activities ?? []
@@ -366,8 +366,8 @@ onBeforeUnmount(stopGenerationFeedback)
             <RouterLink :to="{ name: 'catalog' }" class="font-semibold underline">从 BGG 查找或手动添加</RouterLink>
           </div>
 
-          <div v-if="modelConfiguration && !teachingVisionCapable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-            <p><span class="font-semibold">{{ teachingProviderLabel }} 目前只能读文字。</span>讲解仍可生成并附上原文页，但不会识别组件照片、版图位置或图标。</p>
+          <div v-if="modelConfiguration && !visualVisionCapable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
+            <p><span class="font-semibold">{{ visualProviderLabel }}目前不读取页面图片。</span>讲解仍可生成并附上原文页，但不会识别组件照片、版图位置或图标。</p>
             <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">连接支持图片的 Gemini 或 OpenAI</RouterLink>
           </div>
 
@@ -404,7 +404,7 @@ onBeforeUnmount(stopGenerationFeedback)
                 <span class="text-xs tabular-nums text-ink/45">已用时 {{ generationElapsed }}</span>
               </div>
               <p class="mt-2 text-sm font-medium leading-6 text-ink/75">{{ generationStatus }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/45">复杂规则书和严格核对可能需要几分钟，请保持此页打开。{{ teachingVisionCapable ? '页面图片会参与讲解。' : '本次只读取文字，页面图片仅作为原文供你查看。' }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/45">复杂规则书和严格核对可能需要几分钟，请保持此页打开。{{ visualVisionCapable ? `${visualProviderLabel} 会读取关键页面图片。` : '本次只读取文字，页面图片仅作为原文供你查看。' }}</p>
             </div>
           </div>
 

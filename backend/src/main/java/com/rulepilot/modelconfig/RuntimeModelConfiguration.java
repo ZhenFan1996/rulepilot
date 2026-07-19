@@ -24,6 +24,7 @@ public class RuntimeModelConfiguration {
 
     public enum Role {
         TEACHING,
+        VISUAL,
         ANSWER,
         CRITIC
     }
@@ -40,6 +41,8 @@ public class RuntimeModelConfiguration {
             ModelProviderProperties properties,
             @Value("${rulepilot.teaching.provider:fake}") String teachingAdapter,
             @Value("${rulepilot.teaching.model-provider:gemini}") String teachingProvider,
+            @Value("${rulepilot.visual.provider:fake}") String visualAdapter,
+            @Value("${rulepilot.visual.model-provider:gemini}") String visualProvider,
             @Value("${rulepilot.answer.provider:fake}") String answerAdapter,
             @Value("${rulepilot.answer.model-provider:gemini}") String answerProvider,
             @Value("${rulepilot.critic.provider:fake}") String criticAdapter,
@@ -52,10 +55,12 @@ public class RuntimeModelConfiguration {
         addStartupProvider(providers, "openai", properties.openai());
         addStartupProvider(providers, "deepseek", properties.deepseek());
         addStartupProvider(providers, "compatible", properties.compatible());
+        String teachingAssignment = assignment(teachingAdapter, teachingProvider, providers);
         this.startupState = new State(
                 Map.copyOf(providers),
                 new Assignments(
-                        assignment(teachingAdapter, teachingProvider, providers),
+                        teachingAssignment,
+                        visualAssignment(visualAdapter, visualProvider, teachingAssignment, providers),
                         assignment(answerAdapter, answerProvider, providers),
                         assignment(criticAdapter, criticProvider, providers)),
                 0);
@@ -116,11 +121,13 @@ public class RuntimeModelConfiguration {
         return snapshot(username);
     }
 
-    public synchronized Snapshot assign(String username, String teaching, String answer, String critic) {
+    public synchronized Snapshot assign(
+            String username, String teaching, String visual, String answer, String critic) {
         AtomicReference<State> userState = userState(username);
         State current = userState.get();
         Assignments assignments = new Assignments(
                 selectable(teaching, current.providers()),
+                selectableVisual(visual, current.providers()),
                 selectable(answer, current.providers()),
                 selectable(critic, current.providers()));
         userState.set(new State(current.providers(), assignments, current.revision() + 1));
@@ -175,6 +182,17 @@ public class RuntimeModelConfiguration {
         return "spring-ai".equalsIgnoreCase(adapter) ? selectable(provider, providers) : "fake";
     }
 
+    private String visualAssignment(
+            String adapter,
+            String provider,
+            String teachingAssignment,
+            Map<String, ConfiguredProvider> providers) {
+        if ("spring-ai".equalsIgnoreCase(adapter)) {
+            return selectableVisual(provider, providers);
+        }
+        return supportsVisionProvider(teachingAssignment) ? teachingAssignment : "fake";
+    }
+
     private String selectable(String provider, Map<String, ConfiguredProvider> providers) {
         if (provider == null || "fake".equalsIgnoreCase(provider.trim())) {
             return "fake";
@@ -184,6 +202,14 @@ public class RuntimeModelConfiguration {
             throw new IllegalArgumentException("model provider '" + id + "' must be configured before assignment");
         }
         return id;
+    }
+
+    private String selectableVisual(String provider, Map<String, ConfiguredProvider> providers) {
+        String selected = selectable(provider, providers);
+        if (!"fake".equals(selected) && !supportsVisionProvider(selected)) {
+            throw new IllegalArgumentException("visual model provider must support page images");
+        }
+        return selected;
     }
 
     private String providerId(String provider) {
@@ -264,10 +290,11 @@ public class RuntimeModelConfiguration {
             boolean apiKeyConfigured,
             boolean visionCapable) {}
 
-    public record Assignments(String teaching, String answer, String critic) {
+    public record Assignments(String teaching, String visual, String answer, String critic) {
         String forRole(Role role) {
             return switch (role) {
                 case TEACHING -> teaching;
+                case VISUAL -> visual;
                 case ANSWER -> answer;
                 case CRITIC -> critic;
             };
@@ -276,6 +303,7 @@ public class RuntimeModelConfiguration {
         Assignments replace(String current, String replacement) {
             return new Assignments(
                     teaching.equals(current) ? replacement : teaching,
+                    visual.equals(current) ? replacement : visual,
                     answer.equals(current) ? replacement : answer,
                     critic.equals(current) ? replacement : critic);
         }

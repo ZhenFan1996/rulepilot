@@ -8,7 +8,7 @@ interface Session { username: string; roles: string[] }
 interface TeachingPlan { id: string; gameTitle: string; createdAt: string }
 interface ModelSnapshot {
   providers: Array<{ configured: boolean }>
-  assignments: { teaching: string; answer: string; critic: string }
+  assignments: { teaching: string; visual: string; answer: string; critic: string }
 }
 
 const router = useRouter()
@@ -81,8 +81,9 @@ onMounted(load)
 
         <section class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <h2 class="font-display text-2xl font-semibold">当前模型分工</h2>
-          <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-3">
-            <div><dt class="text-ink/45">规则讲解</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
+          <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt class="text-ink/45">讲解文字</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
+            <div><dt class="text-ink/45">页面视觉</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
             <div><dt class="text-ink/45">规则答疑</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
             <div><dt class="text-ink/45">事实审校</dt><dd class="mt-1 font-semibold">{{ models?.assignments.critic }}</dd></div>
           </dl>

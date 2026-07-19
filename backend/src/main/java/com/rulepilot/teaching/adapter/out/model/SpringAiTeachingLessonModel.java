@@ -38,17 +38,20 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public String providerId() {
-        return models.providerFor(Role.TEACHING);
+        String teaching = models.providerFor(Role.TEACHING);
+        String visual = models.providerFor(Role.VISUAL);
+        return "fake".equals(visual) || teaching.equals(visual) ? teaching : teaching + "+" + visual;
     }
 
     @Override
     public boolean supportsVisualEvidence() {
-        return models.supportsVision(Role.TEACHING);
+        return !models.usesFake(Role.VISUAL) && models.supportsVision(Role.VISUAL);
     }
 
     @Override
     public SectionDraft compose(SectionRequest request) {
-        if (models.usesFake(Role.TEACHING)) {
+        Role role = roleFor(request);
+        if (models.usesFake(role)) {
             return fakeModel.compose(request);
         }
         RuntimeException firstFailure;
@@ -67,7 +70,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     @Override
     public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-        if (models.usesFake(Role.TEACHING)) {
+        Role role = roleFor(request);
+        if (models.usesFake(role)) {
             return fakeModel.revise(request, previousDraft, feedback);
         }
         String revisionInstruction = """
@@ -92,9 +96,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
+        Role role = roleFor(request);
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.TEACHING)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.TEACHING)) {
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role)).prompt();
+        if (models.usesDeepSeekNonThinkingGeneration(role)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             prompt = prompt.options(options);
@@ -113,13 +118,12 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .param("maxSteps", request.maxSteps())
                             .param("continuity", request.priorSections())
                             .param("evidence", modelEvidence(request))
-                            .param("visualEvidenceAvailable", models.supportsVision(Role.TEACHING)
-                                    && !request.pageImages().isEmpty())
+                            .param("visualEvidenceAvailable", role == Role.VISUAL)
                             .param("visualPages", request.pageImages().stream()
                                     .map(TeachingLessonModel.PageImageInput::pageNumber)
                                     .toList())
                             .param("repair", repairInstruction);
-                    if (models.supportsVision(Role.TEACHING)) {
+                    if (role == Role.VISUAL) {
                         request.pageImages().forEach(image -> user.media(
                                 MimeTypeUtils.parseMimeType(image.mediaType()),
                                 new ByteArrayResource(image.content())));
@@ -128,6 +132,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 .call()
                 .entity(ModelSectionDraft.class);
         return toSectionDraft(draft, evidenceIds);
+    }
+
+    Role roleFor(SectionRequest request) {
+        return !request.pageImages().isEmpty() && supportsVisualEvidence() ? Role.VISUAL : Role.TEACHING;
     }
 
     private List<ModelEvidence> modelEvidence(SectionRequest request) {

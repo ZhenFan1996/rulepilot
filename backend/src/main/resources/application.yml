@@ -121,6 +121,9 @@ rulepilot:
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:72}
       max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
       timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
+  visual:
+    provider: ${VISUAL_PROVIDER:fake}
+    model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:

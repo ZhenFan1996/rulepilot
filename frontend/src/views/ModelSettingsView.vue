@@ -20,6 +20,7 @@ interface ProviderView {
 
 interface Assignments {
   teaching: string
+  visual: string
   answer: string
   critic: string
 }
@@ -52,10 +53,17 @@ const providerLabels: Record<string, string> = {
 
 const provider = computed(() => snapshot.value?.providers.find((entry) => entry.id === selectedProvider.value))
 const configuredProviders = computed(() => snapshot.value?.providers.filter((entry) => entry.configured) ?? [])
+const configuredVisualProviders = computed(() => configuredProviders.value.filter((entry) => entry.visionCapable))
 const needsBaseUrl = computed(() => selectedProvider.value !== 'gemini')
-const teachingProvider = computed(() => snapshot.value?.providers.find(
-  (entry) => entry.id === snapshot.value?.assignments.teaching,
+const visualProvider = computed(() => snapshot.value?.providers.find(
+  (entry) => entry.id === snapshot.value?.assignments.visual,
 ))
+const roleDefinitions = [
+  ['teaching', '讲解文字与结构'],
+  ['visual', '规则书页面视觉'],
+  ['answer', '规则答疑'],
+  ['critic', '事实审校'],
+] as const
 
 function selectProvider(id: string) {
   selectedProvider.value = id
@@ -242,17 +250,18 @@ onMounted(loadConfiguration)
             <p class="text-xs font-medium text-ink/40">用途</p>
             <h2 class="mt-2 font-display text-2xl font-semibold">各项功能使用哪个模型</h2>
             <p class="mt-3 text-sm leading-6 text-ink/55">未连接外部服务时，可以继续使用不联网的内置演示。</p>
-            <p v-if="teachingProvider && !teachingProvider.visionCapable" class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
-              {{ providerLabels[teachingProvider.id] }} 当前是纯文本模型，无法读取规则书页面图片。页面仍会展示给用户，但要让 Agent 理解棋盘布局和图标，请将规则讲解切换到支持图片的 Gemini 或 OpenAI 模型。
+            <p v-if="!visualProvider" class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
+              当前未启用页面视觉。讲解仍会引用并展示原文页，但 Agent 不会识别棋盘布局、组件照片和图标；连接 Gemini 或 OpenAI 后，可只把页面视觉交给它，讲解文字仍由你选择的模型完成。
             </p>
 
             <form class="mt-7 space-y-5" @submit.prevent="saveAssignments">
-              <label v-for="role in ([['teaching', '规则讲解（需要视觉模型）'], ['answer', '规则答疑'], ['critic', '事实审校']] as const)" :key="role[0]" class="block text-sm font-semibold">
+              <label v-for="role in roleDefinitions" :key="role[0]" class="block text-sm font-semibold">
                 {{ role[1] }}
                 <select v-model="snapshot.assignments[role[0]]" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 text-ink outline-none focus:border-copper">
-                  <option value="fake">内置演示（不联网）</option>
-                  <option v-for="item in configuredProviders" :key="item.id" :value="item.id">{{ providerLabels[item.id] }}{{ role[0] === 'teaching' && !item.visionCapable ? '（仅文本）' : '' }}</option>
+                  <option value="fake">{{ role[0] === 'visual' ? '不读取页面图片' : '内置演示（不联网）' }}</option>
+                  <option v-for="item in role[0] === 'visual' ? configuredVisualProviders : configuredProviders" :key="item.id" :value="item.id">{{ providerLabels[item.id] }}</option>
                 </select>
+                <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-ink/40">只处理需要理解版图、组件或图示的章节，不会增加一次额外调用。</span>
               </label>
 
               <button :disabled="savingAssignments" class="min-h-11 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-50">{{ savingAssignments ? '正在应用…' : '保存用途设置' }}</button>

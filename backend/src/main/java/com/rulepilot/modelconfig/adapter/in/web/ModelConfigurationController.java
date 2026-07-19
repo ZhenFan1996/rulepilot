@@ -43,10 +43,10 @@ public class ModelConfigurationController {
     @PutMapping("/assignments")
     Snapshot assign(@RequestBody AssignmentsRequest request, Principal principal) {
         return configuration.assign(
-                principal.getName(), request.teaching(), request.answer(), request.critic());
+                principal.getName(), request.teaching(), request.visual(), request.answer(), request.critic());
     }
 
     record ConfigureProviderRequest(String apiKey, String baseUrl, String model) {}
 
-    record AssignmentsRequest(String teaching, String answer, String critic) {}
+    record AssignmentsRequest(String teaching, String visual, String answer, String critic) {}
 }
