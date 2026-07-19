@@ -53,13 +53,16 @@ interface TeachingPlanResponse {
   playerCount: number
   beginnerCount: number
   durationMinutes: number
+  gameTitle: string
+  premise: string
   sections: Array<{
     position: number
-    type: string
+    topicKey: string
+    title: string
+    objective: string
     required: boolean
-    evidenceAvailable: boolean
-    sourcePages: number[]
-    dependencies: string[]
+    retrievalQueries: string[]
+    coverageTags: string[]
   }>
 }
 
@@ -102,21 +105,6 @@ const sourceTypes = [
   ['OFFICIAL_ERRATA', '官方勘误'],
   ['OFFICIAL_PLAYER_AID', '官方玩家辅助'],
 ] as const
-
-const sectionLabels: Record<string, string> = {
-  OBJECTIVE: '目标与胜利条件',
-  COMPONENTS: '组件与用途',
-  SETUP: 'Setup',
-  ROUND_STRUCTURE: '轮次与回合',
-  PHASES: '阶段',
-  ACTIONS: '可执行行动',
-  END_CONDITIONS: '结束条件',
-  SCORING: '计分',
-  TIE_BREAKERS: '同分规则',
-  FIRST_ROUND_PRACTICE: '首轮演练',
-  COMMON_MISTAKES: '常见错误',
-  RECAP: '流程回顾',
-}
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
@@ -399,15 +387,17 @@ onMounted(load)
                 <button :disabled="creatingPlan" class="mt-4 rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{{ creatingPlan ? '正在准备…' : '准备讲解' }}</button>
               </form>
               <div v-if="teachingPlan" class="mt-5 rounded-lg bg-indigo/5 p-4">
-                <p class="font-semibold">{{ teachingPlan.playerCount }} 人 · {{ teachingPlan.beginnerCount }} 位新手 · {{ teachingPlan.durationMinutes }} 分钟</p>
+                <p class="font-display text-xl font-semibold">{{ teachingPlan.gameTitle }}</p>
+                <p class="mt-2 text-sm leading-6 text-ink/60">{{ teachingPlan.premise }}</p>
+                <p class="mt-3 text-xs font-semibold text-ink/45">{{ teachingPlan.playerCount }} 人 · {{ teachingPlan.beginnerCount }} 位新手 · {{ teachingPlan.durationMinutes }} 分钟</p>
                 <ol class="mt-4 space-y-2">
-                  <li v-for="section in teachingPlan.sections" :key="section.type" class="flex items-start gap-3 text-sm">
+                  <li v-for="section in teachingPlan.sections" :key="section.topicKey" class="flex items-start gap-3 rounded-xl bg-paper/70 p-3 text-sm">
                     <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo text-xs font-semibold text-white">{{ section.position }}</span>
                     <span>
-                      <strong>{{ sectionLabels[section.type] ?? section.type }}</strong>
-                      <span v-if="!section.evidenceAvailable" class="ml-2 text-amber-700">内容不足</span>
-                      <span v-else-if="!section.required" class="ml-2 text-ink/45">按本桌情况加入</span>
-                      <span v-if="section.dependencies.length" class="mt-1 block text-xs text-ink/45">先看：{{ section.dependencies.map((dependency) => sectionLabels[dependency] ?? dependency).join('、') }}</span>
+                      <strong>{{ section.title }}</strong>
+                      <span v-if="!section.required" class="ml-2 text-ink/45">可选</span>
+                      <span class="mt-1 block leading-5 text-ink/55">{{ section.objective }}</span>
+                      <span class="mt-1 block text-xs text-ink/40">检索：{{ section.retrievalQueries.join('；') }}</span>
                     </span>
                   </li>
                 </ol>

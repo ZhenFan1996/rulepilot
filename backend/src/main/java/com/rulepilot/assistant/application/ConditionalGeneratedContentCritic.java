@@ -57,8 +57,10 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         Set<Integer> claimPositions = request.claims().stream()
                 .map(GeneratedContentCritic.Claim::position)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        draft.issues().forEach(issue -> validateIssue(issue, claimPositions, allowedEvidence));
-        return new Review(true, draft.issues());
+        List<Issue> normalizedIssues = draft.issues().stream()
+                .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
+                .toList();
+        return new Review(true, normalizedIssues);
     }
 
     private void validateRequest(ReviewRequest request) {
@@ -80,12 +82,22 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         }
     }
 
-    private void validateIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
-        if (issue == null || issue.type() == null || !claimPositions.contains(issue.claimPosition())
-                || issue.summary() == null || issue.summary().isBlank() || issue.summary().length() > 240
-                || issue.evidenceIds().stream().anyMatch(id -> id == null || !allowedEvidence.contains(id))) {
+    private Issue normalizeIssue(Issue issue, Set<Integer> claimPositions, Set<UUID> allowedEvidence) {
+        if (issue == null || issue.type() == null || issue.summary() == null || issue.summary().isBlank()) {
             throw new IllegalArgumentException("critic issue is invalid");
         }
+        int claimPosition = claimPositions.contains(issue.claimPosition())
+                ? issue.claimPosition()
+                : claimPositions.stream().min(Integer::compareTo).orElseThrow();
+        List<UUID> evidenceIds = issue.evidenceIds().stream()
+                .filter(id -> id != null && allowedEvidence.contains(id))
+                .distinct()
+                .toList();
+        String summary = issue.summary().strip();
+        if (summary.length() > 240) {
+            summary = summary.substring(0, 240).stripTrailing();
+        }
+        return new Issue(issue.type(), claimPosition, evidenceIds, summary);
     }
 
     private int estimateTokens(String value) {

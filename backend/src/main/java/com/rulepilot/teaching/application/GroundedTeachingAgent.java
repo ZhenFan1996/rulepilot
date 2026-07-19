@@ -26,9 +26,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
-import com.rulepilot.teaching.application.TeachingRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -52,14 +51,13 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    private static final int MAX_EVIDENCE_PER_SECTION = 6;
+    static final String GENERATOR_VERSION = "adaptive-teaching-v1";
+    private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
-    private static final Set<TeachingSectionType> HIGH_IMPACT_SECTIONS = Set.of(
-            TeachingSectionType.SETUP,
-            TeachingSectionType.END_CONDITIONS,
-            TeachingSectionType.SCORING,
-            TeachingSectionType.TIE_BREAKERS);
+    private static final int MAX_REVISION_ATTEMPTS = 2;
+    private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
+    private static final Set<String> HIGH_IMPACT_TAGS = Set.of("setup", "end", "scoring", "tie_breaker");
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
@@ -73,7 +71,7 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
-            @Value("${rulepilot.teaching.agent.max-tool-calls:24}") int maxToolCalls) {
+            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls) {
         this.tools = tools;
         this.model = model;
         this.evidenceVerifier = evidenceVerifier;
@@ -83,12 +81,25 @@ public class GroundedTeachingAgent {
     }
 
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
+        return create(plan, assistantRunId, null);
+    }
+
+    public IllustratedLesson create(
+            TeachingPlan plan, UUID assistantRunId, IllustratedLesson previousLesson) {
         List<LessonSection> sections = new ArrayList<>();
-        Map<TeachingSectionType, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
+        Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
+        Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int toolCalls = 0;
+        int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
+            LessonSection reusable = reusableSections.get(planned.topicKey());
+            if (reusable != null) {
+                log.info("Teaching topic {} reuses a previously verified section", planned.topicKey());
+                sections.add(reusable);
+                continue;
+            }
             if (toolCalls >= maxToolCalls) {
-                log.warn("Teaching Agent tool budget exhausted before section {}", planned.type());
+                log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
                 sections.add(insufficient(planned));
                 continue;
             }
@@ -96,30 +107,24 @@ public class GroundedTeachingAgent {
             Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
             List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
             boolean conflictingEvidence = false;
-            List<RetrievalIntent> retrievalIntents = TeachingRetrievalPlanner.forSection(planned.type());
-            for (int intentIndex = 0; intentIndex < retrievalIntents.size(); intentIndex++) {
+            for (String query : retrievalQueries(planned, queriesPerTopic)) {
                 if (toolCalls >= maxToolCalls) {
                     break;
                 }
-                RetrievalIntent plannedIntent = retrievalIntents.get(intentIndex);
-                RetrievalIntent intent = intentIndex == 0
-                        ? plannedIntent
-                        : TeachingRetrievalPlanner.refineWithAnchorHeadings(
-                                plannedIntent, evidenceById.values().stream().map(RuleEvidence::heading).toList());
                 toolCalls++;
                 try {
                     List<RuleEvidence> retrieved = invocations.invoke(
                             assistantRunId,
                             ActivityType.TOOL,
                             "searchRuleEvidence",
-                            estimateTokens(intent.query()),
+                            estimateTokens(query),
                             "Version-scoped rule evidence retrieved",
-                            () -> retrieve(plan.documentVersionId(), planned.type(), intent),
+                            () -> retrieve(plan.documentVersionId(), planned.topicKey(), query),
                             this::evidenceTokens);
                     evidenceByIntent.add(retrieved);
                     for (RuleEvidence source : retrieved) {
                         RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
-                        if (existing != null && !existing.equals(source)) {
+                        if (existing != null && !sameEvidence(existing, source)) {
                             conflictingEvidence = true;
                             break;
                         }
@@ -128,12 +133,13 @@ public class GroundedTeachingAgent {
                     throw stopped;
                 } catch (RuntimeException retrievalFailure) {
                     log.warn(
-                            "Teaching Agent retrieval intent failed for section {}: {}",
-                            planned.type(),
-                            retrievalFailure.getClass().getSimpleName());
+                            "Teaching Agent retrieval failed for topic {} query '{}': {}",
+                            planned.topicKey(),
+                            query,
+                            retrievalFailure.getMessage());
                 }
                 if (conflictingEvidence) {
-                    log.warn("Teaching Agent retrieved conflicting snapshots for section {}", planned.type());
+                    log.warn("Teaching Agent retrieved conflicting snapshots for topic {}", planned.topicKey());
                     break;
                 }
             }
@@ -155,7 +161,7 @@ public class GroundedTeachingAgent {
                 sections.add(compose(
                         plan,
                         planned,
-                        pacing.get(planned.type()),
+                        pacing.get(planned.position()),
                         continuityContext(sections),
                         evidence,
                         assistantRunId));
@@ -163,10 +169,11 @@ public class GroundedTeachingAgent {
                 throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
                 log.warn(
-                        "Teaching Agent model {} failed validation for section {}: {}",
+                        "Teaching Agent model {} failed validation for section {}: {} ({})",
                         model.providerId(),
-                        planned.type(),
-                        invalidOrFailedModelOutput.getClass().getSimpleName());
+                        planned.topicKey(),
+                        invalidOrFailedModelOutput.getClass().getSimpleName(),
+                        invalidOrFailedModelOutput.getMessage());
                 sections.add(insufficient(planned));
             }
         }
@@ -179,18 +186,55 @@ public class GroundedTeachingAgent {
                 plan.id(),
                 complete ? LessonStatus.COMPLETE : LessonStatus.INCOMPLETE,
                 sections,
+                GENERATOR_VERSION,
                 Instant.now());
     }
 
-    private List<RuleEvidence> retrieve(
-            UUID documentVersionId, TeachingSectionType sectionType, RetrievalIntent intent) {
+    private Map<String, LessonSection> reusableSections(
+            TeachingPlan plan, IllustratedLesson previousLesson) {
+        if (previousLesson == null
+                || !plan.id().equals(previousLesson.teachingPlanId())
+                || !GENERATOR_VERSION.equals(previousLesson.generatorVersion())) {
+            return Map.of();
+        }
+        Set<String> currentTopics = plan.sections().stream()
+                .map(TeachingPlan.PlannedSection::topicKey)
+                .collect(Collectors.toUnmodifiableSet());
+        return previousLesson.sections().stream()
+                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                .filter(section -> currentTopics.contains(section.topicKey()))
+                .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, Function.identity()));
+    }
+
+    private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {
         return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
-                        intent.query(),
+                        query,
                         EVIDENCE_PER_INTENT,
-                        intent.sourceTypes(),
-                        sectionType.name(),
+                        Set.of(),
+                        null,
+                        true,
                         true)));
+    }
+
+    private List<String> retrievalQueries(TeachingPlan.PlannedSection topic, int limit) {
+        Stream<String> queries = topic.retrievalQueries().stream();
+        if (topic.retrievalQueries().size() == 4) {
+            queries = Stream.concat(objectiveQueries(topic.objective()).stream(), queries);
+        }
+        return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
+    }
+
+    private List<String> objectiveQueries(String objective) {
+        int maxLength = 480;
+        if (objective.length() <= maxLength) return List.of(objective);
+        String head = objective.substring(0, maxLength);
+        int lastSpace = head.lastIndexOf(' ');
+        if (lastSpace > 0) head = head.substring(0, lastSpace);
+        String tail = objective.substring(Math.max(0, objective.length() - maxLength));
+        int firstSpace = tail.indexOf(' ');
+        if (firstSpace >= 0) tail = tail.substring(firstSpace + 1);
+        return List.of(head, tail);
     }
 
     private List<RuleEvidence> balancedEvidence(List<List<RuleEvidence>> evidenceByIntent) {
@@ -223,14 +267,30 @@ public class GroundedTeachingAgent {
             List<RuleEvidence> evidence,
             UUID assistantRunId) {
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
-                planned.type(),
+                planned.topicKey(),
+                planned.title(),
+                planned.objective(),
+                planned.coverageTags(),
                 plan.playerCount(),
                 plan.beginnerCount(),
                 plan.durationMinutes(),
                 pacing.durationSeconds(),
                 pacing.maxSteps(),
                 priorSections,
-                evidence.stream().map(this::toModelEvidence).toList());
+                evidence.stream().map(this::toModelEvidence).toList(),
+                evidence.stream()
+                        .flatMap(source -> source.pageImages().stream())
+                        .collect(Collectors.toMap(
+                                com.rulepilot.assistant.AssistantReadTools.RulePageImage::pageNumber,
+                                Function.identity(),
+                                (first, duplicate) -> first,
+                                LinkedHashMap::new))
+                        .values()
+                        .stream()
+                        .limit(2)
+                        .map(image -> new TeachingLessonModel.PageImageInput(
+                                image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
+                        .toList());
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -239,6 +299,43 @@ public class GroundedTeachingAgent {
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
+        for (int revision = 0; ; revision++) {
+            try {
+                return acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
+            } catch (IllegalArgumentException rejectedDraft) {
+                if (revision == MAX_REVISION_ATTEMPTS) {
+                    throw rejectedDraft;
+                }
+                List<String> feedback = List.of(rejectedDraft.getMessage() == null
+                        ? "The previous draft failed lesson validation."
+                        : rejectedDraft.getMessage());
+                log.info(
+                        "Teaching topic {} revision {}/{}: {}",
+                        planned.topicKey(),
+                        revision + 1,
+                        MAX_REVISION_ATTEMPTS,
+                        feedback.getFirst());
+                SectionDraft draftToRevise = draft;
+                draft = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.MODEL,
+                        "reviseTeachingSection",
+                        estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
+                                + estimateTokens(feedback.toString()),
+                        "Teaching section revised from validation feedback",
+                        () -> model.revise(modelRequest, draftToRevise, feedback),
+                        result -> estimateTokens(result.toString()));
+            }
+        }
+    }
+
+    private LessonSection acceptDraft(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            UUID assistantRunId,
+            TeachingLessonModel.SectionRequest modelRequest,
+            SectionDraft draft) {
         validateDraft(draft, modelRequest.maxSteps());
 
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
@@ -255,14 +352,14 @@ public class GroundedTeachingAgent {
                 evidence.stream().map(this::toVerifierEvidence).toList(),
                 generatedClaims));
         if (!verification.verified()) {
-            throw new IllegalArgumentException("teaching section evidence did not pass policy verification");
+            throw new IllegalArgumentException(
+                    "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
-        var guidance = TeachingSectionKnowledge.forSection(planned.type());
         var review = critic.review(
                 new ReviewRequest(
                         assistantRunId,
                         ContentType.LESSON,
-                        new TaskContext(guidance.objective(), guidance.coverageChecklist()),
+                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
                         Stream.concat(
                                         Stream.of(new Claim(1, draft.visualCaption(), visualCitationIds)),
                                         IntStream.range(0, draft.steps().size())
@@ -275,11 +372,13 @@ public class GroundedTeachingAgent {
                                 .map(source -> new GeneratedContentCritic.Evidence(
                                         source.chunkId(), source.excerpt()))
                                 .toList()),
-                HIGH_IMPACT_SECTIONS.contains(planned.type())
+                planned.coverageTags().stream().anyMatch(HIGH_IMPACT_TAGS::contains)
                         ? ReviewRisk.HIGH_IMPACT
-                        : ReviewRisk.STANDARD);
+                        : ReviewRisk.LOW_CONFIDENCE);
         if (!review.accepted()) {
-            throw new IllegalArgumentException("teaching section did not pass factual consistency review");
+            throw new IllegalArgumentException("Factual review rejected the draft: " + review.issues().stream()
+                    .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
+                    .collect(Collectors.joining("; ")));
         }
 
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
@@ -294,7 +393,8 @@ public class GroundedTeachingAgent {
                 .toList();
         return new LessonSection(
                 planned.position(),
-                planned.type(),
+                planned.topicKey(),
+                planned.coverageTags(),
                 draft.title().strip(),
                 planned.required(),
                 EvidenceStatus.SUPPORTED,
@@ -339,13 +439,22 @@ public class GroundedTeachingAgent {
     }
 
     private void validateDraft(SectionDraft draft, int maxSteps) {
-        if (draft == null || draft.title() == null || draft.title().isBlank() || draft.title().length() > 160
-                || draft.visualKind() == null
-                || draft.visualCaption() == null || draft.visualCaption().isBlank()
-                || draft.visualCaption().length() > 240
-                || draft.visualCitationIds().isEmpty()
-                || draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps)) {
-            throw new IllegalArgumentException("teaching section output is invalid");
+        if (draft == null) throw new IllegalArgumentException("The draft is missing.");
+        if (draft.title() == null || draft.title().isBlank() || draft.title().length() > 160)
+            throw new IllegalArgumentException("The title is missing or longer than 160 characters.");
+        if (draft.visualKind() == null) throw new IllegalArgumentException("visualKind is missing.");
+        if (draft.visualCaption() == null || draft.visualCaption().isBlank() || draft.visualCaption().length() > 240)
+            throw new IllegalArgumentException("The visual caption is missing or longer than 240 characters.");
+        if (draft.visualCitationIds().isEmpty())
+            throw new IllegalArgumentException("The visual caption has no evidence citation.");
+        if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps))
+            throw new IllegalArgumentException("The draft must contain between 1 and "
+                    + Math.min(MAX_STEPS_PER_SECTION, maxSteps) + " steps.");
+        if (UNRESOLVED_PDF_MARKER.matcher(draft.visualCaption()).find()
+                || draft.steps().stream().anyMatch(step -> step != null && step.text() != null
+                        && UNRESOLVED_PDF_MARKER.matcher(step.text()).find())) {
+            throw new IllegalArgumentException(
+                    "Replace unresolved PDF icon markers with natural Simplified Chinese terms.");
         }
     }
 
@@ -359,6 +468,15 @@ public class GroundedTeachingAgent {
                 evidence.pageTo());
     }
 
+    private boolean sameEvidence(RuleEvidence first, RuleEvidence second) {
+        return first.chunkId().equals(second.chunkId())
+                && first.documentVersionId().equals(second.documentVersionId())
+                && first.sectionType().equals(second.sectionType())
+                && first.heading().equals(second.heading())
+                && first.pageFrom() == second.pageFrom()
+                && first.pageTo() == second.pageTo();
+    }
+
     private List<PriorSectionContext> continuityContext(List<LessonSection> sections) {
         List<LessonSection> supported = sections.stream()
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
@@ -366,7 +484,7 @@ public class GroundedTeachingAgent {
         int fromIndex = Math.max(0, supported.size() - 2);
         return supported.subList(fromIndex, supported.size()).stream()
                 .map(section -> new PriorSectionContext(
-                        section.type(), section.title(), section.steps().getLast().text()))
+                        section.topicKey(), section.title(), section.steps().getLast().text()))
                 .toList();
     }
 
@@ -379,8 +497,9 @@ public class GroundedTeachingAgent {
     private LessonSection insufficient(TeachingPlan.PlannedSection planned) {
         return new LessonSection(
                 planned.position(),
-                planned.type(),
-                label(planned.type()),
+                planned.topicKey(),
+                planned.coverageTags(),
+                planned.title(),
                 planned.required(),
                 EvidenceStatus.INSUFFICIENT_EVIDENCE,
                 VisualKind.REFERENCE_CARD,
@@ -390,10 +509,6 @@ public class GroundedTeachingAgent {
                         "规则资料中尚未找到这一节所需的可靠证据。",
                         List.of(),
                         List.of())));
-    }
-
-    private String label(TeachingSectionType type) {
-        return type.name().replace('_', ' ');
     }
 
     private int evidenceTokens(List<RuleEvidence> evidence) {

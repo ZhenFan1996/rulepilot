@@ -10,7 +10,10 @@ import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -26,6 +29,47 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
+    void reusesPreviouslyVerifiedTopicsAndRetriesOnlyIncompleteOnes() {
+        UUID versionId = UUID.randomUUID();
+        TeachingPlan plan = plan(versionId);
+        LessonSection verified = new LessonSection(
+                1,
+                TeachingSectionType.SETUP.name(),
+                List.of("setup"),
+                "已验证的开局",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.TABLE_LAYOUT,
+                "桌面布置",
+                List.of(2),
+                List.of(UUID.randomUUID()),
+                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(2), List.of(UUID.randomUUID()))));
+        IllustratedLesson previous = new IllustratedLesson(
+                UUID.randomUUID(),
+                plan.id(),
+                LessonStatus.COMPLETE,
+                List.of(verified),
+                GroundedTeachingAgent.GENERATOR_VERSION,
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> {
+                    throw new AssertionError("verified topic must not be retrieved again");
+                },
+                request -> {
+                    throw new AssertionError("verified topic must not be regenerated");
+                },
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var resumed = agent.create(plan, UUID.randomUUID(), previous);
+
+        assertThat(resumed.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(resumed.sections()).containsExactly(verified);
+    }
+
+    @Test
     void retrievesVersionScopedEvidenceAndPersistsValidatedStepCitations() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -35,10 +79,10 @@ class GroundedTeachingAgentTest {
             assertThat(request.documentVersionId()).isEqualTo(versionId);
             assertThat(request.includeAdjacentContext()).isTrue();
             if (retrievalCalls.getAndIncrement() == 0) {
-                assertThat(request.sectionTypes()).containsExactly("SETUP");
+                assertThat(request.sectionTypes()).isEmpty();
             } else {
-                assertThat(request.sectionTypes()).containsExactly("SETUP");
-                assertThat(request.query()).contains("Setup");
+                assertThat(request.sectionTypes()).isEmpty();
+                assertThat(request.query()).containsIgnoringCase("setup");
             }
             return List.of(evidence);
         };
@@ -58,8 +102,8 @@ class GroundedTeachingAgentTest {
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
             assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-            assertThat(request.taskContext().objective()).contains("executable table-ready sequence");
-            assertThat(request.taskContext().requiredCoverage()).contains("starting player");
+            assertThat(request.taskContext().objective()).contains("SETUP");
+            assertThat(request.taskContext().requiredCoverage()).contains("setup");
             assertThat(request.claims()).hasSize(2);
             assertThat(request.claims().getFirst().text()).isEqualTo("桌面布置示意");
             assertThat(request.claims().getFirst().citationIds()).containsExactly(chunkId);
@@ -99,25 +143,25 @@ class GroundedTeachingAgentTest {
                 assertThat(request.priorSections()).isEmpty();
             } else if (call == 1) {
                 assertThat(request.priorSections())
-                        .extracting(TeachingLessonModel.PriorSectionContext::sectionType)
-                        .containsExactly(TeachingSectionType.OBJECTIVE);
+                        .extracting(TeachingLessonModel.PriorSectionContext::topicKey)
+                        .containsExactly(TeachingSectionType.OBJECTIVE.name());
                 assertThat(request.priorSections().getFirst().closingStep()).contains("most stars");
             } else {
                 assertThat(request.priorSections())
-                        .extracting(TeachingLessonModel.PriorSectionContext::sectionType)
-                        .containsExactly(TeachingSectionType.OBJECTIVE, TeachingSectionType.COMPONENTS);
+                        .extracting(TeachingLessonModel.PriorSectionContext::topicKey)
+                        .containsExactly(TeachingSectionType.OBJECTIVE.name(), TeachingSectionType.COMPONENTS.name());
                 assertThat(request.priorSections().getLast().closingStep()).contains("one color");
             }
-            RuleEvidence source = evidence.get(request.sectionType());
+            RuleEvidence source = evidence.get(TeachingSectionType.valueOf(request.topicKey()));
             return new TeachingLessonModel.SectionDraft(
-                    request.sectionType().name(),
+                    request.title(),
                     VisualKind.REFERENCE_CARD,
                     "本节规则提示",
                     List.of(source.chunkId()),
                     List.of(new TeachingLessonModel.StepDraft(source.excerpt(), List.of(source.chunkId()))));
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
-                request -> List.of(evidence.get(TeachingSectionType.valueOf(request.currentSectionType()))),
+                request -> List.of(evidence.get(TeachingSectionType.valueOf(request.query()))),
                 model,
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
@@ -195,7 +239,9 @@ class GroundedTeachingAgentTest {
                     primary.get(1).chunkId(),
                     supplementary.get(1).chunkId(),
                     primary.get(2).chunkId(),
-                    supplementary.get(2).chunkId());
+                    supplementary.get(2).chunkId(),
+                    primary.get(3).chunkId(),
+                    supplementary.get(3).chunkId());
             assertThat(request.evidence())
                     .extracting(TeachingLessonModel.EvidenceInput::chunkId)
                     .containsExactlyElementsOf(expectedOrder);
@@ -340,7 +386,7 @@ class GroundedTeachingAgentTest {
         UUID chunkId = UUID.randomUUID();
         RuleEvidence first = evidence(chunkId, versionId);
         RuleEvidence conflicting = new RuleEvidence(
-                chunkId, versionId, "SETUP", "Setup", "Place the board somewhere else.", 2, 3);
+                chunkId, versionId, "SETUP", "Different source identity", "Place the board somewhere else.", 2, 3);
         AtomicInteger calls = new AtomicInteger();
         AssistantReadTools retrieval = request -> calls.getAndIncrement() == 0
                 ? List.of(first)
@@ -394,7 +440,9 @@ class GroundedTeachingAgentTest {
                 4,
                 2,
                 20,
-                List.of(new PlannedSection(1, TeachingSectionType.SETUP, true, true, List.of(2, 3), List.of())),
+                "Game",
+                "Premise",
+                List.of(topic(1, TeachingSectionType.SETUP)),
                 "player",
                 Instant.now());
     }
@@ -406,12 +454,32 @@ class GroundedTeachingAgentTest {
                 4,
                 2,
                 10,
+                "Game",
+                "Premise",
                 List.of(
-                        new PlannedSection(1, TeachingSectionType.OBJECTIVE, true, true, List.of(1), List.of()),
-                        new PlannedSection(2, TeachingSectionType.COMPONENTS, true, true, List.of(2), List.of()),
-                        new PlannedSection(3, TeachingSectionType.SETUP, true, true, List.of(3), List.of())),
+                        topic(1, TeachingSectionType.OBJECTIVE),
+                        topic(2, TeachingSectionType.COMPONENTS),
+                        topic(3, TeachingSectionType.SETUP)),
                 "player",
                 Instant.now());
+    }
+
+    private PlannedSection topic(int position, TeachingSectionType type) {
+        String tag = switch (type) {
+            case SETUP -> "setup";
+            case ACTIONS, ROUND_STRUCTURE, PHASES -> "core_loop";
+            case END_CONDITIONS -> "end";
+            case SCORING -> "scoring";
+            default -> type.name().toLowerCase();
+        };
+        return new PlannedSection(
+                position,
+                type.name(),
+                type.name(),
+                "Explain " + type.name(),
+                true,
+                List.of(type.name(), "More " + type.name()),
+                List.of(tag));
     }
 
     private GeneratedContentCritic acceptedCritic() {

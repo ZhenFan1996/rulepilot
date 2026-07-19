@@ -10,8 +10,10 @@ interface TeachingPlan {
   playerCount: number
   beginnerCount: number
   durationMinutes: number
+  gameTitle: string
+  premise: string
   createdAt: string
-  sections: Array<{ required: boolean; evidenceAvailable: boolean }>
+  sections: Array<{ required: boolean; topicKey: string; title: string }>
 }
 
 const router = useRouter()
@@ -21,11 +23,11 @@ const errorMessage = ref('')
 const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 
 const readyCount = computed(
-  () => plans.value.filter((plan) => plan.sections.filter((section) => section.required).every((section) => section.evidenceAvailable)).length,
+  () => plans.value.length,
 )
 
 function isReady(plan: TeachingPlan) {
-  return plan.sections.filter((section) => section.required).every((section) => section.evidenceAvailable)
+  return plan.sections.length > 0
 }
 
 function createdLabel(value: string) {
@@ -87,10 +89,10 @@ onMounted(loadPlans)
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
-              <h2 class="mt-2 font-display text-2xl font-semibold">{{ plan.playerCount }} 人讲解</h2>
+              <h2 class="mt-2 font-display text-2xl font-semibold">{{ plan.gameTitle }}</h2>
             </div>
             <span :class="isReady(plan) ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1.5 text-xs font-semibold">
-              {{ isReady(plan) ? '可以开始' : '内容不足' }}
+              {{ isReady(plan) ? '目录已生成' : '等待整理' }}
             </span>
           </div>
           <dl class="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
@@ -98,6 +100,7 @@ onMounted(loadPlans)
             <div><dt class="text-ink/45">计划时长</dt><dd class="mt-1 font-semibold">{{ plan.durationMinutes }} 分钟</dd></div>
             <div class="col-span-2"><dt class="text-ink/45">适合</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount ? `${plan.beginnerCount} 位新手` : '熟悉桌游的玩家' }}</dd></div>
           </dl>
+          <p class="mt-4 line-clamp-2 text-sm leading-6 text-ink/55">{{ plan.premise }}</p>
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">上次打开</span>
             <span v-else class="text-xs text-ink/35">{{ plan.sections.length }} 个章节</span>

@@ -23,12 +23,9 @@ class TeachingPacingPolicyTest {
                         .mapToInt(TeachingPacingPolicy.SectionPacing::durationSeconds)
                         .sum())
                 .isEqualTo(600));
-        assertThat(pacing.get(TeachingSectionType.ACTIONS).durationSeconds())
-                .isGreaterThan(pacing.get(TeachingSectionType.SETUP).durationSeconds());
-        assertThat(pacing.get(TeachingSectionType.SETUP).durationSeconds())
-                .isGreaterThan(pacing.get(TeachingSectionType.COMPONENTS).durationSeconds());
-        assertThat(pacing.get(TeachingSectionType.SCORING).durationSeconds())
-                .isGreaterThan(pacing.get(TeachingSectionType.END_CONDITIONS).durationSeconds());
+        assertThat(pacing.get(6).durationSeconds()).isGreaterThan(pacing.get(3).durationSeconds());
+        assertThat(pacing.get(3).durationSeconds()).isGreaterThan(pacing.get(2).durationSeconds());
+        assertThat(pacing.get(8).durationSeconds()).isGreaterThan(pacing.get(7).durationSeconds());
     }
 
     @Test
@@ -51,9 +48,25 @@ class TeachingPacingPolicyTest {
     private TeachingPlan plan(int durationMinutes, List<TeachingSectionType> types) {
         List<PlannedSection> sections = java.util.stream.IntStream.range(0, types.size())
                 .mapToObj(index -> new PlannedSection(
-                        index + 1, types.get(index), types.get(index).required(), true, List.of(1), List.of()))
+                        index + 1,
+                        types.get(index).name(),
+                        types.get(index).name(),
+                        "Explain topic",
+                        types.get(index).required(),
+                        List.of(types.get(index).name()),
+                        List.of(tag(types.get(index)))))
                 .toList();
         return new TeachingPlan(
-                UUID.randomUUID(), UUID.randomUUID(), 4, 2, durationMinutes, sections, "player", Instant.now());
+                UUID.randomUUID(), UUID.randomUUID(), 4, 2, durationMinutes, "Game", "Premise", sections, "player", Instant.now());
+    }
+
+    private String tag(TeachingSectionType type) {
+        return switch (type) {
+            case SETUP -> "setup";
+            case ACTIONS, ROUND_STRUCTURE, PHASES -> "core_loop";
+            case END_CONDITIONS -> "end";
+            case SCORING -> "scoring";
+            default -> type.name().toLowerCase();
+        };
     }
 }

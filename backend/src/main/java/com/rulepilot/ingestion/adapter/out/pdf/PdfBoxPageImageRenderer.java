@@ -1,0 +1,79 @@
+package com.rulepilot.ingestion.adapter.out.pdf;
+
+import com.rulepilot.document.DocumentPageImageStore.RenderedPageImage;
+import com.rulepilot.ingestion.application.PdfPageImageRenderer;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Iterator;
+import java.util.function.Consumer;
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.io.RandomAccessReadBuffer;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+@Component
+public class PdfBoxPageImageRenderer implements PdfPageImageRenderer {
+
+    private static final float RENDER_DPI = 120;
+    private static final float JPEG_QUALITY = 0.84f;
+
+    private final int maxPages;
+
+    public PdfBoxPageImageRenderer(@Value("${rulepilot.document.max-pdf-pages:500}") int maxPages) {
+        this.maxPages = maxPages;
+    }
+
+    @Override
+    public int render(InputStream input, Consumer<RenderedPageImage> pageConsumer) {
+        if (input == null || pageConsumer == null) {
+            throw new IllegalArgumentException("PDF input and page image consumer are required");
+        }
+        try (input;
+                RandomAccessReadBuffer source = new RandomAccessReadBuffer(input);
+                PDDocument document = Loader.loadPDF(source)) {
+            if (document.getNumberOfPages() > maxPages) {
+                throw new PdfExtractionException("PDF exceeds the configured page limit");
+            }
+            PDFRenderer renderer = new PDFRenderer(document);
+            for (int index = 0; index < document.getNumberOfPages(); index++) {
+                BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
+                pageConsumer.accept(new RenderedPageImage(
+                        index + 1, encodeJpeg(image), image.getWidth(), image.getHeight()));
+            }
+            return document.getNumberOfPages();
+        } catch (PdfExtractionException exception) {
+            throw exception;
+        } catch (IOException exception) {
+            throw new PdfExtractionException("could not render PDF page images", exception);
+        }
+    }
+
+    private byte[] encodeJpeg(BufferedImage image) throws IOException {
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpeg");
+        if (!writers.hasNext()) {
+            throw new IOException("JPEG writer is unavailable");
+        }
+        ImageWriter writer = writers.next();
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+                ImageOutputStream imageOutput = ImageIO.createImageOutputStream(output)) {
+            writer.setOutput(imageOutput);
+            ImageWriteParam parameters = writer.getDefaultWriteParam();
+            parameters.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            parameters.setCompressionQuality(JPEG_QUALITY);
+            writer.write(null, new IIOImage(image, null, null), parameters);
+            return output.toByteArray();
+        } finally {
+            writer.dispose();
+        }
+    }
+}

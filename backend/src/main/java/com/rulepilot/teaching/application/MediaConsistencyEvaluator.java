@@ -50,7 +50,7 @@ public class MediaConsistencyEvaluator {
         }
         for (var section : lesson.sections()) {
             var chapter = narration.chapters().get(section.position() - 1);
-            if (chapter.position() != section.position() || chapter.type() != section.type()) {
+            if (chapter.position() != section.position() || !chapter.topicKey().equals(section.topicKey())) {
                 return false;
             }
             if (section.evidenceStatus() == EvidenceStatus.SUPPORTED) {

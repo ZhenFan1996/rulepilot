@@ -17,11 +17,21 @@ import org.mockito.ArgumentCaptor;
 class AssistantRunServiceTest {
 
     @Test
-    void givesTeachingRunsTheirLongerExecutionWindow() {
+    void givesTeachingRunsTheirDedicatedExecutionBudget() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);
         AssistantRunService service = new AssistantRunService(
-                repository, execution, 40, 24, 16, 24_000, Duration.ofMinutes(2), Duration.ofMinutes(5));
+                repository,
+                execution,
+                72,
+                24,
+                16,
+                24_000,
+                Duration.ofMinutes(2),
+                72,
+                40,
+                300_000,
+                Duration.ofMinutes(30));
 
         service.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "player");
         service.start(AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player");
@@ -29,7 +39,9 @@ class AssistantRunServiceTest {
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
         verify(execution, times(2)).initialize(any(), limits.capture(), any());
         assertThat(limits.getAllValues())
-                .extracting(BudgetLimits::timeout)
-                .containsExactly(Duration.ofMinutes(5), Duration.ofMinutes(2));
+                .extracting(BudgetLimits::maxTokens, BudgetLimits::timeout)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30)),
+                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2)));
     }
 }

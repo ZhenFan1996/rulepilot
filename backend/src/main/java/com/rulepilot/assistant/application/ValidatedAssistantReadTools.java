@@ -1,11 +1,14 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -27,15 +30,24 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
 
     private final HybridRuleSearch retrieval;
     private final RuleEvidenceLookup evidenceLookup;
+    private final DocumentPageImages pageImages;
 
     @Autowired
-    public ValidatedAssistantReadTools(HybridRuleSearch retrieval, RuleEvidenceLookup evidenceLookup) {
+    public ValidatedAssistantReadTools(
+            HybridRuleSearch retrieval,
+            RuleEvidenceLookup evidenceLookup,
+            DocumentPageImages pageImages) {
         this.retrieval = retrieval;
         this.evidenceLookup = evidenceLookup;
+        this.pageImages = pageImages;
+    }
+
+    public ValidatedAssistantReadTools(HybridRuleSearch retrieval, RuleEvidenceLookup evidenceLookup) {
+        this(retrieval, evidenceLookup, (documentVersionId, pageNumbers) -> List.of());
     }
 
     public ValidatedAssistantReadTools(HybridRuleSearch retrieval) {
-        this(retrieval, (documentVersionId, chunkIds) -> List.of());
+        this(retrieval, (documentVersionId, chunkIds) -> List.of(), (documentVersionId, pageNumbers) -> List.of());
     }
 
     @Override
@@ -59,6 +71,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         if (request.includeAdjacentContext()) {
             evidence = expandAdjacent(request, sectionTypes, evidence);
         }
+        Map<Integer, RulePageImage> visuals = pageVisuals(request, evidence);
         return evidence.stream().map(source -> {
             if (!request.documentVersionId().equals(source.documentVersionId())) {
                 throw new IllegalStateException("retrieval tool returned evidence outside document scope");
@@ -70,8 +83,32 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                     source.heading(),
                     source.excerpt(),
                     source.pageFrom(),
-                    source.pageTo());
+                    source.pageTo(),
+                    visuals.values().stream()
+                            .filter(image -> image.pageNumber() >= source.pageFrom()
+                                    && image.pageNumber() <= source.pageTo())
+                            .toList());
         }).toList();
+    }
+
+    private Map<Integer, RulePageImage> pageVisuals(
+            SearchRuleEvidence request, List<RuleEvidenceHit> evidence) {
+        if (!request.includePageImages()) {
+            return Map.of();
+        }
+        Set<Integer> requestedPages = evidence.stream()
+                .map(RuleEvidenceHit::pageFrom)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        requestedPages = requestedPages.stream().limit(2)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        if (requestedPages.isEmpty()) {
+            return Map.of();
+        }
+        return pageImages.read(request.documentVersionId(), requestedPages).stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        DocumentPageImages.PageImage::pageNumber,
+                        image -> new RulePageImage(
+                                image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())));
     }
 
     private List<RuleEvidenceHit> expandAdjacent(
@@ -83,19 +120,33 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         Set<UUID> anchorIds = anchors.stream()
                 .map(RuleEvidenceHit::chunkId)
                 .collect(java.util.stream.Collectors.toSet());
+        Map<UUID, RuleEvidenceHit> hydratedAnchors = evidenceLookup
+                .findByChunkIds(request.documentVersionId(), anchorIds)
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(RuleEvidenceHit::chunkId, source -> source));
         List<RuleEvidenceHit> adjacent = evidenceLookup.findAdjacent(
                 request.documentVersionId(), anchorIds, 1, sectionTypes);
         Map<UUID, RuleEvidenceHit> merged = new LinkedHashMap<>();
-        anchors.forEach(source -> merged.put(source.chunkId(), source));
+        anchors.forEach(source -> {
+            RuleEvidenceHit hydrated = hydratedAnchors.getOrDefault(source.chunkId(), source);
+            validateExpandedEvidence(request, sectionTypes, hydrated);
+            merged.put(source.chunkId(), hydrated);
+        });
         for (RuleEvidenceHit source : adjacent) {
-            if (!request.documentVersionId().equals(source.documentVersionId())
-                    || !sectionTypes.contains(source.sectionType().toUpperCase(Locale.ROOT))) {
-                throw new IllegalStateException("adjacent evidence escaped the requested scope");
-            }
+            validateExpandedEvidence(request, sectionTypes, source);
             merged.putIfAbsent(source.chunkId(), source);
         }
         ranked.forEach(source -> merged.putIfAbsent(source.chunkId(), source));
         return merged.values().stream().limit(request.limit()).toList();
+    }
+
+    private void validateExpandedEvidence(
+            SearchRuleEvidence request, Set<String> sectionTypes, RuleEvidenceHit source) {
+        if (!request.documentVersionId().equals(source.documentVersionId())
+                || (!sectionTypes.isEmpty()
+                        && !sectionTypes.contains(source.sectionType().toUpperCase(Locale.ROOT)))) {
+            throw new IllegalStateException("expanded evidence escaped the requested scope");
+        }
     }
 
     private void validate(SearchRuleEvidence request) {
@@ -111,8 +162,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         }
         if (request.sectionTypes() == null || request.sectionTypes().size() > MAX_SECTION_FILTERS
                 || request.sectionTypes().stream().anyMatch(this::invalidSectionType)
-                || (request.currentSectionType() != null && invalidSectionType(request.currentSectionType()))
-                || (request.includeAdjacentContext() && request.sectionTypes().isEmpty())) {
+                || (request.currentSectionType() != null && invalidSectionType(request.currentSectionType()))) {
             throw new IllegalArgumentException("rule search section filter is invalid");
         }
     }

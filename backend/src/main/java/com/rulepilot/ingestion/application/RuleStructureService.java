@@ -19,16 +19,19 @@ import org.springframework.transaction.annotation.Transactional;
 public class RuleStructureService implements RuleStructureCatalog {
 
     private final RuleStructureClassifier classifier;
+    private final RulePageChunker chunker;
     private final RuleStructureRepository repository;
 
-    public RuleStructureService(RuleStructureClassifier classifier, RuleStructureRepository repository) {
+    public RuleStructureService(
+            RuleStructureClassifier classifier, RulePageChunker chunker, RuleStructureRepository repository) {
         this.classifier = classifier;
+        this.chunker = chunker;
         this.repository = repository;
     }
 
     @Transactional
     public void organize(UUID documentVersionId, List<DocumentProcessing.ExtractedPage> pages) {
-        repository.replace(documentVersionId, classifier.classify(pages));
+        repository.replace(documentVersionId, classifier.classify(pages), chunker.chunk(pages));
     }
 
     @Transactional(readOnly = true)

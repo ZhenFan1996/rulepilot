@@ -7,7 +7,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -86,6 +85,7 @@ class IllustratedLessonEntity {
     @Id UUID id;
     @Column(name = "teaching_plan_id", nullable = false) UUID teachingPlanId;
     @Column(nullable = false) String status;
+    @Column(name = "generator_version", nullable = false) String generatorVersion;
     @Column(name = "created_at", nullable = false) Instant createdAt;
 
     protected IllustratedLessonEntity() {}
@@ -94,11 +94,13 @@ class IllustratedLessonEntity {
         id = lesson.id();
         teachingPlanId = lesson.teachingPlanId();
         status = lesson.status().name();
+        generatorVersion = lesson.generatorVersion();
         createdAt = lesson.createdAt();
     }
 
     IllustratedLesson toDomain(List<LessonSection> sections) {
-        return new IllustratedLesson(id, teachingPlanId, LessonStatus.valueOf(status), sections, createdAt);
+        return new IllustratedLesson(
+                id, teachingPlanId, LessonStatus.valueOf(status), sections, generatorVersion, createdAt);
     }
 }
 
@@ -108,7 +110,8 @@ class IllustratedLessonSectionEntity {
     @Id UUID id;
     @Column(name = "lesson_id", nullable = false) UUID lessonId;
     @Column(nullable = false) int position;
-    @Column(name = "section_type", nullable = false) String sectionType;
+    @Column(name = "topic_key", nullable = false) String topicKey;
+    @Column(name = "coverage_tags", nullable = false) String coverageTags;
     @Column(nullable = false) String title;
     @Column(nullable = false) boolean required;
     @Column(name = "evidence_status", nullable = false) String evidenceStatus;
@@ -123,7 +126,8 @@ class IllustratedLessonSectionEntity {
         this.id = id;
         this.lessonId = lessonId;
         position = section.position();
-        sectionType = section.type().name();
+        topicKey = section.topicKey();
+        coverageTags = String.join(",", section.coverageTags());
         title = section.title();
         required = section.required();
         evidenceStatus = section.evidenceStatus().name();
@@ -140,7 +144,8 @@ class IllustratedLessonSectionEntity {
     LessonSection toDomain(List<LessonStep> steps) {
         return new LessonSection(
                 position,
-                TeachingSectionType.valueOf(sectionType),
+                topicKey,
+                coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")),
                 title,
                 required,
                 EvidenceStatus.valueOf(evidenceStatus),

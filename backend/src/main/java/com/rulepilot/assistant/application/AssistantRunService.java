@@ -35,11 +35,15 @@ public class AssistantRunService implements AssistantRuns {
             @Value("${rulepilot.agent.max-model-calls:16}") int maxModelCalls,
             @Value("${rulepilot.agent.max-tokens:24000}") int maxTokens,
             @Value("${rulepilot.agent.timeout:PT2M}") Duration timeout,
-            @Value("${rulepilot.teaching.agent.timeout:PT5M}") Duration teachingTimeout) {
+            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int teachingMaxToolCalls,
+            @Value("${rulepilot.teaching.agent.max-model-calls:72}") int teachingMaxModelCalls,
+            @Value("${rulepilot.teaching.agent.max-tokens:300000}") int teachingMaxTokens,
+            @Value("${rulepilot.teaching.agent.timeout:PT30M}") Duration teachingTimeout) {
         this.repository = repository;
         this.execution = execution;
         this.defaultLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
-        this.teachingLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, teachingTimeout);
+        this.teachingLimits = new BudgetLimits(
+                maxSteps, teachingMaxToolCalls, teachingMaxModelCalls, teachingMaxTokens, teachingTimeout);
     }
 
     @Override

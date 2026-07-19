@@ -11,6 +11,8 @@ public class VersionedAgentPrompts {
 
     private final String teachingSystem;
     private final String teachingUser;
+    private final String teachingOutlineSystem;
+    private final String teachingOutlineUser;
     private final String answerSystem;
     private final String answerUser;
     private final String criticSystem;
@@ -18,16 +20,20 @@ public class VersionedAgentPrompts {
     private final String structuredOutputRepair;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v5-system.txt") Resource teachingSystem,
-            @Value("classpath:prompts/teaching-agent-v5-user.txt") Resource teachingUser,
+            @Value("classpath:prompts/teaching-agent-v7-system.txt") Resource teachingSystem,
+            @Value("classpath:prompts/teaching-agent-v7-user.txt") Resource teachingUser,
+            @Value("classpath:prompts/teaching-outline-v2-system.txt") Resource teachingOutlineSystem,
+            @Value("classpath:prompts/teaching-outline-v2-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v2-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v2-user.txt") Resource answerUser,
-            @Value("classpath:prompts/content-critic-v3-system.txt") Resource criticSystem,
-            @Value("classpath:prompts/content-critic-v3-user.txt") Resource criticUser,
+            @Value("classpath:prompts/content-critic-v4-system.txt") Resource criticSystem,
+            @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
         this.teachingSystem = read(teachingSystem);
         this.teachingUser = read(teachingUser);
+        this.teachingOutlineSystem = read(teachingOutlineSystem);
+        this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = read(answerSystem);
         this.answerUser = read(answerUser);
         this.criticSystem = read(criticSystem);
@@ -41,6 +47,14 @@ public class VersionedAgentPrompts {
 
     public String teachingUser() {
         return teachingUser;
+    }
+
+    public String teachingOutlineSystem() {
+        return teachingOutlineSystem;
+    }
+
+    public String teachingOutlineUser() {
+        return teachingOutlineUser;
     }
 
     public String answerSystem() {

@@ -2,6 +2,7 @@ package com.rulepilot.ingestion.application;
 
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessingStage;
+import com.rulepilot.document.DocumentPageImageStore;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +17,8 @@ public class UploadedDocumentIngestion {
 
     private final DocumentProcessing documents;
     private final PdfPageExtractor extractor;
+    private final PdfPageImageRenderer pageImageRenderer;
+    private final DocumentPageImageStore pageImages;
     private final ProcessingProgressTracker progress;
     private final RuleStructureService structures;
     private final RuleChunkEmbeddingService embeddings;
@@ -23,11 +26,15 @@ public class UploadedDocumentIngestion {
     public UploadedDocumentIngestion(
             DocumentProcessing documents,
             PdfPageExtractor extractor,
+            PdfPageImageRenderer pageImageRenderer,
+            DocumentPageImageStore pageImages,
             ProcessingProgressTracker progress,
             RuleStructureService structures,
             RuleChunkEmbeddingService embeddings) {
         this.documents = documents;
         this.extractor = extractor;
+        this.pageImageRenderer = pageImageRenderer;
+        this.pageImages = pageImages;
         this.progress = progress;
         this.structures = structures;
         this.embeddings = embeddings;
@@ -60,6 +67,11 @@ public class UploadedDocumentIngestion {
         documents.markExtracting(documentVersionId);
         var pages = extractor.extract(documents.open(documentVersionId));
         documents.replacePages(documentVersionId, pages);
+        int renderedPages = pageImageRenderer.render(
+                documents.open(documentVersionId), image -> pageImages.store(documentVersionId, image));
+        if (renderedPages != pages.size()) {
+            throw new IllegalStateException("rendered page count does not match extracted page count");
+        }
         progress.update(documentVersionId, "EXTRACTING", 65, pages.size(), false);
     }
 

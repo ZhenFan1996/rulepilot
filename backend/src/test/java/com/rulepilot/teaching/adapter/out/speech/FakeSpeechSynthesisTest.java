@@ -6,7 +6,6 @@ import com.rulepilot.teaching.domain.NarrationScript;
 import com.rulepilot.teaching.domain.NarrationScript.NarrationChapter;
 import com.rulepilot.teaching.domain.NarrationScript.NarrationSegment;
 import com.rulepilot.teaching.domain.NarrationScript.ScriptStatus;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -23,7 +22,7 @@ class FakeSpeechSynthesisTest {
                 ScriptStatus.READY,
                 List.of(new NarrationChapter(
                         1,
-                        TeachingSectionType.SETUP,
+                        "setup",
                         "Setup",
                         true,
                         List.of(new NarrationSegment(1, "Place the board.", List.of(1))))),

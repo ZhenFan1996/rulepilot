@@ -1,0 +1,8 @@
+Create a {duration}-minute lesson for {players} players, including {beginners} beginners.
+
+Rulebook pages, in printed order:
+{pages}
+
+First identify the game and its premise. Then produce the smallest coherent set of game-specific teaching topics. The player should finish knowing how to set up, what they are trying to achieve, what a turn feels like, how play progresses, and exactly how the game ends and scores. Put special systems and exceptions where they become understandable, not in arbitrary fixed slots.
+
+{repair}

@@ -34,6 +34,6 @@ public class NarrationScriptFactory {
                         .toList()
                 : List.of(new NarrationSegment(1, INSUFFICIENT_EVIDENCE_MESSAGE, List.of()));
         return new NarrationChapter(
-                section.position(), section.type(), section.title(), supported, segments);
+                section.position(), section.topicKey(), section.title(), supported, segments);
     }
 }

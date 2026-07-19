@@ -25,13 +25,13 @@ public record NarrationScript(
 
     public record NarrationChapter(
             int position,
-            TeachingSectionType type,
+            String topicKey,
             String title,
             boolean supported,
             List<NarrationSegment> segments) {
 
         public NarrationChapter {
-            if (position < 1 || type == null || title == null || title.isBlank()) {
+            if (position < 1 || topicKey == null || topicKey.isBlank() || title == null || title.isBlank()) {
                 throw new IllegalArgumentException("narration chapter identity is required");
             }
             segments = List.copyOf(segments);

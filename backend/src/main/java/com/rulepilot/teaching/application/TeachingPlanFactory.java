@@ -1,21 +1,21 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 @Component
 public class TeachingPlanFactory {
+
+    private static final int MAX_TOPICS = 16;
+    private static final Set<String> CORE_COVERAGE = Set.of("setup", "core_loop", "end", "scoring");
 
     public TeachingPlan create(
             UUID documentVersionId,
@@ -23,46 +23,35 @@ public class TeachingPlanFactory {
             int beginnerCount,
             int durationMinutes,
             String createdBy,
-            StructureView structure) {
-        Map<String, com.rulepilot.ingestion.RuleStructureCatalog.SectionView> evidence = structure.sections().stream()
-                .collect(Collectors.toMap(section -> section.type(), Function.identity()));
-        List<TeachingSectionType> selected = new ArrayList<>(Arrays.stream(TeachingSectionType.values())
-                .filter(TeachingSectionType::required)
-                .toList());
-        if (beginnerCount > 0 && durationMinutes >= 20) {
-            selected.add(TeachingSectionType.FIRST_ROUND_PRACTICE);
+            OutlineDraft outline) {
+        if (outline == null || outline.gameTitle() == null || outline.gameTitle().isBlank()
+                || outline.premise() == null || outline.premise().isBlank()
+                || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
+            throw new IllegalArgumentException("model did not produce a usable teaching outline");
         }
-        if (durationMinutes >= 30) {
-            selected.add(TeachingSectionType.COMMON_MISTAKES);
-        }
-        if (beginnerCount > 0 || durationMinutes >= 15) {
-            selected.add(TeachingSectionType.RECAP);
-        }
-
-        List<PlannedSection> sections = new ArrayList<>();
-        for (int index = 0; index < selected.size(); index++) {
-            TeachingSectionType type = selected.get(index);
-            var source = evidence.get(type.name());
-            List<Integer> sourcePages = type.required()
-                    ? source == null ? List.of() : source.pageNumbers()
-                    : type.dependencies().stream()
-                            .map(dependency -> evidence.get(dependency.name()))
-                            .filter(java.util.Objects::nonNull)
-                            .flatMap(section -> section.pageNumbers().stream())
-                            .distinct()
-                            .toList();
-            boolean evidenceAvailable = type.required()
-                    ? source != null && source.present()
-                    : type.dependencies().stream()
-                            .map(dependency -> evidence.get(dependency.name()))
-                            .allMatch(section -> section != null && section.present());
-            sections.add(new PlannedSection(
-                    index + 1,
-                    type,
-                    type.required(),
-                    evidenceAvailable,
-                    sourcePages,
-                    type.dependencies()));
+        Set<String> keys = new HashSet<>();
+        List<PlannedSection> topics = java.util.stream.IntStream.range(0, outline.topics().size())
+                .mapToObj(index -> {
+                    var topic = outline.topics().get(index);
+                    String key = normalizedKey(topic.key(), index + 1);
+                    if (!keys.add(key)) {
+                        throw new IllegalArgumentException("teaching topic keys must be unique");
+                    }
+                    return new PlannedSection(
+                            index + 1,
+                            key,
+                            topic.title(),
+                            topic.objective(),
+                            topic.required(),
+                            normalizedQueries(topic.retrievalQueries()),
+                            normalizedTags(topic.coverageTags()));
+                })
+                .toList();
+        Set<String> covered = topics.stream()
+                .flatMap(topic -> topic.coverageTags().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        if (!covered.containsAll(CORE_COVERAGE)) {
+            throw new IllegalArgumentException("teaching outline omitted setup, core loop, ending, or scoring coverage");
         }
         return new TeachingPlan(
                 UUID.randomUUID(),
@@ -70,8 +59,48 @@ public class TeachingPlanFactory {
                 playerCount,
                 beginnerCount,
                 durationMinutes,
-                sections,
+                outline.gameTitle(),
+                outline.premise(),
+                topics,
                 createdBy,
                 Instant.now());
+    }
+
+    private String normalizedKey(String value, int position) {
+        String key = value == null ? "" : value.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("(^-|-$)", "");
+        return key.isBlank() ? "topic-" + position : key.substring(0, Math.min(key.length(), 80));
+    }
+
+    private List<String> normalizedTags(List<String> values) {
+        return values == null ? List.of() : values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(value -> canonicalTag(value.toLowerCase(Locale.ROOT).replace('-', '_').strip()))
+                .distinct()
+                .toList();
+    }
+
+    private List<String> normalizedQueries(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            throw new IllegalArgumentException("every teaching topic needs at least one retrieval question");
+        }
+        return values.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::strip)
+                .filter(value -> value.length() <= 300)
+                .distinct()
+                .limit(4)
+                .toList();
+    }
+
+    private String canonicalTag(String tag) {
+        return switch (tag) {
+            case "game_setup", "table_setup" -> "setup";
+            case "turn", "turns", "turn_structure", "round_structure", "gameplay", "actions" -> "core_loop";
+            case "game_end", "end_game", "end_conditions", "ending" -> "end";
+            case "final_scoring", "score", "scores" -> "scoring";
+            default -> tag;
+        };
     }
 }

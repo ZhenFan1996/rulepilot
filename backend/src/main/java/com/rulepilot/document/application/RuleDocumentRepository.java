@@ -34,7 +34,13 @@ public interface RuleDocumentRepository {
 
     List<DocumentProcessing.PageView> findPages(UUID versionId);
 
+    void updatePageImage(UUID versionId, int pageNumber, String objectKey, int width, int height);
+
+    List<PageImageMetadata> findPageImages(UUID versionId, java.util.Set<Integer> pageNumbers);
+
     List<DocumentSummary> findByEdition(UUID editionId);
 
     record DocumentSummary(RuleDocument document, DocumentVersion latestVersion) {}
+
+    record PageImageMetadata(int pageNumber, String objectKey, int width, int height) {}
 }

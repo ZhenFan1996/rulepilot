@@ -64,7 +64,7 @@ public class ManifestVideoComposition implements VideoCompositionPort {
         }).toList();
         return new VideoChapter(
                 section.position(),
-                section.type(),
+                section.topicKey(),
                 section.title(),
                 section.evidenceStatus(),
                 section.visualKind(),

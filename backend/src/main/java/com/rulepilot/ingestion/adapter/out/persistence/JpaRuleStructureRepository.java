@@ -23,7 +23,10 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
     private EntityManager entityManager;
 
     @Override
-    public void replace(UUID documentVersionId, List<DetectedRuleSection> sections) {
+    public void replace(
+            UUID documentVersionId,
+            List<DetectedRuleSection> sections,
+            List<DetectedRuleChunk> chunks) {
         entityManager
                 .createQuery("delete from RuleChunkEntity c where c.documentVersionId = :versionId")
                 .setParameter("versionId", documentVersionId)
@@ -42,14 +45,17 @@ public class JpaRuleStructureRepository implements RuleStructureRepository {
                     section.content(),
                     section.pageNumbers().stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(",")),
                     now));
+        }
+        for (int index = 0; index < chunks.size(); index++) {
+            var chunk = chunks.get(index);
             entityManager.persist(new RuleChunkEntity(
                     UUID.randomUUID(),
                     documentVersionId,
-                    section.type().name(),
-                    section.type().label(),
-                    section.content(),
-                    section.pageNumbers().getFirst(),
-                    section.pageNumbers().getLast(),
+                    chunk.sectionType(),
+                    chunk.heading(),
+                    chunk.content(),
+                    chunk.pageNumber(),
+                    chunk.pageNumber(),
                     index,
                     now));
         }

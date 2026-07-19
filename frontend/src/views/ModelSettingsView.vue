@@ -15,6 +15,7 @@ interface ProviderView {
   baseUrl: string
   model: string
   apiKeyConfigured: boolean
+  visionCapable: boolean
 }
 
 interface Assignments {
@@ -52,6 +53,9 @@ const providerLabels: Record<string, string> = {
 const provider = computed(() => snapshot.value?.providers.find((entry) => entry.id === selectedProvider.value))
 const configuredProviders = computed(() => snapshot.value?.providers.filter((entry) => entry.configured) ?? [])
 const needsBaseUrl = computed(() => selectedProvider.value !== 'gemini')
+const teachingProvider = computed(() => snapshot.value?.providers.find(
+  (entry) => entry.id === snapshot.value?.assignments.teaching,
+))
 
 function selectProvider(id: string) {
   selectedProvider.value = id
@@ -238,13 +242,16 @@ onMounted(loadConfiguration)
             <p class="text-xs font-medium text-ink/40">用途</p>
             <h2 class="mt-2 font-display text-2xl font-semibold">各项功能使用哪个模型</h2>
             <p class="mt-3 text-sm leading-6 text-ink/55">未连接外部服务时，可以继续使用不联网的内置演示。</p>
+            <p v-if="teachingProvider && !teachingProvider.visionCapable" class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
+              {{ providerLabels[teachingProvider.id] }} 当前是纯文本模型，无法读取规则书页面图片。页面仍会展示给用户，但要让 Agent 理解棋盘布局和图标，请将规则讲解切换到支持图片的 Gemini 或 OpenAI 模型。
+            </p>
 
             <form class="mt-7 space-y-5" @submit.prevent="saveAssignments">
-              <label v-for="role in ([['teaching', '规则讲解'], ['answer', '规则答疑'], ['critic', '事实审校']] as const)" :key="role[0]" class="block text-sm font-semibold">
+              <label v-for="role in ([['teaching', '规则讲解（需要视觉模型）'], ['answer', '规则答疑'], ['critic', '事实审校']] as const)" :key="role[0]" class="block text-sm font-semibold">
                 {{ role[1] }}
                 <select v-model="snapshot.assignments[role[0]]" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 text-ink outline-none focus:border-copper">
                   <option value="fake">内置演示（不联网）</option>
-                  <option v-for="item in configuredProviders" :key="item.id" :value="item.id">{{ providerLabels[item.id] }}</option>
+                  <option v-for="item in configuredProviders" :key="item.id" :value="item.id">{{ providerLabels[item.id] }}{{ role[0] === 'teaching' && !item.visionCapable ? '（仅文本）' : '' }}</option>
                 </select>
               </label>
 

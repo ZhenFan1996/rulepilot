@@ -155,6 +155,41 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public void updatePageImage(UUID versionId, int pageNumber, String objectKey, int width, int height) {
+        DocumentPageEntity page = entityManager
+                .createQuery(
+                        "select p from DocumentPageEntity p where p.documentVersionId = :versionId and p.pageNumber = :pageNumber",
+                        DocumentPageEntity.class)
+                .setParameter("versionId", versionId)
+                .setParameter("pageNumber", pageNumber)
+                .getResultStream()
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("document page does not exist"));
+        page.imageObjectKey = objectKey;
+        page.imageWidth = width;
+        page.imageHeight = height;
+        entityManager.flush();
+    }
+
+    @Override
+    public List<PageImageMetadata> findPageImages(UUID versionId, java.util.Set<Integer> pageNumbers) {
+        if (pageNumbers.isEmpty()) {
+            return List.of();
+        }
+        return entityManager
+                .createQuery(
+                        "select p from DocumentPageEntity p where p.documentVersionId = :versionId and p.pageNumber in :pageNumbers and p.imageObjectKey is not null order by p.pageNumber",
+                        DocumentPageEntity.class)
+                .setParameter("versionId", versionId)
+                .setParameter("pageNumbers", pageNumbers)
+                .getResultList()
+                .stream()
+                .map(page -> new PageImageMetadata(
+                        page.pageNumber, page.imageObjectKey, page.imageWidth, page.imageHeight))
+                .toList();
+    }
+
+    @Override
     public List<DocumentSummary> findByEdition(UUID editionId) {
         List<RuleDocumentEntity> documents = entityManager
                 .createQuery(
@@ -307,6 +342,15 @@ class DocumentPageEntity {
 
     @Column(name = "character_count", nullable = false)
     int characterCount;
+
+    @Column(name = "image_object_key")
+    String imageObjectKey;
+
+    @Column(name = "image_width")
+    Integer imageWidth;
+
+    @Column(name = "image_height")
+    Integer imageHeight;
 
     @Column(name = "created_at", nullable = false)
     Instant createdAt;

@@ -1,10 +1,17 @@
 package com.rulepilot.assistant.adapter.out.model;
 
 import com.rulepilot.assistant.ContentCriticModel;
+import com.rulepilot.assistant.GeneratedContentCritic.Issue;
+import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -49,16 +56,86 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     }
 
     private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
-        return ChatClient.create(models.modelFor(Role.CRITIC)).prompt()
+        Map<String, UUID> evidenceIds = evidenceIds(request);
+        ModelCritiqueDraft draft = ChatClient.create(models.modelFor(Role.CRITIC)).prompt()
                 .system(prompts.criticSystem())
                 .user(user -> user.text(prompts.criticUser())
                         .param("type", request.contentType())
                         .param("objective", request.taskContext().objective())
                         .param("coverage", request.taskContext().requiredCoverage())
-                        .param("claims", request.claims())
-                        .param("evidence", request.evidence())
+                        .param("claims", modelClaims(request))
+                        .param("evidence", modelEvidence(request))
                         .param("repair", repair))
                 .call()
-                .entity(CritiqueDraft.class);
+                .entity(ModelCritiqueDraft.class);
+        if (draft == null) throw new IllegalArgumentException("critic returned no draft");
+        return new CritiqueDraft(draft.issues().stream()
+                .map(issue -> new Issue(
+                        issue.type(),
+                        issue.claimPosition(),
+                        resolveReferences(issue.evidenceIds(), evidenceIds),
+                        issue.summary()))
+                .toList());
+    }
+
+    private List<ModelClaim> modelClaims(ReviewRequest request) {
+        Map<UUID, String> references = reverseEvidenceIds(request);
+        return request.claims().stream()
+                .map(claim -> new ModelClaim(
+                        claim.position(),
+                        claim.text(),
+                        claim.citationIds().stream().map(references::get).filter(java.util.Objects::nonNull).toList()))
+                .toList();
+    }
+
+    private List<ModelEvidence> modelEvidence(ReviewRequest request) {
+        return IntStream.range(0, request.evidence().size())
+                .mapToObj(index -> new ModelEvidence(
+                        "E" + (index + 1), request.evidence().get(index).excerpt()))
+                .toList();
+    }
+
+    private Map<String, UUID> evidenceIds(ReviewRequest request) {
+        Map<String, UUID> references = new LinkedHashMap<>();
+        IntStream.range(0, request.evidence().size())
+                .forEach(index -> references.put(
+                        "E" + (index + 1), request.evidence().get(index).chunkId()));
+        return Map.copyOf(references);
+    }
+
+    private Map<UUID, String> reverseEvidenceIds(ReviewRequest request) {
+        Map<UUID, String> references = new LinkedHashMap<>();
+        evidenceIds(request).forEach((reference, id) -> references.put(id, reference));
+        return Map.copyOf(references);
+    }
+
+    private List<UUID> resolveReferences(List<String> references, Map<String, UUID> evidenceIds) {
+        if (references == null) return List.of();
+        return references.stream()
+                .map(reference -> reference == null ? "" : reference.strip().toUpperCase())
+                .map(reference -> {
+                    UUID id = evidenceIds.get(reference);
+                    if (id == null) throw new IllegalArgumentException("critic cited an unknown evidence reference");
+                    return id;
+                })
+                .distinct()
+                .toList();
+    }
+
+    private record ModelClaim(int position, String text, List<String> citationIds) {}
+
+    private record ModelEvidence(String evidenceRef, String excerpt) {}
+
+    private record ModelCritiqueDraft(List<ModelIssue> issues) {
+        private ModelCritiqueDraft {
+            issues = issues == null ? List.of() : List.copyOf(issues);
+        }
+    }
+
+    private record ModelIssue(
+            IssueType type, int claimPosition, List<String> evidenceIds, String summary) {
+        private ModelIssue {
+            evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
+        }
     }
 }

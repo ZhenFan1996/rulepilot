@@ -54,7 +54,8 @@ class MediaConsistencyEvaluatorTest {
                 LessonStatus.COMPLETE,
                 List.of(new LessonSection(
                         1,
-                        TeachingSectionType.SETUP,
+                        "setup",
+                        List.of("setup"),
                         "Setup",
                         true,
                         EvidenceStatus.SUPPORTED,
@@ -71,7 +72,7 @@ class MediaConsistencyEvaluatorTest {
                 frame.segmentPosition(), frame.startMillis(), frame.endMillis(), "错误字幕", frame.sourcePages());
         var driftedChapter = new VideoChapter(
                 chapter.position(),
-                chapter.type(),
+                chapter.topicKey(),
                 chapter.title(),
                 chapter.evidenceStatus(),
                 chapter.visualKind(),

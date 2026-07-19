@@ -5,6 +5,7 @@ import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -19,6 +20,16 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
     @Override
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> search(UUID documentVersionId, String query, int limit) {
+        List<RuleEvidenceHit> exact = execute(documentVersionId, query, limit);
+        if (!exact.isEmpty()) {
+            return exact;
+        }
+        String fallback = fallbackQuery(query);
+        return fallback.equals(query) ? exact : execute(documentVersionId, fallback, limit);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<RuleEvidenceHit> execute(UUID documentVersionId, String query, int limit) {
         String sql = """
                 WITH search_query AS (
                     SELECT websearch_to_tsquery('simple', :query) AS value
@@ -41,6 +52,17 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
                 .setParameter("limit", limit)
                 .getResultList();
         return rows.stream().map(this::toHit).toList();
+    }
+
+    private String fallbackQuery(String query) {
+        List<String> terms = java.util.Arrays.stream(query.strip().split("\\s+"))
+                .map(term -> term.replaceAll("[^\\p{L}\\p{N}_-]", ""))
+                .filter(term -> term.length() > 2)
+                .map(term -> term.toLowerCase(Locale.ROOT))
+                .distinct()
+                .limit(8)
+                .toList();
+        return terms.size() < 2 ? query : String.join(" OR ", terms);
     }
 
     private RuleEvidenceHit toHit(Object[] row) {

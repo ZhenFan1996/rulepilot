@@ -28,7 +28,7 @@ public record ChapterVideo(
 
     public record VideoChapter(
             int position,
-            TeachingSectionType type,
+            String topicKey,
             String title,
             EvidenceStatus evidenceStatus,
             VisualKind visualKind,
@@ -38,7 +38,7 @@ public record ChapterVideo(
             List<VideoFrame> frames) {
 
         public VideoChapter {
-            if (position < 1 || type == null || title == null || title.isBlank() || evidenceStatus == null
+            if (position < 1 || topicKey == null || topicKey.isBlank() || title == null || title.isBlank() || evidenceStatus == null
                     || visualKind == null || visualCaption == null || startMillis < 0 || endMillis <= startMillis) {
                 throw new IllegalArgumentException("video chapter content is required");
             }

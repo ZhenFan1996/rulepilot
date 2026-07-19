@@ -1,10 +1,16 @@
 package com.rulepilot.document.application;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.DocumentPageImageStore;
+import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.ProcessingStatus;
 import java.io.InputStream;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -13,7 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @Profile("!test")
-class DocumentProcessingService implements DocumentProcessing {
+class DocumentProcessingService implements DocumentProcessing, DocumentPageImageStore, DocumentPageImages {
+
+    private static final int MAX_PAGE_IMAGE_BYTES = 5 * 1024 * 1024;
 
     private final RuleDocumentRepository repository;
     private final DocumentStorage storage;
@@ -107,6 +115,50 @@ class DocumentProcessingService implements DocumentProcessing {
     public List<PageView> pages(UUID documentVersionId) {
         requireVersion(documentVersionId);
         return repository.findPages(documentVersionId);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void store(UUID documentVersionId, RenderedPageImage image) {
+        requireVersion(documentVersionId);
+        byte[] content = image.content();
+        if (content.length > MAX_PAGE_IMAGE_BYTES) {
+            throw new IllegalArgumentException("rendered page image exceeds the size limit");
+        }
+        String objectKey = "documents/%s/pages/%04d.jpg".formatted(documentVersionId, image.pageNumber());
+        storage.store(objectKey, new ByteArrayInputStream(content), content.length, "image/jpeg");
+        repository.updatePageImage(
+                documentVersionId, image.pageNumber(), objectKey, image.width(), image.height());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<PageImage> read(UUID documentVersionId, Set<Integer> pageNumbers) {
+        requireVersion(documentVersionId);
+        if (pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+                || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+            throw new IllegalArgumentException("requested document page images are invalid");
+        }
+        return repository.findPageImages(documentVersionId, Set.copyOf(pageNumbers)).stream()
+                .map(metadata -> new PageImage(
+                        metadata.pageNumber(),
+                        "image/jpeg",
+                        readImage(metadata.objectKey()),
+                        metadata.width(),
+                        metadata.height()))
+                .toList();
+    }
+
+    private byte[] readImage(String objectKey) {
+        try (InputStream input = storage.open(objectKey)) {
+            byte[] content = input.readNBytes(MAX_PAGE_IMAGE_BYTES + 1);
+            if (content.length > MAX_PAGE_IMAGE_BYTES) {
+                throw new IllegalStateException("stored page image exceeds the size limit");
+            }
+            return content;
+        } catch (IOException exception) {
+            throw new UncheckedIOException("could not read page image", exception);
+        }
     }
 
     private void transition(UUID versionId, ProcessingStatus next) {

@@ -10,6 +10,8 @@ public record TeachingPlan(
         int playerCount,
         int beginnerCount,
         int durationMinutes,
+        String gameTitle,
+        String premise,
         List<PlannedSection> sections,
         String createdBy,
         Instant createdAt) {
@@ -27,9 +29,12 @@ public record TeachingPlan(
         if (durationMinutes < 2 || durationMinutes > 180) {
             throw new IllegalArgumentException("duration must be between 2 and 180 minutes");
         }
-        if (createdBy == null || createdBy.isBlank()) {
-            throw new IllegalArgumentException("creator is required");
+        if (gameTitle == null || gameTitle.isBlank() || premise == null || premise.isBlank()
+                || createdBy == null || createdBy.isBlank()) {
+            throw new IllegalArgumentException("generated teaching plan identity is required");
         }
+        gameTitle = gameTitle.strip();
+        premise = premise.strip();
         sections = List.copyOf(sections);
         for (int index = 0; index < sections.size(); index++) {
             if (sections.get(index).position() != index + 1) {
@@ -38,23 +43,33 @@ public record TeachingPlan(
         }
     }
 
-    public boolean complete() {
-        return sections.stream().filter(PlannedSection::required).allMatch(PlannedSection::evidenceAvailable);
-    }
-
     public record PlannedSection(
             int position,
-            TeachingSectionType type,
+            String topicKey,
+            String title,
+            String objective,
             boolean required,
-            boolean evidenceAvailable,
-            List<Integer> sourcePages,
-            List<TeachingSectionType> dependencies) {
+            List<String> retrievalQueries,
+            List<String> coverageTags) {
         public PlannedSection {
-            if (position < 1 || type == null) {
-                throw new IllegalArgumentException("section position and type are required");
+            if (position < 1
+                    || topicKey == null || topicKey.isBlank() || topicKey.length() > 80
+                    || title == null || title.isBlank() || title.length() > 160
+                    || objective == null || objective.isBlank() || objective.length() > 600
+                    || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 5
+                    || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank() || query.length() > 300)
+                    || coverageTags == null) {
+                throw new IllegalArgumentException("generated teaching topic is invalid");
             }
-            sourcePages = List.copyOf(sourcePages);
-            dependencies = List.copyOf(dependencies);
+            topicKey = topicKey.strip();
+            title = title.strip();
+            objective = objective.strip();
+            retrievalQueries = retrievalQueries.stream().map(String::strip).distinct().toList();
+            coverageTags = coverageTags.stream()
+                    .filter(tag -> tag != null && !tag.isBlank())
+                    .map(String::strip)
+                    .distinct()
+                    .toList();
         }
     }
 }

@@ -33,7 +33,7 @@ class RuleEvidenceLookupService implements RuleEvidenceLookup {
             UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
         if (documentVersionId == null || anchorChunkIds == null || anchorChunkIds.isEmpty()
                 || anchorChunkIds.size() > 4 || radius < 1 || radius > 2
-                || sectionTypes == null || sectionTypes.isEmpty() || sectionTypes.size() > 6
+                || sectionTypes == null || sectionTypes.size() > 6
                 || sectionTypes.stream().anyMatch(value -> value == null || value.isBlank())) {
             throw new IllegalArgumentException("adjacent evidence lookup is invalid");
         }

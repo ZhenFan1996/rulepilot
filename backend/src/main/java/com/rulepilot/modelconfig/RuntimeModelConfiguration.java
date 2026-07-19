@@ -71,6 +71,11 @@ public class RuntimeModelConfiguration {
         return state.get().assignments().forRole(role);
     }
 
+    public boolean supportsVision(Role role) {
+        String provider = providerFor(role);
+        return "fake".equals(provider) || "gemini".equals(provider) || "openai".equals(provider);
+    }
+
     public synchronized Snapshot configure(String provider, String apiKey, String baseUrl, String model) {
         String id = providerId(provider);
         String checkedModel = required(model, "model name", 200);
@@ -115,7 +120,8 @@ public class RuntimeModelConfiguration {
                     configured != null,
                     configured == null ? defaultBaseUrl(id) : configured.baseUrl(),
                     configured == null ? defaultModel(id) : configured.modelName(),
-                    configured != null));
+                    configured != null,
+                    supportsVisionProvider(id)));
         }
         return new Snapshot(List.copyOf(providers), current.assignments(), current.revision(), true);
     }
@@ -207,11 +213,21 @@ public class RuntimeModelConfiguration {
         };
     }
 
+    private boolean supportsVisionProvider(String provider) {
+        return "gemini".equals(provider) || "openai".equals(provider);
+    }
+
     private record ConfiguredProvider(String id, String baseUrl, String modelName, ChatModel model) {}
 
     private record State(Map<String, ConfiguredProvider> providers, Assignments assignments, long revision) {}
 
-    public record ProviderView(String id, boolean configured, String baseUrl, String model, boolean apiKeyConfigured) {}
+    public record ProviderView(
+            String id,
+            boolean configured,
+            String baseUrl,
+            String model,
+            boolean apiKeyConfigured,
+            boolean visionCapable) {}
 
     public record Assignments(String teaching, String answer, String critic) {
         String forRole(Role role) {

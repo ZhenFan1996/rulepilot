@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -26,6 +26,8 @@ interface TeachingPlan {
   playerCount: number
   beginnerCount: number
   durationMinutes: number
+  gameTitle: string
+  premise: string
 }
 
 interface IllustratedLesson {
@@ -36,7 +38,8 @@ interface IllustratedLesson {
 
 interface LessonSection {
   position: number
-  type: string
+  topicKey: string
+  coverageTags: string[]
   title: string
   required: boolean
   evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
@@ -51,7 +54,7 @@ interface LessonQualityReport {
   status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED'
   score: number
   checks: Array<{
-    type: string
+    topicKey: string
     status: 'PASS' | 'FAIL' | 'NOT_EVALUATED'
     summary: string
     detail: string
@@ -201,9 +204,16 @@ const editedVerdict = ref('')
 const editedExplanation = ref('')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
+const visualImageFailed = ref(false)
+const resumingLesson = ref(false)
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const currentVisualPageUrl = computed(() => {
+  const page = currentSection.value?.visualSourcePages[0]
+  if (!plan.value || !page) return ''
+  return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
+})
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
 const currentVideoChapter = computed(() => video.value?.chapters[progress.value.currentIndex] ?? null)
 const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
@@ -225,6 +235,13 @@ const completedCount = computed(() => new Set([...progress.value.completed, ...p
 const progressPercent = computed(() =>
   lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
 )
+const supportedSectionCount = computed(
+  () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
+)
+
+watch(currentVisualPageUrl, () => {
+  visualImageFailed.value = false
+})
 
 function progressKey() {
   return lesson.value ? `rulepilot:lesson-progress:${lesson.value.id}` : ''
@@ -369,7 +386,7 @@ async function askCurrentSection() {
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({
         question: text,
-        currentLessonSection: currentSection.value.type,
+        currentLessonSection: currentSection.value.topicKey,
         playerCount: plan.value.playerCount,
       }),
     })
@@ -428,6 +445,26 @@ async function csrfToken() {
   }
   if (!response.ok) throw new Error('无法建立安全会话，请稍后重试。')
   return (await response.json()) as CsrfResponse
+}
+
+async function resumeLesson() {
+  if (!planId.value || resumingLesson.value || !online.value) return
+  resumingLesson.value = true
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error('暂时无法继续补全讲解，请稍后重试。')
+    await loadLesson()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '暂时无法继续补全讲解。'
+  } finally {
+    resumingLesson.value = false
+  }
 }
 
 function applyRuling(value: ConfirmedRuling) {
@@ -827,12 +864,23 @@ onUnmounted(() => {
               </span>
             </summary>
             <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
-              <li v-for="check in quality.checks" :key="check.type" class="text-xs leading-5">
+              <li v-for="check in quality.checks" :key="check.topicKey" class="text-xs leading-5">
                 <p class="font-semibold"><span aria-hidden="true">{{ check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '×' : '?' }}</span> {{ check.summary }}</p>
                 <p class="mt-0.5 text-ink/50">{{ check.detail }}</p>
               </li>
             </ul>
           </details>
+          <div v-if="lesson.status === 'INCOMPLETE'" class="mt-3 rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950">
+            <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ lesson.sections.length }} 节</p>
+            <p class="mt-1 text-xs leading-5 text-amber-900/75">继续时会保留已经通过引用与事实检查的章节，只补尚未通过的部分。</p>
+            <button
+              class="mt-3 min-h-10 rounded-xl bg-amber-900 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              :disabled="resumingLesson || !online"
+              @click="resumeLesson"
+            >
+              {{ resumingLesson ? '正在补全…' : '继续补全讲解' }}
+            </button>
+          </div>
           <details v-if="mediaConsistency" class="mt-3 rounded-2xl border border-ink/10 bg-paper/70 p-3">
             <summary class="cursor-pointer list-none text-sm font-semibold">
               <span class="flex items-center justify-between gap-3">
@@ -861,7 +909,7 @@ onUnmounted(() => {
             </button>
           </div>
           <ol class="mt-5 flex max-w-full gap-2 overflow-x-auto pb-2 lg:block lg:space-y-2 lg:overflow-visible">
-            <li v-for="(section, index) in lesson.sections" :key="section.type" class="shrink-0 lg:shrink">
+            <li v-for="(section, index) in lesson.sections" :key="section.topicKey" class="shrink-0 lg:shrink">
               <button
                 class="flex min-h-12 w-52 items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm transition lg:w-full"
                 :class="index === progress.currentIndex ? 'bg-ink-panel text-panel-text' : 'bg-paper/60 text-ink hover:bg-paper'"
@@ -940,7 +988,11 @@ onUnmounted(() => {
 
             <div v-if="mediaMode !== 'VIDEO'" class="mt-7 rounded-3xl bg-indigo/8 p-5">
               <p class="text-xs font-semibold text-indigo">{{ visualKindLabel(currentSection.visualKind) }}</p>
-              <div class="my-6 flex items-center gap-2" aria-hidden="true">
+              <figure v-if="currentVisualPageUrl && !visualImageFailed" class="my-5 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
+                <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentSection.visualSourcePages[0]} 页，${currentSection.visualCaption}`" class="max-h-[34rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
+                <figcaption class="border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">规则书第 {{ currentSection.visualSourcePages[0] }} 页视觉证据</figcaption>
+              </figure>
+              <div v-else class="my-6 flex items-center gap-2" aria-hidden="true">
                 <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
                 <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
               </div>

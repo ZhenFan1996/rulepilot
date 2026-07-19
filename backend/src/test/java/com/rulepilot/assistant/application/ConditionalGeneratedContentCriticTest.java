@@ -1,7 +1,6 @@
 package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
@@ -80,15 +79,18 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void rejectsIssueThatEscapesClaimOrEvidenceScope() {
+    void keepsMalformedModelIssueBlockingWhileNormalizingItsScope() {
         Issue invalid = new Issue(
                 IssueType.OVERREACH, 2, List.of(UUID.randomUUID()), "Out of scope.");
         var critic = new ConditionalGeneratedContentCritic(
                 request -> new CritiqueDraft(List.of(invalid)), new ImmediateAuditedAgentInvocations(), true);
 
-        assertThatThrownBy(() -> critic.review(request(), ReviewRisk.STANDARD))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("critic issue is invalid");
+        var review = critic.review(request(), ReviewRisk.STANDARD);
+
+        assertThat(review.accepted()).isFalse();
+        assertThat(review.issues().getFirst())
+                .extracting(Issue::claimPosition, Issue::evidenceIds)
+                .containsExactly(1, List.of());
     }
 
     private ReviewRequest request() {

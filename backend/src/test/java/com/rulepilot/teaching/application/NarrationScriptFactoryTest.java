@@ -60,7 +60,8 @@ class NarrationScriptFactoryTest {
             List<LessonStep> steps) {
         return new LessonSection(
                 position,
-                type,
+                type.name().toLowerCase(),
+                List.of(type == TeachingSectionType.SETUP ? "setup" : "core_loop"),
                 type.name(),
                 true,
                 evidenceStatus,

@@ -2,45 +2,33 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.ingestion.RuleStructureCatalog.SectionView;
-import com.rulepilot.ingestion.RuleStructureCatalog.StructureView;
-import com.rulepilot.teaching.domain.TeachingSectionType;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class TeachingPlanFactoryTest {
 
-    private final TeachingPlanFactory factory = new TeachingPlanFactory();
-
     @Test
-    void keepsRequiredGapsAndAddsBeginnerSectionsWhenTimeAllows() {
-        var structure = new StructureView(
+    void preservesTheModelsGameSpecificTopicsInsteadOfExpandingAFixedTemplate() {
+        var outline = new OutlineDraft(
+                "SETI",
+                "Lead a scientific institution searching for alien life.",
                 List.of(
-                        new SectionView("OBJECTIVE", "目标", true, "Win with points", List.of(1)),
-                        new SectionView("SETUP", "Setup", true, "Deal cards", List.of(2))),
-                2,
-                9);
+                        topic("build-the-solar-system", "Build the rotating solar system", List.of("setup")),
+                        topic("launch-and-listen", "Launch probes and listen for signals", List.of("core_loop")),
+                        topic("close-the-fifth-round", "Close round five and score", List.of("end", "scoring"))));
 
-        var plan = factory.create(UUID.randomUUID(), 4, 3, 30, "player", structure);
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 3, 30, "player", outline);
 
-        assertThat(plan.sections().stream().filter(section -> section.required())).hasSize(9);
-        assertThat(plan.sections()).extracting(section -> section.type()).contains(
-                TeachingSectionType.FIRST_ROUND_PRACTICE,
-                TeachingSectionType.COMMON_MISTAKES,
-                TeachingSectionType.RECAP);
-        assertThat(plan.complete()).isFalse();
-        assertThat(plan.sections().stream()
-                        .filter(section -> section.type() == TeachingSectionType.FIRST_ROUND_PRACTICE)
-                        .findFirst()
-                        .orElseThrow()
-                        .evidenceAvailable())
-                .isFalse();
-        assertThat(plan.sections().stream()
-                        .filter(section -> section.type() == TeachingSectionType.SETUP)
-                        .findFirst()
-                        .orElseThrow()
-                        .sourcePages())
-                .containsExactly(2);
+        assertThat(plan.gameTitle()).isEqualTo("SETI");
+        assertThat(plan.sections()).extracting(section -> section.title()).containsExactly(
+                "Build the rotating solar system", "Launch probes and listen for signals", "Close round five and score");
+        assertThat(plan.sections()).extracting(section -> section.topicKey()).doesNotContain("objective", "components");
+    }
+
+    private TopicDraft topic(String key, String title, List<String> tags) {
+        return new TopicDraft(key, title, "Explain " + title, true, List.of(title), tags);
     }
 }

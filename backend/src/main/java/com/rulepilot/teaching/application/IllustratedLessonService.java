@@ -66,7 +66,8 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
-            IllustratedLesson lesson = repository.save(agent.create(plan, run.id()));
+            IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
+            IllustratedLesson lesson = repository.save(agent.create(plan, run.id(), previousLesson));
             run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             if (lesson.status() == LessonStatus.INCOMPLETE) {
                 run = advance(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Required lesson evidence is incomplete");

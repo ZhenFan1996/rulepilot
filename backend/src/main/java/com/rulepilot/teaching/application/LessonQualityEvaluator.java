@@ -9,7 +9,6 @@ import com.rulepilot.teaching.domain.LessonQualityReport.CheckType;
 import com.rulepilot.teaching.domain.LessonQualityReport.OverallStatus;
 import com.rulepilot.teaching.domain.LessonQualityReport.QualityCheck;
 import com.rulepilot.teaching.domain.TeachingPlan;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Component;
@@ -75,7 +74,7 @@ public class LessonQualityEvaluator {
     }
 
     private QualityCheck setupExecutability(IllustratedLesson lesson) {
-        var setup = section(lesson, TeachingSectionType.SETUP);
+        var setup = section(lesson, "setup");
         boolean executable = setup != null
                 && setup.evidenceStatus() == EvidenceStatus.SUPPORTED
                 && !setup.steps().isEmpty()
@@ -88,13 +87,10 @@ public class LessonQualityEvaluator {
     }
 
     private QualityCheck endAndScoring(IllustratedLesson lesson) {
-        List<TeachingSectionType> required = List.of(
-                TeachingSectionType.END_CONDITIONS,
-                TeachingSectionType.SCORING,
-                TeachingSectionType.TIE_BREAKERS);
-        List<TeachingSectionType> missing = required.stream()
-                .filter(type -> {
-                    var section = section(lesson, type);
+        List<String> required = List.of("end", "scoring");
+        List<String> missing = required.stream()
+                .filter(tag -> {
+                    var section = section(lesson, tag);
                     return section == null || section.evidenceStatus() != EvidenceStatus.SUPPORTED;
                 })
                 .toList();
@@ -107,19 +103,18 @@ public class LessonQualityEvaluator {
                         : "缺少：" + missing.stream().map(this::label).collect(java.util.stream.Collectors.joining("、")));
     }
 
-    private LessonSection section(IllustratedLesson lesson, TeachingSectionType type) {
+    private LessonSection section(IllustratedLesson lesson, String coverageTag) {
         return lesson.sections().stream()
-                .filter(section -> section.type() == type)
+                .filter(section -> section.coverageTags().contains(coverageTag))
                 .findFirst()
                 .orElse(null);
     }
 
-    private String label(TeachingSectionType type) {
-        return switch (type) {
-            case END_CONDITIONS -> "结束条件";
-            case SCORING -> "最终计分";
-            case TIE_BREAKERS -> "同分处理";
-            default -> type.name();
+    private String label(String tag) {
+        return switch (tag) {
+            case "end" -> "结束条件";
+            case "scoring" -> "最终计分";
+            default -> tag;
         };
     }
 }

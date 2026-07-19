@@ -10,20 +10,27 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v5-system.txt"),
-                resource("teaching-agent-v5-user.txt"),
+                resource("teaching-agent-v7-system.txt"),
+                resource("teaching-agent-v7-user.txt"),
+                resource("teaching-outline-v2-system.txt"),
+                resource("teaching-outline-v2-user.txt"),
                 resource("rule-answer-agent-v2-system.txt"),
                 resource("rule-answer-agent-v2-user.txt"),
-                resource("content-critic-v3-system.txt"),
-                resource("content-critic-v3-user.txt"),
+                resource("content-critic-v4-system.txt"),
+                resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
         assertThat(prompts.teachingSystem())
                 .contains(
                         "untrusted data",
                         "directly support the whole step",
+                        "short references E1",
                         "continuity data is not evidence",
                         "visualCitationIds",
+                        "attached page",
+                        "icon-to-label",
+                        "PDF extraction markers",
+                        "win condition",
                         "maximum step count",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
@@ -34,12 +41,23 @@ class VersionedAgentPromptsTest {
                         "{sectionDuration}",
                         "{maxSteps}",
                         "{continuity}",
-                        "{evidence}");
+                        "{evidence}",
+                        "{visualEvidenceAvailable}",
+                        "{visualPages}",
+                        "{repair}");
+        assertThat(prompts.teachingOutlineSystem())
+                .contains("game-specific lesson", "core_loop", "retrieval query", "objective");
         assertThat(prompts.answerSystem())
                 .contains("set answerable to false", "Do not answer from prior knowledge", "gameplay context");
         assertThat(prompts.answerUser()).contains("{questionType}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.criticSystem())
-                .contains("MISSING_EXCEPTION", "MISSING_CRITICAL_RULE", "visual description", "outside knowledge");
+                .contains(
+                        "MISSING_EXCEPTION",
+                        "MISSING_CRITICAL_RULE",
+                        "visual description",
+                        "outside knowledge",
+                        "causal bridge",
+                        "negation");
         assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }

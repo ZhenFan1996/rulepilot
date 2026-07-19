@@ -41,6 +41,7 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
     @SuppressWarnings("unchecked")
     public List<RuleEvidenceHit> findAdjacent(
             UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
+        String sectionPredicate = sectionTypes.isEmpty() ? "" : "AND c.section_type IN (:sectionTypes)";
         String sql = """
                 WITH anchors AS (
                     SELECT chunk_index
@@ -54,15 +55,15 @@ class PostgresRuleEvidenceLookup implements RuleEvidenceLookupRepository {
                 JOIN anchors a ON c.chunk_index BETWEEN a.chunk_index - :radius AND a.chunk_index + :radius
                 WHERE c.document_version_id = :versionId
                   AND c.id NOT IN (:anchorIds)
-                  AND c.section_type IN (:sectionTypes)
+                  %s
                 ORDER BY c.chunk_index
-                """;
-        List<Object[]> rows = entityManager.createNativeQuery(sql)
+                """.formatted(sectionPredicate);
+        var query = entityManager.createNativeQuery(sql)
                 .setParameter("versionId", documentVersionId)
                 .setParameter("anchorIds", anchorChunkIds)
-                .setParameter("radius", radius)
-                .setParameter("sectionTypes", sectionTypes)
-                .getResultList();
+                .setParameter("radius", radius);
+        if (!sectionTypes.isEmpty()) query.setParameter("sectionTypes", sectionTypes);
+        List<Object[]> rows = query.getResultList();
         return rows.stream()
                 .map(row -> new RuleEvidenceHit(
                         (UUID) row[0], (UUID) row[1], (String) row[2], (String) row[3], (String) row[4],

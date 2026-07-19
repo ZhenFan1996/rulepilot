@@ -117,8 +117,10 @@ rulepilot:
     provider: ${TEACHING_PROVIDER:fake}
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
     agent:
-      max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:24}
-      timeout: ${TEACHING_AGENT_TIMEOUT:PT5M}
+      max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
+      max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:72}
+      max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
+      timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:
@@ -137,6 +139,7 @@ rulepilot:
     model-provider: ${CRITIC_MODEL_PROVIDER:gemini}
     evaluation-mode: ${CRITIC_EVALUATION_MODE:false}
   models:
+    request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
     openai:
       enabled: ${OPENAI_ENABLED:false}
       api-key: ${OPENAI_API_KEY:}

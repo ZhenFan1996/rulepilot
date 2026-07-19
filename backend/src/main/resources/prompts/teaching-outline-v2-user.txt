@@ -1,0 +1,8 @@
+Create a {duration}-minute lesson for {players} players, including {beginners} beginners.
+
+Rulebook pages, in printed order:
+{pages}
+
+Identify the game and its premise, then produce the smallest coherent set of game-specific teaching topics. A player should finish knowing the goal, exact setup, turn choices and costs, how systems connect without invented links, round progression, exceptions that change decisions, and complete end scoring. Check that every required objective clause has a matching retrieval query before returning.
+
+{repair}

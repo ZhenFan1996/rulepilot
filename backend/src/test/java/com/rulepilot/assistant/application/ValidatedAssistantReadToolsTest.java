@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
+import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
@@ -59,6 +60,10 @@ class ValidatedAssistantReadToolsTest {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit first = evidence(UUID.randomUUID(), versionId, "Place the board in the center.", 2);
         RuleEvidenceHit second = evidence(UUID.randomUUID(), versionId, "Shuffle the deck.", 3);
+        RuleEvidenceHit hydratedFirst = evidence(
+                first.chunkId(), versionId, "Full setup paragraph: place the board in the center.", 2);
+        RuleEvidenceHit hydratedSecond = evidence(
+                second.chunkId(), versionId, "Full setup paragraph: shuffle the deck and deal cards.", 3);
         RuleEvidenceHit third = evidence(UUID.randomUUID(), versionId, "Choose a starting player.", 5);
         RuleEvidenceHit adjacent = evidence(UUID.randomUUID(), versionId, "Deal five cards to each player.", 4);
         HybridRuleSearch retrieval = (requestedVersion, query, options) -> List.of(
@@ -66,7 +71,9 @@ class ValidatedAssistantReadToolsTest {
         RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
             @Override
             public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
-                throw new AssertionError("direct evidence lookup must not be used");
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(chunkIds).containsExactlyInAnyOrder(first.chunkId(), second.chunkId());
+                return List.of(hydratedFirst, hydratedSecond);
             }
 
             @Override
@@ -86,6 +93,35 @@ class ValidatedAssistantReadToolsTest {
 
         assertThat(result).extracting(hit -> hit.chunkId())
                 .containsExactly(first.chunkId(), second.chunkId(), adjacent.chunkId(), third.chunkId());
+        assertThat(result).extracting(hit -> hit.excerpt())
+                .startsWith(hydratedFirst.excerpt(), hydratedSecond.excerpt());
+    }
+
+    @Test
+    void attachesOnlyBoundedVersionScopedPageImagesWhenRequested() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit first = evidence(UUID.randomUUID(), versionId, "Place the board in the center.", 2);
+        RuleEvidenceHit second = evidence(UUID.randomUUID(), versionId, "Deal starting cards.", 3);
+        RuleEvidenceHit third = evidence(UUID.randomUUID(), versionId, "Choose a player color.", 4);
+        HybridRuleSearch retrieval = (requestedVersion, query, options) -> List.of(
+                hybrid(first, 1), hybrid(second, 2), hybrid(third, 3));
+        var tools = new ValidatedAssistantReadTools(
+                retrieval,
+                (documentVersionId, chunkIds) -> List.of(),
+                (documentVersionId, pageNumbers) -> {
+                    assertThat(documentVersionId).isEqualTo(versionId);
+                    assertThat(pageNumbers).containsExactly(2, 3);
+                    return List.of(
+                            new PageImage(2, "image/jpeg", new byte[] {1}, 800, 1200),
+                            new PageImage(3, "image/jpeg", new byte[] {2}, 800, 1200));
+                });
+
+        var result = tools.searchRuleEvidence(new SearchRuleEvidence(
+                versionId, "setup", 4, Set.of("SETUP"), "SETUP", false, true));
+
+        assertThat(result.get(0).pageImages()).extracting(image -> image.pageNumber()).containsExactly(2);
+        assertThat(result.get(1).pageImages()).extracting(image -> image.pageNumber()).containsExactly(3);
+        assertThat(result.get(2).pageImages()).isEmpty();
     }
 
     private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {

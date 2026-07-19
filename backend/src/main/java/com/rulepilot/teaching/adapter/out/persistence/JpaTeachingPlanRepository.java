@@ -3,7 +3,6 @@ package com.rulepilot.teaching.adapter.out.persistence;
 import com.rulepilot.teaching.application.TeachingPlanRepository;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
-import com.rulepilot.teaching.domain.TeachingSectionType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -11,7 +10,6 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -112,6 +110,12 @@ class TeachingPlanEntity {
     @Column(name = "duration_minutes", nullable = false)
     int durationMinutes;
 
+    @Column(name = "game_title", nullable = false)
+    String gameTitle;
+
+    @Column(nullable = false, columnDefinition = "text")
+    String premise;
+
     @Column(name = "created_by", nullable = false)
     String createdBy;
 
@@ -126,13 +130,24 @@ class TeachingPlanEntity {
         this.playerCount = plan.playerCount();
         this.beginnerCount = plan.beginnerCount();
         this.durationMinutes = plan.durationMinutes();
+        this.gameTitle = plan.gameTitle();
+        this.premise = plan.premise();
         this.createdBy = plan.createdBy();
         this.createdAt = plan.createdAt();
     }
 
     TeachingPlan toDomain(List<PlannedSection> sections) {
         return new TeachingPlan(
-                id, documentVersionId, playerCount, beginnerCount, durationMinutes, sections, createdBy, createdAt);
+                id,
+                documentVersionId,
+                playerCount,
+                beginnerCount,
+                durationMinutes,
+                gameTitle,
+                premise,
+                sections,
+                createdBy,
+                createdAt);
     }
 }
 
@@ -149,20 +164,23 @@ class TeachingPlanSectionEntity {
     @Column(nullable = false)
     int position;
 
-    @Column(name = "section_type", nullable = false)
-    String sectionType;
+    @Column(name = "topic_key", nullable = false)
+    String topicKey;
+
+    @Column(nullable = false)
+    String title;
+
+    @Column(nullable = false, columnDefinition = "text")
+    String objective;
 
     @Column(nullable = false)
     boolean required;
 
-    @Column(name = "evidence_available", nullable = false)
-    boolean evidenceAvailable;
+    @Column(name = "retrieval_queries", nullable = false, columnDefinition = "text")
+    String retrievalQueries;
 
-    @Column(name = "source_pages", nullable = false)
-    String sourcePages;
-
-    @Column(nullable = false)
-    String dependencies;
+    @Column(name = "coverage_tags", nullable = false)
+    String coverageTags;
 
     protected TeachingPlanSectionEntity() {}
 
@@ -170,28 +188,22 @@ class TeachingPlanSectionEntity {
         this.id = UUID.randomUUID();
         this.teachingPlanId = teachingPlanId;
         this.position = section.position();
-        this.sectionType = section.type().name();
+        this.topicKey = section.topicKey();
+        this.title = section.title();
+        this.objective = section.objective();
         this.required = section.required();
-        this.evidenceAvailable = section.evidenceAvailable();
-        this.sourcePages = section.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
-        this.dependencies = section.dependencies().stream()
-                .map(TeachingSectionType::name)
-                .collect(Collectors.joining(","));
+        this.retrievalQueries = String.join("\n", section.retrievalQueries());
+        this.coverageTags = String.join(",", section.coverageTags());
     }
 
     PlannedSection toDomain() {
-        List<Integer> pages = sourcePages.isBlank()
-                ? List.of()
-                : Arrays.stream(sourcePages.split(",")).map(Integer::valueOf).toList();
-        List<TeachingSectionType> requiredBefore = dependencies.isBlank()
-                ? List.of()
-                : Arrays.stream(dependencies.split(",")).map(TeachingSectionType::valueOf).toList();
         return new PlannedSection(
                 position,
-                TeachingSectionType.valueOf(sectionType),
+                topicKey,
+                title,
+                objective,
                 required,
-                evidenceAvailable,
-                pages,
-                requiredBefore);
+                retrievalQueries.lines().filter(value -> !value.isBlank()).toList(),
+                coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")));
     }
 }

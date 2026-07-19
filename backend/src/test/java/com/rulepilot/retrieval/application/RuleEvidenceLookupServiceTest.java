@@ -27,8 +27,8 @@ class RuleEvidenceLookupServiceTest {
 
         assertThatThrownBy(() -> lookup.findAdjacent(versionId, Set.of(anchorId), 3, Set.of("SETUP")))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> lookup.findAdjacent(versionId, Set.of(anchorId), 1, Set.of()))
-                .isInstanceOf(IllegalArgumentException.class);
+        lookup.findAdjacent(versionId, Set.of(anchorId), 1, Set.of());
+        assertThat(repository.sectionTypes).isEmpty();
     }
 
     private static final class RecordingRepository implements RuleEvidenceLookupRepository {
