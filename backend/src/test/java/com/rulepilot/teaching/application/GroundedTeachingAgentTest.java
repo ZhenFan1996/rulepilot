@@ -16,6 +16,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import com.rulepilot.teaching.domain.TeachingSectionType;
@@ -96,7 +97,11 @@ class GroundedTeachingAgentTest {
                     VisualKind.TABLE_LAYOUT,
                     "桌面布置示意",
                     List.of(chunkId),
-                    List.of(new TeachingLessonModel.StepDraft("将棋盘放在桌面中央。", List.of(chunkId))));
+                    List.of(new TeachingLessonModel.StepDraft(
+                            "摆放主棋盘",
+                            TeachingMove.DO,
+                            "将棋盘放在桌面中央。",
+                            List.of(chunkId))));
         };
         AtomicInteger criticCalls = new AtomicInteger();
         GeneratedContentCritic critic = (request, risk) -> {
@@ -107,6 +112,7 @@ class GroundedTeachingAgentTest {
             assertThat(request.claims()).hasSize(2);
             assertThat(request.claims().getFirst().text()).isEqualTo("桌面布置示意");
             assertThat(request.claims().getFirst().citationIds()).containsExactly(chunkId);
+            assertThat(request.claims().get(1).text()).isEqualTo("摆放主棋盘：将棋盘放在桌面中央。");
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent =
@@ -122,6 +128,8 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().visualSourceChunkIds()).containsExactly(chunkId);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourcePages()).containsExactly(2, 3);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
+        assertThat(lesson.sections().getFirst().steps().getFirst().heading()).isEqualTo("摆放主棋盘");
+        assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.DO);
         assertThat(retrievalCalls).hasValue(2);
         assertThat(criticCalls).hasValue(1);
     }

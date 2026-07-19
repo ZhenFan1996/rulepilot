@@ -5,6 +5,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -148,7 +149,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 draft.visualCitationIds().stream().map(references::get).toList(),
                 draft.steps().stream()
                         .map(step -> new ModelStepDraft(
-                                step.text(), step.citationIds().stream().map(references::get).toList()))
+                                step.heading(), step.kind(), step.text(),
+                                step.citationIds().stream().map(references::get).toList()))
                         .toList());
     }
 
@@ -179,7 +181,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 resolveReferences(draft.visualCitationIds(), evidenceIds),
                 draft.steps().stream()
                         .map(step -> new StepDraft(
-                                step.text(), resolveReferences(step.citationIds(), evidenceIds)))
+                                step.heading(), step.kind(), step.text(),
+                                resolveReferences(step.citationIds(), evidenceIds)))
                         .toList());
     }
 
@@ -218,7 +221,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         }
     }
 
-    private record ModelStepDraft(String text, List<String> citationIds) {
+    private record ModelStepDraft(
+            String heading,
+            TeachingMove kind,
+            String text,
+            List<String> citationIds) {
         private ModelStepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
         }

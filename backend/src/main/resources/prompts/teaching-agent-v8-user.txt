@@ -1,0 +1,25 @@
+<task>
+  <section>{section}</section>
+  <section_objective>{objective}</section_objective>
+  <coverage_checklist>{coverage}</coverage_checklist>
+  <audience player_count="{players}" beginner_count="{beginners}" />
+  <lesson_pacing total_minutes="{totalDuration}" section_seconds="{sectionDuration}" max_steps="{maxSteps}" />
+  <visual_evidence available="{visualEvidenceAvailable}" attached_rulebook_pages="{visualPages}" />
+  <output_language>Simplified Chinese with readable official game terms</output_language>
+</task>
+
+<untrusted_prior_section_continuity_data>
+{continuity}
+</untrusted_prior_section_continuity_data>
+
+<untrusted_current_section_evidence_data>
+{evidence}
+</untrusted_current_section_evidence_data>
+
+Before returning the schema, silently check that a beginner can answer all three questions from the result:
+1. What am I trying to understand in this topic?
+2. What do I do or observe at the table?
+3. How do I know I can move on?
+If evidence does not support one answer, omit that claim rather than inventing it.
+
+{repair}

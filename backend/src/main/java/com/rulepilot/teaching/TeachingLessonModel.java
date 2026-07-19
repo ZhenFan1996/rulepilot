@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import java.util.List;
 import java.util.UUID;
 
@@ -123,9 +124,13 @@ public interface TeachingLessonModel {
         }
     }
 
-    record StepDraft(String text, List<UUID> citationIds) {
+    record StepDraft(String heading, TeachingMove kind, String text, List<UUID> citationIds) {
         public StepDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
+        }
+
+        public StepDraft(String text, List<UUID> citationIds) {
+            this("照着做", TeachingMove.DO, text, citationIds);
         }
     }
 }

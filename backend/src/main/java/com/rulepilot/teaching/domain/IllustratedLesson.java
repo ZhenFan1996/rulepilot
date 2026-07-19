@@ -46,6 +46,14 @@ public record IllustratedLesson(
         SCOREBOARD
     }
 
+    public enum TeachingMove {
+        UNDERSTAND,
+        DO,
+        EXAMPLE,
+        WATCH,
+        CHECK
+    }
+
     public record LessonSection(
             int position,
             String topicKey,
@@ -95,15 +103,22 @@ public record IllustratedLesson(
 
     public record LessonStep(
             int position,
+            String heading,
+            TeachingMove kind,
             String text,
             List<Integer> sourcePages,
             List<UUID> sourceChunkIds) {
         public LessonStep {
-            if (position < 1 || text == null || text.isBlank()) {
+            if (position < 1 || heading == null || heading.isBlank() || kind == null
+                    || text == null || text.isBlank()) {
                 throw new IllegalArgumentException("lesson step content is required");
             }
             sourcePages = List.copyOf(sourcePages);
             sourceChunkIds = List.copyOf(sourceChunkIds);
+        }
+
+        public LessonStep(int position, String text, List<Integer> sourcePages, List<UUID> sourceChunkIds) {
+            this(position, "照着做", TeachingMove.DO, text, sourcePages, sourceChunkIds);
         }
     }
 }

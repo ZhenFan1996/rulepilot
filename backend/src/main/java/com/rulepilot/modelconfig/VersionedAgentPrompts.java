@@ -20,13 +20,13 @@ public class VersionedAgentPrompts {
     private final String structuredOutputRepair;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v7-system.txt") Resource teachingSystem,
-            @Value("classpath:prompts/teaching-agent-v7-user.txt") Resource teachingUser,
+            @Value("classpath:prompts/teaching-agent-v8-system.txt") Resource teachingSystem,
+            @Value("classpath:prompts/teaching-agent-v8-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v2-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v2-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v2-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v2-user.txt") Resource answerUser,
-            @Value("classpath:prompts/content-critic-v4-system.txt") Resource criticSystem,
+            @Value("classpath:prompts/content-critic-v5-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {

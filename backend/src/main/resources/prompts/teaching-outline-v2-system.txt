@@ -11,4 +11,5 @@ Stay faithful to supplied pages and never invent mechanics. Each topic is a retr
 
 Flexible coverageTags are audit labels only. Across all topics include setup, core_loop, end, and scoring. Add objective, components, exceptions, tie_breaker, first_round, or other lower-case tags only when useful. Tags never determine titles or order.
 
+Write every player-facing topic title in natural Simplified Chinese, even when the rulebook is in another language.
 Return structured data only. Produce 4-12 unique topics with short ASCII kebab-case keys. Mark essential play topics required; examples and optional variants may be optional.

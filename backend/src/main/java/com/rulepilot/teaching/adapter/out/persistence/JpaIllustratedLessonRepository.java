@@ -6,6 +6,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -167,6 +168,8 @@ class IllustratedLessonStepEntity {
     @Id UUID id;
     @Column(name = "lesson_section_id", nullable = false) UUID lessonSectionId;
     @Column(nullable = false) int position;
+    @Column(name = "step_heading", nullable = false) String stepHeading;
+    @Column(name = "teaching_move", nullable = false) String teachingMove;
     @Column(name = "step_text", nullable = false, columnDefinition = "text") String stepText;
     @Column(name = "source_pages", nullable = false) String sourcePages;
     @Column(name = "source_chunk_ids", nullable = false) String sourceChunkIds;
@@ -177,6 +180,8 @@ class IllustratedLessonStepEntity {
         id = UUID.randomUUID();
         this.lessonSectionId = lessonSectionId;
         position = step.position();
+        stepHeading = step.heading();
+        teachingMove = step.kind().name();
         stepText = step.text();
         sourcePages = step.sourcePages().stream().map(String::valueOf).collect(Collectors.joining(","));
         sourceChunkIds = step.sourceChunkIds().stream().map(UUID::toString).collect(Collectors.joining(","));
@@ -189,6 +194,7 @@ class IllustratedLessonStepEntity {
         List<UUID> chunkIds = sourceChunkIds.isBlank()
                 ? List.of()
                 : Arrays.stream(sourceChunkIds.split(",")).map(UUID::fromString).toList();
-        return new LessonStep(position, stepText, pages, chunkIds);
+        return new LessonStep(
+                position, stepHeading, TeachingMove.valueOf(teachingMove), stepText, pages, chunkIds);
     }
 }

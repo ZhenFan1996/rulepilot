@@ -4,6 +4,8 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 
+withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
+
 const route = useRoute()
 const router = useRouter()
 const isDark = ref(document.documentElement.classList.contains('dark'))
@@ -88,7 +90,7 @@ onMounted(loadSession)
       <slot />
     </main>
 
-    <nav class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" aria-label="主要导航">
+    <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" aria-label="主要导航">
       <RouterLink
         v-for="item in navigation"
         :key="item.name"

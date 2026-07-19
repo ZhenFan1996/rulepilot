@@ -25,6 +25,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
@@ -51,11 +52,11 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v1";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v3";
     private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
-    private static final int MAX_REVISION_ATTEMPTS = 2;
+    private static final int MAX_REVISION_ATTEMPTS = 4;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Set<String> HIGH_IMPACT_TAGS = Set.of("setup", "end", "scoring", "tie_breaker");
     private final AssistantReadTools tools;
@@ -345,7 +346,7 @@ public class GroundedTeachingAgent {
         List<EvidenceClaim> generatedClaims = new ArrayList<>();
         generatedClaims.add(new EvidenceClaim(draft.visualCaption(), visualCitationIds));
         generatedClaims.addAll(draft.steps().stream()
-                .map(step -> new EvidenceClaim(step.text(), step.citationIds()))
+                .map(step -> new EvidenceClaim(step.heading() + "：" + step.text(), step.citationIds()))
                 .toList());
         var verification = evidenceVerifier.verify(new VerificationRequest(
                 plan.documentVersionId(),
@@ -365,7 +366,8 @@ public class GroundedTeachingAgent {
                                         IntStream.range(0, draft.steps().size())
                                                 .mapToObj(index -> new Claim(
                                                         index + 2,
-                                                        draft.steps().get(index).text(),
+                                                        draft.steps().get(index).heading() + "："
+                                                                + draft.steps().get(index).text(),
                                                         draft.steps().get(index).citationIds())))
                                 .toList(),
                         evidence.stream()
@@ -435,7 +437,13 @@ public class GroundedTeachingAgent {
                 .sorted()
                 .boxed()
                 .toList();
-        return new LessonStep(position, draft.text().strip(), pages, List.copyOf(citationIds));
+        return new LessonStep(
+                position,
+                draft.heading().strip(),
+                draft.kind(),
+                draft.text().strip(),
+                pages,
+                List.copyOf(citationIds));
     }
 
     private void validateDraft(SectionDraft draft, int maxSteps) {
@@ -450,6 +458,11 @@ public class GroundedTeachingAgent {
         if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, maxSteps))
             throw new IllegalArgumentException("The draft must contain between 1 and "
                     + Math.min(MAX_STEPS_PER_SECTION, maxSteps) + " steps.");
+        if (draft.steps().stream().anyMatch(step -> step == null
+                || step.heading() == null || step.heading().isBlank() || step.heading().length() > 32
+                || step.kind() == null)) {
+            throw new IllegalArgumentException("Every step needs a short heading and a teaching kind.");
+        }
         if (UNRESOLVED_PDF_MARKER.matcher(draft.visualCaption()).find()
                 || draft.steps().stream().anyMatch(step -> step != null && step.text() != null
                         && UNRESOLVED_PDF_MARKER.matcher(step.text()).find())) {
@@ -506,6 +519,8 @@ public class GroundedTeachingAgent {
                 "本节等待可验证的规则证据",
                 List.of(new LessonStep(
                         1,
+                        "暂时跳过",
+                        TeachingMove.WATCH,
                         "规则资料中尚未找到这一节所需的可靠证据。",
                         List.of(),
                         List.of())));

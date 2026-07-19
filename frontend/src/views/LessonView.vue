@@ -47,7 +47,13 @@ interface LessonSection {
   visualCaption: string
   visualSourcePages: number[]
   visualSourceChunkIds: string[]
-  steps: Array<{ position: number; text: string; sourcePages: number[] }>
+  steps: Array<{
+    position: number
+    heading: string
+    kind: 'UNDERSTAND' | 'DO' | 'EXAMPLE' | 'WATCH' | 'CHECK'
+    text: string
+    sourcePages: number[]
+  }>
 }
 
 interface LessonQualityReport {
@@ -239,6 +245,29 @@ const supportedSectionCount = computed(
   () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
 )
 
+const teachingMoveMeta = {
+  UNDERSTAND: { label: '先理解', marker: '想', tone: 'bg-indigo/10 text-indigo' },
+  DO: { label: '照着做', marker: '做', tone: 'bg-copper/10 text-copper' },
+  EXAMPLE: { label: '走一遍', marker: '例', tone: 'bg-emerald-100 text-emerald-800' },
+  WATCH: { label: '别弄错', marker: '注', tone: 'bg-amber-100 text-amber-900' },
+  CHECK: { label: '检查一下', marker: '验', tone: 'bg-ink-panel text-panel-text' },
+} as const
+
+function lessonOutcome(section: LessonSection) {
+  const tags = new Set(section.coverageTags)
+  const key = section.topicKey.toLowerCase()
+  if (tags.has('setup') || key.includes('setup')) return '把组件摆到正确位置，并能一眼确认开局已经准备好。'
+  if (tags.has('scoring') || key.includes('scor')) return '按正确顺序算完分，知道每一项从哪里来。'
+  if (tags.has('end') || key.includes('end')) return '认出游戏何时结束，以及结束后马上做什么。'
+  if (tags.has('action') || key.includes('action') || key.includes('turn')) return '轮到你时知道有哪些选择，并能完整走完一次行动。'
+  if (key.includes('objective') || key.includes('goal')) return '用一句话讲清你在争取什么，以及最后如何判断胜负。'
+  return `用自己的话讲清“${section.title}”，并知道它在桌上什么时候会用到。`
+}
+
+function moveMeta(kind: LessonSection['steps'][number]['kind'] | undefined) {
+  return teachingMoveMeta[kind ?? 'DO']
+}
+
 watch(currentVisualPageUrl, () => {
   visualImageFailed.value = false
 })
@@ -333,10 +362,13 @@ async function loadLesson() {
       mediaConsistency.value = (await consistencyResponse.json()) as MediaConsistencyReport
     }
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
-    progress.value = restoreLessonProgress(
-      localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
-      lesson.value.sections.length,
-    )
+    progress.value = {
+      ...restoreLessonProgress(
+        localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
+        lesson.value.sections.length,
+      ),
+      paused: false,
+    }
     const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
     if (
       Number.isFinite(restoredNarration) &&
@@ -600,12 +632,6 @@ function finish(outcome: 'completed' | 'skipped') {
   saveProgress()
 }
 
-function togglePause() {
-  progress.value = { ...progress.value, paused: !progress.value.paused }
-  if (progress.value.paused) narrationPlayer.value?.pause()
-  saveProgress()
-}
-
 function narrationPositionKey() {
   return lesson.value ? `rulepilot:narration-position:${lesson.value.id}` : ''
 }
@@ -771,7 +797,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <AppShell>
+  <AppShell immersive>
     <div class="min-h-screen overflow-x-hidden bg-canvas pb-28 text-ink lg:pb-8">
       <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
@@ -856,10 +882,10 @@ onUnmounted(() => {
             <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">完整规则讲解</h1></div>
             <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
           </div>
-          <details v-if="quality" class="mt-4 rounded-2xl border border-ink/10 bg-paper/70 p-3">
+          <details v-if="quality" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
             <summary class="cursor-pointer list-none text-sm font-semibold">
               <span class="flex items-center justify-between gap-3">
-                <span>内容检查 {{ quality.score }} 分</span>
+                <span>讲解有问题？查看诊断</span>
                 <span :class="quality.status === 'READY' ? 'text-emerald-700' : quality.status === 'BLOCKED' ? 'text-red-700' : 'text-amber-700'">{{ quality.status === 'READY' ? '可交付' : quality.status === 'BLOCKED' ? '有阻塞项' : '需要复核' }}</span>
               </span>
             </summary>
@@ -870,7 +896,7 @@ onUnmounted(() => {
               </li>
             </ul>
           </details>
-          <div v-if="lesson.status === 'INCOMPLETE'" class="mt-3 rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950">
+          <div v-if="lesson.status === 'INCOMPLETE'" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
             <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ lesson.sections.length }} 节</p>
             <p class="mt-1 text-xs leading-5 text-amber-900/75">继续时会保留已经通过引用与事实检查的章节，只补尚未通过的部分。</p>
             <button
@@ -881,10 +907,10 @@ onUnmounted(() => {
               {{ resumingLesson ? '正在补全…' : '继续补全讲解' }}
             </button>
           </div>
-          <details v-if="mediaConsistency" class="mt-3 rounded-2xl border border-ink/10 bg-paper/70 p-3">
+          <details v-if="mediaConsistency" class="mt-3 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
             <summary class="cursor-pointer list-none text-sm font-semibold">
               <span class="flex items-center justify-between gap-3">
-                <span>图文与音视频 {{ mediaConsistency.consistencyPercent }}%</span>
+                <span>图文与音视频状态</span>
                 <span :class="mediaConsistency.status === 'CONSISTENT' ? 'text-emerald-700' : 'text-red-700'">{{ mediaConsistency.status === 'CONSISTENT' ? '一致' : '需检查' }}</span>
               </span>
             </summary>
@@ -929,6 +955,11 @@ onUnmounted(() => {
               <div><p class="text-xs font-semibold text-ink/45">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p><h2 class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ currentSection.title }}</h2></div>
               <span v-if="currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900">原文内容不足</span>
               <span v-else class="rounded-md bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">可查看原文</span>
+            </div>
+
+            <div class="mt-6 rounded-2xl border border-copper/20 bg-copper/8 px-4 py-4 sm:px-5">
+              <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">这一节学完，你应该能</p>
+              <p class="mt-2 text-base font-semibold leading-7 text-ink/80">{{ lessonOutcome(currentSection) }}</p>
             </div>
 
             <audio
@@ -986,29 +1017,47 @@ onUnmounted(() => {
               </nav>
             </section>
 
-            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 rounded-3xl bg-indigo/8 p-5">
-              <p class="text-xs font-semibold text-indigo">{{ visualKindLabel(currentSection.visualKind) }}</p>
+            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 rounded-3xl bg-indigo/8 p-4 sm:p-5">
+              <p class="text-xs font-semibold text-indigo">先看桌面 · {{ visualKindLabel(currentSection.visualKind) }}</p>
               <figure v-if="currentVisualPageUrl && !visualImageFailed" class="my-5 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
-                <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentSection.visualSourcePages[0]} 页，${currentSection.visualCaption}`" class="max-h-[34rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
-                <figcaption class="border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">规则书第 {{ currentSection.visualSourcePages[0] }} 页视觉证据</figcaption>
+                <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开大图">
+                  <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentSection.visualSourcePages[0]} 页，${currentSection.visualCaption}`" class="max-h-[26rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
+                </a>
+                <figcaption class="flex items-center justify-between gap-3 border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">
+                  <span>配合第 {{ currentSection.visualSourcePages[0] }} 页来看</span>
+                  <a :href="currentVisualPageUrl" target="_blank" rel="noopener" class="font-semibold text-indigo">放大</a>
+                </figcaption>
               </figure>
               <div v-else class="my-6 flex items-center gap-2" aria-hidden="true">
                 <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
                 <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
               </div>
-              <p class="text-sm text-ink/60">{{ currentSection.visualCaption }}</p>
+              <p class="text-sm leading-6 text-ink/65"><span class="font-semibold text-ink/80">看图时找：</span>{{ currentSection.visualCaption }}</p>
               <p v-if="currentSection.visualSourcePages.length" class="mt-2 text-xs font-semibold text-indigo">
                 图示依据：规则书第 {{ currentSection.visualSourcePages.join('、') }} 页
               </p>
             </div>
 
-            <ol v-if="mediaMode !== 'VIDEO'" class="mt-7 space-y-5">
-              <li v-for="step in currentSection.steps" :key="step.position" class="rounded-2xl border border-ink/8 p-4 sm:p-5">
-                <p class="text-base leading-8 text-ink/75">{{ step.text }}</p>
-                <details v-if="step.sourcePages.length" class="mt-3">
-                  <summary class="cursor-pointer text-sm font-semibold text-indigo">查看规则书原文</summary>
-                  <p class="mt-2 rounded-xl bg-indigo/8 px-3 py-2 text-sm text-indigo">来源：规则书第 {{ step.sourcePages.join('、') }} 页</p>
-                </details>
+            <ol v-if="mediaMode !== 'VIDEO'" class="mt-7 space-y-4">
+              <li
+                v-for="step in currentSection.steps"
+                :key="step.position"
+                class="grid gap-3 rounded-2xl border p-4 sm:grid-cols-[3rem_1fr] sm:p-5"
+                :class="step.kind === 'CHECK' ? 'border-ink/20 bg-ink/[0.035]' : 'border-ink/8'"
+              >
+                <div class="flex items-center gap-2 sm:block">
+                  <span class="grid size-10 place-items-center rounded-xl text-sm font-bold" :class="moveMeta(step.kind).tone">{{ moveMeta(step.kind).marker }}</span>
+                  <span class="text-xs font-semibold text-ink/45 sm:mt-2 sm:block sm:text-center">{{ step.position }}</span>
+                </div>
+                <div>
+                  <p class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</p>
+                  <h3 class="mt-1 font-display text-xl font-semibold leading-7">{{ step.heading || `第 ${step.position} 步` }}</h3>
+                  <p class="mt-2 text-base leading-8 text-ink/75">{{ step.text }}</p>
+                  <details v-if="step.sourcePages.length" class="mt-3">
+                    <summary class="cursor-pointer text-sm font-semibold text-indigo">核对第 {{ step.sourcePages.join('、') }} 页</summary>
+                    <p class="mt-2 rounded-xl bg-indigo/8 px-3 py-2 text-sm text-indigo">来源：规则书第 {{ step.sourcePages.join('、') }} 页</p>
+                  </details>
+                </div>
               </li>
             </ol>
 
@@ -1054,137 +1103,137 @@ onUnmounted(() => {
               </div>
             </details>
 
-            <div v-if="progress.paused" class="mt-7 rounded-2xl border border-copper/25 bg-copper/8 p-4 text-sm font-semibold" role="status">讲解已暂停。继续后才能完成或跳过当前章节。</div>
-
-            <section class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
-              <p class="text-xs font-semibold text-copper">问问这一节</p>
-              <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h3 id="lesson-question-title" class="font-display text-2xl font-semibold">关于本节继续追问</h3>
-                  <p class="mt-2 text-sm leading-6 text-ink/55">问题会自动沿用“{{ currentSection.title }}”及当前规则版本。</p>
+            <details class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
+              <summary class="cursor-pointer list-none rounded-2xl border border-ink/10 px-4 py-4 font-semibold hover:bg-canvas">还有没明白的？展开问这一节</summary>
+              <div class="mt-6">
+                <p class="text-xs font-semibold text-copper">问问这一节</p>
+                <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h3 id="lesson-question-title" class="font-display text-2xl font-semibold">关于本节继续追问</h3>
+                    <p class="mt-2 text-sm leading-6 text-ink/55">问题会自动沿用“{{ currentSection.title }}”及当前规则版本。</p>
+                  </div>
+                  <span class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">第 {{ currentSection.position }} 节上下文</span>
                 </div>
-                <span class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">第 {{ currentSection.position }} 节上下文</span>
-              </div>
 
-              <form class="mt-5" @submit.prevent="askCurrentSection">
-                <div class="mb-3 flex flex-wrap items-start gap-3">
-                  <button
-                    type="button"
-                    class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                <form class="mt-5" @submit.prevent="askCurrentSection">
+                  <div class="mb-3 flex flex-wrap items-start gap-3">
+                    <button
+                      type="button"
+                      class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      :disabled="answerLoading || !online"
+                      @click="cardOcrOpen = true"
+                    >
+                      拍照识别卡牌文字
+                    </button>
+                    <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="useVoiceTranscript" />
+                  </div>
+                  <label for="lesson-question" class="sr-only">针对当前讲解章节提问</label>
+                  <textarea
+                    id="lesson-question"
+                    v-model="question"
+                    rows="3"
+                    maxlength="800"
                     :disabled="answerLoading || !online"
-                    @click="cardOcrOpen = true"
-                  >
-                    拍照识别卡牌文字
-                  </button>
-                  <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="useVoiceTranscript" />
-                </div>
-                <label for="lesson-question" class="sr-only">针对当前讲解章节提问</label>
-                <textarea
-                  id="lesson-question"
-                  v-model="question"
-                  rows="3"
-                  maxlength="800"
-                  :disabled="answerLoading || !online"
-                  placeholder="例如：为什么完成目标后才计算这一分？"
-                  class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
-                />
-                <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-                  <p class="text-xs text-ink/45">{{ question.length }}/800 · 回答必须附带当前版本中的规则依据</p>
-                  <button
-                    type="submit"
-                    :disabled="answerLoading || !online || !question.trim()"
-                    class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {{ answerLoading ? '正在查找规则依据…' : online ? '提交问题' : '离线时无法提问' }}
-                  </button>
-                </div>
-              </form>
-
-              <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
-              <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
-                <p class="text-sm font-semibold">正在理解问题并核对规则书…</p>
-                <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
-                <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
-              </div>
-
-              <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
-                <div class="p-5 sm:p-6">
-                  <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
-                    <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
-                    <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
+                    placeholder="例如：为什么完成目标后才计算这一分？"
+                    class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
+                  />
+                  <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <p class="text-xs text-ink/45">{{ question.length }}/800 · 回答必须附带当前版本中的规则依据</p>
+                    <button
+                      type="submit"
+                      :disabled="answerLoading || !online || !question.trim()"
+                      class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {{ answerLoading ? '正在查找规则依据…' : online ? '提交问题' : '离线时无法提问' }}
+                    </button>
                   </div>
-                  <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
+                </form>
 
-                  <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
-                  <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
+                <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
+                <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
+                  <p class="text-sm font-semibold">正在理解问题并核对规则书…</p>
+                  <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
+                  <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
+                </div>
 
-                  <details v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
-                    <summary class="cursor-pointer font-semibold text-indigo">查看详细解释与例外</summary>
-                    <p class="mt-3 leading-7 text-ink/70">{{ answer.explanation }}</p>
-                    <ul v-if="answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
-                      <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
-                    </ul>
+                <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
+                  <div class="p-5 sm:p-6">
+                    <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                      <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
+                      <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
+                    </div>
+                    <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
+
+                    <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
+                    <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
+
+                    <details v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
+                      <summary class="cursor-pointer font-semibold text-indigo">查看详细解释与例外</summary>
+                      <p class="mt-3 leading-7 text-ink/70">{{ answer.explanation }}</p>
+                      <ul v-if="answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
+                        <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
+                      </ul>
+                    </details>
+                  </div>
+
+                  <details v-if="answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6">
+                    <summary class="cursor-pointer font-semibold text-indigo">规则出处与页码（{{ answer.citations.length }}）</summary>
+                    <ol class="mt-4 space-y-3">
+                      <li v-for="citation in answer.citations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                          <p class="font-semibold">{{ citation.heading }}</p>
+                          <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
+                        </div>
+                        <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
+                      </li>
+                    </ol>
                   </details>
-                </div>
 
-                <details v-if="answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6">
-                  <summary class="cursor-pointer font-semibold text-indigo">规则出处与页码（{{ answer.citations.length }}）</summary>
-                  <ol class="mt-4 space-y-3">
-                    <li v-for="citation in answer.citations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
-                      <div class="flex flex-wrap items-center justify-between gap-2">
-                        <p class="font-semibold">{{ citation.heading }}</p>
-                        <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
+                  <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
+                    <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
+                    <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
+                      <p class="font-semibold text-amber-950">另一处编辑已经更新了这条裁定</p>
+                      <p class="mt-1 text-sm leading-6 text-amber-900">为避免覆盖他人的修改，请加载服务器版本后重新编辑。</p>
+                      <button class="mt-3 min-h-11 rounded-xl bg-amber-900 px-4 text-sm font-semibold text-white" :disabled="rulingSaving" @click="reloadRuling">加载最新版本</button>
+                    </div>
+
+                    <div v-else-if="ruling && editingRuling" class="space-y-4">
+                      <div>
+                        <label for="ruling-verdict" class="text-sm font-semibold">一句话裁定</label>
+                        <textarea id="ruling-verdict" v-model="editedVerdict" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
                       </div>
-                      <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
-                    </li>
-                  </ol>
-                </details>
+                      <div>
+                        <label for="ruling-explanation" class="text-sm font-semibold">详细解释</label>
+                        <textarea id="ruling-explanation" v-model="editedExplanation" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                      </div>
+                      <div class="flex flex-wrap gap-3">
+                        <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="saveRulingRevision">{{ rulingSaving ? '保存中…' : '保存修改' }}</button>
+                        <button class="min-h-11 rounded-xl border border-ink/15 px-5 text-sm font-semibold" :disabled="rulingSaving" @click="editingRuling = false">取消</button>
+                      </div>
+                    </div>
 
-                <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
-                  <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
-                  <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
-                    <p class="font-semibold text-amber-950">另一处编辑已经更新了这条裁定</p>
-                    <p class="mt-1 text-sm leading-6 text-amber-900">为避免覆盖他人的修改，请加载服务器版本后重新编辑。</p>
-                    <button class="mt-3 min-h-11 rounded-xl bg-amber-900 px-4 text-sm font-semibold text-white" :disabled="rulingSaving" @click="reloadRuling">加载最新版本</button>
+                    <div v-else-if="ruling" class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-emerald-50 p-4">
+                      <div>
+                        <p class="font-semibold text-emerald-900">已保存为确认裁定</p>
+                        <p class="mt-1 text-xs text-emerald-800">版本 {{ ruling.version }} · 引用 {{ ruling.citations.length }} 条</p>
+                      </div>
+                      <button class="min-h-11 rounded-xl border border-emerald-700 px-4 text-sm font-semibold text-emerald-900" @click="editingRuling = true">编辑裁定</button>
+                    </div>
+
+                    <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="confirmAnswer">{{ rulingSaving ? '正在保存…' : '保存为已确认裁定' }}</button>
                   </div>
-
-                  <div v-else-if="ruling && editingRuling" class="space-y-4">
-                    <div>
-                      <label for="ruling-verdict" class="text-sm font-semibold">一句话裁定</label>
-                      <textarea id="ruling-verdict" v-model="editedVerdict" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
-                    </div>
-                    <div>
-                      <label for="ruling-explanation" class="text-sm font-semibold">详细解释</label>
-                      <textarea id="ruling-explanation" v-model="editedExplanation" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
-                    </div>
-                    <div class="flex flex-wrap gap-3">
-                      <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="saveRulingRevision">{{ rulingSaving ? '保存中…' : '保存修改' }}</button>
-                      <button class="min-h-11 rounded-xl border border-ink/15 px-5 text-sm font-semibold" :disabled="rulingSaving" @click="editingRuling = false">取消</button>
-                    </div>
-                  </div>
-
-                  <div v-else-if="ruling" class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-emerald-50 p-4">
-                    <div>
-                      <p class="font-semibold text-emerald-900">已保存为确认裁定</p>
-                      <p class="mt-1 text-xs text-emerald-800">版本 {{ ruling.version }} · 引用 {{ ruling.citations.length }} 条</p>
-                    </div>
-                    <button class="min-h-11 rounded-xl border border-emerald-700 px-4 text-sm font-semibold text-emerald-900" @click="editingRuling = true">编辑裁定</button>
-                  </div>
-
-                  <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="confirmAnswer">{{ rulingSaving ? '正在保存…' : '保存为已确认裁定' }}</button>
-                </div>
-              </article>
-            </section>
+                </article>
+              </div>
+            </details>
           </div>
         </section>
       </div>
 
-      <nav v-if="lesson" class="fixed inset-x-0 bottom-0 z-30 border-t border-ink/10 bg-canvas/95 p-3 backdrop-blur lg:sticky lg:bottom-0 lg:mx-auto lg:max-w-4xl lg:rounded-2xl lg:border" aria-label="讲解控制">
-        <div class="mx-auto grid max-w-3xl grid-cols-4 gap-2">
+      <nav v-if="lesson" class="fixed inset-x-0 bottom-0 z-30 border-t border-ink/10 bg-canvas/95 p-3 backdrop-blur lg:sticky lg:mx-auto lg:max-w-4xl lg:rounded-2xl lg:border" aria-label="讲解控制">
+        <div class="mx-auto grid max-w-3xl grid-cols-[0.8fr_1fr_1.5fr] gap-2">
           <button :disabled="progress.currentIndex === 0" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="previousSection">上一节</button>
-          <button class="min-h-12 rounded-xl border border-copper/30 px-3 text-sm font-semibold text-copper" @click="togglePause">{{ progress.paused ? '继续' : '暂停' }}</button>
-          <button :disabled="progress.paused" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="finish('skipped')">跳过</button>
-          <button :disabled="progress.paused" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:opacity-35" @click="finish('completed')">{{ progress.currentIndex === lesson.sections.length - 1 ? '完成' : '下一节' }}</button>
+          <button class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="finish('skipped')">稍后再看</button>
+          <button class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white" @click="finish('completed')">{{ progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
         </div>
       </nav>
 

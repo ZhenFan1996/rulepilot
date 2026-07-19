@@ -10,13 +10,13 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v7-system.txt"),
-                resource("teaching-agent-v7-user.txt"),
+                resource("teaching-agent-v8-system.txt"),
+                resource("teaching-agent-v8-user.txt"),
                 resource("teaching-outline-v2-system.txt"),
                 resource("teaching-outline-v2-user.txt"),
                 resource("rule-answer-agent-v2-system.txt"),
                 resource("rule-answer-agent-v2-user.txt"),
-                resource("content-critic-v4-system.txt"),
+                resource("content-critic-v5-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -57,6 +57,7 @@ class VersionedAgentPromptsTest {
                         "visual description",
                         "outside knowledge",
                         "causal bridge",
+                        "resource ledger",
                         "negation");
         assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
