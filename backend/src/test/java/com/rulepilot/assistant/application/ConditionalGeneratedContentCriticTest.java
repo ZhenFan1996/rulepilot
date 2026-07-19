@@ -9,10 +9,14 @@ import com.rulepilot.assistant.GeneratedContentCritic.Evidence;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -238,6 +242,99 @@ class ConditionalGeneratedContentCriticTest {
                 true);
 
         assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(defect);
+    }
+
+    @Test
+    void acceptsCandidateIssueWhenIndependentAtomicReviewDoesNotConfirmIt() {
+        AtomicInteger calls = new AtomicInteger();
+        Issue candidate = new Issue(
+                IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "The reward is unsupported.");
+        var critic = new ConditionalGeneratedContentCritic(request -> calls.getAndIncrement() == 0
+                        ? new CritiqueDraft(List.of(candidate))
+                        : new CritiqueDraft(List.of()),
+                new ImmediateAuditedAgentInvocations(), true);
+
+        var review = critic.review(request(), ReviewRisk.STANDARD);
+
+        assertThat(review.accepted()).isTrue();
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
+    void confirmsEachClaimOnlyAgainstItsCombinedCitations() {
+        UUID secondCitation = UUID.randomUUID();
+        UUID unrelatedEvidence = UUID.randomUUID();
+        List<ReviewRequest> observed = new ArrayList<>();
+        Issue candidate = new Issue(
+                IssueType.MISSING_EXCEPTION, 2, List.of(unrelatedEvidence), "The discount condition is missing.");
+        var critic = new ConditionalGeneratedContentCritic(request -> {
+            observed.add(request);
+            return request.reviewMode() == ReviewMode.DISCOVERY
+                    ? new CritiqueDraft(List.of(candidate))
+                    : new CritiqueDraft(List.of(new Issue(
+                            IssueType.MISSING_EXCEPTION,
+                            2,
+                            List.of(chunkId, secondCitation),
+                            "The discount condition is missing.")));
+        }, new ImmediateAuditedAgentInvocations(), true);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                List.of(
+                        new Claim(1, "First claim.", List.of(unrelatedEvidence)),
+                        new Claim(2, "Discounted action.", List.of(chunkId, secondCitation))),
+                List.of(
+                        new Evidence(chunkId, "The action costs three energy."),
+                        new Evidence(secondCitation, "It costs two when any orbiter is present."),
+                        new Evidence(unrelatedEvidence, "Unrelated first claim evidence.")));
+
+        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
+
+        assertThat(review.issues()).hasSize(1);
+        assertThat(observed).hasSize(2);
+        ReviewRequest confirmation = observed.get(1);
+        assertThat(confirmation.reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
+        assertThat(confirmation.claims()).extracting(Claim::position).containsExactly(2);
+        assertThat(confirmation.evidence()).extracting(Evidence::chunkId)
+                .containsExactly(chunkId, secondCitation);
+    }
+
+    @Test
+    void confirmsIndependentClaimPositionsConcurrently() throws InterruptedException {
+        UUID secondChunk = UUID.randomUUID();
+        CountDownLatch confirmationsStarted = new CountDownLatch(2);
+        AtomicInteger calls = new AtomicInteger();
+        var critic = new ConditionalGeneratedContentCritic(request -> {
+            if (request.reviewMode() == ReviewMode.DISCOVERY) {
+                return new CritiqueDraft(List.of(
+                        new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First defect."),
+                        new Issue(IssueType.CONTRADICTION, 2, List.of(secondChunk), "Second defect.")));
+            }
+            calls.incrementAndGet();
+            confirmationsStarted.countDown();
+            try {
+                if (!confirmationsStarted.await(2, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("claim confirmations did not overlap");
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(exception);
+            }
+            return new CritiqueDraft(List.of());
+        }, new ImmediateAuditedAgentInvocations(), true, 2);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                List.of(
+                        new Claim(1, "First.", List.of(chunkId)),
+                        new Claim(2, "Second.", List.of(secondChunk))),
+                List.of(new Evidence(chunkId, "First."), new Evidence(secondChunk, "Second.")));
+
+        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
+
+        assertThat(confirmationsStarted.await(0, TimeUnit.MILLISECONDS)).isTrue();
+        assertThat(calls).hasValue(2);
+        assertThat(review.accepted()).isTrue();
     }
 
     private ReviewRequest request() {

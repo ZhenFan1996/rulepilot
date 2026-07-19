@@ -3,6 +3,7 @@ package com.rulepilot.assistant.adapter.out.model;
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
@@ -59,16 +60,20 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)) {
+        if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)
+                && request.reviewMode() != ReviewMode.ATOMIC_CONFIRMATION) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.temperature(0.0);
             options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             prompt = prompt.options(options);
         }
         ModelCritiqueDraft draft = prompt
-                .system(prompts.criticSystem())
+                .system(request.reviewMode() == ReviewMode.ATOMIC_CONFIRMATION
+                        ? prompts.atomicCriticSystem()
+                        : prompts.criticSystem())
                 .user(user -> user.text(prompts.criticUser())
                         .param("type", request.contentType())
+                        .param("mode", request.reviewMode())
                         .param("objective", request.taskContext().objective())
                         .param("coverage", request.taskContext().requiredCoverage())
                         .param("claims", modelClaims(request))

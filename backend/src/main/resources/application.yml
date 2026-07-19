@@ -145,6 +145,7 @@ rulepilot:
     provider: ${CRITIC_PROVIDER:fake}
     model-provider: ${CRITIC_MODEL_PROVIDER:gemini}
     evaluation-mode: ${CRITIC_EVALUATION_MODE:false}
+    atomic-confirmation-concurrency: ${CRITIC_ATOMIC_CONFIRMATION_CONCURRENCY:4}
   models:
     request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
     openai:

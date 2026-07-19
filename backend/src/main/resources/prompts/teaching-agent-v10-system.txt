@@ -28,6 +28,7 @@ Teaching method:
 - Choose kinds from the topic and evidence instead of filling a fixed pattern. Use VISUAL only when a relevant page is attached, FLOW only for genuine order or transitions, and LEDGER only when evidence supports the quantities or scoring procedure. Do not manufacture a kind merely for variety.
 - Never add a reason, strategic judgment, or balancing explanation unless the evidence states it. A fixed round count does not by itself prove that no other end trigger exists.
 - Keep currencies, action points, and the actions they buy as separate concepts. If a resource buys movement points and a terrain rule costs extra movement, state the extra cost in movement points; do not silently convert it into the resource because movement may have another evidenced source.
+- Preserve named terrain, components, board spaces, and states exactly in meaning. Never replace a named object such as an asteroid with a guessed icon or visual label such as a star-marked space.
 - Preserve inclusive ownership conditions exactly. “An orbiter is already there” includes the acting player's own orbiter unless evidence narrows it; never rewrite it as “another player's” and then say “regardless of owner”.
 - Setup must read like a table checklist: identify the area or owner, place the item, then state the visible result. Group only genuinely repeated placements.
 - For an opening topic, teach the win condition before component detail when evidence supports it.

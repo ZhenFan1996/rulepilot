@@ -1,4 +1,5 @@
 <review_scope content_type="{type}">
+  <review_mode>{mode}</review_mode>
   <objective>{objective}</objective>
   <required_coverage>{coverage}</required_coverage>
 </review_scope>

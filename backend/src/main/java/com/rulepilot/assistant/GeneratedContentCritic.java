@@ -18,6 +18,11 @@ public interface GeneratedContentCritic {
         HIGH_IMPACT
     }
 
+    enum ReviewMode {
+        DISCOVERY,
+        ATOMIC_CONFIRMATION
+    }
+
     enum IssueType {
         UNSUPPORTED_CLAIM,
         CONTRADICTION,
@@ -29,12 +34,23 @@ public interface GeneratedContentCritic {
     record ReviewRequest(
             UUID assistantRunId,
             ContentType contentType,
+            ReviewMode reviewMode,
             TaskContext taskContext,
             List<Claim> claims,
             List<Evidence> evidence) {
         public ReviewRequest {
+            reviewMode = reviewMode == null ? ReviewMode.DISCOVERY : reviewMode;
             claims = claims == null ? List.of() : List.copyOf(claims);
             evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
+
+        public ReviewRequest(
+                UUID assistantRunId,
+                ContentType contentType,
+                TaskContext taskContext,
+                List<Claim> claims,
+                List<Evidence> evidence) {
+            this(assistantRunId, contentType, ReviewMode.DISCOVERY, taskContext, claims, evidence);
         }
 
         public ReviewRequest(
@@ -42,6 +58,7 @@ public interface GeneratedContentCritic {
             this(
                     assistantRunId,
                     contentType,
+                    ReviewMode.DISCOVERY,
                     new TaskContext("Check generated content against supplied evidence.", "All material rule details."),
                     claims,
                     evidence);

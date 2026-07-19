@@ -17,6 +17,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v6-system.txt"),
+                resource("atomic-content-critic-v1-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -87,6 +88,7 @@ class VersionedAgentPromptsTest {
                         "resource ledger",
                         "starting inventory",
                         "costs one extra movement",
+                        "asteroid",
                         "negation",
                         "heading ownership",
                         "player turn (回合)",
@@ -94,9 +96,12 @@ class VersionedAgentPromptsTest {
                         "Never emit an issue as an audit note",
                         "semantic rule meaning",
                         "combined evidence set",
+                        "ATOMIC_CONFIRMATION",
                         "credit/credits=信用点",
                         "at most 160 characters");
-        assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
+        assertThat(prompts.atomicCriticSystem())
+                .contains("combined evidence set", "semantic meaning", "asteroid space", "return an empty issues list");
+        assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }
 

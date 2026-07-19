@@ -82,8 +82,11 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 Preserve claims and citation assignments that were not diagnosed. Edit only the diagnosed claims unless
                 another edit is strictly required for coherence. For a wrong citation, use an original evidence item whose
                 excerpt directly states the whole repaired claim; if none does, remove the unsupported phrase instead of
-                guessing or moving an unrelated citation. Correct every diagnosed problem while still satisfying the
-                original objective and output schema.
+                guessing or moving an unrelated citation. If the diagnosed phrase names an action or outcome explicitly
+                required by the original objective, inspect every original evidence item for direct support and repair the
+                citation before considering removal. Never pass review by silently deleting an objective-required action
+                that the supplied evidence can support. Correct every diagnosed problem while still satisfying the original
+                objective and output schema.
                 """.formatted(toModelDraft(request, previousDraft), modelFeedback(request, feedback));
         RuntimeException firstFailure;
         try {
