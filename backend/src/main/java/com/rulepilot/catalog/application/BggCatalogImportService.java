@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Game;
@@ -42,6 +43,13 @@ public class BggCatalogImportService {
             throw new IllegalArgumentException("BGG search query must contain 2 to 120 characters");
         }
         return bgg.search(checked).stream().limit(20).toList();
+    }
+
+    public List<HotGame> hotGames() {
+        return bgg.hotGames().stream()
+                .filter(game -> !game.thumbnailUrl().isBlank())
+                .limit(12)
+                .toList();
     }
 
     @Transactional

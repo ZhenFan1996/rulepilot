@@ -40,4 +40,22 @@ class BggXmlApiClientTest {
         assertThat(game.maxPlayers()).isEqualTo(5);
         assertThat(game.playingTimeMinutes()).isEqualTo(70);
     }
+
+    @Test
+    void parsesHotGameCoversAndRanks() {
+        var games = client.parseHotGames("""
+                <items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse">
+                  <item id="432123" rank="1">
+                    <thumbnail value="https://cf.geekdo-images.com/hot-game.jpg"/>
+                    <name value="A Hot Strategy Game"/>
+                    <yearpublished value="2026"/>
+                  </item>
+                </items>
+                """);
+
+        assertThat(games).hasSize(1);
+        assertThat(games.getFirst().rank()).isEqualTo(1);
+        assertThat(games.getFirst().name()).isEqualTo("A Hot Strategy Game");
+        assertThat(games.getFirst().thumbnailUrl()).endsWith("hot-game.jpg");
+    }
 }

@@ -53,6 +53,16 @@ describe('HomeView', () => {
   it('lets a signed-in player continue the latest teaching plan from home', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
+      if (path.includes('/api/v1/bgg/hot')) {
+        return new Response(JSON.stringify([{
+          rank: 1,
+          bggId: 266192,
+          name: 'Wingspan',
+          publicationYear: 2019,
+          thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
+          bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+        }]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
       if (path.includes('/api/v1/teaching-plans')) {
         return new Response(JSON.stringify([{
           id: 'plan-1',
@@ -78,5 +88,6 @@ describe('HomeView', () => {
     expect(wrapper.text()).toContain('player 的规则桌')
     expect(wrapper.text()).toContain('继续讲翼展翅膀')
     expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续上次的讲解')
+    expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
   })
 })

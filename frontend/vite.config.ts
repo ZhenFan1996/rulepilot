@@ -91,7 +91,7 @@ export default defineConfig({
       workbox: {
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
-        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        globPatterns: ['**/*.{js,css,html,svg,jpg,woff2}'],
         globIgnores: ['ocr-assets/**'],
       },
     }),

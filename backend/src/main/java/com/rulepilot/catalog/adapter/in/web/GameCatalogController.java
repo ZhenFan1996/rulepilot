@@ -3,6 +3,7 @@ package com.rulepilot.catalog.adapter.in.web;
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.GameCatalogService;
 import com.rulepilot.catalog.application.GameCatalogView;
 import com.rulepilot.catalog.domain.BggGameMetadata;
@@ -54,6 +55,12 @@ public class GameCatalogController {
         return bggService.search(query).stream().map(BggSearchResult::from).toList();
     }
 
+    @GetMapping("/bgg/hot")
+    List<BggHotGameResponse> hotBggGames() {
+        requireBgg();
+        return bggService.hotGames().stream().map(BggHotGameResponse::from).toList();
+    }
+
     @PostMapping("/bgg/games/{bggId}/import")
     BggImportResponse importBggGame(@PathVariable int bggId) {
         requireBgg();
@@ -102,6 +109,24 @@ public class GameCatalogController {
                     result.name(),
                     result.publicationYear(),
                     "https://boardgamegeek.com/boardgame/" + result.bggId());
+        }
+    }
+
+    record BggHotGameResponse(
+            int rank,
+            int bggId,
+            String name,
+            Integer publicationYear,
+            String thumbnailUrl,
+            String bggUrl) {
+        static BggHotGameResponse from(HotGame game) {
+            return new BggHotGameResponse(
+                    game.rank(),
+                    game.bggId(),
+                    game.name(),
+                    game.publicationYear(),
+                    game.thumbnailUrl(),
+                    "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }
 

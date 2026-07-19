@@ -8,9 +8,13 @@ public interface BoardGameGeekCatalog {
 
     List<SearchResult> search(String query);
 
+    List<HotGame> hotGames();
+
     GameDetails game(int bggId);
 
     record SearchResult(int bggId, String name, Integer publicationYear) {}
+
+    record HotGame(int rank, int bggId, String name, Integer publicationYear, String thumbnailUrl) {}
 
     record GameDetails(
             int bggId,

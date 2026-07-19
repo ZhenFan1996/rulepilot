@@ -52,6 +52,11 @@ class BggCatalogImportServiceTest {
         }
 
         @Override
+        public List<HotGame> hotGames() {
+            return List.of(new HotGame(1, 266192, "Wingspan", 2019, "https://example.test/wingspan.jpg"));
+        }
+
+        @Override
         public GameDetails game(int bggId) {
             detailCalls++;
             return new GameDetails(bggId, "Wingspan", "Bird game", "", 2019, 1, 5, 70, 10);

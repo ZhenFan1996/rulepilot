@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.adapter.out.bgg;
 
 import com.rulepilot.catalog.application.BoardGameGeekCatalog;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import java.io.StringReader;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -38,6 +39,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
     private final XMLInputFactory xml;
     private final Map<String, CacheEntry<List<SearchResult>>> searchCache = new ConcurrentHashMap<>();
     private final Map<Integer, CacheEntry<GameDetails>> gameCache = new ConcurrentHashMap<>();
+    private volatile CacheEntry<List<HotGame>> hotCache;
     private final AtomicLong nextRequestAt = new AtomicLong();
 
     public BggXmlApiClient(
@@ -68,6 +70,16 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         List<SearchResult> results = parseSearch(get(url));
         searchCache.put(key, new CacheEntry<>(results, Instant.now().plus(CACHE_TTL)));
         return results;
+    }
+
+    @Override
+    public List<HotGame> hotGames() {
+        requireConfigured();
+        CacheEntry<List<HotGame>> cached = hotCache;
+        if (cached != null && cached.valid()) return cached.value();
+        List<HotGame> games = parseHotGames(get(baseUrl + "/xmlapi2/hot?type=boardgame"));
+        hotCache = new CacheEntry<>(games, Instant.now().plus(Duration.ofHours(1)));
+        return games;
     }
 
     @Override
@@ -127,6 +139,41 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 } else if (event == XMLStreamConstants.END_ELEMENT && "item".equals(reader.getLocalName())
                         && id != null && name != null) {
                     results.add(new SearchResult(id, name, year));
+                }
+            }
+            reader.close();
+            return List.copyOf(results);
+        } catch (XMLStreamException exception) {
+            throw new IllegalStateException("BGG returned invalid XML", exception);
+        }
+    }
+
+    List<HotGame> parseHotGames(String body) {
+        List<HotGame> results = new ArrayList<>();
+        try {
+            XMLStreamReader reader = xml.createXMLStreamReader(new StringReader(body));
+            Integer rank = null;
+            Integer id = null;
+            String name = null;
+            String thumbnail = "";
+            Integer year = null;
+            while (reader.hasNext()) {
+                int event = reader.next();
+                if (event == XMLStreamConstants.START_ELEMENT && "item".equals(reader.getLocalName())) {
+                    rank = integer(reader.getAttributeValue(null, "rank"));
+                    id = integer(reader.getAttributeValue(null, "id"));
+                    name = null;
+                    thumbnail = "";
+                    year = null;
+                } else if (event == XMLStreamConstants.START_ELEMENT && "name".equals(reader.getLocalName())) {
+                    name = reader.getAttributeValue(null, "value");
+                } else if (event == XMLStreamConstants.START_ELEMENT && "thumbnail".equals(reader.getLocalName())) {
+                    thumbnail = reader.getAttributeValue(null, "value");
+                } else if (event == XMLStreamConstants.START_ELEMENT && "yearpublished".equals(reader.getLocalName())) {
+                    year = integer(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.END_ELEMENT && "item".equals(reader.getLocalName())
+                        && rank != null && id != null && name != null) {
+                    results.add(new HotGame(rank, id, name, year, thumbnail));
                 }
             }
             reader.close();
