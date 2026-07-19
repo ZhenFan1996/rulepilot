@@ -19,6 +19,8 @@ public interface AssistantRuns {
 
     Optional<RunDetails> findLatestOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 
+    int failInterrupted(AssistantRunMode mode);
+
     record RunSnapshot(
             UUID id,
             AssistantRunMode mode,

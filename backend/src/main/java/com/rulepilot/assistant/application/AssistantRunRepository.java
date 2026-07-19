@@ -17,5 +17,7 @@ public interface AssistantRunRepository {
 
     Optional<AssistantRun> findLatest(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 
+    List<AssistantRun> findNonTerminal(AssistantRunMode mode);
+
     List<StepSnapshot> steps(UUID runId);
 }

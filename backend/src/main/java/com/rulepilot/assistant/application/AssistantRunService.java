@@ -9,6 +9,7 @@ import com.rulepilot.assistant.domain.AssistantRun;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -101,6 +102,17 @@ public class AssistantRunService implements AssistantRuns {
                 .map(run -> new RunDetails(
                         snapshot(run), repository.steps(run.id()), execution.budget(run.id()),
                         execution.activities(run.id())));
+    }
+
+    @Override
+    @Transactional
+    public int failInterrupted(AssistantRunMode mode) {
+        List<AssistantRun> interrupted = repository.findNonTerminal(mode);
+        for (AssistantRun current : interrupted) {
+            AssistantRun failed = current.fail("APPLICATION_RESTARTED", Instant.now(clock));
+            persist(current, failed, "Generation was interrupted by an application restart");
+        }
+        return interrupted.size();
     }
 
     @Override

@@ -1,0 +1,53 @@
+package com.rulepilot.teaching.application;
+
+import com.rulepilot.assistant.AssistantRunMode;
+import com.rulepilot.assistant.AssistantRunState;
+import com.rulepilot.assistant.AssistantRuns;
+import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.stereotype.Service;
+
+@Service
+@Profile("!test")
+public class IllustratedLessonLauncher {
+
+    private final IllustratedLessonService lessons;
+    private final AssistantRuns runs;
+    private final TaskExecutor executor;
+
+    public IllustratedLessonLauncher(
+            IllustratedLessonService lessons,
+            AssistantRuns runs,
+            @Qualifier("teachingGenerationExecutor") TaskExecutor executor) {
+        this.lessons = lessons;
+        this.runs = runs;
+        this.executor = executor;
+    }
+
+    public synchronized LessonLaunch launch(UUID teachingPlanId, String ownerUsername) {
+        var existing = runs.findLatestOwned(AssistantRunMode.TEACHING, teachingPlanId, ownerUsername)
+                .map(AssistantRuns.RunDetails::run)
+                .filter(run -> !run.state().terminal());
+        if (existing.isPresent()) {
+            RunSnapshot run = existing.get();
+            return new LessonLaunch(run.id(), run.state(), true);
+        }
+
+        RunSnapshot run = lessons.begin(teachingPlanId, ownerUsername);
+        try {
+            executor.execute(() -> {
+                var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
+                lessons.finish(outcome);
+            });
+        } catch (RuntimeException schedulingFailure) {
+            lessons.failScheduling(run);
+            throw schedulingFailure;
+        }
+        return new LessonLaunch(run.id(), run.state(), false);
+    }
+
+    public record LessonLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}
+}

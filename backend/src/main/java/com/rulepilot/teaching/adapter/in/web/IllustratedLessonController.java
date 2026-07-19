@@ -1,7 +1,8 @@
 package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.IllustratedLessonService;
-import com.rulepilot.teaching.application.IllustratedLessonService.LessonCreation;
+import com.rulepilot.teaching.application.IllustratedLessonLauncher;
+import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.security.Principal;
 import java.util.UUID;
@@ -21,18 +22,21 @@ import org.springframework.web.server.ResponseStatusException;
 public class IllustratedLessonController {
 
     private final IllustratedLessonService lessons;
+    private final IllustratedLessonLauncher launcher;
     private final TeachingPlanOwnerGuard owners;
 
-    public IllustratedLessonController(IllustratedLessonService lessons, TeachingPlanOwnerGuard owners) {
+    public IllustratedLessonController(
+            IllustratedLessonService lessons, IllustratedLessonLauncher launcher, TeachingPlanOwnerGuard owners) {
         this.lessons = lessons;
+        this.launcher = launcher;
         this.owners = owners;
     }
 
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    LessonCreation create(@PathVariable UUID planId, Principal principal) {
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    LessonLaunch create(@PathVariable UUID planId, Principal principal) {
         owners.requireOwned(planId, principal.getName());
-        return lessons.create(planId, principal.getName());
+        return launcher.launch(planId, principal.getName());
     }
 
     @GetMapping("/latest")

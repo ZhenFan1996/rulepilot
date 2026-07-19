@@ -574,7 +574,7 @@ async function resumeLesson() {
       headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error('暂时无法继续补全讲解，请稍后重试。')
-    await loadLesson()
+    await router.push({ name: 'lessons', query: { started: planId.value } })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '暂时无法继续补全讲解。'
   } finally {

@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -21,6 +22,7 @@ public class ApiExceptionHandler {
     private static final URI INVALID_REQUEST_TYPE = URI.create("urn:rulepilot:problem:invalid-request");
     private static final URI INTERNAL_ERROR_TYPE = URI.create("urn:rulepilot:problem:internal-error");
     private static final URI AGENT_STOPPED_TYPE = URI.create("urn:rulepilot:problem:agent-execution-stopped");
+    private static final URI CAPACITY_EXCEEDED_TYPE = URI.create("urn:rulepilot:problem:capacity-exceeded");
     private static final Pattern SAFE_TRACE_ID = Pattern.compile("[A-Za-z0-9._-]{1,64}");
 
     @ExceptionHandler(IllegalArgumentException.class)
@@ -51,6 +53,18 @@ public class ApiExceptionHandler {
                 "The assistant run stopped at a configured execution boundary.",
                 request);
         return ResponseEntity.status(status).body(problem);
+    }
+
+    @ExceptionHandler(TaskRejectedException.class)
+    public ResponseEntity<ProblemDetail> handleCapacityExceeded(
+            TaskRejectedException exception, HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(problem(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                CAPACITY_EXCEEDED_TYPE,
+                "Generation capacity exceeded",
+                "GENERATION_CAPACITY_EXCEEDED",
+                "All generation slots are busy. Retry this task shortly.",
+                request));
     }
 
     @ExceptionHandler(Exception.class)

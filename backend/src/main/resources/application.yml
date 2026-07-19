@@ -121,6 +121,10 @@ rulepilot:
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:72}
       max-tokens: ${TEACHING_AGENT_MAX_TOKENS:300000}
       timeout: ${TEACHING_AGENT_TIMEOUT:PT30M}
+    background:
+      core-pool-size: ${TEACHING_BACKGROUND_CORE_POOL_SIZE:2}
+      max-pool-size: ${TEACHING_BACKGROUND_MAX_POOL_SIZE:4}
+      queue-capacity: ${TEACHING_BACKGROUND_QUEUE_CAPACITY:20}
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}

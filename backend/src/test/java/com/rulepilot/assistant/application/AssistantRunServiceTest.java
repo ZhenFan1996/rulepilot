@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.BudgetLimits;
 import com.rulepilot.assistant.AssistantRunMode;
+import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.domain.AssistantRun;
 import java.time.Duration;
 import java.time.Instant;
@@ -19,6 +20,27 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class AssistantRunServiceTest {
+
+    @Test
+    void turnsInterruptedTeachingRunsIntoRetryableFailuresOnStartup() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(60);
+        AssistantRun interrupted = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1));
+        when(repository.findNonTerminal(AssistantRunMode.TEACHING)).thenReturn(List.of(interrupted));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        int recovered = service.failInterrupted(AssistantRunMode.TEACHING);
+
+        assertThat(recovered).isOne();
+        ArgumentCaptor<AssistantRun> changed = ArgumentCaptor.forClass(AssistantRun.class);
+        verify(repository).update(any(), changed.capture(), any());
+        assertThat(changed.getValue().state()).isEqualTo(AssistantRunState.FAILED);
+        assertThat(changed.getValue().lastErrorCode()).isEqualTo("APPLICATION_RESTARTED");
+    }
 
     @Test
     void givesTeachingRunsTheirDedicatedExecutionBudget() {
@@ -76,5 +98,20 @@ class AssistantRunServiceTest {
         assertThat(details).isPresent();
         assertThat(details.orElseThrow().run().subjectId()).isEqualTo(planId);
         verify(repository).findLatest(AssistantRunMode.TEACHING, planId, "player");
+    }
+
+    private AssistantRunService service(AssistantRunRepository repository, AgentExecutionControl execution) {
+        return new AssistantRunService(
+                repository,
+                execution,
+                72,
+                24,
+                16,
+                24_000,
+                Duration.ofMinutes(2),
+                72,
+                40,
+                300_000,
+                Duration.ofMinutes(30));
     }
 }

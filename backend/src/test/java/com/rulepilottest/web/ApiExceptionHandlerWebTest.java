@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 import org.springframework.http.MediaType;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -51,12 +52,25 @@ class ApiExceptionHandlerWebTest {
         }
     }
 
+    @Test
+    void returnsRetryableCapacityProblemWhenTheGenerationQueueIsFull() throws Exception {
+        mockMvc.perform(get("/test/capacity"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.type").value("urn:rulepilot:problem:capacity-exceeded"))
+                .andExpect(jsonPath("$.code").value("GENERATION_CAPACITY_EXCEEDED"));
+    }
+
     @RestController
     static class FailingController {
 
         @GetMapping("/test/invalid")
         void invalidRequest() {
             throw new IllegalArgumentException("internal input detail must not leak");
+        }
+
+        @GetMapping("/test/capacity")
+        void capacityExceeded() {
+            throw new TaskRejectedException("internal queue detail must not leak");
         }
     }
 }
