@@ -272,8 +272,11 @@ public class StructuredRuleAnswerService {
     private RetrievalResult retrieveEvidence(
             UUID assistantRunId, UnderstoodQuestion question, QuestionContext context) {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
+        Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         boolean conflicting = false;
-        for (RetrievalIntent intent : AnswerRetrievalPlanner.plan(question, context)) {
+        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context);
+        for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
+            RetrievalIntent intent = intents.get(intentIndex);
             try {
                 List<HybridEvidenceHit> retrieved = invocations.invoke(
                         assistantRunId,
@@ -286,11 +289,18 @@ public class StructuredRuleAnswerService {
                                 intent.query(),
                                 new RetrievalOptions(3, intent.sectionTypes(), intent.currentSectionType())),
                         this::evidenceTokens);
+                boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
+                if (!retrieved.isEmpty() && !supplementaryIntent) {
+                    intentAnchors.putIfAbsent(retrieved.getFirst().evidence().chunkId(), retrieved.getFirst());
+                }
                 for (HybridEvidenceHit hit : retrieved) {
-                    HybridEvidenceHit existing = evidenceById.putIfAbsent(hit.evidence().chunkId(), hit);
+                    HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
                     if (existing != null && !sameEvidenceSnapshot(existing, hit)) {
                         conflicting = true;
                         break;
+                    }
+                    if (existing == null || hit.score() > existing.score()) {
+                        evidenceById.put(hit.evidence().chunkId(), hit);
                     }
                 }
             } catch (AgentExecutionStoppedException stopped) {
@@ -308,7 +318,17 @@ public class StructuredRuleAnswerService {
         if (conflicting) {
             return new RetrievalResult(List.of(), true);
         }
-        return new RetrievalResult(evidenceById.values().stream().limit(5).toList(), false);
+        Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
+        intentAnchors.values().forEach(hit -> selected.putIfAbsent(
+                hit.evidence().chunkId(), evidenceById.get(hit.evidence().chunkId())));
+        if (selected.size() < 3) {
+            evidenceById.values().stream()
+                    .sorted(java.util.Comparator.comparingDouble(HybridEvidenceHit::score)
+                            .reversed()
+                            .thenComparing(hit -> hit.evidence().chunkId()))
+                    .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+        }
+        return new RetrievalResult(selected.values().stream().limit(5).toList(), false);
     }
 
     private boolean sameEvidenceSnapshot(HybridEvidenceHit first, HybridEvidenceHit second) {

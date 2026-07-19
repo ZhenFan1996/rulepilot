@@ -22,7 +22,7 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class RedisRuleAnswerCache implements RuleAnswerCache {
 
-    private static final String KEY_PREFIX = "rulepilot:answer:data-v";
+    private static final String KEY_PREFIX = "rulepilot:answer:pipeline-v4:data-v";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper json = new ObjectMapper();

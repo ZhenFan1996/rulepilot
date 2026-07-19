@@ -2,6 +2,7 @@ package com.rulepilot.retrieval.application;
 
 import com.rulepilot.retrieval.FullTextRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch;
+import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VectorRuleSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -21,10 +22,13 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     private static final int MAX_RESULTS = 20;
     private final FullTextRuleSearch fullText;
     private final VectorRuleSearch vector;
+    private final RuleEvidenceLookup evidenceLookup;
 
-    public HybridRuleSearchService(FullTextRuleSearch fullText, VectorRuleSearch vector) {
+    public HybridRuleSearchService(
+            FullTextRuleSearch fullText, VectorRuleSearch vector, RuleEvidenceLookup evidenceLookup) {
         this.fullText = fullText;
         this.vector = vector;
+        this.evidenceLookup = evidenceLookup;
     }
 
     @Override
@@ -38,13 +42,32 @@ public class HybridRuleSearchService implements HybridRuleSearch {
         Map<UUID, Candidate> candidates = new LinkedHashMap<>();
         add(candidates, fullTextHits, true);
         add(candidates, vectorHits, false);
-        return candidates.values().stream()
+        List<HybridEvidenceHit> ranked = candidates.values().stream()
                 .filter(candidate -> options.sectionTypes().isEmpty()
                         || options.sectionTypes().contains(candidate.evidence.sectionType().toUpperCase()))
                 .map(candidate -> candidate.result(options.currentSectionType()))
                 .sorted(java.util.Comparator.comparingDouble(HybridEvidenceHit::score).reversed()
                         .thenComparing(hit -> hit.evidence().chunkId()))
                 .limit(limit)
+                .toList();
+        if (ranked.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, RuleEvidenceHit> completeEvidence = evidenceLookup
+                .findByChunkIds(
+                        documentVersionId,
+                        ranked.stream()
+                                .map(hit -> hit.evidence().chunkId())
+                                .collect(java.util.stream.Collectors.toUnmodifiableSet()))
+                .stream()
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(RuleEvidenceHit::chunkId, hit -> hit));
+        return ranked.stream()
+                .map(hit -> new HybridEvidenceHit(
+                        completeEvidence.getOrDefault(hit.evidence().chunkId(), hit.evidence()),
+                        hit.score(),
+                        hit.fullTextRank(),
+                        hit.vectorRank(),
+                        hit.currentSectionBoosted()))
                 .toList();
     }
 

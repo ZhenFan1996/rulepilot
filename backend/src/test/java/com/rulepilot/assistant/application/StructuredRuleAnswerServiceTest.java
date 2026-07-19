@@ -188,6 +188,39 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void keepsHighestScoringEvidenceAcrossRetrievalIntents() {
+        RuleEvidenceHit relevant = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Players begin with four credits.", 6, 6, 0.8);
+        List<HybridEvidenceHit> primary = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> new HybridEvidenceHit(
+                        new RuleEvidenceHit(
+                                UUID.randomUUID(), versionId, "SETUP", "Unrelated " + index,
+                                "Unrelated setup detail " + index, 10 + index, 10 + index, 0.2),
+                        0.01 + index * 0.001, index + 1, null, false))
+                .toList();
+        AtomicInteger retrievalCalls = new AtomicInteger();
+        var service = answerService(
+                (version, query, options) -> retrievalCalls.getAndIncrement() == 0
+                        ? primary
+                        : List.of(new HybridEvidenceHit(relevant, 0.05, 1, 1, true)),
+                request -> {
+                    assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId)
+                            .contains(relevant.chunkId())
+                            .doesNotContain(primary.get(1).evidence().chunkId());
+                    return new ModelDraft(
+                            "开局有 4 信用点。", "玩家开局获得 4 信用点。",
+                            List.of(relevant.chunkId()), List.of(), "HIGH");
+                });
+
+        var answer = service.answer(
+                "开局有多少信用点？", new QuestionContext(versionId, "SETUP", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(relevant.chunkId());
+    }
+
+    @Test
     void keepsPrimaryEvidenceWhenSupplementaryRetrievalFails() {
         RuleEvidenceHit source = evidence("SCORING");
         AtomicInteger retrievalCalls = new AtomicInteger();

@@ -3,10 +3,13 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -14,6 +17,10 @@ public final class AnswerRetrievalPlanner {
 
     private static final int MAX_QUERY_LENGTH = 500;
     private static final int MAX_SECTION_FILTERS = 4;
+    private static final int MAX_INTENTS = 6;
+    private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
+            java.util.regex.Pattern.compile("[?？!！;；,，]+");
+    private static final Map<String, String> SEARCH_VOCABULARY = searchVocabulary();
     private static final Set<String> KNOWN_SECTIONS = Set.of(
             "OBJECTIVE",
             "COMPONENTS",
@@ -32,12 +39,66 @@ public final class AnswerRetrievalPlanner {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
         String currentSection = knownSection(context.currentLessonSection());
-        return List.of(
-                new RetrievalIntent(bounded(question.normalizedQuestion()), Set.of(), currentSection),
-                new RetrievalIntent(
-                        supplementaryQuery(question, context),
-                        inferredSections(question, currentSection),
-                        currentSection));
+        List<RetrievalIntent> intents = new ArrayList<>();
+        List<String> parts = questionParts(question.normalizedQuestion());
+        if (parts.size() == 1) {
+            intents.add(new RetrievalIntent(expandSearchTerms(question.normalizedQuestion()), Set.of(), null));
+        } else {
+            parts.forEach(part -> intents.add(new RetrievalIntent(expandSearchTerms(part), Set.of(), null)));
+        }
+        intents.add(new RetrievalIntent(
+                supplementaryQuery(question, context),
+                inferredSections(question, currentSection),
+                currentSection));
+        return intents.stream().limit(MAX_INTENTS).toList();
+    }
+
+    private static List<String> questionParts(String question) {
+        List<String> parts = QUESTION_PART_SEPARATOR.splitAsStream(question)
+                .map(String::strip)
+                .filter(part -> part.length() >= 2)
+                .distinct()
+                .limit(MAX_INTENTS - 1L)
+                .toList();
+        return parts.isEmpty() ? List.of(question) : parts;
+    }
+
+    private static String expandSearchTerms(String questionPart) {
+        StringBuilder query = new StringBuilder(questionPart);
+        append(query, translatedTerms(questionPart));
+        return bounded(query.toString());
+    }
+
+    private static String translatedTerms(String text) {
+        return SEARCH_VOCABULARY.entrySet().stream()
+                .filter(entry -> text.contains(entry.getKey()))
+                .map(Map.Entry::getValue)
+                .distinct()
+                .collect(Collectors.joining(" "));
+    }
+
+    private static Map<String, String> searchVocabulary() {
+        Map<String, String> vocabulary = new LinkedHashMap<>();
+        vocabulary.put("第一轮", "round 1");
+        vocabulary.put("开局", "setup starting resources");
+        vocabulary.put("开始", "starting");
+        vocabulary.put("信用点", "credits");
+        vocabulary.put("能量", "energy");
+        vocabulary.put("宣传度", "publicity");
+        vocabulary.put("手牌", "hand cards");
+        vocabulary.put("收入", "income");
+        vocabulary.put("买牌", "buying a card");
+        vocabulary.put("打牌", "play a card");
+        vocabulary.put("数据", "data computer place data");
+        vocabulary.put("主要行动", "one main action on your turn");
+        vocabulary.put("自由行动", "any number free actions before or after");
+        vocabulary.put("研究科技", "research a tech");
+        vocabulary.put("分析", "analyze");
+        vocabulary.put("结束", "end of game");
+        vocabulary.put("同分", "tie tied");
+        vocabulary.put("平局", "tie tied");
+        vocabulary.put("获胜", "winner wins");
+        return Map.copyOf(vocabulary);
     }
 
     private static String supplementaryQuery(UnderstoodQuestion question, QuestionContext context) {
@@ -46,6 +107,7 @@ public final class AnswerRetrievalPlanner {
             append(query, String.join(" ", question.terms()));
         }
         append(query, facets(question.type()));
+        append(query, translatedTerms(question.normalizedQuestion()));
         if (context.currentLessonSection() != null) {
             append(query, context.currentLessonSection().replace('_', ' '));
         }
@@ -73,7 +135,11 @@ public final class AnswerRetrievalPlanner {
         }
         String text = question.normalizedQuestion();
         addWhenContains(sections, text, "SETUP", "setup", "starting", "开局", "设置", "布置");
-        addWhenContains(sections, text, "TIE_BREAKERS", "tie", "tied", "平局", "同分");
+        if (containsAny(text, "tie", "tied", "平局", "同分")) {
+            sections.add("TIE_BREAKERS");
+            sections.add("END_CONDITIONS");
+            sections.add("SCORING");
+        }
         addWhenContains(sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数");
         addWhenContains(sections, text, "END_CONDITIONS", "game end", "ending", "结束条件", "游戏结束");
         addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
@@ -86,9 +152,13 @@ public final class AnswerRetrievalPlanner {
 
     private static void addWhenContains(
             Set<String> sections, String text, String section, String... indicators) {
-        if (Arrays.stream(indicators).anyMatch(text::contains)) {
+        if (containsAny(text, indicators)) {
             sections.add(section);
         }
+    }
+
+    private static boolean containsAny(String text, String... indicators) {
+        return Arrays.stream(indicators).anyMatch(text::contains);
     }
 
     private static String knownSection(String value) {

@@ -29,7 +29,8 @@ class RetrievalEvaluationServiceTest {
         };
         var search = new HybridRuleSearchService(
                 (version, query, limit) -> List.of(hit(version, "OBJECTIVE"), hit(version, "SCORING")),
-                (version, query, limit) -> List.of());
+                (version, query, limit) -> List.of(),
+                (version, chunkIds) -> List.of());
 
         var report = new RetrievalEvaluationService(search, evaluationSet).evaluate(versionId);
 

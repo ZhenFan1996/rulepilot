@@ -54,4 +54,46 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.get(1).sectionTypes()).containsExactly("SCORING");
         assertThat(intents.get(1).currentSectionType()).isNull();
     }
+
+    @Test
+    void decomposesCompoundTableQuestionAndKeepsEndingScopeForTies() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "When does the game end? How are ties resolved?",
+                "when does the game end? how are ties resolved?",
+                QuestionType.RULE_QUERY,
+                List.of("game", "end", "ties"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(intents).hasSize(3);
+        assertThat(intents.get(0).query()).isEqualTo("when does the game end");
+        assertThat(intents.get(1).query()).isEqualTo("how are ties resolved");
+        assertThat(intents.get(2).sectionTypes())
+                .contains("TIE_BREAKERS", "END_CONDITIONS", "SCORING");
+    }
+
+    @Test
+    void expandsChineseTableTermsForEnglishRulebooks() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "我的回合能先买牌，再打牌，再把数据放进电脑吗？",
+                "我的回合能先买牌，再打牌，再把数据放进电脑吗？",
+                QuestionType.SITUATION_QUERY,
+                List.of("行动"),
+                Set.of(),
+                "ACTIONS");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+
+        assertThat(intents.get(0).query()).contains("buying a card");
+        assertThat(intents.get(1).query()).contains("play a card");
+        assertThat(intents.get(2).query()).contains("place data", "computer");
+    }
 }

@@ -59,4 +59,14 @@ class DeterministicQuestionUnderstandingTest {
         assertThat(result.type()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(result.missingContext()).containsExactly(MissingQuestionContext.CURRENT_LESSON_SECTION);
     }
+
+    @Test
+    void asksForSituationDetailsInsteadOfGuessingAChineseFollowUpReference() {
+        var result = understanding.understand(
+                "那我还能再做一次吗？",
+                new QuestionContext(versionId, null, "ACTION_PHASE", 4, Set.of()));
+
+        assertThat(result.type()).isEqualTo(QuestionType.SITUATION_QUERY);
+        assertThat(result.missingContext()).containsExactly(MissingQuestionContext.SITUATION_DETAILS);
+    }
 }

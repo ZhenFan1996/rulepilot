@@ -18,7 +18,10 @@ class HybridRuleSearchServiceTest {
         RuleEvidenceHit scoring = hit(versionId, "SCORING", 2);
         var service = new HybridRuleSearchService(
                 (version, query, limit) -> List.of(setup, scoring),
-                (version, query, limit) -> List.of(scoring, setup));
+                (version, query, limit) -> List.of(scoring, setup),
+                (version, chunkIds) -> List.of(
+                        complete(setup, "Complete setup evidence"),
+                        complete(scoring, "Complete scoring evidence")));
 
         var results = service.search(
                 versionId,
@@ -31,7 +34,14 @@ class HybridRuleSearchServiceTest {
             assertThat(result.vectorRank()).isEqualTo(1);
             assertThat(result.currentSectionBoosted()).isTrue();
             assertThat(result.score()).isGreaterThan(0.03);
+            assertThat(result.evidence().excerpt()).isEqualTo("Complete scoring evidence");
         });
+    }
+
+    private RuleEvidenceHit complete(RuleEvidenceHit hit, String evidence) {
+        return new RuleEvidenceHit(
+                hit.chunkId(), hit.documentVersionId(), hit.sectionType(), hit.heading(), evidence,
+                hit.pageFrom(), hit.pageTo(), 1.0);
     }
 
     private RuleEvidenceHit hit(UUID versionId, String sectionType, int page) {
