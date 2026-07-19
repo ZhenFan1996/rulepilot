@@ -42,6 +42,8 @@ interface LessonSection {
   evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
   visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
   visualCaption: string
+  visualSourcePages: number[]
+  visualSourceChunkIds: string[]
   steps: Array<{ position: number; text: string; sourcePages: number[] }>
 }
 
@@ -943,6 +945,9 @@ onUnmounted(() => {
                 <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
               </div>
               <p class="text-sm text-ink/60">{{ currentSection.visualCaption }}</p>
+              <p v-if="currentSection.visualSourcePages.length" class="mt-2 text-xs font-semibold text-indigo">
+                图示依据：规则书第 {{ currentSection.visualSourcePages.join('、') }} 页
+              </p>
             </div>
 
             <ol v-if="mediaMode !== 'VIDEO'" class="mt-7 space-y-5">

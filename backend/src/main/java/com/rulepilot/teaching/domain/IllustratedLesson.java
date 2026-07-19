@@ -43,12 +43,38 @@ public record IllustratedLesson(
             EvidenceStatus evidenceStatus,
             VisualKind visualKind,
             String visualCaption,
+            List<Integer> visualSourcePages,
+            List<UUID> visualSourceChunkIds,
             List<LessonStep> steps) {
         public LessonSection {
             if (position < 1 || type == null || title == null || title.isBlank()) {
                 throw new IllegalArgumentException("lesson section identity is required");
             }
+            visualSourcePages = visualSourcePages == null ? List.of() : List.copyOf(visualSourcePages);
+            visualSourceChunkIds = visualSourceChunkIds == null ? List.of() : List.copyOf(visualSourceChunkIds);
             steps = List.copyOf(steps);
+        }
+
+        public LessonSection(
+                int position,
+                TeachingSectionType type,
+                String title,
+                boolean required,
+                EvidenceStatus evidenceStatus,
+                VisualKind visualKind,
+                String visualCaption,
+                List<LessonStep> steps) {
+            this(
+                    position,
+                    type,
+                    title,
+                    required,
+                    evidenceStatus,
+                    visualKind,
+                    visualCaption,
+                    List.of(),
+                    List.of(),
+                    steps);
         }
     }
 

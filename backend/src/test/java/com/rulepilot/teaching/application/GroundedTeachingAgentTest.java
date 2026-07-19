@@ -73,6 +73,8 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().visualSourcePages()).containsExactly(2, 3);
+        assertThat(lesson.sections().getFirst().visualSourceChunkIds()).containsExactly(chunkId);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourcePages()).containsExactly(2, 3);
         assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
         assertThat(retrievalCalls).hasValue(2);

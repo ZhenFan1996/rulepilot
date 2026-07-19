@@ -285,6 +285,12 @@ public class GroundedTeachingAgent {
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
+        List<Integer> visualSourcePages = evidence.stream()
+                .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
+                .distinct()
+                .sorted()
+                .boxed()
+                .toList();
         return new LessonSection(
                 planned.position(),
                 planned.type(),
@@ -293,6 +299,8 @@ public class GroundedTeachingAgent {
                 EvidenceStatus.SUPPORTED,
                 draft.visualKind(),
                 draft.visualCaption().strip(),
+                visualSourcePages,
+                allEvidenceIds,
                 steps);
     }
 

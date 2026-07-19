@@ -114,6 +114,8 @@ class IllustratedLessonSectionEntity {
     @Column(name = "evidence_status", nullable = false) String evidenceStatus;
     @Column(name = "visual_kind", nullable = false) String visualKind;
     @Column(name = "visual_caption", nullable = false) String visualCaption;
+    @Column(name = "visual_source_pages", nullable = false) String visualSourcePages;
+    @Column(name = "visual_source_chunk_ids", nullable = false) String visualSourceChunkIds;
 
     protected IllustratedLessonSectionEntity() {}
 
@@ -127,6 +129,12 @@ class IllustratedLessonSectionEntity {
         evidenceStatus = section.evidenceStatus().name();
         visualKind = section.visualKind().name();
         visualCaption = section.visualCaption();
+        visualSourcePages = section.visualSourcePages().stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
+        visualSourceChunkIds = section.visualSourceChunkIds().stream()
+                .map(UUID::toString)
+                .collect(Collectors.joining(","));
     }
 
     LessonSection toDomain(List<LessonStep> steps) {
@@ -138,6 +146,12 @@ class IllustratedLessonSectionEntity {
                 EvidenceStatus.valueOf(evidenceStatus),
                 VisualKind.valueOf(visualKind),
                 visualCaption,
+                visualSourcePages.isBlank()
+                        ? List.of()
+                        : Arrays.stream(visualSourcePages.split(",")).map(Integer::valueOf).toList(),
+                visualSourceChunkIds.isBlank()
+                        ? List.of()
+                        : Arrays.stream(visualSourceChunkIds.split(",")).map(UUID::fromString).toList(),
                 steps);
     }
 }
