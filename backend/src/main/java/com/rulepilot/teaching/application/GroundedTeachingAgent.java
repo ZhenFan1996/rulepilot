@@ -32,6 +32,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -283,19 +284,7 @@ public class GroundedTeachingAgent {
                 pacing.maxSteps(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                (model.supportsVisualEvidence() ? evidence.stream() : Stream.<RuleEvidence>empty())
-                        .flatMap(source -> source.pageImages().stream())
-                        .collect(Collectors.toMap(
-                                com.rulepilot.assistant.AssistantReadTools.RulePageImage::pageNumber,
-                                Function.identity(),
-                                (first, duplicate) -> first,
-                                LinkedHashMap::new))
-                        .values()
-                        .stream()
-                        .limit(2)
-                        .map(image -> new TeachingLessonModel.PageImageInput(
-                                image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
-                        .toList());
+                selectedPageImages(planned, evidence));
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -335,6 +324,61 @@ public class GroundedTeachingAgent {
                         result -> estimateTokens(result.toString()));
             }
         }
+    }
+
+    private List<TeachingLessonModel.PageImageInput> selectedPageImages(
+            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
+        if (!model.supportsVisualEvidence()) return List.of();
+        Map<Integer, com.rulepilot.assistant.AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
+        Map<Integer, Integer> scores = new LinkedHashMap<>();
+        Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();
+        Set<String> topicTerms = visualTopicTerms(planned);
+        IntStream.range(0, evidence.size()).forEach(index -> {
+            RuleEvidence source = evidence.get(index);
+            int sourceScore = 100 + visualTopicScore(source, topicTerms)
+                    + (source.pageFrom() == source.pageTo() ? 20 : 0);
+            source.pageImages().stream()
+                    .filter(image -> image.pageNumber() >= source.pageFrom()
+                            && image.pageNumber() <= source.pageTo())
+                    .forEach(image -> {
+                        images.putIfAbsent(image.pageNumber(), image);
+                        scores.merge(image.pageNumber(), sourceScore, Integer::sum);
+                        firstEvidenceRank.putIfAbsent(image.pageNumber(), index);
+                    });
+        });
+        List<TeachingLessonModel.PageImageInput> selected = images.keySet().stream()
+                .sorted(Comparator
+                        .<Integer>comparingInt(page -> scores.getOrDefault(page, 0))
+                        .reversed()
+                        .thenComparingInt(page -> firstEvidenceRank.getOrDefault(page, Integer.MAX_VALUE))
+                        .thenComparingInt(Integer::intValue))
+                .limit(2)
+                .map(images::get)
+                .map(image -> new TeachingLessonModel.PageImageInput(
+                        image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
+                .toList();
+        if (!selected.isEmpty()) {
+            log.info(
+                    "Teaching topic {} selected visual evidence pages {}",
+                    planned.topicKey(),
+                    selected.stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList());
+        }
+        return selected;
+    }
+
+    private Set<String> visualTopicTerms(TeachingPlan.PlannedSection planned) {
+        return Stream.concat(
+                        Stream.of(planned.topicKey(), planned.title()),
+                        Stream.concat(planned.coverageTags().stream(), planned.retrievalQueries().stream()))
+                .flatMap(value -> Stream.of(value.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
+                .filter(term -> term.length() >= 3)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private int visualTopicScore(RuleEvidence source, Set<String> topicTerms) {
+        String sourceIdentity = (source.sectionType() + " " + source.heading())
+                .toLowerCase(java.util.Locale.ROOT);
+        return (int) topicTerms.stream().filter(sourceIdentity::contains).limit(5).count() * 20;
     }
 
     private LessonSection acceptDraft(

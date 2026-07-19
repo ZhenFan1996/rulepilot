@@ -258,6 +258,54 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void ranksPagesByTopicEvidenceCoverageInsteadOfFirstImageOrder() {
+        UUID versionId = UUID.randomUUID();
+        RulePageImage componentPage = new RulePageImage(2, "image/jpeg", new byte[] {2}, 1_086, 1_511);
+        RulePageImage setupPage = new RulePageImage(4, "image/jpeg", new byte[] {4}, 1_086, 1_511);
+        RuleEvidence firstComponent = new RuleEvidence(
+                UUID.randomUUID(), versionId, "COMPONENTS", "Components", "Main board pieces.", 2, 2,
+                List.of(componentPage));
+        RuleEvidence setupLayout = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SETUP", "Setup main board", "Assemble the main board.", 4, 4,
+                List.of(setupPage));
+        RuleEvidence setupPlacement = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SETUP", "Setup table", "Place it in the middle.", 4, 4,
+                List.of(setupPage));
+        TeachingLessonModel visionModel = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4, 2);
+                return new SectionDraft(
+                        "完成开局",
+                        VisualKind.TABLE_LAYOUT,
+                        "组装主棋盘并放到桌面中央。",
+                        List.of(setupLayout.chunkId(), setupPlacement.chunkId()),
+                        List.of(new StepDraft(
+                                "放置主棋盘",
+                                TeachingMove.DO,
+                                "组装主棋盘并放到桌面中央。",
+                                List.of(setupLayout.chunkId(), setupPlacement.chunkId()))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(firstComponent, setupLayout, setupPlacement),
+                visionModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+    }
+
+    @Test
     void rejectsVisualBlockWhenNoPageImageReachedTheModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

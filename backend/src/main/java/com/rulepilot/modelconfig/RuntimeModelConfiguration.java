@@ -86,8 +86,7 @@ public class RuntimeModelConfiguration {
     }
 
     public boolean supportsVision(Role role) {
-        String provider = providerFor(role);
-        return "fake".equals(provider) || "gemini".equals(provider) || "openai".equals(provider);
+        return supportsVisionProvider(providerFor(role));
     }
 
     public synchronized Snapshot configure(

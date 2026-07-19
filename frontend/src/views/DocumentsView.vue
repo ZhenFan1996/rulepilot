@@ -17,6 +17,10 @@ interface TeachingPlanResponse {
   id: string
   sections: Array<{ position: number; topicKey: string; title: string }>
 }
+interface ModelConfigurationResponse {
+  providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
+  assignments: { teaching: string }
+}
 interface AssistantRunDetails {
   run: {
     id: string
@@ -56,6 +60,7 @@ const errorMessage = ref('')
 const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
 const generationPlan = ref<TeachingPlanResponse | null>(null)
 const generationRun = ref<AssistantRunDetails | null>(null)
+const modelConfiguration = ref<ModelConfigurationResponse | null>(null)
 const generationElapsedSeconds = ref(0)
 let generationPollTimer: ReturnType<typeof setTimeout> | undefined
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
@@ -67,6 +72,17 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
 }))))
 const selectedEdition = computed(() => editionOptions.value.find((item) => item.id === editionId.value))
 const canUpload = computed(() => Boolean(file.value && editionId.value && !uploading.value && !preparingVersionId.value))
+const teachingProvider = computed(() => modelConfiguration.value?.providers.find(
+  (provider) => provider.id === modelConfiguration.value?.assignments.teaching,
+))
+const teachingVisionCapable = computed(() => teachingProvider.value?.visionCapable === true)
+const teachingProviderLabel = computed(() => ({
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  deepseek: 'DeepSeek',
+  compatible: '兼容模型',
+  fake: '内置演示',
+}[modelConfiguration.value?.assignments.teaching ?? 'fake'] ?? '当前模型'))
 const terminalRunStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 const generationSectionIdentifier = computed(() => {
   const activities = generationRun.value?.activities ?? []
@@ -156,9 +172,13 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const response = await checkedFetch('/api/v1/games')
+    const [response, modelResponse] = await Promise.all([
+      checkedFetch('/api/v1/games'),
+      checkedFetch('/api/v1/model-configuration'),
+    ])
     if (!response.ok) throw new Error('无法读取游戏目录。')
     games.value = await response.json() as GameResponse[]
+    if (modelResponse.ok) modelConfiguration.value = await modelResponse.json() as ModelConfigurationResponse
     const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
     editionId.value = editionOptions.value.some((item) => item.id === requestedEdition)
       ? requestedEdition
@@ -346,6 +366,11 @@ onBeforeUnmount(stopGenerationFeedback)
             <RouterLink :to="{ name: 'catalog' }" class="font-semibold underline">从 BGG 查找或手动添加</RouterLink>
           </div>
 
+          <div v-if="modelConfiguration && !teachingVisionCapable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
+            <p><span class="font-semibold">{{ teachingProviderLabel }} 目前只能读文字。</span>讲解仍可生成并附上原文页，但不会识别组件照片、版图位置或图标。</p>
+            <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">连接支持图片的 Gemini 或 OpenAI</RouterLink>
+          </div>
+
           <details class="mt-4 border-t border-ink/10 pt-4">
             <summary class="cursor-pointer text-sm font-semibold text-ink/55">人数、时长和资料类型</summary>
             <div class="mt-4 grid gap-4 sm:grid-cols-3">
@@ -379,7 +404,7 @@ onBeforeUnmount(stopGenerationFeedback)
                 <span class="text-xs tabular-nums text-ink/45">已用时 {{ generationElapsed }}</span>
               </div>
               <p class="mt-2 text-sm font-medium leading-6 text-ink/75">{{ generationStatus }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/45">复杂规则书和严格核对可能需要几分钟，请保持此页打开。</p>
+              <p class="mt-1 text-xs leading-5 text-ink/45">复杂规则书和严格核对可能需要几分钟，请保持此页打开。{{ teachingVisionCapable ? '页面图片会参与讲解。' : '本次只读取文字，页面图片仅作为原文供你查看。' }}</p>
             </div>
           </div>
 
