@@ -20,6 +20,7 @@ const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const file = ref<File | null>(null)
+const title = ref('')
 const sourceType = ref('BASE_RULEBOOK')
 const playerCount = ref(4)
 const beginnerCount = ref(4)
@@ -150,7 +151,7 @@ async function uploadAndTeach() {
     const selectedFile = file.value
     const csrf = await csrfToken()
     const form = new FormData()
-    form.append('title', titleFromFile(selectedFile))
+    form.append('title', title.value.trim() || titleFromFile(selectedFile))
     form.append('sourceType', sourceType.value)
     form.append('file', selectedFile)
     const response = await checkedFetch(`/api/v1/editions/${editionId.value}/documents`, {
@@ -159,6 +160,7 @@ async function uploadAndTeach() {
     if (!response.ok) throw new Error('上传失败，请确认文件是 50 MiB 以内的 PDF。')
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
     file.value = null
+    title.value = ''
     await loadDocuments()
     if (result.version.status === 'READY') {
       await startLesson(result.version.id)
@@ -195,6 +197,10 @@ onMounted(load)
             <span class="mt-2 text-sm text-ink/45">{{ file ? '点击可以换一本' : '最大 50 MiB' }}</span>
           </label>
           <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+
+          <label class="mt-4 block text-sm font-semibold">讲解标题 <span class="font-normal text-ink/40">（可选）</span>
+            <input v-model="title" maxlength="160" :placeholder="file ? titleFromFile(file) : '留空则使用 PDF 文件名'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+          </label>
 
           <div v-if="selectedEdition" class="mt-4 flex items-center justify-between gap-4 rounded-lg bg-ink/5 px-4 py-3 text-sm">
             <span class="text-ink/50">将加入</span>
