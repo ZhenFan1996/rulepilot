@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 
@@ -180,7 +180,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     await router.push({ name: 'login' })
     throw new Error('登录已失效。')
   }
-  if (response.status === 403) throw new Error('当前账户只能查看目录，需要 EDITOR 或 ADMIN 权限才能修改。')
+  if (response.status === 403) throw new Error('当前账户不能修改游戏库。')
   if (!response.ok) throw new Error('提交内容无效或名称已经存在。')
   return (await response.json()) as T
 }
@@ -313,6 +313,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
             </div>
             <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
             <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
+            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">给这款游戏添加规则书</RouterLink>
           </article>
         </section>
 
@@ -360,8 +361,11 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
                 </div>
                 <button :disabled="saving" class="w-full rounded-lg bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">保存版本</button>
               </div>
-              <ul class="mt-5 space-y-2 text-sm text-ink/60">
-                <li v-for="edition in selectedGame.editions" :key="edition.id">{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></li>
+              <ul class="mt-5 divide-y divide-ink/10 text-sm text-ink/60">
+                <li v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center justify-between gap-3 py-2">
+                  <span>{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
+                  <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">添加规则书</RouterLink>
+                </li>
               </ul>
             </form>
 

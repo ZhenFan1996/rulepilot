@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 
@@ -16,6 +16,7 @@ interface DocumentResponse {
 interface TeachingPlanResponse { id: string }
 
 const router = useRouter()
+const route = useRoute()
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
@@ -70,7 +71,10 @@ async function load() {
     const response = await checkedFetch('/api/v1/games')
     if (!response.ok) throw new Error('无法读取游戏目录。')
     games.value = await response.json() as GameResponse[]
-    editionId.value = editionOptions.value[0]?.id ?? ''
+    const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
+    editionId.value = editionOptions.value.some((item) => item.id === requestedEdition)
+      ? requestedEdition
+      : editionOptions.value.length === 1 ? editionOptions.value[0]!.id : ''
     await loadDocuments()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载失败。'
@@ -202,20 +206,24 @@ onMounted(load)
             <input v-model="title" maxlength="160" :placeholder="file ? titleFromFile(file) : '留空则使用 PDF 文件名'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
           </label>
 
-          <div v-if="selectedEdition" class="mt-4 flex items-center justify-between gap-4 rounded-lg bg-ink/5 px-4 py-3 text-sm">
+          <label v-if="editionOptions.length > 1" class="mt-4 block text-sm font-semibold">这本规则书属于
+            <select v-model="editionId" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+              <option value="" disabled>请选择游戏和版本</option>
+              <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
+            </select>
+          </label>
+          <div v-else-if="selectedEdition" class="mt-4 flex items-center justify-between gap-4 rounded-lg bg-ink/5 px-4 py-3 text-sm">
             <span class="text-ink/50">将加入</span>
             <span class="truncate font-semibold">{{ selectedEdition.label }}</span>
           </div>
+          <div v-else class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+            上传前需要先添加游戏版本。
+            <RouterLink :to="{ name: 'catalog' }" class="font-semibold underline">从 BGG 查找或手动添加</RouterLink>
+          </div>
 
           <details class="mt-4 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-ink/55">人数、时长和版本</summary>
+            <summary class="cursor-pointer text-sm font-semibold text-ink/55">人数、时长和资料类型</summary>
             <div class="mt-4 grid gap-4 sm:grid-cols-3">
-              <label class="text-sm font-semibold sm:col-span-3">游戏版本
-                <select v-model="editionId" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
-                  <option value="" disabled>还没有游戏版本</option>
-                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-                </select>
-              </label>
               <label class="text-sm font-semibold">玩家<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
               <label class="text-sm font-semibold">新手<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
               <label class="text-sm font-semibold">分钟<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
@@ -252,7 +260,8 @@ onMounted(load)
           <p class="font-semibold">还没有游戏版本</p>
           <RouterLink :to="{ name: 'catalog' }" class="mt-3 inline-block text-sm font-semibold text-indigo">先从 BGG 导入或添加一个 →</RouterLink>
         </div>
-        <p v-else-if="documents.length === 0" class="mt-5 text-sm text-ink/45">还没有规则书。</p>
+        <p v-else-if="!editionId" class="mt-5 text-sm text-ink/45">选择上方的游戏版本后，这里会显示已有规则书。</p>
+        <p v-else-if="documents.length === 0" class="mt-5 text-sm text-ink/45">这个版本还没有规则书。</p>
         <ul v-else class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
           <li v-for="entry in documents" :key="entry.document.id" class="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div class="min-w-0">

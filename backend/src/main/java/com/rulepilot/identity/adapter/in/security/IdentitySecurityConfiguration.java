@@ -5,7 +5,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -45,10 +44,6 @@ public class IdentitySecurityConfiguration {
                                 "/api/auth/login",
                                 "/error")
                         .permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/v1/games", "/api/v1/games/*/editions", "/api/v1/games/*/expansions")
-                        .hasRole("EDITOR")
-                        .requestMatchers(HttpMethod.POST, "/api/v1/bgg/games/*/import")
-                        .hasRole("EDITOR")
                         .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
