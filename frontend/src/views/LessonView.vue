@@ -129,6 +129,11 @@ interface AnswerCreation {
   answer: StructuredRuleAnswer
 }
 
+interface AnswerTurn {
+  question: string
+  answer: StructuredRuleAnswer
+}
+
 interface RuleCitation {
   chunkId: string
   sectionType: string
@@ -199,6 +204,8 @@ const narrationRestoreTarget = ref<number | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
 const question = ref('')
 const answer = ref<StructuredRuleAnswer | null>(null)
+const answeredQuestion = ref('')
+const answerTurns = ref<AnswerTurn[]>([])
 const answerLoading = ref(false)
 const answerError = ref('')
 const ruling = ref<ConfirmedRuling | null>(null)
@@ -244,6 +251,7 @@ const progressPercent = computed(() =>
 const supportedSectionCount = computed(
   () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
 )
+const previousAnswerTurns = computed(() => answerTurns.value.slice(0, -1))
 
 const teachingMoveMeta = {
   UNDERSTAND: { label: '先理解', marker: '想', tone: 'bg-indigo/10 text-indigo' },
@@ -389,6 +397,8 @@ function selectSection(index: number) {
   progress.value = { ...progress.value, currentIndex: index }
   question.value = ''
   answer.value = null
+  answeredQuestion.value = ''
+  answerTurns.value = []
   answerError.value = ''
   ruling.value = null
   rulingError.value = ''
@@ -412,6 +422,7 @@ async function askCurrentSection() {
     }
     if (!csrfResponse.ok) throw new Error('无法建立安全会话，请稍后重试。')
     const csrf = (await csrfResponse.json()) as CsrfResponse
+    const previousTurn = answerTurns.value[answerTurns.value.length - 1]
     const response = await fetch(`/api/v1/document-versions/${plan.value.documentVersionId}/answers`, {
       method: 'POST',
       credentials: 'include',
@@ -420,6 +431,7 @@ async function askCurrentSection() {
         question: text,
         currentLessonSection: currentSection.value.topicKey,
         playerCount: plan.value.playerCount,
+        previousQuestion: previousTurn?.question,
       }),
     })
     if (response.status === 401) {
@@ -430,6 +442,8 @@ async function askCurrentSection() {
     const creation = (await response.json()) as AnswerCreation
     const received = creation.answer
     answer.value = received
+    answeredQuestion.value = text
+    answerTurns.value.push({ question: text, answer: received })
     if (received.status === 'ANSWERED') {
       cacheOfflineAnswer(planId.value, text, currentSection.value.title, received)
       refreshOfflineKnowledge()
@@ -454,6 +468,11 @@ async function askCurrentSection() {
   } finally {
     answerLoading.value = false
   }
+}
+
+function prepareFollowUp(text: string) {
+  question.value = text
+  answerError.value = ''
 }
 
 function useCardText(text: string) {
@@ -507,7 +526,7 @@ function applyRuling(value: ConfirmedRuling) {
   editingRuling.value = false
   cacheOfflineRuling(
     planId.value,
-    question.value,
+    answeredQuestion.value,
     currentSection.value?.title ?? '规则答疑',
     value,
   )
@@ -527,7 +546,7 @@ async function confirmAnswer() {
       body: JSON.stringify({
         documentVersionId: plan.value.documentVersionId,
         expansionIds: [],
-        question: question.value.trim(),
+        question: answeredQuestion.value,
         shortVerdict: answer.value.shortVerdict,
         explanation: answer.value.explanation,
         citationChunkIds: answer.value.citations.map((citation) => citation.chunkId),
@@ -1115,6 +1134,14 @@ onUnmounted(() => {
                   <span class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">第 {{ currentSection.position }} 节上下文</span>
                 </div>
 
+                <ol v-if="previousAnswerTurns.length" class="mt-5 space-y-3" aria-label="本节之前的问答">
+                  <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
+                    <p class="text-xs font-semibold text-ink/45">你问</p>
+                    <p class="mt-1 text-sm leading-6">{{ turn.question }}</p>
+                    <p class="mt-3 border-l-2 border-copper pl-3 text-sm font-semibold leading-6">{{ turn.answer.shortVerdict }}</p>
+                  </li>
+                </ol>
+
                 <form class="mt-5" @submit.prevent="askCurrentSection">
                   <div class="mb-3 flex flex-wrap items-start gap-3">
                     <button
@@ -1151,13 +1178,15 @@ onUnmounted(() => {
 
                 <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
                 <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
-                  <p class="text-sm font-semibold">正在理解问题并核对规则书…</p>
+                  <p class="text-sm font-semibold">正在理解这次追问并重新核对规则书…</p>
+                  <p class="text-xs leading-5 text-ink/50">上一问只帮助理解“它、这样、再一次”指什么；结论仍会重新查找并验证规则依据。</p>
                   <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
                   <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
                 </div>
 
                 <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
                   <div class="p-5 sm:p-6">
+                    <p class="text-xs font-semibold text-ink/45">你问：{{ answeredQuestion }}</p>
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
                       <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
                       <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
@@ -1174,6 +1203,12 @@ onUnmounted(() => {
                         <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
                       </ul>
                     </details>
+
+                    <div v-if="answer.status === 'ANSWERED'" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" aria-label="继续追问">
+                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('为什么要这样做？')">为什么？</button>
+                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('请用一个具体回合举例说明。')">走个例子</button>
+                      <button type="button" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper" @click="prepareFollowUp('这条规则有哪些例外或限制？')">例外和限制</button>
+                    </div>
                   </div>
 
                   <details v-if="answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6">

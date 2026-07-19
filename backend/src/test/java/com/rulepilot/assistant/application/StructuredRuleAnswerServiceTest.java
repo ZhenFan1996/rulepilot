@@ -336,6 +336,34 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void alwaysCritiquesContextResolvedFollowUps() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicReference<GeneratedContentCritic.ReviewRisk> capturedRisk = new AtomicReference<>();
+        GeneratedContentCritic recordingCritic = (request, risk) -> {
+            capturedRisk.set(risk);
+            assertThat(request.taskContext().objective())
+                    .contains("那还能再做一次吗", "执行一次主要行动后还能执行自由行动吗");
+            assertThat(request.taskContext().requiredCoverage()).contains("repeatability claim");
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> new ModelDraft(
+                        "可以继续。", "规则允许在主要行动后执行自由行动。",
+                        List.of(source.chunkId()), List.of(), "HIGH"),
+                recordingCritic);
+
+        var answer = service.answer(
+                "那还能再做一次吗？",
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(),
+                        "执行一次主要行动后还能执行自由行动吗？"));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(capturedRisk.get()).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+    }
+
+    @Test
     void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
         UUID rulingId = UUID.randomUUID();
         UUID expansionId = UUID.randomUUID();

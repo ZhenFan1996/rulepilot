@@ -20,12 +20,14 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*");
     private static final Pattern SITUATION = Pattern.compile(
             "\\b(can|may|could) i\\b|\\b(on my turn|in my hand|i have|we have|my token|my card)\\b|"
-                    + "我(还)?(能|可以|有)|我的(回合|手牌|卡牌|棋子)|当前局面|此时");
+                    + "我的(回合|手牌|卡牌|棋子)|当前局面|此时");
     private static final Pattern STEP_REFERENCE = Pattern.compile(
             "\\b(this|that|previous|next) (step|part|section)\\b|\\bwhy (do|did) we\\b|"
                     + "这一步|上一步|下一步|刚才|这个步骤|这里为什么");
     private static final Pattern VAGUE_REFERENCE = Pattern.compile(
             "\\b(this|that|it)\\b|这个|这样|它|那(?:我)?|再做一次|再来一次|还能再|还可以再|上述|前面");
+    private static final Pattern UNRESOLVED_FOLLOW_UP = Pattern.compile(
+            "\\b(can|could) i (do|take|play) (it|that) again\\b|那(?:我)?|再做一次|再来一次|还能再|还可以再");
     private static final Set<String> STOP_WORDS = Set.of(
             "the", "a", "an", "is", "are", "am", "be", "do", "did", "does", "what", "when", "where",
             "why", "how", "who", "which", "can", "may", "could", "should", "would", "i", "we", "you",
@@ -54,6 +56,16 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
     }
 
     private QuestionType classify(String question, QuestionContext context) {
+        if (context.previousQuestion() != null
+                && context.currentLessonSection() != null
+                && VAGUE_REFERENCE.matcher(question).find()) {
+            return QuestionType.LESSON_STEP_FOLLOW_UP;
+        }
+        if (context.previousQuestion() == null
+                && context.currentLessonSection() == null
+                && UNRESOLVED_FOLLOW_UP.matcher(question).find()) {
+            return QuestionType.SITUATION_QUERY;
+        }
         if (SITUATION.matcher(question).find()) {
             return QuestionType.SITUATION_QUERY;
         }
@@ -73,7 +85,9 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
             if (context.gamePhase() == null) {
                 missing.add(MissingQuestionContext.GAME_PHASE);
             }
-            if (VAGUE_REFERENCE.matcher(question).find() && context.currentLessonSection() == null) {
+            if (VAGUE_REFERENCE.matcher(question).find()
+                    && context.currentLessonSection() == null
+                    && context.previousQuestion() == null) {
                 missing.add(MissingQuestionContext.SITUATION_DETAILS);
             }
         }

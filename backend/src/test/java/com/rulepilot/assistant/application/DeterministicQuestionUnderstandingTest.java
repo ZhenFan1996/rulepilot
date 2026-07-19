@@ -69,4 +69,26 @@ class DeterministicQuestionUnderstandingTest {
         assertThat(result.type()).isEqualTo(QuestionType.SITUATION_QUERY);
         assertThat(result.missingContext()).containsExactly(MissingQuestionContext.SITUATION_DETAILS);
     }
+
+    @Test
+    void resolvesAVagueLessonFollowUpFromThePreviousQuestion() {
+        var result = understanding.understand(
+                "那我还能再做一次吗？",
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(),
+                        "执行一次主要行动后，我还能做什么？"));
+
+        assertThat(result.type()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
+        assertThat(result.needsClarification()).isFalse();
+    }
+
+    @Test
+    void treatsAnExplicitChineseActionQuestionAsALessonRuleQuestion() {
+        var result = understanding.understand(
+                "执行一次主要行动后，我还能执行自由行动吗？",
+                new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(result.type()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
+        assertThat(result.needsClarification()).isFalse();
+    }
 }

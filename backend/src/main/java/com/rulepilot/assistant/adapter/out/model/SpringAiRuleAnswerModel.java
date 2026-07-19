@@ -67,6 +67,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("gamePhase", request.context().gamePhase())
                         .param("playerCount", request.context().playerCountForPrompt())
                         .param("activeExpansionCount", request.context().activeExpansionCount())
+                        .param("previousQuestion", request.context().previousQuestion())
                         .param("evidence", request.evidence())
                         .param("repair", repairInstruction))
                 .call()

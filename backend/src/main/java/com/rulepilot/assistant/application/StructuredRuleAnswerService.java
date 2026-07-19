@@ -225,9 +225,11 @@ public class StructuredRuleAnswerService {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
         try {
-            ReviewRisk risk = answer.confidence() == AnswerConfidence.LOW
-                    ? ReviewRisk.LOW_CONFIDENCE
-                    : ReviewRisk.STANDARD;
+            ReviewRisk risk = context.previousQuestion() != null
+                    ? ReviewRisk.HIGH_IMPACT
+                    : answer.confidence() == AnswerConfidence.LOW
+                            ? ReviewRisk.LOW_CONFIDENCE
+                            : ReviewRisk.STANDARD;
             if (!critic.review(toCriticRequest(assistantRunId, understood, context, answer, evidence), risk)
                     .accepted()) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
@@ -263,9 +265,12 @@ public class StructuredRuleAnswerService {
     }
 
     private AnswerCacheKey cacheKey(UnderstoodQuestion question, QuestionContext context) {
+        String conversationScopedQuestion = context.previousQuestion() == null
+                ? question.normalizedQuestion()
+                : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
         return new AnswerCacheKey(
                 context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
-                question.normalizedQuestion(), context.currentLessonSection(),
+                conversationScopedQuestion, context.currentLessonSection(),
                 context.gamePhase(), context.playerCount(), context.activeExpansions());
     }
 
@@ -352,7 +357,8 @@ public class StructuredRuleAnswerService {
                         context.currentLessonSection(),
                         context.gamePhase(),
                         context.playerCount(),
-                        context.activeExpansions().size()),
+                        context.activeExpansions().size(),
+                        context.previousQuestion()),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(
@@ -419,12 +425,15 @@ public class StructuredRuleAnswerService {
                 assistantRunId,
                 ContentType.ANSWER,
                 new TaskContext(
-                        "Answer the user's normalized rule question: " + question.normalizedQuestion(),
+                        "Answer the user's normalized rule question: " + question.normalizedQuestion()
+                                + "; previous question for reference resolution only: "
+                                + contextValue(context.previousQuestion()),
                         "Give a supported verdict and explanation for question type " + question.type()
                                 + "; preserve material exceptions for lesson section "
                                 + contextValue(context.currentLessonSection()) + ", game phase "
                                 + contextValue(context.gamePhase()) + ", and player count "
-                                + contextValue(context.playerCount()) + "."),
+                                + contextValue(context.playerCount())
+                                + ". For an 'again' follow-up, reject any repeatability claim not explicitly supported by evidence."),
                 claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)

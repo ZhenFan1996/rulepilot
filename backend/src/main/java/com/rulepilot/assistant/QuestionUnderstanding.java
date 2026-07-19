@@ -13,7 +13,17 @@ public interface QuestionUnderstanding {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            Set<UUID> activeExpansions) {
+            Set<UUID> activeExpansions,
+            String previousQuestion) {
+
+        public QuestionContext(
+                UUID documentVersionId,
+                String currentLessonSection,
+                String gamePhase,
+                Integer playerCount,
+                Set<UUID> activeExpansions) {
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, null);
+        }
 
         public QuestionContext {
             if (documentVersionId == null || playerCount != null && playerCount < 1) {
@@ -21,6 +31,10 @@ public interface QuestionUnderstanding {
             }
             currentLessonSection = normalize(currentLessonSection);
             gamePhase = normalize(gamePhase);
+            previousQuestion = normalize(previousQuestion);
+            if (previousQuestion != null && previousQuestion.length() > 800) {
+                throw new IllegalArgumentException("previous question is too long");
+            }
             activeExpansions = activeExpansions == null
                     ? Set.of()
                     : activeExpansions.stream()

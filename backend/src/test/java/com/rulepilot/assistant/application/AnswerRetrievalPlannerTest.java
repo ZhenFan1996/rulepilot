@@ -96,4 +96,30 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.get(1).query()).contains("play a card");
         assertThat(intents.get(2).query()).contains("place data", "computer");
     }
+
+    @Test
+    void carriesThePreviousQuestionIntoFollowUpRetrieval() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "那还能再做一次吗？",
+                "那还能再做一次吗？",
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                List.of(),
+                Set.of(),
+                "ACTIONS");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(
+                        versionId, "ACTIONS", null, 4, Set.of(),
+                        "完成主要行动后还能执行自由行动吗？"));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anyMatch(query -> query.contains("完成主要行动后还能执行自由行动吗"))
+                .anyMatch(query -> query.contains("那还能再做一次吗"));
+        assertThat(intents.getLast().query())
+                .contains("完成主要行动后还能执行自由行动吗", "那还能再做一次吗");
+        assertThat(intents.getLast().currentSectionType()).isEqualTo("ACTIONS");
+    }
 }

@@ -26,13 +26,24 @@ public interface RuleAnswerModel {
             String currentLessonSection,
             String gamePhase,
             Integer playerCount,
-            int activeExpansionCount) {
+            int activeExpansionCount,
+            String previousQuestion) {
+
+        public AnswerContext(
+                String currentLessonSection,
+                String gamePhase,
+                Integer playerCount,
+                int activeExpansionCount) {
+            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, null);
+        }
+
         public AnswerContext {
             if (playerCount != null && playerCount < 1 || activeExpansionCount < 0) {
                 throw new IllegalArgumentException("answer context is invalid");
             }
             currentLessonSection = optional(currentLessonSection);
             gamePhase = optional(gamePhase);
+            previousQuestion = optional(previousQuestion);
         }
 
         private static String optional(String value) {

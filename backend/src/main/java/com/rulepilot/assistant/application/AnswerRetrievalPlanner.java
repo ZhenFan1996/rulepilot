@@ -40,7 +40,8 @@ public final class AnswerRetrievalPlanner {
         }
         String currentSection = knownSection(context.currentLessonSection());
         List<RetrievalIntent> intents = new ArrayList<>();
-        List<String> parts = questionParts(question.normalizedQuestion());
+        String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
+        List<String> parts = questionParts(contextualQuestion);
         if (parts.size() == 1) {
             intents.add(new RetrievalIntent(expandSearchTerms(question.normalizedQuestion()), Set.of(), null));
         } else {
@@ -51,6 +52,13 @@ public final class AnswerRetrievalPlanner {
                 inferredSections(question, currentSection),
                 currentSection));
         return intents.stream().limit(MAX_INTENTS).toList();
+    }
+
+    private static String contextualQuestion(String question, String previousQuestion) {
+        if (previousQuestion == null) {
+            return question;
+        }
+        return bounded("previous question: " + previousQuestion + " follow-up: " + question);
     }
 
     private static List<String> questionParts(String question) {
@@ -102,7 +110,8 @@ public final class AnswerRetrievalPlanner {
     }
 
     private static String supplementaryQuery(UnderstoodQuestion question, QuestionContext context) {
-        StringBuilder query = new StringBuilder(question.normalizedQuestion());
+        StringBuilder query = new StringBuilder(contextualQuestion(
+                question.normalizedQuestion(), context.previousQuestion()));
         if (!question.terms().isEmpty()) {
             append(query, String.join(" ", question.terms()));
         }
