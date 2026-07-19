@@ -6,6 +6,7 @@ import HomeView from '@/views/HomeView.vue'
 import LessonView from '@/views/LessonView.vue'
 import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
+import RegisterView from '@/views/RegisterView.vue'
 import ModelSettingsView from '@/views/ModelSettingsView.vue'
 import AccountView from '@/views/AccountView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
@@ -22,6 +23,11 @@ const router = createRouter({
       path: '/login',
       name: 'login',
       component: LoginView,
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: RegisterView,
     },
     {
       path: '/catalog',

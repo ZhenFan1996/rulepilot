@@ -70,6 +70,11 @@ async function login() {
           {{ isSubmitting ? '正在登录…' : '登录' }}
         </button>
       </form>
+
+      <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-ink/55">
+        第一次使用？
+        <RouterLink :to="{ name: 'register' }" class="font-semibold text-indigo">创建账号</RouterLink>
+      </p>
     </section>
   </main>
 </template>

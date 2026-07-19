@@ -179,9 +179,9 @@ make demo-data
 
 该命令使用 `.env` 中的本地管理员账户，经由真实 API 创建 `Lantern Relay` 游戏与版本、生成并上传一份项目自制的五页小型规则书，等待异步解析完成，再创建教学计划和 Teaching Agent 图文讲解。命令可重复执行；生成的 PDF、Cookie 和结果只保存在被 Git 忽略的 `.local/demo/`。完成后终端会输出可直接打开的讲解地址。规则样本原文位于 `examples/lantern-relay-rules.txt`，采用 CC0 许可，不包含商业桌游内容；需要连接其他本地实例时可设置 `DEMO_BASE_URL`、`DEMO_ADMIN_NAME` 和 `DEMO_ADMIN_PASSWORD`。
 
-打开 http://127.0.0.1:5173/login，使用 `.env` 中的本地用户登录。登录会话保存在 Redis；本地提供 `USER` 与具备 `EDITOR`、`ADMIN` 权限的管理员账户，不开放公开注册。
+打开 http://127.0.0.1:5173/register 创建普通用户账号；注册成功后会自动登录并进入个人页，账号安全哈希保存在 PostgreSQL，登录会话保存在 Redis。也可以在 http://127.0.0.1:5173/login 使用 `.env` 中预置的本地用户或管理员账号。
 
-使用管理员账户登录后打开 http://127.0.0.1:5173/catalog，可以创建游戏、版本和扩展，并为扩展选择兼容的游戏版本。
+登录后打开 http://127.0.0.1:5173/catalog，可以创建游戏、版本和扩展，并为扩展选择兼容的游戏版本。
 
 ### 从 BoardGameGeek 读取游戏信息
 
@@ -191,7 +191,7 @@ RulePilot 可以在游戏目录中直接搜索 BoardGameGeek（BGG），并导�
 BGG_API_TOKEN=你的_BGG_Application_Token
 ```
 
-重启 `make dev`，使用 `EDITOR` 或 `ADMIN` 账户打开 http://127.0.0.1:5173/catalog 即可搜索和导入。后端统一代理 XML API 请求，并对搜索与详情缓存 24 小时、限制请求间隔，浏览器不会接触 Token。未配置 Token 时页面会显示配置入口，不会导致应用启动失败。
+重启 `make dev`，登录后打开 http://127.0.0.1:5173/catalog 即可搜索和导入。后端统一代理 XML API 请求，并对搜索与详情缓存 24 小时、限制请求间隔，浏览器不会接触 Token。未配置 Token 时页面会显示配置入口，不会导致应用启动失败。
 
 BGG 元数据只用于目录识别，不进入规则讲解、Agent 或 RAG 证据。使用本功能前请确认场景符合 BGG API 的非商业条款；界面保留 BGG 来源链接和 Powered by BGG 标识。
 
@@ -203,7 +203,7 @@ BGG 元数据只用于目录识别，不进入规则讲解、Agent 或 RAG 证�
 
 ### 配置大模型 API
 
-使用 `.env` 中的管理员账户登录后打开 http://127.0.0.1:5173/settings/models，可以配置 Gemini、OpenAI、DeepSeek 或其他 OpenAI 兼容服务，并分别指定规则讲解、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
+登录后打开 http://127.0.0.1:5173/settings/models，可以为当前账号配置 Gemini、OpenAI、DeepSeek 或其他 OpenAI 兼容服务，并分别指定规则讲解、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
 
 网页中保存的密钥仅存在于当前后端进程内存，重启后恢复启动配置。这适合本地开发和单进程演示；跨主机访问必须使用 HTTPS。需要重启后自动恢复时，仍可把配置放在被 Git 忽略的根目录 `.env`：
 

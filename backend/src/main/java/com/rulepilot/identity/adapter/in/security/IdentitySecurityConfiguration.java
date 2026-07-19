@@ -1,7 +1,10 @@
 package com.rulepilot.identity.adapter.in.security;
 
 import jakarta.servlet.http.HttpServletResponse;
+import javax.sql.DataSource;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,10 +13,12 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.userdetails.User;
-import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
+import org.springframework.security.provisioning.JdbcUserDetailsManager;
+import org.springframework.security.provisioning.UserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter.ReferrerPolicy;
 
@@ -42,6 +47,7 @@ public class IdentitySecurityConfiguration {
                                 "/actuator/prometheus",
                                 "/api/auth/csrf",
                                 "/api/auth/login",
+                                "/api/auth/register",
                                 "/error")
                         .permitAll()
                         .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")
@@ -71,20 +77,51 @@ public class IdentitySecurityConfiguration {
     }
 
     @Bean
-    UserDetailsService localIdentityUsers(
+    UserDetailsManager localIdentityUsers(ObjectProvider<DataSource> dataSources) {
+        DataSource dataSource = dataSources.getIfAvailable();
+        if (dataSource == null) {
+            return new InMemoryUserDetailsManager();
+        }
+
+        JdbcUserDetailsManager users = new JdbcUserDetailsManager(dataSource);
+        users.setUsersByUsernameQuery("select username, password_hash, enabled from app_user where username = ?");
+        users.setAuthoritiesByUsernameQuery(
+                "select username, authority from app_user_authority where username = ?");
+        users.setUserExistsSql("select count(*) from app_user where username = ?");
+        users.setCreateUserSql("insert into app_user (username, password_hash, enabled) values (?, ?, ?)");
+        users.setCreateAuthoritySql(
+                "insert into app_user_authority (username, authority) values (?, ?)");
+        users.setUpdateUserSql("update app_user set password_hash = ?, enabled = ? where username = ?");
+        users.setDeleteUserAuthoritiesSql("delete from app_user_authority where username = ?");
+        return users;
+    }
+
+    @Bean
+    ApplicationRunner seedLocalIdentityUsers(
+            UserDetailsManager users,
             PasswordEncoder passwordEncoder,
             @Value("${rulepilot.identity.user.username}") String userName,
             @Value("${rulepilot.identity.user.password}") String userPassword,
             @Value("${rulepilot.identity.admin.username}") String adminName,
             @Value("${rulepilot.identity.admin.password}") String adminPassword) {
-        return new InMemoryUserDetailsManager(
-                User.withUsername(userName)
-                        .password(passwordEncoder.encode(userPassword))
-                        .roles("USER")
-                        .build(),
-                User.withUsername(adminName)
-                        .password(passwordEncoder.encode(adminPassword))
-                        .roles("USER", "EDITOR", "ADMIN")
-                        .build());
+        return arguments -> {
+            synchronizeConfiguredUser(users, User.withUsername(userName)
+                    .password(passwordEncoder.encode(userPassword))
+                    .roles("USER")
+                    .build());
+            synchronizeConfiguredUser(users, User.withUsername(adminName)
+                    .password(passwordEncoder.encode(adminPassword))
+                    .roles("USER", "EDITOR", "ADMIN")
+                    .build());
+        };
+    }
+
+    private void synchronizeConfiguredUser(
+            UserDetailsManager users, UserDetails user) {
+        if (users.userExists(user.getUsername())) {
+            users.updateUser(user);
+        } else {
+            users.createUser(user);
+        }
     }
 }
