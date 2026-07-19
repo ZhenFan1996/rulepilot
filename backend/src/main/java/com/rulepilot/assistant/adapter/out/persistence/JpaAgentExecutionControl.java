@@ -50,12 +50,15 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public InvocationReservation reserve(
             UUID runId, ActivityType type, String operation, int estimatedInputTokens) {
+        if (type == ActivityType.VALIDATION) {
+            throw new IllegalArgumentException("validation activities do not reserve invocation budget");
+        }
         validateInvocation(type, operation, estimatedInputTokens);
         BudgetRow budget = lockBudget(runId);
         StopReason stopped = stopped(budget, Instant.now());
         if (stopped != null) throw new AgentExecutionStoppedException(stopped);
         int tools = budget.usedToolCalls + (type == ActivityType.TOOL ? 1 : 0);
-        int models = budget.usedModelCalls + (type == ActivityType.TOOL ? 0 : 1);
+        int models = budget.usedModelCalls + (type == ActivityType.MODEL || type == ActivityType.CRITIC ? 1 : 0);
         if (tools > budget.maxToolCalls) throw new AgentExecutionStoppedException(StopReason.TOOL_BUDGET);
         if (models > budget.maxModelCalls) throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
         if ((long) budget.usedTokens + estimatedInputTokens > budget.maxTokens) {
@@ -99,12 +102,48 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .setParameter("tokens", estimatedOutputTokens)
                 .setParameter("runId", reservation.runId())
                 .executeUpdate();
+        insertActivity(
+                reservation.id(), reservation.runId(), reservation.type(), reservation.operation(), recordedOutcome,
+                reservation.inputTokens(), estimatedOutputTokens, latencyMs, summary);
+        if (stopReason != null) throw new AgentExecutionStoppedException(stopReason);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void record(
+            UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+        if (type != ActivityType.VALIDATION) {
+            throw new IllegalArgumentException("diagnostic activity type is invalid");
+        }
+        validateInvocation(type, operation, 0);
+        InvocationReservation diagnostic =
+                new InvocationReservation(UUID.randomUUID(), runId, type, operation.strip(), 0);
+        validateCompletion(
+                diagnostic,
+                outcome,
+                0,
+                0,
+                summary);
+        lockBudget(runId);
+        insertActivity(diagnostic.id(), runId, type, diagnostic.operation(), outcome, 0, 0, 0, summary);
+    }
+
+    private void insertActivity(
+            UUID activityId,
+            UUID runId,
+            ActivityType type,
+            String operation,
+            ActivityOutcome outcome,
+            int inputTokens,
+            int outputTokens,
+            long latencyMs,
+            String summary) {
         Number sequence = (Number) entityManager.createNativeQuery("""
                         select coalesce(max(sequence_number), 0) + 1
                         from assistant_run_activity
                         where assistant_run_id = :runId
                         """)
-                .setParameter("runId", reservation.runId())
+                .setParameter("runId", runId)
                 .getSingleResult();
         entityManager.createNativeQuery("""
                         insert into assistant_run_activity (
@@ -115,19 +154,18 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                             :inputTokens, :outputTokens, :latency, :summary, :occurredAt
                         )
                         """)
-                .setParameter("id", reservation.id())
-                .setParameter("runId", reservation.runId())
+                .setParameter("id", activityId)
+                .setParameter("runId", runId)
                 .setParameter("sequence", sequence.longValue())
-                .setParameter("type", reservation.type().name())
-                .setParameter("operation", reservation.operation())
-                .setParameter("outcome", recordedOutcome.name())
-                .setParameter("inputTokens", reservation.inputTokens())
-                .setParameter("outputTokens", estimatedOutputTokens)
+                .setParameter("type", type.name())
+                .setParameter("operation", operation)
+                .setParameter("outcome", outcome.name())
+                .setParameter("inputTokens", inputTokens)
+                .setParameter("outputTokens", outputTokens)
                 .setParameter("latency", latencyMs)
                 .setParameter("summary", summary.strip())
                 .setParameter("occurredAt", Instant.now())
                 .executeUpdate();
-        if (stopReason != null) throw new AgentExecutionStoppedException(stopReason);
     }
 
     @Override

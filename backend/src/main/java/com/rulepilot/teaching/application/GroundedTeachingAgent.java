@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
@@ -20,6 +21,7 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
+import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -63,6 +65,13 @@ public class GroundedTeachingAgent {
     private static final int MAX_STEPS_PER_SECTION = 6;
     private static final int MAX_REVISION_ATTEMPTS = 4;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
+    private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
+    private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
+            "(?i)(attached|attachment|image|rulebook|page\\s*\\d|图片|附件|规则书|第\\s*\\d+\\s*页|页面)");
+    private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
+    private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
+            "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
+            "with", "you", "your");
     private static final Set<String> HIGH_IMPACT_TAGS = Set.of("setup", "end", "scoring", "tie_breaker");
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
@@ -106,6 +115,7 @@ public class GroundedTeachingAgent {
             }
             if (toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
+                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 sections.add(insufficient(planned));
                 continue;
             }
@@ -153,24 +163,28 @@ public class GroundedTeachingAgent {
                     ? List.of()
                     : balancedEvidence(evidenceByIntent);
             if (evidence.isEmpty()) {
+                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_RETRIEVED_EVIDENCE");
                 sections.add(insufficient(planned));
                 continue;
             }
             if (!evidenceVerifier.verify(new VerificationRequest(
                             plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
                     .verified()) {
+                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "RETRIEVED_EVIDENCE_INVALID");
                 sections.add(insufficient(planned));
                 continue;
             }
 
             try {
-                sections.add(compose(
+                LessonSection composed = compose(
                         plan,
                         planned,
                         pacing.get(planned.position()),
                         continuityContext(sections),
                         evidence,
-                        assistantRunId));
+                        assistantRunId);
+                sections.add(composed);
+                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "DRAFT_ACCEPTED");
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
@@ -180,6 +194,11 @@ public class GroundedTeachingAgent {
                         planned.topicKey(),
                         invalidOrFailedModelOutput.getClass().getSimpleName(),
                         invalidOrFailedModelOutput.getMessage());
+                recordPublication(
+                        assistantRunId,
+                        planned,
+                        ActivityOutcome.REJECTED,
+                        "DRAFT_WITHHELD_AFTER_BOUNDED_REVISIONS");
                 sections.add(insufficient(planned));
             }
         }
@@ -215,12 +234,20 @@ public class GroundedTeachingAgent {
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {
         return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
-                        query,
+                        focusedRetrievalQuery(query),
                         EVIDENCE_PER_INTENT,
                         Set.of(),
                         null,
                         true,
                         true)));
+    }
+
+    String focusedRetrievalQuery(String query) {
+        String focused = Stream.of(RETRIEVAL_QUERY_SEPARATOR.split(query.strip()))
+                .filter(token -> !token.isBlank())
+                .filter(token -> !ENGLISH_RETRIEVAL_FILLER.contains(token.toLowerCase(java.util.Locale.ROOT)))
+                .collect(Collectors.joining(" "));
+        return focused.isBlank() ? query.strip() : focused;
     }
 
     private List<String> retrievalQueries(TeachingPlan.PlannedSection topic, int limit) {
@@ -293,12 +320,26 @@ public class GroundedTeachingAgent {
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
+        draft = normalizePresentationMetadata(draft, modelRequest.pageImages().isEmpty());
         String previousRejection = null;
         for (int revision = 0; ; revision++) {
             try {
-                return acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
+                LessonSection accepted = acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
+                recordValidation(
+                        assistantRunId,
+                        planned,
+                        revision,
+                        ActivityOutcome.SUCCEEDED,
+                        "DRAFT_ACCEPTED");
+                return accepted;
             } catch (IllegalArgumentException rejectedDraft) {
                 String rejection = rejectionFingerprint(rejectedDraft);
+                recordValidation(
+                        assistantRunId,
+                        planned,
+                        revision,
+                        ActivityOutcome.REJECTED,
+                        rejectionCategory(rejectedDraft));
                 if (revision == MAX_REVISION_ATTEMPTS || rejection.equals(previousRejection)) {
                     throw rejectedDraft;
                 }
@@ -322,8 +363,35 @@ public class GroundedTeachingAgent {
                         "Teaching section revised from validation feedback",
                         () -> model.revise(modelRequest, draftToRevise, feedback),
                         result -> estimateTokens(result.toString()));
+                draft = normalizePresentationMetadata(draft, modelRequest.pageImages().isEmpty());
             }
         }
+    }
+
+    private SectionDraft normalizePresentationMetadata(SectionDraft draft, boolean textOnly) {
+        if (draft == null || draft.steps() == null) return draft;
+        StepDraft anchor = draft.steps().stream()
+                .filter(step -> step != null
+                        && step.heading() != null && !step.heading().isBlank()
+                        && step.text() != null && !step.text().isBlank()
+                        && step.citationIds() != null && !step.citationIds().isEmpty())
+                .findFirst()
+                .orElse(null);
+        if (anchor == null) return draft;
+
+        String caption = draft.visualCaption();
+        if (caption == null || caption.isBlank() || caption.length() > 240
+                || textOnly && TEXT_ONLY_PRESENTATION_MARKER.matcher(caption).find()) {
+            caption = anchor.text().length() <= 240 ? anchor.text() : anchor.heading();
+        }
+        List<UUID> visualCitations = draft.visualCitationIds();
+        if (visualCitations == null || visualCitations.isEmpty()) {
+            visualCitations = anchor.citationIds();
+        }
+        if (caption.equals(draft.visualCaption()) && visualCitations.equals(draft.visualCitationIds())) {
+            return draft;
+        }
+        return new SectionDraft(draft.title(), draft.visualKind(), caption, visualCitations, draft.steps());
     }
 
     private List<TeachingLessonModel.PageImageInput> selectedPageImages(
@@ -408,6 +476,9 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
+        Set<UUID> citedEvidenceIds = generatedClaims.stream()
+                .flatMap(claim -> claim.citationIds().stream())
+                .collect(Collectors.toUnmodifiableSet());
         var review = critic.review(
                 new ReviewRequest(
                         assistantRunId,
@@ -423,6 +494,7 @@ public class GroundedTeachingAgent {
                                                         draft.steps().get(index).citationIds())))
                                 .toList(),
                         evidence.stream()
+                                .filter(source -> citedEvidenceIds.contains(source.chunkId()))
                                 .map(source -> new GeneratedContentCritic.Evidence(
                                         source.chunkId(), source.excerpt()))
                                 .toList()),
@@ -439,6 +511,7 @@ public class GroundedTeachingAgent {
                     .collect(Collectors.joining(";"));
             throw new RejectedTeachingDraftException(
                     fingerprint,
+                    criticDiagnostic(review.issues()),
                     "Factual review rejected the draft: " + review.issues().stream()
                     .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
                     .collect(Collectors.joining("; ")));
@@ -568,8 +641,10 @@ public class GroundedTeachingAgent {
         if (draft.title() == null || draft.title().isBlank() || draft.title().length() > 160)
             throw new IllegalArgumentException("The title is missing or longer than 160 characters.");
         if (draft.visualKind() == null) throw new IllegalArgumentException("visualKind is missing.");
-        if (draft.visualCaption() == null || draft.visualCaption().isBlank() || draft.visualCaption().length() > 240)
-            throw new IllegalArgumentException("The visual caption is missing or longer than 240 characters.");
+        if (draft.visualCaption() == null || draft.visualCaption().isBlank())
+            throw new IllegalArgumentException("The visual caption is missing.");
+        if (draft.visualCaption().length() > 240)
+            throw new IllegalArgumentException("The visual caption is longer than 240 characters.");
         if (draft.visualCitationIds().isEmpty())
             throw new IllegalArgumentException("The visual caption has no evidence citation.");
         if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, request.maxSteps()))
@@ -598,6 +673,12 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Replace unresolved PDF icon markers with natural Simplified Chinese terms.");
         }
+        if (UNRESOLVED_EMOJI_ICON.matcher(draft.visualCaption()).find()
+                || draft.steps().stream().anyMatch(step -> step != null && step.text() != null
+                        && UNRESOLVED_EMOJI_ICON.matcher(step.text()).find())) {
+            throw new IllegalArgumentException(
+                    "Replace inferred emoji icons with an evidenced natural-language rule term.");
+        }
     }
 
     private String rejectionFingerprint(IllegalArgumentException rejection) {
@@ -607,16 +688,98 @@ public class GroundedTeachingAgent {
         return "validation:" + (rejection.getMessage() == null ? rejection.getClass().getName() : rejection.getMessage());
     }
 
+    private String rejectionCategory(IllegalArgumentException rejection) {
+        if (rejection instanceof RejectedTeachingDraftException criticRejection) {
+            return criticRejection.diagnostic();
+        }
+        String message = rejection.getMessage() == null ? "" : rejection.getMessage();
+        if (message.startsWith("Evidence validation failed:")) {
+            return "EVIDENCE_POLICY_" + message.substring(message.indexOf(':') + 1)
+                    .replaceAll("[^A-Z0-9_, -]", "")
+                    .strip()
+                    .replaceAll("[, -]+", "+");
+        }
+        if (message.contains("unknown evidence reference")) return "UNKNOWN_EVIDENCE_REFERENCE";
+        if (message.contains("visual cites evidence outside")) return "VISUAL_CITATION_OUTSIDE_SCOPE";
+        if (message.contains("step cites evidence outside")) return "STEP_CITATION_OUTSIDE_SCOPE";
+        if (message.contains("visual caption has no evidence")) return "VISUAL_CITATION_MISSING";
+        if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
+        if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
+        if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
+        if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
+        if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";
+        if (message.contains("Every step needs")) return "STEP_METADATA_INVALID";
+        if (message.contains("teaching step is invalid")) return "STEP_CONTENT_INVALID";
+        if (message.contains("visual caption is missing")) return "VISUAL_CAPTION_MISSING";
+        if (message.contains("visual caption is longer")) return "VISUAL_CAPTION_TOO_LONG";
+        if (message.contains("visual caption")) return "VISUAL_CAPTION_INVALID";
+        if (message.contains("title")) return "TITLE_INVALID";
+        if (message.contains("visualKind")) return "VISUAL_KIND_MISSING";
+        if (message.contains("draft is missing")) return "DRAFT_MISSING";
+        return "SCHEMA_OR_POLICY_INVALID";
+    }
+
+    private String criticDiagnostic(List<GeneratedContentCritic.Issue> issues) {
+        String diagnostic = "CRITIC_" + issues.stream()
+                .collect(Collectors.groupingBy(
+                        GeneratedContentCritic.Issue::type,
+                        java.util.TreeMap::new,
+                        Collectors.mapping(
+                                GeneratedContentCritic.Issue::claimPosition,
+                                Collectors.collectingAndThen(
+                                        Collectors.toCollection(java.util.TreeSet::new),
+                                        positions -> positions.stream()
+                                                .map(String::valueOf)
+                                                .collect(Collectors.joining(","))))))
+                .entrySet().stream()
+                .map(entry -> entry.getKey() + "@" + entry.getValue())
+                .collect(Collectors.joining("+"));
+        return diagnostic.length() <= 180 ? diagnostic : diagnostic.substring(0, 180);
+    }
+
+    private void recordValidation(
+            UUID runId,
+            TeachingPlan.PlannedSection section,
+            int revision,
+            ActivityOutcome outcome,
+            String category) {
+        invocations.record(
+                runId,
+                ActivityType.VALIDATION,
+                "validateTeachingSection|" + section.position() + "|" + revision,
+                outcome,
+                "Teaching draft " + (outcome == ActivityOutcome.SUCCEEDED ? "accepted: " : "rejected: ") + category);
+    }
+
+    private void recordPublication(
+            UUID runId,
+            TeachingPlan.PlannedSection section,
+            ActivityOutcome outcome,
+            String category) {
+        invocations.record(
+                runId,
+                ActivityType.VALIDATION,
+                "publishTeachingSection|" + section.position(),
+                outcome,
+                "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
+    }
+
     private static final class RejectedTeachingDraftException extends IllegalArgumentException {
         private final String fingerprint;
+        private final String diagnostic;
 
-        private RejectedTeachingDraftException(String fingerprint, String message) {
+        private RejectedTeachingDraftException(String fingerprint, String diagnostic, String message) {
             super(message);
             this.fingerprint = fingerprint;
+            this.diagnostic = diagnostic;
         }
 
         private String fingerprint() {
             return fingerprint;
+        }
+
+        private String diagnostic() {
+            return diagnostic;
         }
     }
 

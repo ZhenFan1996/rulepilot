@@ -82,7 +82,7 @@ public class RuntimeModelConfiguration {
 
     public boolean usesDeepSeekNonThinkingGeneration(Role role) {
         return !deepSeekGenerationThinking
-                && (role == Role.TEACHING || role == Role.ANSWER)
+                && (role == Role.TEACHING || role == Role.ANSWER || role == Role.CRITIC)
                 && "deepseek".equals(providerFor(role));
     }
 

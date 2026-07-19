@@ -21,6 +21,12 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
     }
 
     @Override
+    public void record(
+            UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+        execution.record(runId, type, operation, outcome, summary);
+    }
+
+    @Override
     public <T> T invoke(
             UUID runId,
             ActivityType type,

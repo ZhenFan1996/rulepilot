@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -57,7 +58,14 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
 
     private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ModelCritiqueDraft draft = ChatClient.create(models.modelFor(Role.CRITIC)).prompt()
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
+        if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)) {
+            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.temperature(0.0);
+            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            prompt = prompt.options(options);
+        }
+        ModelCritiqueDraft draft = prompt
                 .system(prompts.criticSystem())
                 .user(user -> user.text(prompts.criticUser())
                         .param("type", request.contentType())

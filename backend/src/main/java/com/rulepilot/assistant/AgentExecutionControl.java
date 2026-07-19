@@ -10,7 +10,8 @@ public interface AgentExecutionControl {
     enum ActivityType {
         TOOL,
         MODEL,
-        CRITIC
+        CRITIC,
+        VALIDATION
     }
 
     enum ActivityOutcome {
@@ -62,6 +63,8 @@ public interface AgentExecutionControl {
             int estimatedOutputTokens,
             long latencyMs,
             String summary);
+
+    void record(UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary);
 
     void requestCancellation(UUID runId, String ownerUsername);
 

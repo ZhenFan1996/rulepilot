@@ -61,12 +61,34 @@ class BudgetedAgentInvocationsTest {
         assertThat(control.outcome).isNull();
     }
 
+    @Test
+    void recordsValidationDiagnosticWithoutReservingInvocationBudget() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        UUID runId = UUID.randomUUID();
+
+        invocations.record(
+                runId,
+                AgentExecutionControl.ActivityType.VALIDATION,
+                "validateTeachingSection|3|1",
+                AgentExecutionControl.ActivityOutcome.REJECTED,
+                "Teaching draft rejected: STEP_COUNT_INVALID");
+
+        assertThat(control.reservation).isNull();
+        assertThat(control.recordedRunId).isEqualTo(runId);
+        assertThat(control.recordedType).isEqualTo(AgentExecutionControl.ActivityType.VALIDATION);
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.REJECTED);
+        assertThat(control.summary).isEqualTo("Teaching draft rejected: STEP_COUNT_INVALID");
+    }
+
     private static final class RecordingControl implements AgentExecutionControl {
         private InvocationReservation reservation;
         private ActivityOutcome outcome;
         private int outputTokens;
         private String summary;
         private boolean stopOnReserve;
+        private UUID recordedRunId;
+        private ActivityType recordedType;
 
         @Override
         public void initialize(UUID runId, BudgetLimits limits, Instant startedAt) {}
@@ -91,6 +113,15 @@ class BudgetedAgentInvocationsTest {
                 String summary) {
             this.outcome = outcome;
             this.outputTokens = estimatedOutputTokens;
+            this.summary = summary;
+        }
+
+        @Override
+        public void record(
+                UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+            this.recordedRunId = runId;
+            this.recordedType = type;
+            this.outcome = outcome;
             this.summary = summary;
         }
 

@@ -16,7 +16,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
-                resource("content-critic-v5-system.txt"),
+                resource("content-critic-v6-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -32,6 +32,12 @@ class VersionedAgentPromptsTest {
                         "visualFocus",
                         "0-1000",
                         "PDF extraction markers",
+                        "scope gate",
+                        "solo rival",
+                        "hypothetical label",
+                        "Never substitute an emoji",
+                        "separate concepts",
+                        "inclusive ownership",
                         "win condition",
                         "maximum step count",
                         "Do not output analysis");
@@ -79,10 +85,17 @@ class VersionedAgentPromptsTest {
                         "outside knowledge",
                         "causal bridge",
                         "resource ledger",
+                        "starting inventory",
+                        "costs one extra movement",
                         "negation",
                         "heading ownership",
                         "player turn (回合)",
-                        "invented baseline");
+                        "invented baseline",
+                        "Never emit an issue as an audit note",
+                        "semantic rule meaning",
+                        "combined evidence set",
+                        "credit/credits=信用点",
+                        "at most 160 characters");
         assertThat(prompts.criticUser()).contains("{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }

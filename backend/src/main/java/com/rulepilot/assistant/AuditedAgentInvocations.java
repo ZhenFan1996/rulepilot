@@ -14,4 +14,11 @@ public interface AuditedAgentInvocations {
             String successSummary,
             Supplier<T> invocation,
             ToIntFunction<T> outputTokenEstimator);
+
+    default void record(
+            UUID runId,
+            AgentExecutionControl.ActivityType type,
+            String operation,
+            AgentExecutionControl.ActivityOutcome outcome,
+            String summary) {}
 }

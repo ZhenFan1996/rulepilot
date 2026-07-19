@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
@@ -32,9 +35,29 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
 
 class GroundedTeachingAgentTest {
+
+    @Test
+    void removesEnglishQuestionFillerWithoutDroppingRetrievalConditions() {
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(),
+                request -> null,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        assertThat(agent.focusedRetrievalQuery(
+                        "What is the cost to launch a probe and what is the default limit on probes in space?"))
+                .isEqualTo("cost launch probe default limit on probes in space");
+        assertThat(agent.focusedRetrievalQuery(
+                        "When landing on a planet that already has an orbiter, what is the cost reduction?"))
+                .isEqualTo("landing on planet that already has orbiter cost reduction");
+    }
 
     @Test
     void reusesPreviouslyVerifiedTopicsAndRetriesOnlyIncompleteOnes() {
@@ -111,6 +134,7 @@ class GroundedTeachingAgentTest {
                             List.of(chunkId))));
         };
         AtomicInteger criticCalls = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
             assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
@@ -125,7 +149,7 @@ class GroundedTeachingAgentTest {
         GroundedTeachingAgent agent =
                 new GroundedTeachingAgent(
                         tools, model, new PolicyEvidenceVerifier(), critic,
-                        new ImmediateAuditedAgentInvocations(), 4);
+                        invocations, 4);
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
@@ -139,6 +163,40 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.DO);
         assertThat(retrievalCalls).hasValue(2);
         assertThat(criticCalls).hasValue(1);
+        assertThat(invocations.diagnostics).containsExactly(
+                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
+                        "Teaching draft accepted: DRAFT_ACCEPTED"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching section published: DRAFT_ACCEPTED"));
+    }
+
+    @Test
+    void sendsOnlyDraftCitedEvidenceToTheCritic() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence cited = evidence(UUID.randomUUID(), versionId);
+        RuleEvidence unrelated = new RuleEvidence(
+                UUID.randomUUID(), versionId, "SCORING", "Scoring", "Each coin scores a point.", 9, 9);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "三步完成开局",
+                VisualKind.REFERENCE_CARD,
+                "把主棋盘放在桌面中央。",
+                List.of(cited.chunkId()),
+                List.of(new StepDraft(
+                        "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(cited.chunkId()))));
+        GeneratedContentCritic critic = (request, risk) -> {
+            assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
+                    .containsExactly(cited.chunkId());
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(cited, unrelated),
+                model,
+                new PolicyEvidenceVerifier(),
+                critic,
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        assertThat(agent.create(plan(versionId), UUID.randomUUID()).status()).isEqualTo(LessonStatus.COMPLETE);
     }
 
     @Test
@@ -168,6 +226,37 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
         assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v5");
+    }
+
+    @Test
+    void derivesMissingPresentationMetadataFromAnEvidenceCitedTeachingStep() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
+        TeachingLessonModel model = request -> new TeachingLessonModel.SectionDraft(
+                "探测行动",
+                VisualKind.REFERENCE_CARD,
+                null,
+                List.of(),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "执行探测",
+                        TeachingMove.DO,
+                        "选择一项有证据支持的探测行动并结算。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().visualCaption())
+                .isEqualTo("选择一项有证据支持的探测行动并结算。");
+        assertThat(lesson.sections().getFirst().visualSourceChunkIds()).containsExactly(chunkId);
     }
 
     @Test
@@ -617,6 +706,31 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void rejectsInferredEmojiUsedAsAMissingRulebookIcon() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "开局",
+                VisualKind.REFERENCE_CARD,
+                "桌面布置",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "领取奖励", TeachingMove.DO, "领取一个🔬。", List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
     void rejectsEvidenceFromAnotherDocumentVersionBeforeComposition() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence wrongVersion = evidence(UUID.randomUUID(), UUID.randomUUID());
@@ -677,6 +791,7 @@ class GroundedTeachingAgentTest {
                 List.of(new TeachingLessonModel.StepDraft("玩家可以任意放置棋盘。", List.of(chunkId))));
         };
         AtomicInteger criticCalls = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic rejectingCritic = (request, risk) -> {
             criticCalls.incrementAndGet();
             return new GeneratedContentCritic.Review(
@@ -687,7 +802,7 @@ class GroundedTeachingAgentTest {
         GroundedTeachingAgent agent =
                 new GroundedTeachingAgent(
                         retrieval, model, new PolicyEvidenceVerifier(), rejectingCritic,
-                        new ImmediateAuditedAgentInvocations(), 4);
+                        invocations, 4);
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
@@ -697,6 +812,38 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("任意放置");
         assertThat(modelCalls).hasValue(2);
         assertThat(criticCalls).hasValue(2);
+        assertThat(invocations.diagnostics).containsExactly(
+                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
+                        "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
+                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.REJECTED,
+                        "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.REJECTED,
+                        "Teaching section withheld: DRAFT_WITHHELD_AFTER_BOUNDED_REVISIONS"));
+    }
+
+    private record Diagnostic(String operation, ActivityOutcome outcome, String summary) {}
+
+    private static final class RecordingInvocations implements AuditedAgentInvocations {
+        private final java.util.ArrayList<Diagnostic> diagnostics = new java.util.ArrayList<>();
+
+        @Override
+        public <T> T invoke(
+                UUID runId,
+                ActivityType type,
+                String operation,
+                int estimatedInputTokens,
+                String successSummary,
+                Supplier<T> invocation,
+                ToIntFunction<T> outputTokenEstimator) {
+            return invocation.get();
+        }
+
+        @Override
+        public void record(
+                UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
+            assertThat(type).isEqualTo(ActivityType.VALIDATION);
+            diagnostics.add(new Diagnostic(operation, outcome, summary));
+        }
     }
 
     private TeachingPlan plan(UUID versionId) {

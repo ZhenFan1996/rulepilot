@@ -46,7 +46,7 @@ class RuntimeModelConfigurationTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must support page images");
         RuntimeModelConfiguration.Snapshot assigned =
-                configuration.assign("player", "deepseek", "gemini", "deepseek", "fake");
+                configuration.assign("player", "deepseek", "gemini", "deepseek", "deepseek");
 
         assertThat(configured.toString()).doesNotContain("secret-value");
         assertThat(assigned.assignments().teaching()).isEqualTo("deepseek");
@@ -67,7 +67,7 @@ class RuntimeModelConfigurationTest {
             assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.ANSWER))
                     .isTrue();
             assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
-                    .isFalse();
+                    .isTrue();
         } finally {
             SecurityContextHolder.clearContext();
         }

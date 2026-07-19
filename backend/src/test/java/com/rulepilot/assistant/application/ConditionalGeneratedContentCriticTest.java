@@ -93,6 +93,153 @@ class ConditionalGeneratedContentCriticTest {
                 .containsExactly(1, List.of());
     }
 
+    @Test
+    void discardsSelfContradictingIssueThatExplicitlyConcludesThereIsNoIssue() {
+        Issue falsePositive = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The claim exactly matches the cited evidence. No issue.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(falsePositive)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        var review = critic.review(request(), ReviewRisk.STANDARD);
+
+        assertThat(review.performed()).isTrue();
+        assertThat(review.accepted()).isTrue();
+        assertThat(review.issues()).isEmpty();
+    }
+
+    @Test
+    void discardsAuditNoteThatOnlyConcludesTheClaimIsSupported() {
+        Issue falsePositive = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The first-orbiter reward is directly supported and the wording is correct.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(falsePositive)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        var review = critic.review(request(), ReviewRisk.STANDARD);
+
+        assertThat(review.accepted()).isTrue();
+        assertThat(review.issues()).isEmpty();
+    }
+
+    @Test
+    void keepsIssueThatAcknowledgesOneSupportedPartBeforeNamingARealDefect() {
+        Issue defect = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The cost is supported, but the claimed reward is unsupported.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(defect)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        var review = critic.review(request(), ReviewRisk.STANDARD);
+
+        assertThat(review.accepted()).isFalse();
+        assertThat(review.issues()).containsExactly(defect);
+    }
+
+    @Test
+    void discardsBareSupportedConclusionWithoutAConcreteDefect() {
+        Issue falsePositive = new Issue(
+                IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "The statement matches E1. Supported.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(falsePositive)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
+    }
+
+    @Test
+    void discardsComplaintAgainstRequiredChineseGlossaryTranslation() {
+        Issue falsePositive = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "‘信用点’ is an incorrect translation; the source says credits and should be credits.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(falsePositive)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
+    }
+
+    @Test
+    void discardsSelfNegatingSemanticAuditNoteButKeepsContrastedDefect() {
+        Issue noDefect = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "Evidence says gain publicity, which matches the claim. No contradiction.");
+        Issue actualDefect = new Issue(
+                IssueType.MISSING_EXCEPTION,
+                1,
+                List.of(chunkId),
+                "The base cost is supported, but the required discount condition is omitted.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(noDefect, actualDefect)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(actualDefect);
+    }
+
+    @Test
+    void trustsTerminalNoDefectConclusionAfterVerboseContrast() {
+        Issue selfNegating = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The claim uses 默认, but the source says by default; 语义一致，无缺陷。");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(selfNegating)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
+    }
+
+    @Test
+    void discardsIssueThatEndsByAcknowledgingTheEvidenceSupportsTheClause() {
+        Issue selfNegating = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "E1未提及自由行动，但E4明确说明这是自由行动，支持该部分。");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(selfNegating)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
+    }
+
+    @Test
+    void neverMistakesUnsupportedForTheWordSupported() {
+        Issue defect = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The claimed reward is unsupported by E1.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(List.of(defect)),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(defect);
+    }
+
     private ReviewRequest request() {
         return new ReviewRequest(
                 UUID.randomUUID(),

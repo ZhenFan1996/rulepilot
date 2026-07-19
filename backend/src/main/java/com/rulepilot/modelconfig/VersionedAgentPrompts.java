@@ -26,7 +26,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v4-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
-            @Value("classpath:prompts/content-critic-v5-system.txt") Resource criticSystem,
+            @Value("classpath:prompts/content-critic-v6-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
