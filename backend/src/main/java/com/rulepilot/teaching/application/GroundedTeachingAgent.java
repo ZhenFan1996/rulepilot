@@ -94,6 +94,7 @@ public class GroundedTeachingAgent {
             }
 
             Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
+            List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
             boolean conflictingEvidence = false;
             List<RetrievalIntent> retrievalIntents = TeachingRetrievalPlanner.forSection(planned.type());
             for (int intentIndex = 0; intentIndex < retrievalIntents.size(); intentIndex++) {
@@ -115,6 +116,7 @@ public class GroundedTeachingAgent {
                             "Version-scoped rule evidence retrieved",
                             () -> retrieve(plan.documentVersionId(), planned.type(), intent),
                             this::evidenceTokens);
+                    evidenceByIntent.add(retrieved);
                     for (RuleEvidence source : retrieved) {
                         RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
                         if (existing != null && !existing.equals(source)) {
@@ -135,12 +137,9 @@ public class GroundedTeachingAgent {
                     break;
                 }
             }
-            if (conflictingEvidence) {
-                evidenceById.clear();
-            }
-            List<RuleEvidence> evidence = evidenceById.values().stream()
-                    .limit(MAX_EVIDENCE_PER_SECTION)
-                    .toList();
+            List<RuleEvidence> evidence = conflictingEvidence
+                    ? List.of()
+                    : balancedEvidence(evidenceByIntent);
             if (evidence.isEmpty()) {
                 sections.add(insufficient(planned));
                 continue;
@@ -192,6 +191,28 @@ public class GroundedTeachingAgent {
                         intent.sourceTypes(),
                         sectionType.name(),
                         true)));
+    }
+
+    private List<RuleEvidence> balancedEvidence(List<List<RuleEvidence>> evidenceByIntent) {
+        Map<UUID, RuleEvidence> merged = new LinkedHashMap<>();
+        for (int rank = 0; merged.size() < MAX_EVIDENCE_PER_SECTION; rank++) {
+            boolean candidateAtRank = false;
+            for (List<RuleEvidence> intentEvidence : evidenceByIntent) {
+                if (rank >= intentEvidence.size()) {
+                    continue;
+                }
+                candidateAtRank = true;
+                RuleEvidence candidate = intentEvidence.get(rank);
+                merged.putIfAbsent(candidate.chunkId(), candidate);
+                if (merged.size() == MAX_EVIDENCE_PER_SECTION) {
+                    break;
+                }
+            }
+            if (!candidateAtRank) {
+                break;
+            }
+        }
+        return List.copyOf(merged.values());
     }
 
     private LessonSection compose(

@@ -166,6 +166,52 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void interleavesRankedPrimaryAndSupplementaryEvidenceWithinTheContextCap() {
+        UUID versionId = UUID.randomUUID();
+        List<RuleEvidence> primary = List.of(
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId));
+        List<RuleEvidence> supplementary = List.of(
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId),
+                evidence(UUID.randomUUID(), versionId));
+        AtomicInteger calls = new AtomicInteger();
+        AssistantReadTools tools = request -> calls.getAndIncrement() == 0 ? primary : supplementary;
+        TeachingLessonModel model = request -> {
+            List<UUID> expectedOrder = List.of(
+                    primary.get(0).chunkId(),
+                    supplementary.get(0).chunkId(),
+                    primary.get(1).chunkId(),
+                    supplementary.get(1).chunkId(),
+                    primary.get(2).chunkId(),
+                    supplementary.get(2).chunkId());
+            assertThat(request.evidence())
+                    .extracting(TeachingLessonModel.EvidenceInput::chunkId)
+                    .containsExactlyElementsOf(expectedOrder);
+            return new TeachingLessonModel.SectionDraft(
+                    "平衡证据开局",
+                    VisualKind.TABLE_LAYOUT,
+                    "桌面布置示意",
+                    List.of(new TeachingLessonModel.StepDraft("按规则完成开局。", expectedOrder)));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
     void composesFromPrimaryEvidenceWhenSupplementaryIntentFailsOrBudgetIsExhausted() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence primary = evidence(UUID.randomUUID(), versionId);
