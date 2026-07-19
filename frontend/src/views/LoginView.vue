@@ -38,7 +38,7 @@ async function login() {
     if (response.status === 401) throw new Error('用户名或密码不正确。')
     if (!response.ok) throw new Error('登录暂时失败，请稍后重试。')
 
-    await router.push({ name: 'home' })
+    await router.push({ name: 'account' })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '登录暂时失败。'
   } finally {
@@ -52,7 +52,7 @@ async function login() {
     <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
       <RouterLink :to="{ name: 'home' }" aria-label="返回 RulePilot 首页"><ProductMark /></RouterLink>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">欢迎回来</h1>
-      <p class="mt-3 leading-7 text-ink/55">登录后继续整理规则书和讲解。</p>
+      <p class="mt-3 leading-7 text-ink/55">登录后进入你的规则书、讲解和模型设置。</p>
 
       <form class="mt-8 space-y-5" @submit.prevent="login">
         <label class="block text-sm font-semibold">

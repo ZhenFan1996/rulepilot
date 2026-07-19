@@ -8,10 +8,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -27,7 +31,8 @@ public class RuntimeModelConfiguration {
     private static final List<String> SUPPORTED = List.of("gemini", "openai", "deepseek", "compatible");
 
     private final ChatModelFactory factory;
-    private final AtomicReference<State> state;
+    private final State startupState;
+    private final ConcurrentMap<String, AtomicReference<State>> userStates = new ConcurrentHashMap<>();
 
     public RuntimeModelConfiguration(
             ChatModelFactory factory,
@@ -44,17 +49,17 @@ public class RuntimeModelConfiguration {
         addStartupProvider(providers, "openai", properties.openai());
         addStartupProvider(providers, "deepseek", properties.deepseek());
         addStartupProvider(providers, "compatible", properties.compatible());
-        this.state = new AtomicReference<>(new State(
+        this.startupState = new State(
                 Map.copyOf(providers),
                 new Assignments(
                         assignment(teachingAdapter, teachingProvider, providers),
                         assignment(answerAdapter, answerProvider, providers),
                         assignment(criticAdapter, criticProvider, providers)),
-                0));
+                0);
     }
 
     public ChatModel modelFor(Role role) {
-        State current = state.get();
+        State current = currentState();
         String provider = current.assignments().forRole(role);
         ConfiguredProvider configured = current.providers().get(provider);
         if (configured == null) {
@@ -68,7 +73,7 @@ public class RuntimeModelConfiguration {
     }
 
     public String providerFor(Role role) {
-        return state.get().assignments().forRole(role);
+        return currentState().assignments().forRole(role);
     }
 
     public boolean supportsVision(Role role) {
@@ -76,42 +81,46 @@ public class RuntimeModelConfiguration {
         return "fake".equals(provider) || "gemini".equals(provider) || "openai".equals(provider);
     }
 
-    public synchronized Snapshot configure(String provider, String apiKey, String baseUrl, String model) {
+    public synchronized Snapshot configure(
+            String username, String provider, String apiKey, String baseUrl, String model) {
         String id = providerId(provider);
         String checkedModel = required(model, "model name", 200);
         String checkedBaseUrl = "gemini".equals(id) ? "" : validBaseUrl(baseUrl);
         String checkedApiKey = required(apiKey, "API key", 4096);
         ChatModel client = factory.create(id, checkedApiKey, checkedBaseUrl, checkedModel);
 
-        State current = state.get();
+        AtomicReference<State> userState = userState(username);
+        State current = userState.get();
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
         providers.put(id, new ConfiguredProvider(id, checkedBaseUrl, checkedModel, client));
-        state.set(new State(Map.copyOf(providers), current.assignments(), current.revision() + 1));
-        return snapshot();
+        userState.set(new State(Map.copyOf(providers), current.assignments(), current.revision() + 1));
+        return snapshot(username);
     }
 
-    public synchronized Snapshot disable(String provider) {
+    public synchronized Snapshot disable(String username, String provider) {
         String id = providerId(provider);
-        State current = state.get();
+        AtomicReference<State> userState = userState(username);
+        State current = userState.get();
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
         providers.remove(id);
         Assignments assignments = current.assignments().replace(id, "fake");
-        state.set(new State(Map.copyOf(providers), assignments, current.revision() + 1));
-        return snapshot();
+        userState.set(new State(Map.copyOf(providers), assignments, current.revision() + 1));
+        return snapshot(username);
     }
 
-    public synchronized Snapshot assign(String teaching, String answer, String critic) {
-        State current = state.get();
+    public synchronized Snapshot assign(String username, String teaching, String answer, String critic) {
+        AtomicReference<State> userState = userState(username);
+        State current = userState.get();
         Assignments assignments = new Assignments(
                 selectable(teaching, current.providers()),
                 selectable(answer, current.providers()),
                 selectable(critic, current.providers()));
-        state.set(new State(current.providers(), assignments, current.revision() + 1));
-        return snapshot();
+        userState.set(new State(current.providers(), assignments, current.revision() + 1));
+        return snapshot(username);
     }
 
-    public Snapshot snapshot() {
-        State current = state.get();
+    public Snapshot snapshot(String username) {
+        State current = stateFor(username);
         List<ProviderView> providers = new ArrayList<>();
         for (String id : SUPPORTED) {
             ConfiguredProvider configured = current.providers().get(id);
@@ -124,6 +133,24 @@ public class RuntimeModelConfiguration {
                     supportsVisionProvider(id)));
         }
         return new Snapshot(List.copyOf(providers), current.assignments(), current.revision(), true);
+    }
+
+    private State currentState() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated() || "anonymousUser".equals(authentication.getName())) {
+            return startupState;
+        }
+        return stateFor(authentication.getName());
+    }
+
+    private State stateFor(String username) {
+        AtomicReference<State> personal = userStates.get(required(username, "username", 160));
+        return personal == null ? startupState : personal.get();
+    }
+
+    private AtomicReference<State> userState(String username) {
+        String owner = required(username, "username", 160);
+        return userStates.computeIfAbsent(owner, ignored -> new AtomicReference<>(startupState));
     }
 
     private void addStartupProvider(Map<String, ConfiguredProvider> providers, String id, Provider properties) {

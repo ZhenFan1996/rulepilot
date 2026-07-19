@@ -1,110 +1,43 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 
-interface CsrfResponse {
-  headerName: string
-  token: string
-}
-
+interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
   game: { id: string; name: string }
   editions: Array<{ id: string; name: string; language: string }>
 }
-
-interface EditionOption {
-  id: string
-  label: string
-}
-
 interface DocumentResponse {
-  document: {
-    id: string
-    title: string
-    sourceType: string
-    createdBy: string
-  }
-  latestVersion: {
-    id: string
-    versionNumber: number
-    originalFilename: string
-    checksum: string
-    size: number
-    status: string
-  }
+  document: { id: string; title: string }
+  latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
-
-interface RuleStructureResponse {
-  presentSections: number
-  requiredSections: number
-  sections: Array<{
-    type: string
-    label: string
-    present: boolean
-    content: string
-    pageNumbers: number[]
-  }>
-}
-
-interface TeachingPlanResponse {
-  id: string
-  playerCount: number
-  beginnerCount: number
-  durationMinutes: number
-  gameTitle: string
-  premise: string
-  sections: Array<{
-    position: number
-    topicKey: string
-    title: string
-    objective: string
-    required: boolean
-    retrievalQueries: string[]
-    coverageTags: string[]
-  }>
-}
+interface TeachingPlanResponse { id: string }
 
 const router = useRouter()
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
-const title = ref('')
-const sourceType = ref('BASE_RULEBOOK')
 const file = ref<File | null>(null)
+const sourceType = ref('BASE_RULEBOOK')
+const playerCount = ref(4)
+const beginnerCount = ref(4)
+const durationMinutes = ref(25)
 const loading = ref(true)
 const uploading = ref(false)
+const preparingVersionId = ref('')
+const processingVersionId = ref('')
 const message = ref('')
 const errorMessage = ref('')
-const previewVersionId = ref('')
-const pages = ref<Array<{ pageNumber: number; text: string; characterCount: number }>>([])
-const structureVersionId = ref('')
-const ruleStructure = ref<RuleStructureResponse | null>(null)
-const planPlayerCount = ref(4)
-const planBeginnerCount = ref(2)
-const planDurationMinutes = ref(30)
-const teachingPlan = ref<TeachingPlanResponse | null>(null)
-const creatingPlan = ref(false)
-const creatingLesson = ref(false)
-const processingProgress = ref<Record<string, { stage: string; percentage: number; processedPages: number; complete: boolean }>>({})
+const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
 
-const editionOptions = computed<EditionOption[]>(() =>
-  games.value.flatMap((entry) =>
-    entry.editions.map((edition) => ({
-      id: edition.id,
-      label: `${entry.game.name} · ${edition.name} · ${edition.language}`,
-    })),
-  ),
-)
-
-const sourceTypes = [
-  ['BASE_RULEBOOK', '基础规则书'],
-  ['EXPANSION_RULEBOOK', '扩展规则书'],
-  ['OFFICIAL_FAQ', '官方 FAQ'],
-  ['OFFICIAL_ERRATA', '官方勘误'],
-  ['OFFICIAL_PLAYER_AID', '官方玩家辅助'],
-] as const
+const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
+  id: edition.id,
+  label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
+}))))
+const selectedEdition = computed(() => editionOptions.value.find((item) => item.id === editionId.value))
+const canUpload = computed(() => Boolean(file.value && editionId.value && !uploading.value && !preparingVersionId.value))
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
@@ -115,85 +48,18 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
   return response
 }
 
+async function csrfToken() {
+  const response = await checkedFetch('/api/auth/csrf')
+  if (!response.ok) throw new Error('无法建立安全会话。')
+  return await response.json() as CsrfResponse
+}
+
 async function loadDocuments() {
   documents.value = []
   if (!editionId.value) return
   const response = await checkedFetch(`/api/v1/editions/${editionId.value}/documents`)
-  if (!response.ok) throw new Error('无法读取该版本的规则资料。')
-  documents.value = (await response.json()) as DocumentResponse[]
-}
-
-async function previewPages(versionId: string) {
-  errorMessage.value = ''
-  try {
-    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/pages`)
-    if (!response.ok) throw new Error('无法读取页级预览。')
-    pages.value = (await response.json()) as typeof pages.value
-    previewVersionId.value = versionId
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法读取页级预览。'
-  }
-}
-
-async function previewStructure(versionId: string) {
-  errorMessage.value = ''
-  try {
-    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/rule-structure`)
-    if (!response.ok) throw new Error('无法读取规则结构。')
-    ruleStructure.value = (await response.json()) as RuleStructureResponse
-    structureVersionId.value = versionId
-    teachingPlan.value = null
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法读取规则结构。'
-  }
-}
-
-async function createTeachingPlan(versionId: string) {
-  if (planBeginnerCount.value > planPlayerCount.value) {
-    errorMessage.value = '新手人数不能超过总玩家人数。'
-    return
-  }
-  creatingPlan.value = true
-  errorMessage.value = ''
-  try {
-    const csrfResponse = await checkedFetch('/api/auth/csrf')
-    const csrf = (await csrfResponse.json()) as CsrfResponse
-    const response = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({
-        playerCount: planPlayerCount.value,
-        beginnerCount: planBeginnerCount.value,
-        durationMinutes: planDurationMinutes.value,
-      }),
-    })
-    if (!response.ok) throw new Error('无法创建教学计划，请检查人数和讲解时长。')
-    teachingPlan.value = (await response.json()) as TeachingPlanResponse
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法创建教学计划。'
-  } finally {
-    creatingPlan.value = false
-  }
-}
-
-async function createIllustratedLesson(planId: string) {
-  creatingLesson.value = true
-  errorMessage.value = ''
-  try {
-    const csrfResponse = await checkedFetch('/api/auth/csrf')
-    const csrf = (await csrfResponse.json()) as CsrfResponse
-    const response = await checkedFetch(`/api/v1/teaching-plans/${planId}/illustrated-lessons`, {
-      method: 'POST',
-      headers: { [csrf.headerName]: csrf.token },
-    })
-    if (!response.ok) throw new Error('无法生成图文讲解。')
-    localStorage.setItem('rulepilot:last-plan-id', planId)
-    await router.push({ name: 'lesson', params: { planId } })
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法生成图文讲解。'
-  } finally {
-    creatingLesson.value = false
-  }
+  if (!response.ok) throw new Error('无法读取规则书。')
+  documents.value = await response.json() as DocumentResponse[]
 }
 
 async function load() {
@@ -202,7 +68,7 @@ async function load() {
   try {
     const response = await checkedFetch('/api/v1/games')
     if (!response.ok) throw new Error('无法读取游戏目录。')
-    games.value = (await response.json()) as GameResponse[]
+    games.value = await response.json() as GameResponse[]
     editionId.value = editionOptions.value[0]?.id ?? ''
     await loadDocuments()
   } catch (error) {
@@ -213,35 +79,93 @@ async function load() {
 }
 
 function selectFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  file.value = input.files?.[0] ?? null
-}
-
-async function upload() {
-  if (!editionId.value || !file.value) return
-  uploading.value = true
+  file.value = (event.target as HTMLInputElement).files?.[0] ?? null
   message.value = ''
   errorMessage.value = ''
+}
+
+function titleFromFile(selected: File) {
+  return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || '规则书'
+}
+
+async function startLesson(versionId: string) {
+  if (beginnerCount.value > playerCount.value) {
+    throw new Error('新手人数不能超过玩家人数。')
+  }
+  preparingVersionId.value = versionId
+  message.value = '规则书已经读完，正在整理讲解顺序…'
   try {
-    const csrfResponse = await checkedFetch('/api/auth/csrf')
-    const csrf = (await csrfResponse.json()) as CsrfResponse
-    const form = new FormData()
-    form.append('title', title.value)
-    form.append('sourceType', sourceType.value)
-    form.append('file', file.value)
-    const response = await checkedFetch(`/api/v1/editions/${editionId.value}/documents`, {
+    const csrf = await csrfToken()
+    const planResponse = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        playerCount: playerCount.value,
+        beginnerCount: beginnerCount.value,
+        durationMinutes: durationMinutes.value,
+      }),
+    })
+    if (!planResponse.ok) throw new Error('规则书已读取，但讲解目录生成失败。')
+    const plan = await planResponse.json() as TeachingPlanResponse
+    message.value = '目录已经准备好，正在逐节核对并生成讲解…'
+    const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
       method: 'POST',
       headers: { [csrf.headerName]: csrf.token },
-      body: form,
     })
-    if (response.status === 403) throw new Error('需要 EDITOR 或 ADMIN 权限才能上传规则书。')
+    if (!lessonResponse.ok) throw new Error('讲解生成没有完成，可以稍后从“我的讲解”继续。')
+    localStorage.setItem('rulepilot:last-plan-id', plan.id)
+    await router.push({ name: 'lesson', params: { planId: plan.id } })
+  } finally {
+    preparingVersionId.value = ''
+  }
+}
+
+function watchProgress(versionId: string) {
+  processingVersionId.value = versionId
+  const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
+  events.addEventListener('progress', (event) => {
+    const snapshot = JSON.parse((event as MessageEvent<string>).data) as {
+      stage: string; percentage: number; processedPages: number; complete: boolean
+    }
+    progress.value = { ...progress.value, [versionId]: snapshot }
+    message.value = `正在读取规则书：${snapshot.percentage}%`
+    if (snapshot.complete) {
+      events.close()
+      processingVersionId.value = ''
+      void loadDocuments()
+      void startLesson(versionId).catch((error: unknown) => {
+        errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
+      })
+    }
+  })
+  events.onerror = () => events.close()
+}
+
+async function uploadAndTeach() {
+  if (!file.value || !editionId.value) return
+  uploading.value = true
+  message.value = '正在上传规则书…'
+  errorMessage.value = ''
+  try {
+    const selectedFile = file.value
+    const csrf = await csrfToken()
+    const form = new FormData()
+    form.append('title', titleFromFile(selectedFile))
+    form.append('sourceType', sourceType.value)
+    form.append('file', selectedFile)
+    const response = await checkedFetch(`/api/v1/editions/${editionId.value}/documents`, {
+      method: 'POST', headers: { [csrf.headerName]: csrf.token }, body: form,
+    })
     if (!response.ok) throw new Error('上传失败，请确认文件是 50 MiB 以内的 PDF。')
-    const result = (await response.json()) as { duplicate: boolean; version: { id: string; status: string } }
-    message.value = result.duplicate ? '这份文件已上传，已保留现有版本。' : '规则书已安全保存，等待解析。'
-    title.value = ''
+    const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
     file.value = null
     await loadDocuments()
-    if (!result.duplicate) watchProgress(result.version.id)
+    if (result.version.status === 'READY') {
+      await startLesson(result.version.id)
+    } else {
+      message.value = result.duplicate ? '已找到这本规则书，继续等待读取完成…' : '上传完成，正在读取页面和图片…'
+      watchProgress(result.version.id)
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '上传失败。'
   } finally {
@@ -249,174 +173,90 @@ async function upload() {
   }
 }
 
-function watchProgress(versionId: string) {
-  const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
-  events.addEventListener('progress', (event) => {
-    const snapshot = JSON.parse((event as MessageEvent<string>).data) as {
-      stage: string
-      percentage: number
-      processedPages: number
-      complete: boolean
-    }
-    processingProgress.value = { ...processingProgress.value, [versionId]: snapshot }
-    const document = documents.value.find((entry) => entry.latestVersion.id === versionId)
-    if (document) document.latestVersion.status = snapshot.stage
-    if (snapshot.complete) {
-      events.close()
-      void loadDocuments()
-    }
+watch(editionId, () => {
+  if (!loading.value) void loadDocuments().catch((error: unknown) => {
+    errorMessage.value = error instanceof Error ? error.message : '无法读取规则书。'
   })
-  events.onerror = () => events.close()
-}
-
-watch(editionId, async () => {
-  if (!loading.value) {
-    try {
-      await loadDocuments()
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '加载失败。'
-    }
-  }
 })
-
 onMounted(load)
 </script>
 
 <template>
   <AppShell>
-    <div class="mx-auto grid max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[0.82fr_1.18fr] lg:px-12 lg:py-14">
-      <section>
-        <p class="text-sm font-medium text-copper">规则书</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">添加一本规则书</h1>
-        <p class="mt-4 max-w-xl leading-7 text-ink/55">选择它对应的游戏版本，再上传 PDF。读取完成后，你可以检查内容并准备一场讲解。</p>
+    <main class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
+      <section class="mx-auto max-w-2xl text-center">
+        <p class="text-sm font-medium text-copper">开始一份新讲解</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">把规则书放进来</h1>
+        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">选一个 PDF，RulePilot 会读取文字和页面图片，然后直接打开完整讲解。</p>
 
-        <form class="mt-8 space-y-4 rounded-xl border border-ink/10 bg-paper p-6" @submit.prevent="upload">
-          <label class="block text-sm font-semibold">
-            游戏版本
-            <select v-model="editionId" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-              <option value="" disabled>请先在目录中创建游戏版本</option>
-              <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-            </select>
+        <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadAndTeach">
+          <label for="rulebook-file" class="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-ink/25 bg-canvas px-6 py-8 text-center hover:border-copper/60">
+            <span class="font-display text-xl font-semibold">{{ file?.name ?? '选择一本 PDF 规则书' }}</span>
+            <span class="mt-2 text-sm text-ink/45">{{ file ? '点击可以换一本' : '最大 50 MiB' }}</span>
           </label>
-          <label class="block text-sm font-semibold">
-            资料标题
-            <input v-model="title" required maxlength="160" placeholder="例如：基础规则书 2026 中文版" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-          </label>
-          <label class="block text-sm font-semibold">
-            资料类型
-            <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-              <option v-for="entry in sourceTypes" :key="entry[0]" :value="entry[0]">{{ entry[1] }}</option>
-            </select>
-          </label>
-          <div class="text-sm font-semibold">
-            <span>PDF 文件</span>
-            <label for="rulebook-file" class="mt-2 flex min-h-16 cursor-pointer items-center justify-between gap-3 rounded-lg border border-dashed border-ink/20 bg-canvas px-4 py-3 font-normal hover:border-copper/50">
-              <span class="truncate text-ink/55">{{ file?.name ?? '还没有选择文件' }}</span>
-              <span class="shrink-0 rounded-md border border-ink/15 bg-paper px-3 py-2 text-xs font-semibold text-ink">选择 PDF</span>
-            </label>
-            <input id="rulebook-file" required accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+          <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+
+          <div v-if="selectedEdition" class="mt-4 flex items-center justify-between gap-4 rounded-lg bg-ink/5 px-4 py-3 text-sm">
+            <span class="text-ink/50">将加入</span>
+            <span class="truncate font-semibold">{{ selectedEdition.label }}</span>
           </div>
-          <button :disabled="uploading || !editionId" class="w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">
-            {{ uploading ? '正在上传…' : '保存规则书' }}
+
+          <details class="mt-4 border-t border-ink/10 pt-4">
+            <summary class="cursor-pointer text-sm font-semibold text-ink/55">人数、时长和版本</summary>
+            <div class="mt-4 grid gap-4 sm:grid-cols-3">
+              <label class="text-sm font-semibold sm:col-span-3">游戏版本
+                <select v-model="editionId" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                  <option value="" disabled>还没有游戏版本</option>
+                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
+                </select>
+              </label>
+              <label class="text-sm font-semibold">玩家<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+              <label class="text-sm font-semibold">新手<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+              <label class="text-sm font-semibold">分钟<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+              <label class="text-sm font-semibold sm:col-span-3">资料类型
+                <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                  <option value="BASE_RULEBOOK">基础规则书</option>
+                  <option value="EXPANSION_RULEBOOK">扩展规则书</option>
+                  <option value="OFFICIAL_FAQ">官方 FAQ</option>
+                  <option value="OFFICIAL_ERRATA">官方勘误</option>
+                </select>
+              </label>
+            </div>
+          </details>
+
+          <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
+            {{ preparingVersionId ? '正在生成讲解…' : uploading ? '正在上传…' : '上传并开始讲解' }}
           </button>
         </form>
 
-        <p v-if="message" class="mt-4 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>
-        <p v-if="errorMessage" class="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <p v-if="message" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
+        <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <div v-if="preparingVersionId || processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
+          <div class="h-full bg-copper transition-all" :class="preparingVersionId ? 'animate-pulse' : ''" :style="{ width: preparingVersionId ? '100%' : `${progress[processingVersionId]?.percentage ?? 0}%` }" />
+        </div>
       </section>
 
-      <section>
-        <div class="flex items-end justify-between gap-4">
-          <h2 class="font-display text-2xl font-semibold">已添加的资料</h2>
-          <RouterLink :to="{ name: 'catalog' }" class="text-sm font-medium text-indigo">管理游戏版本</RouterLink>
+      <section class="mt-14 border-t border-ink/10 pt-8">
+        <div class="flex items-center justify-between gap-4">
+          <h2 class="font-display text-2xl font-semibold">这个版本的规则书</h2>
+          <RouterLink :to="{ name: 'catalog' }" class="text-sm font-semibold text-indigo">管理游戏版本</RouterLink>
         </div>
-        <div v-if="loading" class="mt-5 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">正在加载…</div>
-        <div v-else-if="!editionId" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">请先添加游戏和版本。</div>
-        <div v-else-if="documents.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">这个版本还没有规则书。</div>
-        <ul v-else class="mt-5 space-y-4">
-          <li v-for="entry in documents" :key="entry.document.id" class="rounded-xl border border-ink/10 bg-paper p-5">
-            <div class="flex items-start justify-between gap-4">
-              <div>
-                <p class="font-display text-xl font-semibold">{{ entry.document.title }}</p>
-                <p class="mt-2 text-sm text-ink/55">{{ entry.latestVersion.originalFilename }} · v{{ entry.latestVersion.versionNumber }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB</p>
-              </div>
-              <span class="rounded-md bg-indigo/10 px-2.5 py-1 text-xs font-semibold text-indigo">{{ entry.latestVersion.status }}</span>
+        <p v-if="loading" class="mt-5 text-sm text-ink/45">正在读取…</p>
+        <div v-else-if="editionOptions.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center">
+          <p class="font-semibold">还没有游戏版本</p>
+          <RouterLink :to="{ name: 'catalog' }" class="mt-3 inline-block text-sm font-semibold text-indigo">先从 BGG 导入或添加一个 →</RouterLink>
+        </div>
+        <p v-else-if="documents.length === 0" class="mt-5 text-sm text-ink/45">还没有规则书。</p>
+        <ul v-else class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
+          <li v-for="entry in documents" :key="entry.document.id" class="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <p class="truncate font-semibold">{{ entry.document.title }}</p>
+              <p class="mt-1 text-sm text-ink/45">{{ entry.latestVersion.status }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB</p>
             </div>
-            <div v-if="processingProgress[entry.latestVersion.id]" class="mt-4">
-              <div class="h-2 overflow-hidden rounded-full bg-ink/8">
-                <div class="h-full rounded-full bg-indigo transition-all" :style="{ width: `${processingProgress[entry.latestVersion.id]!.percentage}%` }" />
-              </div>
-              <p class="mt-2 text-xs text-ink/45">{{ processingProgress[entry.latestVersion.id]!.percentage }}% · 已读取 {{ processingProgress[entry.latestVersion.id]!.processedPages }} 页</p>
-            </div>
-            <details class="mt-4 text-xs text-ink/40">
-              <summary class="cursor-pointer">文件信息</summary>
-              <p class="mt-2 break-all font-mono" :title="entry.latestVersion.checksum">SHA-256 {{ entry.latestVersion.checksum }}</p>
-            </details>
-            <div class="mt-4 flex flex-wrap gap-3">
-              <button class="rounded-lg border border-ink/15 px-3 py-2 text-sm font-semibold hover:border-indigo/40" @click="previewStructure(entry.latestVersion.id)">检查规则内容</button>
-              <button class="rounded-lg px-3 py-2 text-sm font-medium text-indigo hover:bg-indigo/5" @click="previewPages(entry.latestVersion.id)">查看原文</button>
-            </div>
-            <div v-if="structureVersionId === entry.latestVersion.id && ruleStructure" class="mt-5 border-t border-ink/10 pt-5">
-              <div class="flex items-center justify-between gap-4">
-                <p class="font-semibold">讲解需要的内容：{{ ruleStructure.presentSections }} / {{ ruleStructure.requiredSections }} 项已找到</p>
-                <span :class="ruleStructure.presentSections === ruleStructure.requiredSections ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'" class="rounded-full px-3 py-1 text-xs font-semibold">
-                  {{ ruleStructure.presentSections === ruleStructure.requiredSections ? '可以开始' : '需要补充' }}
-                </span>
-              </div>
-              <div class="mt-4 grid gap-3 sm:grid-cols-2">
-                <article v-for="section in ruleStructure.sections" :key="section.type" class="rounded-lg bg-canvas p-4">
-                  <div class="flex items-center justify-between gap-3">
-                    <h3 class="font-semibold">{{ section.label }}</h3>
-                    <span :class="section.present ? 'text-emerald-700' : 'text-amber-700'" class="text-xs font-semibold">{{ section.present ? '已找到' : '缺失' }}</span>
-                  </div>
-                  <p v-if="section.present" class="mt-2 text-xs text-ink/45">来源页：{{ section.pageNumbers.join('、') }}</p>
-                  <p v-else class="mt-2 text-sm leading-6 text-ink/50">这份规则书里暂时没有找到相关内容。</p>
-                  <details v-if="section.present" class="mt-3">
-                    <summary class="cursor-pointer text-sm font-semibold text-indigo">查看找到的原文</summary>
-                    <pre class="mt-3 max-h-44 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/65">{{ section.content }}</pre>
-                  </details>
-                </article>
-              </div>
-              <form class="mt-5 rounded-lg border border-ink/10 p-4" @submit.prevent="createTeachingPlan(entry.latestVersion.id)">
-                <h3 class="font-semibold">这次要给谁讲？</h3>
-                <div class="mt-3 grid gap-3 sm:grid-cols-3">
-                  <label class="text-sm font-semibold">玩家人数<input v-model.number="planPlayerCount" type="number" min="1" max="20" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
-                  <label class="text-sm font-semibold">其中新手<input v-model.number="planBeginnerCount" type="number" min="0" :max="planPlayerCount" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
-                  <label class="text-sm font-semibold">讲解分钟<input v-model.number="planDurationMinutes" type="number" min="2" max="180" required class="mt-2 w-full rounded-xl border border-ink/15 bg-canvas px-3 py-2"></label>
-                </div>
-                <button :disabled="creatingPlan" class="mt-4 rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{{ creatingPlan ? '正在准备…' : '准备讲解' }}</button>
-              </form>
-              <div v-if="teachingPlan" class="mt-5 rounded-lg bg-indigo/5 p-4">
-                <p class="font-display text-xl font-semibold">{{ teachingPlan.gameTitle }}</p>
-                <p class="mt-2 text-sm leading-6 text-ink/60">{{ teachingPlan.premise }}</p>
-                <p class="mt-3 text-xs font-semibold text-ink/45">{{ teachingPlan.playerCount }} 人 · {{ teachingPlan.beginnerCount }} 位新手 · {{ teachingPlan.durationMinutes }} 分钟</p>
-                <ol class="mt-4 space-y-2">
-                  <li v-for="section in teachingPlan.sections" :key="section.topicKey" class="flex items-start gap-3 rounded-xl bg-paper/70 p-3 text-sm">
-                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo text-xs font-semibold text-white">{{ section.position }}</span>
-                    <span>
-                      <strong>{{ section.title }}</strong>
-                      <span v-if="!section.required" class="ml-2 text-ink/45">可选</span>
-                      <span class="mt-1 block leading-5 text-ink/55">{{ section.objective }}</span>
-                      <span class="mt-1 block text-xs text-ink/40">检索：{{ section.retrievalQueries.join('；') }}</span>
-                    </span>
-                  </li>
-                </ol>
-                <button :disabled="creatingLesson" class="mt-5 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="createIllustratedLesson(teachingPlan.id)">{{ creatingLesson ? '正在整理…' : '开始整理讲解' }}</button>
-              </div>
-            </div>
-            <div v-if="previewVersionId === entry.latestVersion.id" class="mt-5 space-y-3 border-t border-ink/10 pt-5">
-              <p v-if="pages.length === 0" class="text-sm text-ink/45">尚未提取到页面文字。</p>
-              <article v-for="page in pages" :key="page.pageNumber" class="rounded-lg bg-canvas p-4">
-                <div class="flex items-center justify-between text-xs font-semibold text-ink/45">
-                  <span>第 {{ page.pageNumber }} 页</span>
-                  <span>{{ page.characterCount }} 字符</span>
-                </div>
-                <pre class="mt-3 max-h-56 overflow-auto whitespace-pre-wrap font-sans text-sm leading-6 text-ink/70">{{ page.text || '此页没有可提取文字，后续可进入 OCR。' }}</pre>
-              </article>
-            </div>
+            <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId)" class="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">直接讲解</button>
           </li>
         </ul>
       </section>
-    </div>
+    </main>
   </AppShell>
 </template>

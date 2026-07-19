@@ -7,6 +7,7 @@ import LessonView from '@/views/LessonView.vue'
 import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import ModelSettingsView from '@/views/ModelSettingsView.vue'
+import AccountView from '@/views/AccountView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 const router = createRouter({
@@ -36,6 +37,11 @@ const router = createRouter({
       path: '/lessons',
       name: 'lessons',
       component: LessonsView,
+    },
+    {
+      path: '/account',
+      name: 'account',
+      component: AccountView,
     },
     {
       path: '/settings/models',

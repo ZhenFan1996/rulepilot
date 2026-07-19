@@ -72,7 +72,7 @@ async function checkedResponse(response: Response) {
     await router.push({ name: 'login' })
     throw new Error('登录已失效。')
   }
-  if (response.status === 403) throw new Error('只有管理员可以配置大模型。')
+  if (response.status === 403) throw new Error('当前账户不能修改模型配置。')
   if (!response.ok) {
     const problem = (await response.json().catch(() => null)) as { detail?: string } | null
     throw new Error(problem?.detail ?? '模型配置请求失败。')
@@ -89,7 +89,7 @@ async function loadConfiguration() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const response = await checkedResponse(await fetch('/api/admin/model-configuration', { credentials: 'include' }))
+    const response = await checkedResponse(await fetch('/api/v1/model-configuration', { credentials: 'include' }))
     snapshot.value = (await response.json()) as ConfigurationSnapshot
     selectProvider(selectedProvider.value)
   } catch (error) {
@@ -118,7 +118,7 @@ async function saveProvider() {
   message.value = ''
   errorMessage.value = ''
   try {
-    await mutate(`/api/admin/model-configuration/providers/${selectedProvider.value}`, 'PUT', {
+    await mutate(`/api/v1/model-configuration/providers/${selectedProvider.value}`, 'PUT', {
       apiKey: apiKey.value,
       baseUrl: needsBaseUrl.value ? baseUrl.value : '',
       model: modelName.value,
@@ -137,7 +137,7 @@ async function disableProvider() {
   message.value = ''
   errorMessage.value = ''
   try {
-    await mutate(`/api/admin/model-configuration/providers/${selectedProvider.value}`, 'DELETE')
+    await mutate(`/api/v1/model-configuration/providers/${selectedProvider.value}`, 'DELETE')
     message.value = `${providerLabels[selectedProvider.value]} 已停用，相关功能将使用内置演示模式。`
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '停用模型失败。'
@@ -152,7 +152,7 @@ async function saveAssignments() {
   message.value = ''
   errorMessage.value = ''
   try {
-    await mutate('/api/admin/model-configuration/assignments', 'PUT', snapshot.value.assignments)
+    await mutate('/api/v1/model-configuration/assignments', 'PUT', snapshot.value.assignments)
     message.value = '用途设置已生效。'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '保存模型分工失败。'
@@ -170,7 +170,7 @@ onMounted(loadConfiguration)
       <div class="max-w-3xl">
         <p class="text-sm font-medium text-copper">模型设置</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">连接你使用的模型服务</h1>
-        <p class="mt-4 leading-7 text-ink/55">密钥直接交给本机后端，页面不会保存或再次显示。</p>
+        <p class="mt-4 leading-7 text-ink/55">这些连接只属于当前账户。密钥直接交给本机后端，页面不会保存或再次显示。</p>
       </div>
 
       <div v-if="loading" class="mt-10 rounded-3xl border border-ink/10 bg-paper p-8 text-ink/55">正在读取模型配置…</div>

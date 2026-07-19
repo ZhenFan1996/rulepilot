@@ -14,6 +14,7 @@ describe('HomeView', () => {
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
         { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],
     })
