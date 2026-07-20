@@ -54,6 +54,7 @@ const route = useRoute()
 const router = useRouter()
 const plans = ref<TeachingPlan[]>([])
 const progress = ref<Record<string, PlanProgress>>({})
+const progressErrors = ref<Record<string, string>>({})
 const loading = ref(true)
 const errorMessage = ref('')
 const launchingPlanId = ref('')
@@ -62,11 +63,9 @@ const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let disposed = false
 
 const readableCount = computed(() => Object.values(progress.value).filter((item) => item.lesson).length)
-const hasActiveRuns = computed(() => Object.values(progress.value).some(
-  (item) => item.run && !terminalStates.has(item.run.run.state),
-))
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 
 function stateOf(planId: string) {
@@ -219,23 +218,55 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
 }
 
 async function loadProgress(plan: TeachingPlan) {
-  const [runResponse, lessonResponse] = await Promise.all([
-    checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}`),
-    checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
-  ])
-  progress.value = {
-    ...progress.value,
-    [plan.id]: {
-      run: runResponse.ok ? await runResponse.json() as AssistantRun : null,
-      lesson: lessonResponse.ok ? await lessonResponse.json() as LessonSummary : null,
-    },
+  try {
+    const [runResponse, lessonResponse] = await Promise.all([
+      checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}`),
+      checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
+    ])
+    if (!runResponse.ok && runResponse.status !== 404) throw new Error('讲解任务进度暂时不可用。')
+    if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error('讲解内容进度暂时不可用。')
+    progress.value = {
+      ...progress.value,
+      [plan.id]: {
+        run: runResponse.ok ? await runResponse.json() as AssistantRun : null,
+        lesson: lessonResponse.ok ? await lessonResponse.json() as LessonSummary : null,
+      },
+    }
+    if (progressErrors.value[plan.id]) {
+      const next = { ...progressErrors.value }
+      delete next[plan.id]
+      progressErrors.value = next
+    }
+  } catch (error) {
+    progressErrors.value = {
+      ...progressErrors.value,
+      [plan.id]: error instanceof Error ? error.message : '暂时无法取得最新进度。',
+    }
+    throw error
   }
 }
 
-async function refreshProgress() {
-  await Promise.all(plans.value.map(loadProgress))
+function plansNeedingRefresh() {
+  return plans.value.filter((plan) => stateOf(plan.id) === 'GENERATING' || Boolean(progressErrors.value[plan.id]))
+}
+
+function clearProgressTimer() {
   if (pollTimer) clearTimeout(pollTimer)
-  if (hasActiveRuns.value) pollTimer = setTimeout(() => void refreshProgress(), 1500)
+  pollTimer = undefined
+}
+
+function scheduleProgressRefresh(delay = 1500) {
+  clearProgressTimer()
+  if (disposed || plansNeedingRefresh().length === 0) return
+  pollTimer = setTimeout(() => {
+    pollTimer = undefined
+    void refreshProgress(plansNeedingRefresh())
+  }, delay)
+}
+
+async function refreshProgress(targetPlans = plans.value) {
+  await Promise.allSettled(targetPlans.map(loadProgress))
+  scheduleProgressRefresh()
 }
 
 async function loadPlans() {
@@ -267,8 +298,8 @@ async function launch(planId: string) {
     })
     if (!response.ok) throw new Error('讲解任务没有启动，请稍后重试。')
     localStorage.setItem('rulepilot:last-plan-id', planId)
-    await loadProgress(plans.value.find((plan) => plan.id === planId)!)
-    if (!pollTimer) pollTimer = setTimeout(() => void refreshProgress(), 1000)
+    await loadProgress(plans.value.find((plan) => plan.id === planId)!).catch(() => undefined)
+    scheduleProgressRefresh(1000)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '讲解任务没有启动。'
   } finally {
@@ -277,11 +308,13 @@ async function launch(planId: string) {
 }
 
 onMounted(() => {
+  disposed = false
   clockTimer = setInterval(() => { now.value = Date.now() }, 1000)
   void loadPlans()
 })
 onBeforeUnmount(() => {
-  if (pollTimer) clearTimeout(pollTimer)
+  disposed = true
+  clearProgressTimer()
   if (clockTimer) clearInterval(clockTimer)
 })
 </script>
@@ -347,6 +380,7 @@ onBeforeUnmount(() => {
             </ol>
           </div>
           <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
+          <p v-if="progressErrors[plan.id]" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" role="status">暂时没拿到最新进度，正在自动重试。生成任务不会受影响。</p>
           <dl class="mt-5 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
             <div><dt class="text-ink/45">新手人数</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount }} 人</dd></div>
             <div><dt class="text-ink/45">计划时长</dt><dd class="mt-1 font-semibold">{{ plan.durationMinutes }} 分钟</dd></div>
