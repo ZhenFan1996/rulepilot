@@ -20,7 +20,11 @@ public interface CatalogRepository {
 
     Optional<Game> findGame(UUID gameId);
 
+    Optional<Game> findGameByName(String name);
+
     Optional<GameEdition> findEdition(UUID editionId);
+
+    Optional<GameEdition> findEdition(UUID gameId, String name, String language);
 
     Optional<Game> findGameByBggId(int bggId);
 

@@ -131,7 +131,7 @@ async function startLesson(versionId: string) {
         durationMinutes: durationMinutes.value,
       }),
     })
-    if (!planResponse.ok) throw new Error('暂时无法开始讲解，请确认规则书已经关联游戏并读取完成。')
+    if (!planResponse.ok) throw new Error('暂时无法开始讲解，请确认规则书已经读取完成。')
     const plan = await planResponse.json() as TeachingPlanResponse
     message.value = '目录已经准备好，正在启动后台讲解…'
     const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
@@ -145,7 +145,7 @@ async function startLesson(versionId: string) {
   }
 }
 
-function watchProgress(versionId: string, startAfterReady: boolean) {
+function watchProgress(versionId: string) {
   processingVersionId.value = versionId
   const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
   events.addEventListener('progress', (event) => {
@@ -158,13 +158,9 @@ function watchProgress(versionId: string, startAfterReady: boolean) {
       events.close()
       processingVersionId.value = ''
       void loadDocuments()
-      if (startAfterReady) {
-        void startLesson(versionId).catch((error: unknown) => {
-          errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
-        })
-      } else {
-        message.value = '规则书已经读完。关联一个游戏版本后就能开始讲解。'
-      }
+      void startLesson(versionId).catch((error: unknown) => {
+        errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
+      })
     }
   })
   events.onerror = () => events.close()
@@ -194,11 +190,10 @@ async function uploadRulebook() {
     title.value = ''
     await loadDocuments()
     if (result.version.status === 'READY') {
-      if (editionId.value) await startLesson(result.version.id)
-      else message.value = '规则书已经读完。你可以现在关联游戏，也可以稍后再来。'
+      await startLesson(result.version.id)
     } else {
       message.value = result.duplicate ? '已找到这本规则书，继续等待读取完成…' : '上传完成，正在读取页面和图片…'
-      watchProgress(result.version.id, Boolean(editionId.value))
+      watchProgress(result.version.id)
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '上传失败。'
@@ -238,7 +233,7 @@ onMounted(load)
       <section class="mx-auto max-w-2xl text-center">
         <p class="text-sm font-medium text-copper">导入规则书</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">先把 PDF 放进来</h1>
-        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">不需要先创建游戏。RulePilot 会先读取文字和页面图片，游戏版本可以现在选，也可以之后再关联。</p>
+        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">不需要先创建游戏。上传后会直接生成讲解；如果暂不选择版本，RulePilot 会按规则书标题自动创建。</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <label for="rulebook-file" class="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-ink/25 bg-canvas px-6 py-8 text-center hover:border-copper/60">
@@ -253,12 +248,12 @@ onMounted(load)
 
           <label v-if="editionOptions.length" class="mt-4 block text-sm font-semibold">关联游戏 <span class="font-normal text-ink/40">（可稍后）</span>
             <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-              <option value="">暂不关联，只上传并读取</option>
+              <option value="">让 RulePilot 自动创建</option>
               <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
             </select>
           </label>
           <div v-else class="mt-4 rounded-lg bg-ink/5 px-4 py-3 text-sm leading-6 text-ink/60">
-            还没有游戏也没关系，规则书会先保存并读取。
+            还没有游戏也没关系，RulePilot 会按规则书标题自动创建。
             <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">也可以先去添加游戏</RouterLink>
           </div>
 
@@ -287,7 +282,7 @@ onMounted(load)
           </details>
 
           <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
-            {{ preparingVersionId ? '正在启动讲解…' : uploading ? '正在上传…' : editionId ? '上传并开始讲解' : '上传规则书' }}
+            {{ preparingVersionId ? '正在启动讲解…' : uploading ? '正在上传…' : '上传并开始讲解' }}
           </button>
         </form>
 
@@ -319,10 +314,10 @@ onMounted(load)
                 <p class="mt-1 text-sm text-ink/45">
                   {{ entry.latestVersion.status }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
                   <span v-if="entry.document.gameEditionId"> · {{ editionLabel(entry.document.gameEditionId) }}</span>
-                  <span v-else> · 尚未关联游戏</span>
+                  <span v-else> · 讲解时自动创建游戏</span>
                 </p>
               </div>
-              <button v-if="entry.document.gameEditionId && entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId)" class="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
+              <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId)" class="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
             </div>
             <div v-if="!entry.document.gameEditionId" class="mt-4 flex flex-col gap-3 rounded-lg bg-ink/5 p-3 sm:flex-row">
               <template v-if="editionOptions.length">

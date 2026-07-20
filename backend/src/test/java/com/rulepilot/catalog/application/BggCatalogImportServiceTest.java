@@ -97,8 +97,22 @@ class BggCatalogImportServiceTest {
         }
 
         @Override
+        public Optional<Game> findGameByName(String name) {
+            return games.stream().filter(game -> game.name().equalsIgnoreCase(name)).findFirst();
+        }
+
+        @Override
         public Optional<GameEdition> findEdition(UUID editionId) {
             return editions.stream().filter(edition -> edition.id().equals(editionId)).findFirst();
+        }
+
+        @Override
+        public Optional<GameEdition> findEdition(UUID gameId, String name, String language) {
+            return editions.stream()
+                    .filter(edition -> edition.gameId().equals(gameId))
+                    .filter(edition -> edition.name().equalsIgnoreCase(name))
+                    .filter(edition -> edition.language().equalsIgnoreCase(language))
+                    .findFirst();
         }
 
         @Override
