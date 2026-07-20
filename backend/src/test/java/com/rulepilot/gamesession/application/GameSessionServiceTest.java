@@ -52,6 +52,19 @@ class GameSessionServiceTest {
     }
 
     @Test
+    void startsFromTheDocumentScopeWithoutMakingThePlayerChooseAnEditionAgain() {
+        InMemorySessions repository = new InMemorySessions();
+        GameSessionService service = service(repository, new InMemoryContexts(), Set.of(), editionId, "READY");
+
+        GameSession started = service.startFromDocument(
+                versionId, Set.of(), 3, "开局准备", 1, "alice");
+
+        assertThat(started.editionId()).isEqualTo(editionId);
+        assertThat(started.documentVersionId()).isEqualTo(versionId);
+        assertThat(started.playerCount()).isEqualTo(3);
+    }
+
+    @Test
     void continuesFromPostgreSqlWhenContextStoreIsUnavailable() {
         InMemorySessions repository = new InMemorySessions();
         GameSessionService service = service(

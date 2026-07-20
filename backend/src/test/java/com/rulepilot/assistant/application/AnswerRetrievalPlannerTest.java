@@ -99,6 +99,28 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
+    void anchorsMoonLandingQuestionsToTheSpecificEnglishTechnologyRule() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "登陆月球需要支付多少费用？",
+                "登陆月球需要支付多少费用？",
+                QuestionType.SITUATION_QUERY,
+                List.of("月球", "费用"),
+                Set.of(),
+                "ACTIONS");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, null, "主要行动", 4, Set.of()));
+
+        assertThat(intents.getFirst().query())
+                .contains("probe tech", "moon", "same as landing on planet", "prerequisite");
+        assertThat(intents.get(1).query())
+                .contains("moon", "tech", "same cost as landing on the planet", "prerequisite");
+        assertThat(intents.getLast().sectionTypes()).contains("ACTIONS");
+    }
+
+    @Test
     void carriesThePreviousQuestionIntoFollowUpRetrieval() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(

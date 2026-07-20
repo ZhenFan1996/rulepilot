@@ -454,6 +454,50 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void critiquesAndRepairsARejectedLiveTableRuling() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "月球固定支付3能量。", "普通登陆费用直接适用于月球。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return new ModelDraft(
+                        "先满足月球登陆科技；费用与登陆该行星相同。",
+                        "月球规则采用相对费用，不能脱离当前行星状态写成固定数字。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        AtomicInteger reviews = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            reviews.incrementAndGet();
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, true)),
+                model,
+                critic);
+
+        var answer = service.answer(
+                "登陆月球要付多少？",
+                new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
+                "alice",
+                UUID.randomUUID());
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("先满足", "相同");
+        assertThat(revisions).hasValue(1);
+        assertThat(reviews).hasValue(1);
+    }
+
+    @Test
     void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
         UUID rulingId = UUID.randomUUID();
         UUID expansionId = UUID.randomUUID();

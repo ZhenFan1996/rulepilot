@@ -67,6 +67,20 @@ public class GameSessionService {
         return session;
     }
 
+    @Transactional
+    public GameSession startFromDocument(
+            UUID documentVersionId,
+            Set<UUID> expansionIds,
+            int playerCount,
+            String phase,
+            Integer activePlayer,
+            String username) {
+        var version = documents.findVersion(documentVersionId)
+                .orElseThrow(() -> new IllegalArgumentException("document version does not exist"));
+        return start(
+                version.editionId(), documentVersionId, expansionIds, playerCount, phase, activePlayer, username);
+    }
+
     @Transactional(readOnly = true)
     public GameSession get(UUID sessionId, String username) {
         return owned(sessionId, username);

@@ -27,9 +27,13 @@ public class GameSessionController {
 
     @PostMapping
     GameSession start(@RequestBody StartSessionRequest request, Principal principal) {
-        return sessions.start(
-                request.editionId(), request.documentVersionId(), request.expansionIds(), request.playerCount(),
-                request.phase(), request.activePlayer(), principal.getName());
+        if (request.editionId() == null) {
+            return sessions.startFromDocument(
+                    request.documentVersionId(), request.expansionIds(), request.playerCount(),
+                    request.phase(), request.activePlayer(), principal.getName());
+        }
+        return sessions.start(request.editionId(), request.documentVersionId(), request.expansionIds(),
+                request.playerCount(), request.phase(), request.activePlayer(), principal.getName());
     }
 
     @GetMapping("/{sessionId}")

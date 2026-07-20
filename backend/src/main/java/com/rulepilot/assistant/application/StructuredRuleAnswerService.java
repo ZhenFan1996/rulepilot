@@ -63,6 +63,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
+    private static final String ANSWER_POLICY_VERSION = "answer-v5";
 
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
@@ -170,7 +171,7 @@ public class StructuredRuleAnswerService {
             return fromConfirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
-        AnswerCacheKey cacheKey = cacheKey(understood, context);
+        AnswerCacheKey cacheKey = cacheKey(understood, context, gameSessionId);
         var cached = findCached(cacheKey);
         if (cached.isPresent()) {
             cacheHits.increment();
@@ -220,6 +221,17 @@ public class StructuredRuleAnswerService {
         if (!draft.answerable()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
         }
+        if (gameSessionId != null) {
+            String safetyIssue = liveTableSafetyIssue(understood, draft);
+            if (safetyIssue != null) {
+                draft = reviseUnsafeLiveTableDraft(
+                        assistantRunId, username, gameSessionId, modelRequest, draft, safetyIssue);
+                if (draft == null || !draft.answerable() || liveTableSafetyIssue(understood, draft) != null) {
+                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
+                            "裁定未能可靠区分规则书中的相邻条目，请直接查看规则出处。");
+                }
+            }
+        }
         StructuredRuleAnswer answer;
         try {
             answer = validate(context.documentVersionId(), draft, evidence);
@@ -227,7 +239,7 @@ public class StructuredRuleAnswerService {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
         try {
-            ReviewRisk risk = context.previousQuestion() != null || context.learningIntent() != null
+            ReviewRisk risk = gameSessionId != null || context.previousQuestion() != null || context.learningIntent() != null
                     ? ReviewRisk.HIGH_IMPACT
                     : answer.confidence() == AnswerConfidence.LOW
                             ? ReviewRisk.LOW_CONFIDENCE
@@ -235,7 +247,7 @@ public class StructuredRuleAnswerService {
             Review review = critic.review(
                     toCriticRequest(assistantRunId, understood, context, answer, evidence), risk);
             if (!review.accepted()) {
-                if (context.learningIntent() == null) {
+                if (context.learningIntent() == null && gameSessionId == null) {
                     return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
                 }
                 answer = reviseLearningResponse(
@@ -300,6 +312,46 @@ public class StructuredRuleAnswerService {
         return validate(context.documentVersionId(), revised, evidence);
     }
 
+    private ModelDraft reviseUnsafeLiveTableDraft(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft previousDraft,
+            String safetyIssue) {
+        RuleAnswerRateLimiter.Permit permit =
+                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
+        try {
+            return invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "reviseUnsafeLiveTableRuling",
+                    estimateTokens(modelRequest.toString()) + estimateTokens(safetyIssue),
+                    "Live table ruling revised after deterministic rule-scope rejection",
+                    () -> model.revise(modelRequest, previousDraft, List.of("OVERREACH: " + safetyIssue)),
+                    result -> estimateTokens(result.toString()));
+        } finally {
+            permit.close();
+        }
+    }
+
+    private String liveTableSafetyIssue(UnderstoodQuestion question, ModelDraft draft) {
+        String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
+        if (!(normalizedQuestion.contains("月球") || normalizedQuestion.contains("moon"))) {
+            return null;
+        }
+        String answer = (draft.shortVerdict() + " " + draft.explanation()).toLowerCase(Locale.ROOT);
+        boolean preservesRelativeCost = answer.contains("相同")
+                || answer.contains("一样")
+                || answer.contains("same as landing")
+                || answer.contains("same cost as");
+        if (!preservesRelativeCost) {
+            return "The moon permission says its cost is the same as landing on that planet. "
+                    + "Preserve that relative rule and do not merge an adjacent technology-column discount into it.";
+        }
+        return null;
+    }
+
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
         try {
             return cache.find(key);
@@ -323,10 +375,15 @@ public class StructuredRuleAnswerService {
         }
     }
 
-    private AnswerCacheKey cacheKey(UnderstoodQuestion question, QuestionContext context) {
+    private AnswerCacheKey cacheKey(
+            UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
         String conversationScopedQuestion = context.previousQuestion() == null
                 ? question.normalizedQuestion()
                 : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
+        conversationScopedQuestion = ANSWER_POLICY_VERSION + ":" + conversationScopedQuestion;
+        if (gameSessionId != null) {
+            conversationScopedQuestion = "LIVE_TABLE:" + conversationScopedQuestion;
+        }
         if (context.learningIntent() != null) {
             conversationScopedQuestion = context.learningIntent().name() + ":" + conversationScopedQuestion;
         }

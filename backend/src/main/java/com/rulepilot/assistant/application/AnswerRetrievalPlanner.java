@@ -46,6 +46,7 @@ public final class AnswerRetrievalPlanner {
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
                 : Set.of();
+        addNamedRuleAnchor(intents, question.normalizedQuestion());
         if (parts.size() == 1) {
             intents.add(new RetrievalIntent(
                     expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection));
@@ -58,6 +59,15 @@ public final class AnswerRetrievalPlanner {
                 inferredSections(question, currentSection),
                 currentSection));
         return intents.stream().limit(MAX_INTENTS).toList();
+    }
+
+    private static void addNamedRuleAnchor(List<RetrievalIntent> intents, String question) {
+        if (question.contains("月球")) {
+            intents.add(new RetrievalIntent(
+                    "probe tech moon instead of planet cost same as landing on planet prerequisite",
+                    Set.of("ACTIONS"),
+                    "ACTIONS"));
+        }
     }
 
     private static String contextualQuestion(String question, String previousQuestion) {
@@ -98,6 +108,8 @@ public final class AnswerRetrievalPlanner {
         vocabulary.put("开始", "starting");
         vocabulary.put("信用点", "credits");
         vocabulary.put("能量", "energy");
+        vocabulary.put("月球", "moon planet tech same cost as landing on the planet");
+        vocabulary.put("登陆", "land landing probe cost prerequisite");
         vocabulary.put("宣传度", "publicity");
         vocabulary.put("手牌", "hand cards");
         vocabulary.put("收入", "income");
@@ -170,7 +182,7 @@ public final class AnswerRetrievalPlanner {
         }
         addWhenContains(sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数");
         addWhenContains(sections, text, "END_CONDITIONS", "game end", "ending", "结束条件", "游戏结束");
-        addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
+        addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌", "登陆", "月球");
         addWhenContains(sections, text, "PHASES", "phase", "阶段");
         addWhenContains(sections, text, "ROUND_STRUCTURE", "round", "turn order", "轮次", "回合顺序");
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");

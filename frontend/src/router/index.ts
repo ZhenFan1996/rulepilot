@@ -7,6 +7,7 @@ import LessonView from '@/views/LessonView.vue'
 import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
+import TableModeView from '@/views/TableModeView.vue'
 import ModelSettingsView from '@/views/ModelSettingsView.vue'
 import AccountView from '@/views/AccountView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
@@ -58,6 +59,11 @@ const router = createRouter({
       path: '/lesson/:planId?',
       name: 'lesson',
       component: LessonView,
+    },
+    {
+      path: '/table/:planId',
+      name: 'table-mode',
+      component: TableModeView,
     },
     {
       path: '/questions',

@@ -886,6 +886,7 @@ onUnmounted(() => {
         <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← 我的讲解</RouterLink>
           <div class="flex items-center gap-4">
+            <RouterLink v-if="plan" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
             <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
               <p class="font-semibold text-ink/75">这次讲解</p>
               <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
