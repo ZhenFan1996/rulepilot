@@ -29,7 +29,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v4-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/content-critic-v6-system.txt") Resource criticSystem,
-            @Value("classpath:prompts/atomic-content-critic-v1-system.txt") Resource atomicCriticSystem,
+            @Value("classpath:prompts/atomic-content-critic-v2-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v1-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)

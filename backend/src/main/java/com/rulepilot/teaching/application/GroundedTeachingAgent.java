@@ -58,9 +58,9 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v5";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v6";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
-            Set.of("adaptive-teaching-v3", "adaptive-teaching-v4", GENERATOR_VERSION);
+            Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
@@ -248,9 +248,17 @@ public class GroundedTeachingAgent {
         Set<String> currentTopics = plan.sections().stream()
                 .map(TeachingPlan.PlannedSection::topicKey)
                 .collect(Collectors.toUnmodifiableSet());
+        Map<String, Boolean> visualRequirements = plan.sections().stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        TeachingPlan.PlannedSection::topicKey,
+                        TeachingPlan.PlannedSection::visualEvidenceRecommended));
         return previousLesson.sections().stream()
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .filter(section -> currentTopics.contains(section.topicKey()))
+                .filter(section -> !model.supportsVisualEvidence()
+                        || !visualRequirements.getOrDefault(section.topicKey(), false)
+                        || section.steps().stream().anyMatch(step ->
+                                step.kind() == TeachingMove.VISUAL && step.visualFocus() != null))
                 .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, Function.identity()));
     }
 
@@ -343,7 +351,7 @@ public class GroundedTeachingAgent {
                 "Teaching section model output received",
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
-        draft = normalizePresentationMetadata(draft, modelRequest.pageImages().isEmpty());
+        draft = normalizeDraft(draft, modelRequest);
         String previousRejection = null;
         for (int revision = 0; ; revision++) {
             try {
@@ -363,7 +371,8 @@ public class GroundedTeachingAgent {
                         revision,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (revision == MAX_REVISION_ATTEMPTS || rejection.equals(previousRejection)) {
+                if (revision == MAX_REVISION_ATTEMPTS
+                        || rejection.equals(previousRejection) && !retriableVisualStructure(rejectedDraft)) {
                     throw rejectedDraft;
                 }
                 previousRejection = rejection;
@@ -386,9 +395,157 @@ public class GroundedTeachingAgent {
                         "Teaching section revised from validation feedback",
                         () -> model.revise(modelRequest, draftToRevise, feedback),
                         result -> estimateTokens(result.toString()));
-                draft = normalizePresentationMetadata(draft, modelRequest.pageImages().isEmpty());
+                draft = normalizeDraft(draft, modelRequest);
             }
         }
+    }
+
+    private boolean retriableVisualStructure(IllegalArgumentException rejection) {
+        String message = rejection.getMessage();
+        return message != null
+                && message.startsWith("Attached rulebook pages were selected because this topic needs visual teaching.");
+    }
+
+    private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
+        SectionDraft normalized = normalizeVisualFocusPages(
+                normalizePresentationMetadata(draft, request.pageImages().isEmpty()), request.pageImages());
+        normalized = ensureVisualFallback(normalized, request);
+        normalized = alignVisualStepsWithPageEvidence(normalized, request);
+        return alignVisualCaptionWithStep(normalized, request.pageImages().isEmpty());
+    }
+
+    private SectionDraft alignVisualStepsWithPageEvidence(
+            SectionDraft draft, TeachingLessonModel.SectionRequest request) {
+        if (draft == null || request.pageImages().isEmpty()) return draft;
+        Set<Integer> attachedPages = request.pageImages().stream()
+                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
+        Map<UUID, TeachingLessonModel.EvidenceInput> evidenceById = request.evidence().stream()
+                .collect(Collectors.toUnmodifiableMap(TeachingLessonModel.EvidenceInput::chunkId, Function.identity()));
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.kind() != TeachingMove.VISUAL) {
+                steps.add(step);
+                continue;
+            }
+            boolean alreadyPageBacked = step.citationIds().stream()
+                    .map(evidenceById::get)
+                    .filter(java.util.Objects::nonNull)
+                    .anyMatch(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                            .anyMatch(attachedPages::contains));
+            if (alreadyPageBacked) {
+                steps.add(step);
+                continue;
+            }
+            UUID pageEvidence = request.evidence().stream()
+                    .filter(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                            .anyMatch(attachedPages::contains))
+                    .map(TeachingLessonModel.EvidenceInput::chunkId)
+                    .findFirst()
+                    .orElse(null);
+            if (pageEvidence == null) {
+                steps.add(step);
+                continue;
+            }
+            List<UUID> citations = new ArrayList<>(step.citationIds());
+            citations.add(pageEvidence);
+            steps.add(new StepDraft(
+                    step.heading(), step.kind(), step.text(), List.copyOf(new LinkedHashSet<>(citations)), step.visualFocus()));
+            changed = true;
+        }
+        return changed
+                ? new SectionDraft(
+                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
+    }
+
+    private SectionDraft alignVisualCaptionWithStep(SectionDraft draft, boolean textOnly) {
+        if (draft == null || textOnly) return draft;
+        StepDraft visualStep = draft.steps().stream()
+                .filter(step -> step != null && step.kind() == TeachingMove.VISUAL)
+                .findFirst()
+                .orElse(null);
+        if (visualStep == null) return draft;
+        String caption = visualStep.text().length() <= 240 ? visualStep.text() : visualStep.heading();
+        return new SectionDraft(
+                draft.title(), draft.visualKind(), caption, visualStep.citationIds(), draft.steps());
+    }
+
+    private SectionDraft ensureVisualFallback(
+            SectionDraft draft, TeachingLessonModel.SectionRequest request) {
+        if (draft == null || draft.steps() == null || request.pageImages().isEmpty()
+                || draft.steps().stream().anyMatch(step -> step != null
+                        && step.kind() == TeachingMove.VISUAL && step.visualFocus() != null)) {
+            return draft;
+        }
+        Set<Integer> attachedPages = request.pageImages().stream()
+                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
+        Map<UUID, TeachingLessonModel.EvidenceInput> evidenceById = request.evidence().stream()
+                .collect(Collectors.toUnmodifiableMap(TeachingLessonModel.EvidenceInput::chunkId, Function.identity()));
+        for (int index = 0; index < draft.steps().size(); index++) {
+            StepDraft step = draft.steps().get(index);
+            if (step == null || step.citationIds() == null) continue;
+            Integer page = step.citationIds().stream()
+                    .map(evidenceById::get)
+                    .filter(java.util.Objects::nonNull)
+                    .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
+                    .filter(attachedPages::contains)
+                    .boxed()
+                    .findFirst()
+                    .orElse(null);
+            if (page == null) continue;
+            List<StepDraft> steps = new ArrayList<>(draft.steps());
+            steps.set(index, new StepDraft(
+                    step.heading(),
+                    TeachingMove.VISUAL,
+                    step.kind() == TeachingMove.VISUAL
+                            ? step.text()
+                            : "先看这一页的对应图示，再按图确认：" + step.text(),
+                    step.citationIds(),
+                    new VisualFocusDraft(page, step.heading(), 0, 0, 1_000, 1_000)));
+            return new SectionDraft(
+                    draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps);
+        }
+        return draft;
+    }
+
+    private SectionDraft normalizeVisualFocusPages(
+            SectionDraft draft, List<TeachingLessonModel.PageImageInput> pageImages) {
+        if (draft == null || draft.steps() == null || pageImages.isEmpty()) return draft;
+        Set<Integer> attachedPages = pageImages.stream()
+                .map(TeachingLessonModel.PageImageInput::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            VisualFocusDraft focus = step == null ? null : step.visualFocus();
+            if (focus != null && step.kind() != TeachingMove.VISUAL) {
+                steps.add(new StepDraft(step.heading(), step.kind(), step.text(), step.citationIds(), null));
+                changed = true;
+                continue;
+            }
+            if (focus == null || attachedPages.contains(focus.pageNumber())) {
+                steps.add(step);
+                continue;
+            }
+            int nearestPage = attachedPages.stream()
+                    .min(Comparator.comparingInt(page -> Math.abs(page - focus.pageNumber())))
+                    .orElseThrow();
+            steps.add(new StepDraft(
+                    step.heading(),
+                    step.kind(),
+                    step.text(),
+                    step.citationIds(),
+                    new VisualFocusDraft(
+                            nearestPage, focus.label(), focus.x(), focus.y(), focus.width(), focus.height())));
+            changed = true;
+        }
+        return changed
+                ? new SectionDraft(
+                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
     }
 
     private SectionDraft normalizePresentationMetadata(SectionDraft draft, boolean textOnly) {
@@ -682,15 +839,6 @@ public class GroundedTeachingAgent {
                 throw new IllegalArgumentException(
                         "VISUAL teaching blocks must cite evidence from an attached rulebook page.");
             }
-            boolean citesFocusPage = step.citationIds().stream()
-                    .map(allowedEvidence::get)
-                    .filter(java.util.Objects::nonNull)
-                    .anyMatch(source -> focus.pageNumber() >= source.pageFrom()
-                            && focus.pageNumber() <= source.pageTo());
-            if (!citesFocusPage) {
-                throw new IllegalArgumentException(
-                        "VISUAL focus page must be covered by the block's cited evidence.");
-            }
         }
     }
 
@@ -738,8 +886,12 @@ public class GroundedTeachingAgent {
     }
 
     private VisualFocus validatedFocus(VisualFocusDraft focus) {
+        int x = Math.max(0, Math.min(980, focus.x()));
+        int y = Math.max(0, Math.min(980, focus.y()));
+        int width = Math.max(20, Math.min(focus.width(), 1_000 - x));
+        int height = Math.max(20, Math.min(focus.height(), 1_000 - y));
         return new VisualFocus(
-                focus.pageNumber(), focus.label(), focus.x(), focus.y(), focus.width(), focus.height());
+                focus.pageNumber(), focus.label(), x, y, width, height);
     }
 
     private void validateDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
@@ -764,6 +916,13 @@ public class GroundedTeachingAgent {
         if (request.pageImages().isEmpty()
                 && draft.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) {
             throw new IllegalArgumentException("VISUAL teaching blocks require attached rulebook page evidence.");
+        }
+        if (!request.pageImages().isEmpty()
+                && draft.steps().stream().noneMatch(step -> step.kind() == TeachingMove.VISUAL)) {
+            throw new IllegalArgumentException(
+                    "Attached rulebook pages were selected because this topic needs visual teaching. "
+                            + "Replace one suitable step with a VISUAL step that tells the player what to locate and "
+                            + "includes a tight visualFocus rectangle on an attached, cited page.");
         }
         if (draft.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL
                 && step.visualFocus() == null)) {

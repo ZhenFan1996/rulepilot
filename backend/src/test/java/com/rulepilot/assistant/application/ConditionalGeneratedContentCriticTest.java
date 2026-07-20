@@ -348,7 +348,7 @@ class ConditionalGeneratedContentCriticTest {
         }, new ImmediateAuditedAgentInvocations(), true, 2);
         ReviewRequest request = new ReviewRequest(
                 UUID.randomUUID(),
-                ContentType.LESSON,
+                ContentType.ANSWER,
                 List.of(
                         new Claim(1, "First.", List.of(chunkId)),
                         new Claim(2, "Second.", List.of(secondChunk))),
@@ -359,6 +359,44 @@ class ConditionalGeneratedContentCriticTest {
         assertThat(confirmationsStarted.await(0, TimeUnit.MILLISECONDS)).isTrue();
         assertThat(calls).hasValue(2);
         assertThat(review.accepted()).isTrue();
+    }
+
+    @Test
+    void confirmsMultipleLessonClaimsIndependentlyWithEvidenceScopedCalls() {
+        UUID secondChunk = UUID.randomUUID();
+        List<ReviewRequest> observed = java.util.Collections.synchronizedList(new ArrayList<>());
+        var critic = new ConditionalGeneratedContentCritic(request -> {
+            observed.add(request);
+            if (request.reviewMode() == ReviewMode.DISCOVERY) {
+                return new CritiqueDraft(List.of(
+                        new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First candidate."),
+                        new Issue(IssueType.CONTRADICTION, 2, List.of(secondChunk), "Second candidate.")));
+            }
+            return request.claims().getFirst().position() == 1
+                    ? new CritiqueDraft(List.of(
+                            new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed.")))
+                    : new CritiqueDraft(List.of(
+                            new Issue(IssueType.OVERREACH, 2, List.of(secondChunk), "Unlisted type.")));
+        }, new ImmediateAuditedAgentInvocations(), true, 4);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                List.of(
+                        new Claim(1, "First.", List.of(chunkId)),
+                        new Claim(2, "Second.", List.of(secondChunk))),
+                List.of(new Evidence(chunkId, "First."), new Evidence(secondChunk, "Second.")));
+
+        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
+
+        assertThat(observed).hasSize(3);
+        assertThat(observed.stream().filter(item -> item.reviewMode() == ReviewMode.ATOMIC_CONFIRMATION))
+                .allSatisfy(confirmation -> {
+                    assertThat(confirmation.claims()).hasSize(1);
+                    assertThat(confirmation.evidence()).hasSize(1);
+                });
+        assertThat(review.issues())
+                .containsExactly(new Issue(
+                        IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed."));
     }
 
     private ReviewRequest request() {

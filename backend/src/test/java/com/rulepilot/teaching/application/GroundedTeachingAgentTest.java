@@ -80,7 +80,7 @@ class GroundedTeachingAgentTest {
                 plan.id(),
                 LessonStatus.COMPLETE,
                 List.of(verified),
-                "adaptive-teaching-v3",
+                GroundedTeachingAgent.GENERATOR_VERSION,
                 Instant.now());
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> {
@@ -98,6 +98,77 @@ class GroundedTeachingAgentTest {
 
         assertThat(resumed.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(resumed.sections()).containsExactly(verified);
+    }
+
+    @Test
+    void regeneratesPreviouslyVerifiedVisualTopicThatNeverUsedItsPageImage() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        TeachingPlan plan = plan(versionId);
+        LessonSection proseOnly = new LessonSection(
+                1,
+                TeachingSectionType.SETUP.name(),
+                List.of("setup"),
+                "已验证但没有看图的开局",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.TABLE_LAYOUT,
+                "桌面布置",
+                List.of(4),
+                List.of(chunkId),
+                List.of(new LessonStep(1, "放置主棋盘", TeachingMove.DO, "将棋盘放在桌面中央。", List.of(4), List.of(chunkId), null)));
+        IllustratedLesson previous = new IllustratedLesson(
+                UUID.randomUUID(),
+                plan.id(),
+                LessonStatus.COMPLETE,
+                List.of(proseOnly),
+                GroundedTeachingAgent.GENERATOR_VERSION,
+                Instant.now());
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Assemble the main board and place it in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {4}, 1_086, 1_511)));
+        AtomicInteger compositions = new AtomicInteger();
+        TeachingLessonModel visionModel = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                compositions.incrementAndGet();
+                return new SectionDraft(
+                        "照图完成开局",
+                        VisualKind.TABLE_LAYOUT,
+                        "找到拼接后的主棋盘。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "找到主棋盘",
+                                TeachingMove.VISUAL,
+                                "在图中找到拼接后的主棋盘，再按同样关系摆放。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(4, "拼接后的主棋盘", 300, 100, 600, 700))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                visionModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var resumed = agent.create(plan, UUID.randomUUID(), previous);
+
+        assertThat(compositions).hasValue(1);
+        assertThat(resumed.sections().getFirst().title()).isEqualTo("照图完成开局");
+        assertThat(resumed.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
     }
 
     @Test
@@ -309,7 +380,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
-        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v5");
+        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v6");
     }
 
     @Test
@@ -344,7 +415,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void persistsValidatedVisualFocusFromAnAttachedCitedPage() {
+    void normalizesAndPersistsVisualFocusFromAnAttachedCitedPage() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -356,6 +427,7 @@ class GroundedTeachingAgentTest {
                 4,
                 4,
                 List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AtomicInteger compositions = new AtomicInteger();
         TeachingLessonModel model = new TeachingLessonModel() {
             @Override
             public boolean supportsVisualEvidence() {
@@ -375,7 +447,7 @@ class GroundedTeachingAgentTest {
                                 TeachingMove.VISUAL,
                                 "先在图中找到拼接后的主棋盘，再按同样关系摆到桌面中央。",
                                 List.of(chunkId),
-                                new VisualFocusDraft(4, "拼接后的主棋盘", 430, 80, 550, 720))));
+                                new VisualFocusDraft(3, "拼接后的主棋盘", 900, 990, 300, 120))));
             }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -390,7 +462,7 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new VisualFocus(4, "拼接后的主棋盘", 430, 80, 550, 720));
+                .isEqualTo(new VisualFocus(4, "拼接后的主棋盘", 900, 980, 100, 20));
     }
 
     @Test
@@ -506,10 +578,11 @@ class GroundedTeachingAgentTest {
                         "组装主棋盘并放到桌面中央。",
                         List.of(setupLayout.chunkId(), setupPlacement.chunkId()),
                         List.of(new StepDraft(
-                                "放置主棋盘",
-                                TeachingMove.DO,
-                                "组装主棋盘并放到桌面中央。",
-                                List.of(setupLayout.chunkId(), setupPlacement.chunkId()))));
+                                "找到主棋盘",
+                                TeachingMove.VISUAL,
+                                "在图中找到拼接后的主棋盘，再按同样关系放到桌面中央。",
+                                List.of(setupLayout.chunkId(), setupPlacement.chunkId()),
+                                new VisualFocusDraft(4, "拼接后的主棋盘", 300, 100, 600, 700))));
             }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -523,6 +596,59 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+    }
+
+    @Test
+    void fallsBackToAnEvidenceMatchedWholePageWhenTheModelIgnoresAttachedPages() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Assemble the main board and place it in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AtomicInteger compositions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                compositions.incrementAndGet();
+                return new SectionDraft(
+                        "完成开局",
+                        VisualKind.TABLE_LAYOUT,
+                        "组装主棋盘并放到桌面中央。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "放置主棋盘",
+                                TeachingMove.DO,
+                                "组装主棋盘并放到桌面中央。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(3, "错误地挂在普通步骤上的坐标", 50, 50, 200, 200))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(compositions).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.VISUAL);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
+                .isEqualTo(new VisualFocus(4, "放置主棋盘", 0, 0, 1_000, 1_000));
     }
 
     @Test

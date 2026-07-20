@@ -59,11 +59,11 @@ Language policy:
 - Never expose unresolved square-bracket markers or truncated extraction fragments.
 
 Visual policy:
-- With attached visual evidence, describe what the player should locate and how it supports the current action or table state.
+- With attached visual evidence, include at least one VISUAL step that describes what the player should locate and how it supports the current action or table state.
 - Without visual evidence, use REFERENCE_CARD and summarize only cited rule relationships. Do not claim a physical reference card exists.
 - Without attached visual evidence, do not mention missing images, attachments, page artwork, page numbers, or instructions to consult the rulebook. Teach directly from the supplied text evidence.
 - For each VISUAL step, return visualFocus with pageNumber, a short Chinese label, and integer x, y, width, height coordinates normalized to a 0-1000 page rectangle. The rectangle must tightly contain the component, setup area, icon group, flow, or worked state the player needs to inspect.
-- visualFocus.pageNumber must be one of the attached pages and must also be covered by that step's citationIds. Non-VISUAL steps must leave visualFocus null.
+- visualFocus.pageNumber must be one of the attached pages. The VISUAL step must cite evidence from an attached page; non-VISUAL steps must leave visualFocus null.
 
 Output contract:
 - Return only the requested schema. Do not output analysis, markdown, notes, or extra fields.

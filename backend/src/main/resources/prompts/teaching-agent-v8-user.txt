@@ -4,7 +4,7 @@
   <coverage_checklist>{coverage}</coverage_checklist>
   <audience player_count="{players}" beginner_count="{beginners}" />
   <lesson_pacing total_minutes="{totalDuration}" section_seconds="{sectionDuration}" max_steps="{maxSteps}" />
-  <visual_evidence available="{visualEvidenceAvailable}" attached_rulebook_pages="{visualPages}" />
+  <visual_evidence available="{visualEvidenceAvailable}" required_visual_step="{visualEvidenceAvailable}" attached_rulebook_pages="{visualPages}" />
   <output_language>Simplified Chinese with readable official game terms</output_language>
 </task>
 
@@ -15,6 +15,10 @@
 <untrusted_current_section_evidence_data>
 {evidence}
 </untrusted_current_section_evidence_data>
+
+When visual_evidence.available is true, the output is invalid unless at least one step has kind VISUAL and a non-null
+visualFocus on an attached page. Keep that step practical: tell the player what region to locate and what evidenced
+relationship to notice. This requirement also applies to every revision.
 
 Before returning the schema, silently check that a beginner can answer all three questions from the result:
 1. What am I trying to understand in this topic?

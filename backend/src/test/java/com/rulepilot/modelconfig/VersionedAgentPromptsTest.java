@@ -17,7 +17,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v6-system.txt"),
-                resource("atomic-content-critic-v1-system.txt"),
+                resource("atomic-content-critic-v2-system.txt"),
                 resource("objective-coverage-critic-v1-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
@@ -107,6 +107,9 @@ class VersionedAgentPromptsTest {
                         "at most 160 characters");
         assertThat(prompts.atomicCriticSystem())
                 .contains(
+                        "one or more generated claims",
+                        "Judge each claim independently",
+                        "types listed for that position",
                         "combined evidence set",
                         "semantic meaning",
                         "asteroid space",

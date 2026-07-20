@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.security.concurrent.DelegatingSecurityContextRunnable;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("!test")
@@ -21,6 +22,7 @@ class TeachingGenerationConfiguration {
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("teaching-generation-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
         return executor;
     }
 }
