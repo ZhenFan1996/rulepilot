@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
@@ -21,16 +22,19 @@ public class TeachingPlanService {
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
     private static final int MAX_PAGE_CATALOG_CHARACTERS = 3_200;
     private final DocumentProcessing documents;
+    private final DocumentVersionScopeLookup documentScopes;
     private final TeachingOutlineModel outlines;
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
 
     public TeachingPlanService(
             DocumentProcessing documents,
+            DocumentVersionScopeLookup documentScopes,
             TeachingOutlineModel outlines,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository) {
         this.documents = documents;
+        this.documentScopes = documentScopes;
         this.outlines = outlines;
         this.plans = plans;
         this.repository = repository;
@@ -39,6 +43,15 @@ public class TeachingPlanService {
     @Transactional
     public TeachingPlan create(
             UUID documentVersionId, int playerCount, int beginnerCount, int durationMinutes, String createdBy) {
+        var scope = documentScopes.findVersion(documentVersionId)
+                .filter(found -> found.createdBy().equals(createdBy))
+                .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
+        if (scope.editionId() == null) {
+            throw new IllegalArgumentException("link the rule document to a game edition before teaching");
+        }
+        if (!"READY".equals(scope.processingStatus())) {
+            throw new IllegalArgumentException("rule document is not ready for teaching");
+        }
         var pages = documents.pages(documentVersionId).stream()
                 .filter(page -> page.text() != null && !page.text().isBlank())
                 .map(page -> new PageInput(page.pageNumber(), boundedPageText(page.text())))

@@ -34,8 +34,8 @@ public class RuleDocumentController {
     }
 
     @GetMapping
-    List<DocumentResponse> list(@PathVariable UUID editionId) {
-        return documents.list(editionId).stream().map(DocumentResponse::from).toList();
+    List<DocumentResponse> list(@PathVariable UUID editionId, Principal principal) {
+        return documents.list(editionId, principal.getName()).stream().map(DocumentResponse::from).toList();
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

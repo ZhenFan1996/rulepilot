@@ -251,7 +251,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
       <section>
         <p class="text-sm font-medium text-copper">游戏库</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">管理游戏和版本</h1>
-        <p class="mt-4 max-w-xl leading-7 text-ink/55">先把要玩的版本记清楚。之后上传的规则书和生成的讲解都会跟随这里的选择。</p>
+        <p class="mt-4 max-w-xl leading-7 text-ink/55">从 BGG 导入或手动记下游戏版本。你可以从这里开始，也可以先上传规则书，之后再把两者关联起来。</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createGame">
           <h2 class="font-display text-xl font-semibold">添加游戏</h2>
@@ -313,7 +313,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
             </div>
             <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
             <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
-            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">给这款游戏添加规则书</RouterLink>
+            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">上传或关联规则书</RouterLink>
           </article>
         </section>
 
@@ -364,7 +364,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
               <ul class="mt-5 divide-y divide-ink/10 text-sm text-ink/60">
                 <li v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center justify-between gap-3 py-2">
                   <span>{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
-                  <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">添加规则书</RouterLink>
+                  <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">上传或关联规则书</RouterLink>
                 </li>
               </ul>
             </form>

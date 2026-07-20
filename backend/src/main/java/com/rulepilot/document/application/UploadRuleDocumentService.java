@@ -47,12 +47,16 @@ public class UploadRuleDocumentService {
             long size,
             InputStream content,
             String username) {
-        catalog.findEdition(editionId)
-                .orElseThrow(() -> new IllegalArgumentException("game edition does not exist"));
+        if (editionId != null) {
+            requireEdition(editionId);
+        }
 
         Instant now = Instant.now(clock);
         RuleDocument candidate = RuleDocument.create(editionId, title, sourceType, username, now);
-        RuleDocument document = repository.findDocument(editionId, candidate.title(), sourceType)
+        var existing = editionId == null
+                ? repository.findUnassignedDocument(username, candidate.title(), sourceType)
+                : repository.findDocument(editionId, username, candidate.title(), sourceType);
+        RuleDocument document = existing
                 .orElseGet(() -> repository.save(candidate));
 
         DocumentStorage.StoredDocument stored =
@@ -83,10 +87,38 @@ public class UploadRuleDocumentService {
     }
 
     @Transactional(readOnly = true)
-    public List<RuleDocumentRepository.DocumentSummary> list(UUID editionId) {
+    public List<RuleDocumentRepository.DocumentSummary> list(UUID editionId, String username) {
+        requireEdition(editionId);
+        return repository.findByEdition(editionId, username);
+    }
+
+    @Transactional(readOnly = true)
+    public List<RuleDocumentRepository.DocumentSummary> listOwned(String username) {
+        return repository.findByOwner(username);
+    }
+
+    @Transactional
+    public RuleDocument assign(UUID documentId, UUID editionId, String username) {
+        requireEdition(editionId);
+        RuleDocument document = repository.findDocument(documentId)
+                .filter(found -> found.createdBy().equals(username))
+                .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
+        RuleDocument assigned = document.assignTo(editionId);
+        if (assigned == document) {
+            return document;
+        }
+        repository.findDocument(editionId, username, document.title(), document.sourceType())
+                .filter(existing -> !existing.id().equals(document.id()))
+                .ifPresent(existing -> {
+                    throw new IllegalArgumentException("this game edition already has a rule document with that title");
+                });
+        repository.update(assigned);
+        return assigned;
+    }
+
+    private void requireEdition(UUID editionId) {
         catalog.findEdition(editionId)
                 .orElseThrow(() -> new IllegalArgumentException("game edition does not exist"));
-        return repository.findByEdition(editionId);
     }
 
     public record UploadResult(RuleDocument document, DocumentVersion version, boolean duplicate) {}

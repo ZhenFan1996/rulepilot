@@ -10,11 +10,16 @@ import java.util.UUID;
 
 public interface RuleDocumentRepository {
 
-    Optional<RuleDocument> findDocument(UUID editionId, String title, DocumentSourceType sourceType);
+    Optional<RuleDocument> findDocument(
+            UUID editionId, String createdBy, String title, DocumentSourceType sourceType);
+
+    Optional<RuleDocument> findUnassignedDocument(String createdBy, String title, DocumentSourceType sourceType);
 
     Optional<RuleDocument> findDocument(UUID documentId);
 
     RuleDocument save(RuleDocument document);
+
+    void update(RuleDocument document);
 
     Optional<DocumentVersion> findVersionByChecksum(UUID documentId, String checksum);
 
@@ -38,7 +43,9 @@ public interface RuleDocumentRepository {
 
     List<PageImageMetadata> findPageImages(UUID versionId, java.util.Set<Integer> pageNumbers);
 
-    List<DocumentSummary> findByEdition(UUID editionId);
+    List<DocumentSummary> findByEdition(UUID editionId, String createdBy);
+
+    List<DocumentSummary> findByOwner(String createdBy);
 
     record DocumentSummary(RuleDocument document, DocumentVersion latestVersion) {}
 

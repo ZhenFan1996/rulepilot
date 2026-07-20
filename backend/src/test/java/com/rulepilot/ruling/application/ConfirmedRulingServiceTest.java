@@ -117,7 +117,7 @@ class ConfirmedRulingServiceTest {
         CatalogEditionLookup catalog = id -> Optional.of(new CatalogEditionLookup.EditionReference(
                 editionId, gameId, "Base", "en", compatibleExpansions));
         DocumentVersionScopeLookup documents = id -> Optional.of(
-                new DocumentVersionScopeLookup.VersionScope(versionId, editionId, "READY"));
+                new DocumentVersionScopeLookup.VersionScope(versionId, editionId, "READY", "owner"));
         RuleEvidenceLookup evidence = (documentVersionId, chunkIds) -> evidenceHits.stream()
                 .filter(hit -> documentVersionId.equals(hit.documentVersionId()))
                 .filter(hit -> chunkIds.contains(hit.chunkId()))

@@ -17,6 +17,7 @@ class DocumentVersionScopeLookupService implements DocumentVersionScopeLookup {
     @Override
     public java.util.Optional<VersionScope> findVersion(java.util.UUID documentVersionId) {
         return repository.findVersion(documentVersionId).flatMap(version -> repository.findDocument(version.documentId())
-                .map(document -> new VersionScope(version.id(), document.gameEditionId(), version.status().name())));
+                .map(document -> new VersionScope(
+                        version.id(), document.gameEditionId(), version.status().name(), document.createdBy())));
     }
 }

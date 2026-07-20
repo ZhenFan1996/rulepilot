@@ -27,17 +27,20 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     private EntityManager entityManager;
 
     @Override
-    public Optional<RuleDocument> findDocument(UUID editionId, String title, DocumentSourceType sourceType) {
+    public Optional<RuleDocument> findDocument(
+            UUID editionId, String createdBy, String title, DocumentSourceType sourceType) {
         return entityManager
                 .createQuery(
                         """
                         select d from RuleDocumentEntity d
                         where d.gameEditionId = :editionId
+                          and d.createdBy = :createdBy
                           and lower(d.title) = lower(:title)
                           and d.sourceType = :sourceType
                         """,
                         RuleDocumentEntity.class)
                 .setParameter("editionId", editionId)
+                .setParameter("createdBy", createdBy)
                 .setParameter("title", title)
                 .setParameter("sourceType", sourceType.name())
                 .getResultStream()
@@ -52,10 +55,41 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public Optional<RuleDocument> findUnassignedDocument(
+            String createdBy, String title, DocumentSourceType sourceType) {
+        return entityManager
+                .createQuery(
+                        """
+                        select d from RuleDocumentEntity d
+                        where d.gameEditionId is null
+                          and d.createdBy = :createdBy
+                          and lower(d.title) = lower(:title)
+                          and d.sourceType = :sourceType
+                        """,
+                        RuleDocumentEntity.class)
+                .setParameter("createdBy", createdBy)
+                .setParameter("title", title)
+                .setParameter("sourceType", sourceType.name())
+                .getResultStream()
+                .findFirst()
+                .map(RuleDocumentEntity::toDomain);
+    }
+
+    @Override
     public RuleDocument save(RuleDocument document) {
         entityManager.persist(new RuleDocumentEntity(document));
         entityManager.flush();
         return document;
+    }
+
+    @Override
+    public void update(RuleDocument document) {
+        RuleDocumentEntity entity = entityManager.find(RuleDocumentEntity.class, document.id());
+        if (entity == null) {
+            throw new IllegalArgumentException("rule document does not exist");
+        }
+        entity.gameEditionId = document.gameEditionId();
+        entityManager.flush();
     }
 
     @Override
@@ -190,13 +224,33 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
-    public List<DocumentSummary> findByEdition(UUID editionId) {
+    public List<DocumentSummary> findByEdition(UUID editionId, String createdBy) {
         List<RuleDocumentEntity> documents = entityManager
                 .createQuery(
-                        "select d from RuleDocumentEntity d where d.gameEditionId = :editionId order by d.title",
+                        """
+                        select d from RuleDocumentEntity d
+                        where d.gameEditionId = :editionId and d.createdBy = :createdBy
+                        order by d.title
+                        """,
                         RuleDocumentEntity.class)
                 .setParameter("editionId", editionId)
+                .setParameter("createdBy", createdBy)
                 .getResultList();
+        return summaries(documents);
+    }
+
+    @Override
+    public List<DocumentSummary> findByOwner(String createdBy) {
+        List<RuleDocumentEntity> documents = entityManager
+                .createQuery(
+                        "select d from RuleDocumentEntity d where d.createdBy = :createdBy order by d.createdAt desc",
+                        RuleDocumentEntity.class)
+                .setParameter("createdBy", createdBy)
+                .getResultList();
+        return summaries(documents);
+    }
+
+    private List<DocumentSummary> summaries(List<RuleDocumentEntity> documents) {
         return documents.stream()
                 .map(document -> new DocumentSummary(document.toDomain(), latestVersion(document.id).toDomain()))
                 .toList();
@@ -224,7 +278,7 @@ class RuleDocumentEntity {
     @Id
     UUID id;
 
-    @Column(name = "game_edition_id", nullable = false)
+    @Column(name = "game_edition_id")
     UUID gameEditionId;
 
     @Column(nullable = false)
