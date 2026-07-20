@@ -19,13 +19,17 @@ describe('LessonsView', () => {
         return Response.json([{
           id: 'plan-1', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
           durationMinutes: 25, gameTitle: 'SETI', premise: '寻找外星生命。',
-          createdAt: '2026-07-20T10:00:00Z', sections: [{ required: true, topicKey: 'setup', title: '设置' }],
+          createdAt: '2026-07-20T10:00:00Z', sections: [{ position: 1, required: true, topicKey: 'setup', title: '完成开局设置', visualEvidenceRecommended: true }],
         }])
       }
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
           run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
-          activities: [{ sequence: 1, operation: 'searchRuleEvidence|setup', summary: 'searched', outcome: 'SUCCEEDED' }],
+          budget: { usedModelCalls: 1, maxModelCalls: 144 },
+          activities: [{
+            sequence: 1, type: 'MODEL', operation: 'composeTeachingSection|1', summary: 'Work started',
+            outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-20T10:02:00Z',
+          }],
         })
       }
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
@@ -53,7 +57,10 @@ describe('LessonsView', () => {
 
     expect(wrapper.text()).toContain('任务已经交给后台')
     expect(wrapper.text()).toContain('正在生成')
-    expect(wrapper.text()).toContain('正在查找规则依据')
+    expect(wrapper.text()).toContain('正在阅读规则书图片并编写“完成开局设置”')
+    expect(wrapper.text()).toContain('已处理 0/1 节')
+    expect(wrapper.text()).toContain('1 次模型调用')
+    expect(wrapper.text()).toContain('第一节完成后')
     expect(wrapper.text()).toContain('可以关闭或离开此页')
     expect(wrapper.text()).not.toContain('目录已生成')
     wrapper.unmount()

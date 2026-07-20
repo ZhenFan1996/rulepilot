@@ -32,6 +32,16 @@ class SpringAiTeachingLessonModelTest {
                 .isEqualTo(Role.VISUAL);
     }
 
+    @Test
+    void disablesQwenThinkingForBoundedVisualLessonWork() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(Role.VISUAL)).thenReturn("qwen");
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+
+        assertThat(model.providerOptions(Role.VISUAL)).containsEntry("enable_thinking", false);
+    }
+
     private SectionRequest request(List<PageImageInput> pageImages) {
         return new SectionRequest(
                 "setup",

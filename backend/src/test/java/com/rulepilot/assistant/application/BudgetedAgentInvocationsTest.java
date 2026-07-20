@@ -126,6 +126,9 @@ class BudgetedAgentInvocationsTest {
         }
 
         @Override
+        public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {}
+
+        @Override
         public void requestCancellation(UUID runId, String ownerUsername) {}
 
         @Override

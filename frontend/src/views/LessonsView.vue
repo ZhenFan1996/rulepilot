@@ -13,7 +13,7 @@ interface TeachingPlan {
   gameTitle: string
   premise: string
   createdAt: string
-  sections: Array<{ required: boolean; topicKey: string; title: string }>
+  sections: Array<{ position: number; required: boolean; topicKey: string; title: string; visualEvidenceRecommended: boolean }>
 }
 
 interface AssistantRun {
@@ -25,7 +25,16 @@ interface AssistantRun {
     completedAt: string | null
     lastErrorCode: string | null
   }
-  activities: Array<{ sequence: number; operation: string; summary: string; outcome: string }>
+  budget: { usedModelCalls: number; maxModelCalls: number }
+  activities: Array<{
+    sequence: number
+    type: 'TOOL' | 'MODEL' | 'CRITIC' | 'VALIDATION'
+    operation: string
+    summary: string
+    outcome: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+    latencyMs: number
+    occurredAt: string
+  }>
 }
 
 interface LessonSummary {
@@ -87,18 +96,103 @@ function stateClass(planId: string) {
   return 'bg-amber-50 text-amber-800'
 }
 
+function elapsedLabel(plan: TeachingPlan) {
+  const startedAt = progress.value[plan.id]?.run?.run.createdAt
+  const seconds = startedAt ? Math.max(0, Math.floor((now.value - new Date(startedAt).getTime()) / 1000)) : 0
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function operationPosition(operation: string) {
+  const value = Number(operation.split('|')[1])
+  return Number.isInteger(value) && value > 0 ? value : null
+}
+
+function chapterFor(plan: TeachingPlan, operation: string) {
+  const position = operationPosition(operation)
+  if (!position) return null
+  return plan.sections.find((section) => section.position === position) ?? plan.sections[position - 1] ?? null
+}
+
+function chapterForActivity(plan: TeachingPlan, activity: AssistantRun['activities'][number]) {
+  const direct = chapterFor(plan, activity.operation)
+  if (direct) return direct
+  const activities = progress.value[plan.id]?.run?.activities ?? []
+  for (let index = activities.findIndex((candidate) => candidate.sequence === activity.sequence) - 1; index >= 0; index--) {
+    const recent = chapterFor(plan, activities[index]!.operation)
+    if (recent) return recent
+  }
+  return null
+}
+
+function processedChapterCount(plan: TeachingPlan) {
+  const activities = progress.value[plan.id]?.run?.activities ?? []
+  return new Set(activities
+    .filter((activity) => activity.operation.startsWith('publishTeachingSection|'))
+    .map((activity) => operationPosition(activity.operation))
+    .filter((position): position is number => position !== null)).size
+}
+
+function supportedChapterCount(plan: TeachingPlan) {
+  const activities = progress.value[plan.id]?.run?.activities ?? []
+  return new Set(activities
+    .filter((activity) => activity.operation.startsWith('publishTeachingSection|') && activity.outcome === 'SUCCEEDED')
+    .map((activity) => operationPosition(activity.operation))
+    .filter((position): position is number => position !== null)).size
+}
+
+function chapterProgressWidth(plan: TeachingPlan) {
+  return `${Math.round(processedChapterCount(plan) / Math.max(1, plan.sections.length) * 100)}%`
+}
+
+function activityText(plan: TeachingPlan, activity: AssistantRun['activities'][number] | undefined) {
+  if (!activity) return '正在准备规则依据和章节顺序'
+  const chapter = chapterForActivity(plan, activity)
+  const target = chapter ? `“${chapter.title}”` : '当前内容'
+  if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
+  if (activity.operation.startsWith('composeTeachingSection')) {
+    return chapter?.visualEvidenceRecommended
+      ? `正在阅读规则书图片并编写${target}`
+      : `正在编写${target}`
+  }
+  if (activity.operation.startsWith('reviseTeachingSection')) return `正在根据核对结果修正${target}`
+  if (activity.operation.startsWith('confirmGeneratedClaims')) return `正在逐条复核${target}的规则陈述`
+  if (activity.operation.startsWith('reviewGeneratedContent')) return `正在核对${target}的规则和出处`
+  if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
+  if (activity.operation.startsWith('validateTeachingSection')) {
+    return activity.outcome === 'SUCCEEDED' ? `${target}已通过结构检查` : `${target}需要继续修正`
+  }
+  if (activity.operation.startsWith('publishTeachingSection')) {
+    return activity.outcome === 'SUCCEEDED' ? `${target}已经完成` : `${target}暂未通过，继续处理下一节`
+  }
+  return '正在整理并核对讲解'
+}
+
+function currentActivity(plan: TeachingPlan) {
+  return progress.value[plan.id]?.run?.activities.at(-1)
+}
+
+function remainingTimeText(plan: TeachingPlan) {
+  const completed = processedChapterCount(plan)
+  const total = plan.sections.length
+  if (completed === 0) return '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
+  if (completed >= total) return '所有章节已经处理，正在保存最终结果。'
+  const run = progress.value[plan.id]!.run!
+  const elapsedMinutes = Math.max(0.1, (now.value - new Date(run.run.createdAt).getTime()) / 60_000)
+  const estimatedMinutes = elapsedMinutes / completed * (total - completed)
+  const low = Math.max(1, Math.floor(estimatedMinutes * 0.7))
+  const high = Math.max(low + 1, Math.ceil(estimatedMinutes * 1.5))
+  return `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；图片章节可能更久。`
+}
+
+function recentActivities(plan: TeachingPlan) {
+  return (progress.value[plan.id]?.run?.activities ?? []).slice(-3).reverse()
+}
+
 function progressText(plan: TeachingPlan) {
   const item = progress.value[plan.id]
   const state = stateOf(plan.id)
   if (state === 'GENERATING') {
-    const seconds = Math.max(0, Math.floor((now.value - new Date(item!.run!.run.createdAt).getTime()) / 1000))
-    const latest = item!.run!.activities.at(-1)
-    const stage = latest?.operation.startsWith('searchRuleEvidence') ? '正在查找规则依据'
-      : latest?.operation.startsWith('composeTeachingSection') ? '正在编写章节'
-        : latest?.operation.startsWith('reviewGeneratedContent') ? '正在核对规则'
-          : latest?.operation.startsWith('reviseTeachingSection') ? '正在修正讲解'
-            : '正在准备讲解'
-    return `${stage} · 已用时 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}。可以关闭或离开此页。`
+    return `${activityText(plan, item!.run!.activities.at(-1))} · 已用时 ${elapsedLabel(plan)}。可以关闭或离开此页。`
   }
   if (state === 'INCOMPLETE') {
     const supported = item?.lesson?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0
@@ -229,7 +323,30 @@ onBeforeUnmount(() => {
             </div>
             <span :class="stateClass(plan.id)" class="rounded-full px-3 py-1.5 text-xs font-semibold">{{ stateLabel(plan.id) }}</span>
           </div>
-          <p class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
+          <div v-if="stateOf(plan.id) === 'GENERATING'" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4" aria-live="polite" aria-atomic="true">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p class="text-sm font-semibold text-indigo">{{ activityText(plan, currentActivity(plan)) }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">模型返回前，这一行也会保留当前正在做的事。</p>
+              </div>
+              <span class="shrink-0 font-mono text-sm font-semibold text-indigo">{{ elapsedLabel(plan) }}</span>
+            </div>
+            <div class="mt-4 h-2 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="processedChapterCount(plan)" :aria-label="`已处理 ${processedChapterCount(plan)} 个章节，共 ${plan.sections.length} 个`">
+              <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: chapterProgressWidth(plan) }" />
+            </div>
+            <div class="mt-2 flex flex-wrap justify-between gap-2 text-xs text-ink/55">
+              <span>已处理 {{ processedChapterCount(plan) }}/{{ plan.sections.length }} 节，其中 {{ supportedChapterCount(plan) }} 节已通过核对</span>
+              <span>{{ progress[plan.id]?.run?.budget.usedModelCalls ?? 0 }} 次模型调用</span>
+            </div>
+            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} 生成会在后台继续，可以关闭或离开此页。</p>
+            <ol v-if="recentActivities(plan).length" class="mt-4 space-y-2 border-t border-indigo/10 pt-3" aria-label="最近进度">
+              <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
+                <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
+                <span>{{ activityText(plan, activity) }}</span>
+              </li>
+            </ol>
+          </div>
+          <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
           <dl class="mt-5 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
             <div><dt class="text-ink/45">新手人数</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount }} 人</dd></div>
             <div><dt class="text-ink/45">计划时长</dt><dd class="mt-1 font-semibold">{{ plan.durationMinutes }} 分钟</dd></div>

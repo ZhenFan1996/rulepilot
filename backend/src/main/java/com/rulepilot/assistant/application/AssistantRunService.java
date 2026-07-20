@@ -75,6 +75,7 @@ public class AssistantRunService implements AssistantRuns {
     public RunSnapshot fail(UUID runId, long expectedRevision, String errorCode, String stepSummary) {
         AssistantRun current = require(runId, expectedRevision);
         AssistantRun changed = current.fail(errorCode, Instant.now(clock));
+        execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.FAILED, "Work stopped safely");
         persist(current, changed, stepSummary);
         return snapshot(changed);
     }
@@ -110,6 +111,7 @@ public class AssistantRunService implements AssistantRuns {
         List<AssistantRun> interrupted = repository.findNonTerminal(mode);
         for (AssistantRun current : interrupted) {
             AssistantRun failed = current.fail("APPLICATION_RESTARTED", Instant.now(clock));
+            execution.stopRunning(current.id(), AgentExecutionControl.ActivityOutcome.FAILED, "Work stopped after restart");
             persist(current, failed, "Generation was interrupted by an application restart");
         }
         return interrupted.size();
@@ -122,6 +124,7 @@ public class AssistantRunService implements AssistantRuns {
         AssistantRun current = repository.find(runId)
                 .orElseThrow(() -> new IllegalArgumentException("active assistant run does not exist"));
         AssistantRun cancelled = current.fail("AGENT_CANCELLED", Instant.now(clock));
+        execution.stopRunning(runId, AgentExecutionControl.ActivityOutcome.REJECTED, "Work stopped by the user");
         persist(current, cancelled, "Cancellation requested by run owner");
     }
 

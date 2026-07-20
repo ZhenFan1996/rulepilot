@@ -106,9 +106,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Role role = roleFor(request);
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(role)) {
+        Map<String, Object> providerOptions = providerOptions(role);
+        if (!providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            options.extraBody(providerOptions);
             prompt = prompt.options(options);
         }
         ModelSectionDraft draft = prompt
@@ -139,6 +140,17 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 .call()
                 .entity(ModelSectionDraft.class);
         return toSectionDraft(draft, evidenceIds);
+    }
+
+    Map<String, Object> providerOptions(Role role) {
+        Map<String, Object> options = new LinkedHashMap<>();
+        if (models.usesDeepSeekNonThinkingGeneration(role)) {
+            options.put("thinking", Map.of("type", "disabled"));
+        }
+        if ("qwen".equals(models.providerFor(role))) {
+            options.put("enable_thinking", false);
+        }
+        return Map.copyOf(options);
     }
 
     Role roleFor(SectionRequest request) {

@@ -15,6 +15,7 @@ public interface AgentExecutionControl {
     }
 
     enum ActivityOutcome {
+        RUNNING,
         SUCCEEDED,
         FAILED,
         REJECTED
@@ -65,6 +66,8 @@ public interface AgentExecutionControl {
             String summary);
 
     void record(UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary);
+
+    void stopRunning(UUID runId, ActivityOutcome outcome, String summary);
 
     void requestCancellation(UUID runId, String ownerUsername);
 

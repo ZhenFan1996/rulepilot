@@ -64,7 +64,9 @@ public class GroundedTeachingAgent {
     private static final int MAX_EVIDENCE_PER_SECTION = 12;
     private static final int EVIDENCE_PER_INTENT = 4;
     private static final int MAX_STEPS_PER_SECTION = 6;
+    private static final int MAX_VISUAL_STEPS_PER_SECTION = 4;
     private static final int MAX_REVISION_ATTEMPTS = 4;
+    private static final int MAX_VISUAL_REVISION_ATTEMPTS = 2;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
@@ -134,6 +136,7 @@ public class GroundedTeachingAgent {
             if (reusable != null) {
                 log.info("Teaching topic {} reuses a previously verified section", planned.topicKey());
                 sections.add(reusable);
+                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
                 continue;
             }
             if (toolCalls >= maxToolCalls) {
@@ -330,6 +333,10 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
             UUID assistantRunId) {
+        List<TeachingLessonModel.PageImageInput> pageImages = selectedPageImages(planned, evidence);
+        int maxSteps = pageImages.isEmpty()
+                ? pacing.maxSteps()
+                : Math.min(pacing.maxSteps(), MAX_VISUAL_STEPS_PER_SECTION);
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
                 planned.title(),
@@ -339,10 +346,10 @@ public class GroundedTeachingAgent {
                 plan.beginnerCount(),
                 plan.durationMinutes(),
                 pacing.durationSeconds(),
-                pacing.maxSteps(),
+                maxSteps,
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                selectedPageImages(planned, evidence));
+                pageImages);
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -353,6 +360,9 @@ public class GroundedTeachingAgent {
                 result -> estimateTokens(result.toString()));
         draft = normalizeDraft(draft, modelRequest);
         String previousRejection = null;
+        int maxRevisionAttempts = modelRequest.pageImages().isEmpty()
+                ? MAX_REVISION_ATTEMPTS
+                : MAX_VISUAL_REVISION_ATTEMPTS;
         for (int revision = 0; ; revision++) {
             try {
                 LessonSection accepted = acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
@@ -371,7 +381,7 @@ public class GroundedTeachingAgent {
                         revision,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (revision == MAX_REVISION_ATTEMPTS
+                if (revision == maxRevisionAttempts
                         || rejection.equals(previousRejection) && !retriableVisualStructure(rejectedDraft)) {
                     throw rejectedDraft;
                 }
@@ -383,7 +393,7 @@ public class GroundedTeachingAgent {
                         "Teaching topic {} revision {}/{}: {}",
                         planned.topicKey(),
                         revision + 1,
-                        MAX_REVISION_ATTEMPTS,
+                        maxRevisionAttempts,
                         feedback.getFirst());
                 SectionDraft draftToRevise = draft;
                 draft = invocations.invoke(
@@ -645,11 +655,10 @@ public class GroundedTeachingAgent {
         validateObjectiveAlternatives(planned, draft, evidence);
         validateMissingInlineIconClaims(draft, allowedEvidence);
         List<UUID> visualCitationIds = validatedVisualCitationIds(draft, allowedEvidence);
-        List<EvidenceClaim> generatedClaims = new ArrayList<>();
-        generatedClaims.add(new EvidenceClaim(draft.visualCaption(), visualCitationIds));
-        generatedClaims.addAll(draft.steps().stream()
-                .map(step -> new EvidenceClaim(step.heading() + "：" + step.text(), step.citationIds()))
-                .toList());
+        List<Claim> reviewClaims = reviewClaims(draft, visualCitationIds);
+        List<EvidenceClaim> generatedClaims = reviewClaims.stream()
+                .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))
+                .toList();
         var verification = evidenceVerifier.verify(new VerificationRequest(
                 plan.documentVersionId(),
                 evidence.stream().map(this::toVerifierEvidence).toList(),
@@ -666,15 +675,7 @@ public class GroundedTeachingAgent {
                         assistantRunId,
                         ContentType.LESSON,
                         new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
-                        Stream.concat(
-                                        Stream.of(new Claim(1, draft.visualCaption(), visualCitationIds)),
-                                        IntStream.range(0, draft.steps().size())
-                                                .mapToObj(index -> new Claim(
-                                                        index + 2,
-                                                        draft.steps().get(index).heading() + "："
-                                                                + draft.steps().get(index).text(),
-                                                        draft.steps().get(index).citationIds())))
-                                .toList(),
+                        reviewClaims,
                         evidence.stream()
                                 .filter(source -> citedEvidenceIds.contains(source.chunkId()))
                                 .map(source -> new GeneratedContentCritic.Evidence(
@@ -705,15 +706,7 @@ public class GroundedTeachingAgent {
                         ContentType.LESSON,
                         ReviewMode.OBJECTIVE_COVERAGE,
                         new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
-                        Stream.concat(
-                                        Stream.of(new Claim(1, draft.visualCaption(), visualCitationIds)),
-                                        IntStream.range(0, draft.steps().size())
-                                                .mapToObj(index -> new Claim(
-                                                        index + 2,
-                                                        draft.steps().get(index).heading() + "："
-                                                                + draft.steps().get(index).text(),
-                                                        draft.steps().get(index).citationIds())))
-                                .toList(),
+                        reviewClaims,
                         evidence.stream()
                                 .map(source -> new GeneratedContentCritic.Evidence(
                                         source.chunkId(), source.excerpt()))
@@ -757,6 +750,25 @@ public class GroundedTeachingAgent {
                 visualSourcePages,
                 visualCitationIds,
                 steps);
+    }
+
+    private List<Claim> reviewClaims(SectionDraft draft, List<UUID> visualCitationIds) {
+        boolean captionDuplicatesVisualStep = draft.steps().stream()
+                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .anyMatch(step -> step.text().equals(draft.visualCaption())
+                        && Set.copyOf(step.citationIds()).equals(Set.copyOf(visualCitationIds)));
+        List<Claim> claims = new ArrayList<>();
+        if (!captionDuplicatesVisualStep) {
+            claims.add(new Claim(1, draft.visualCaption(), visualCitationIds));
+        }
+        int firstStepPosition = claims.size() + 1;
+        IntStream.range(0, draft.steps().size())
+                .mapToObj(index -> new Claim(
+                        firstStepPosition + index,
+                        draft.steps().get(index).heading() + "：" + draft.steps().get(index).text(),
+                        draft.steps().get(index).citationIds()))
+                .forEach(claims::add);
+        return List.copyOf(claims);
     }
 
     private List<UUID> validatedVisualCitationIds(

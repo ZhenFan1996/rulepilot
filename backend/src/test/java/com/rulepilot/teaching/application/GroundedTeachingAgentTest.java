@@ -31,6 +31,7 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import com.rulepilot.teaching.domain.TeachingPlan.PlannedSection;
 import com.rulepilot.teaching.domain.TeachingSectionType;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -563,6 +564,7 @@ class GroundedTeachingAgentTest {
         RuleEvidence setupPlacement = new RuleEvidence(
                 UUID.randomUUID(), versionId, "SETUP", "Setup table", "Place it in the middle.", 4, 4,
                 List.of(setupPage));
+        List<Integer> reviewedClaimCounts = new ArrayList<>();
         TeachingLessonModel visionModel = new TeachingLessonModel() {
             @Override
             public boolean supportsVisualEvidence() {
@@ -572,6 +574,7 @@ class GroundedTeachingAgentTest {
             @Override
             public SectionDraft compose(SectionRequest request) {
                 assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4, 2);
+                assertThat(request.maxSteps()).isEqualTo(4);
                 return new SectionDraft(
                         "完成开局",
                         VisualKind.TABLE_LAYOUT,
@@ -589,13 +592,17 @@ class GroundedTeachingAgentTest {
                 request -> List.of(firstComponent, setupLayout, setupPlacement),
                 visionModel,
                 new PolicyEvidenceVerifier(),
-                acceptedCritic(),
+                (request, risk) -> {
+                    reviewedClaimCounts.add(request.claims().size());
+                    return new GeneratedContentCritic.Review(false, List.of());
+                },
                 new ImmediateAuditedAgentInvocations(),
                 4);
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(reviewedClaimCounts).containsExactly(1, 1);
     }
 
     @Test

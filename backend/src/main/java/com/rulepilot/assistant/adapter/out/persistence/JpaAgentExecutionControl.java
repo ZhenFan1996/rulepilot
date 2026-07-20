@@ -76,7 +76,12 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .setParameter("tokens", estimatedInputTokens)
                 .setParameter("runId", runId)
                 .executeUpdate();
-        return new InvocationReservation(UUID.randomUUID(), runId, type, operation.strip(), estimatedInputTokens);
+        InvocationReservation reservation =
+                new InvocationReservation(UUID.randomUUID(), runId, type, operation.strip(), estimatedInputTokens);
+        insertActivity(
+                reservation.id(), runId, type, reservation.operation(), ActivityOutcome.RUNNING,
+                estimatedInputTokens, 0, 0, "Work started");
+        return reservation;
     }
 
     @Override
@@ -102,9 +107,27 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 .setParameter("tokens", estimatedOutputTokens)
                 .setParameter("runId", reservation.runId())
                 .executeUpdate();
-        insertActivity(
-                reservation.id(), reservation.runId(), reservation.type(), reservation.operation(), recordedOutcome,
-                reservation.inputTokens(), estimatedOutputTokens, latencyMs, summary);
+        int updated = entityManager.createNativeQuery("""
+                        update assistant_run_activity
+                        set outcome = :outcome,
+                            estimated_output_tokens = :outputTokens,
+                            latency_ms = :latency,
+                            summary = :summary
+                        where id = :id
+                          and assistant_run_id = :runId
+                          and outcome = 'RUNNING'
+                        """)
+                .setParameter("outcome", recordedOutcome.name())
+                .setParameter("outputTokens", estimatedOutputTokens)
+                .setParameter("latency", latencyMs)
+                .setParameter("summary", summary.strip())
+                .setParameter("id", reservation.id())
+                .setParameter("runId", reservation.runId())
+                .executeUpdate();
+        if (updated != 1) {
+            if (stopReason != null) throw new AgentExecutionStoppedException(stopReason);
+            throw new IllegalStateException("agent invocation activity is not running");
+        }
         if (stopReason != null) throw new AgentExecutionStoppedException(stopReason);
     }
 
@@ -112,7 +135,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(
             UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
-        if (type != ActivityType.VALIDATION) {
+        if (type != ActivityType.VALIDATION || outcome == ActivityOutcome.RUNNING) {
             throw new IllegalArgumentException("diagnostic activity type is invalid");
         }
         validateInvocation(type, operation, 0);
@@ -126,6 +149,29 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
                 summary);
         lockBudget(runId);
         insertActivity(diagnostic.id(), runId, type, diagnostic.operation(), outcome, 0, 0, 0, summary);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {
+        if (runId == null || outcome == null || outcome == ActivityOutcome.RUNNING
+                || outcome == ActivityOutcome.SUCCEEDED || summary == null || summary.isBlank()
+                || summary.length() > 240) {
+            throw new IllegalArgumentException("running activity stop is invalid");
+        }
+        entityManager.createNativeQuery("""
+                        update assistant_run_activity
+                        set outcome = :outcome,
+                            latency_ms = greatest(0, extract(epoch from (:now - occurred_at)) * 1000)::bigint,
+                            summary = :summary
+                        where assistant_run_id = :runId
+                          and outcome = 'RUNNING'
+                        """)
+                .setParameter("outcome", outcome.name())
+                .setParameter("now", Instant.now())
+                .setParameter("summary", summary.strip())
+                .setParameter("runId", runId)
+                .executeUpdate();
     }
 
     private void insertActivity(
@@ -251,7 +297,8 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
 
     private void validateCompletion(
             InvocationReservation reservation, ActivityOutcome outcome, int tokens, long latency, String summary) {
-        if (reservation == null || outcome == null || tokens < 0 || latency < 0 || summary == null
+        if (reservation == null || outcome == null || outcome == ActivityOutcome.RUNNING
+                || tokens < 0 || latency < 0 || summary == null
                 || summary.isBlank() || summary.length() > 240) {
             throw new IllegalArgumentException("agent invocation completion is invalid");
         }
