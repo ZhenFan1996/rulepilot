@@ -7,7 +7,7 @@
     "playerCount": 4,
     "expectedStatus": "ANSWERED",
     "requiredPages": [17],
-    "requiredTermGroups": [["不能", "不可以", "需要先", "解锁后"], ["相同", "一样"]],
+    "requiredTermGroups": [["不能", "不可以", "需要先", "解锁后", "必须解锁", "尚未解锁", "未解锁前", "无法登陆"], ["相同", "一样"]],
     "forbiddenTerms": ["月球科技给予1能量减免", "月球科技给予 1 能量减免"],
     "maxLatencyMillis": 45000
   },

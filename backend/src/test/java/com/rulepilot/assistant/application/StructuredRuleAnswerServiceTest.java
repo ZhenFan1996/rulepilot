@@ -527,6 +527,45 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void reconsidersALiveTableAbstentionWhenDirectMoonEvidenceIsPresent() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "PROBE TECHS",
+                "From now on you can land on a planet's moon instead of the planet itself. "
+                        + "The cost is the same as landing on the planet.",
+                17, 17, 0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(false, "uncertain", null, null, List.of(), List.of(), "LOW");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString().contains("EVIDENCE_SUFFICIENCY");
+                return new ModelDraft(
+                        "未解锁前不能登陆；解锁后费用与登陆该行星相同。",
+                        "月球登陆由探测器科技解锁，费用沿用该行星的登陆费用。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.04, 1, 1, true)),
+                model);
+
+        var answer = service.answer(
+                "我还没有解锁月球科技，现在能登陆吗？以后费用怎么算？",
+                new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
+                "alice",
+                UUID.randomUUID());
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(17);
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void returnsOwnedConfirmedRulingBeforeCacheRetrievalAndModel() {
         UUID rulingId = UUID.randomUUID();
         UUID expansionId = UUID.randomUUID();

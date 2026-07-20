@@ -3,10 +3,14 @@ package com.rulepilot.assistant.adapter.in.web;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService;
 import com.rulepilot.assistant.application.StructuredRuleAnswerService.AnswerCreation;
+import com.rulepilot.assistant.application.AnswerFeedbackService;
 import com.rulepilot.assistant.application.GameSessionConversationService;
+import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
+import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.gamesession.GameSessionContextLookup;
 import java.security.Principal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -27,14 +31,17 @@ public class StructuredRuleAnswerController {
     private final StructuredRuleAnswerService answers;
     private final GameSessionContextLookup sessions;
     private final GameSessionConversationService conversations;
+    private final AnswerFeedbackService feedback;
 
     public StructuredRuleAnswerController(
             StructuredRuleAnswerService answers,
             GameSessionContextLookup sessions,
-            GameSessionConversationService conversations) {
+            GameSessionConversationService conversations,
+            AnswerFeedbackService feedback) {
         this.answers = answers;
         this.sessions = sessions;
         this.conversations = conversations;
+        this.feedback = feedback;
     }
 
     @PostMapping
@@ -64,12 +71,18 @@ public class StructuredRuleAnswerController {
     }
 
     @GetMapping("/conversation")
-    List<GameSessionConversationTurn> conversation(
+    List<ConversationTurnResponse> conversation(
             @PathVariable UUID versionId,
             @RequestParam UUID gameSessionId,
             Principal principal) {
-        var session = validateSession(gameSessionId, versionId, principal.getName());
-        return conversations.history(session.sessionId(), principal.getName());
+        String username = principal.getName();
+        var session = validateSession(gameSessionId, versionId, username);
+        List<GameSessionConversationTurn> turns = conversations.history(session.sessionId(), username);
+        var ratings = feedback.ratingsFor(turns, username);
+        return turns.stream()
+                .map(turn -> new ConversationTurnResponse(
+                        turn.id(), turn.question(), turn.answer(), turn.createdAt(), ratings.get(turn.id())))
+                .toList();
     }
 
     private GameSessionContextLookup.SessionContext validateSession(
@@ -104,6 +117,9 @@ public class StructuredRuleAnswerController {
 
     record AnswerResponse(
             UUID assistantRunId,
-            com.rulepilot.assistant.domain.StructuredRuleAnswer answer,
+            StructuredRuleAnswer answer,
             UUID conversationTurnId) {}
+
+    record ConversationTurnResponse(
+            UUID id, String question, StructuredRuleAnswer answer, Instant createdAt, Rating feedback) {}
 }

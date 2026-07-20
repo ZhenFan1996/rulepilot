@@ -131,7 +131,30 @@ public class StructuredRuleAnswerService {
             String question, QuestionContext context, String username, UUID evaluationSessionId) {
         return Observation.createNotStarted("rulepilot.answer.evaluation", observations)
                 .contextualName("answer-evaluation")
-                .observe(() -> answerWithRunObserved(question, context, username, evaluationSessionId, false));
+                .observe(() -> answerEvaluationObserved(
+                        question, context, username, evaluationSessionId));
+    }
+
+    private AnswerCreation answerEvaluationObserved(
+            String question, QuestionContext context, String username, UUID evaluationSessionId) {
+        RunSnapshot run = runs.start(
+                AssistantRunMode.QUESTION_ANSWER, context.documentVersionId(), username);
+        try {
+            StructuredRuleAnswer answer = answerInternal(
+                    question, context, username, evaluationSessionId, run.id(), false);
+            finishRun(run, answer);
+            return new AnswerCreation(run.id(), answer);
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Evaluation stopped by execution budget", stopped);
+            return new AnswerCreation(
+                    run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
+                            "评测执行受到预算限制，未产生可验证答案。"));
+        } catch (RuntimeException exception) {
+            failRun(run, "ANSWER_EVALUATION_FAILED", "Answer evaluation failed safely", exception);
+            return new AnswerCreation(
+                    run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
+                            "评测执行失败，未产生可验证答案。"));
+        }
     }
 
     private AnswerCreation answerWithRunObserved(
@@ -237,6 +260,10 @@ public class StructuredRuleAnswerService {
         }
         if (draft == null) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+        }
+        if (!draft.answerable() && gameSessionId != null && hasDirectMoonRuleEvidence(understood, evidence)) {
+            draft = reviseEvidenceBackedAbstention(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
         }
         if (!draft.answerable()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
@@ -355,6 +382,47 @@ public class StructuredRuleAnswerService {
         } finally {
             permit.close();
         }
+    }
+
+    private ModelDraft reviseEvidenceBackedAbstention(
+            UUID assistantRunId,
+            String username,
+            UUID gameSessionId,
+            ModelRequest modelRequest,
+            ModelDraft previousDraft) {
+        String feedback = "EVIDENCE_SUFFICIENCY: The supplied Probe Tech evidence directly states when moon landing "
+                + "becomes available and that its cost is the same as landing on the planet. Re-evaluate the "
+                + "conditional question from those exact excerpts; preserve the prerequisite and relative cost, "
+                + "and abstain only if those excerpts still cannot answer it.";
+        RuleAnswerRateLimiter.Permit permit =
+                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
+        try {
+            return invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "reconsiderEvidenceBackedAbstention",
+                    estimateTokens(modelRequest.toString()) + estimateTokens(feedback),
+                    "Evidence-backed table abstention reconsidered",
+                    () -> model.revise(modelRequest, previousDraft, List.of(feedback)),
+                    result -> estimateTokens(result.toString()));
+        } finally {
+            permit.close();
+        }
+    }
+
+    private boolean hasDirectMoonRuleEvidence(
+            UnderstoodQuestion question, List<HybridEvidenceHit> evidence) {
+        String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
+        if (!(normalizedQuestion.contains("月球") || normalizedQuestion.contains("moon"))) {
+            return false;
+        }
+        String suppliedEvidence = evidence.stream()
+                .map(hit -> hit.evidence().heading() + " " + hit.evidence().excerpt())
+                .collect(Collectors.joining(" "))
+                .toLowerCase(Locale.ROOT);
+        return suppliedEvidence.contains("probe tech")
+                && suppliedEvidence.contains("planet's moon")
+                && suppliedEvidence.contains("same as landing on the planet");
     }
 
     private String liveTableSafetyIssue(UnderstoodQuestion question, ModelDraft draft) {

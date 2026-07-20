@@ -32,32 +32,59 @@ public class AnswerRegressionService {
     }
 
     public AnswerRegressionReport evaluate(UUID documentVersionId, String username) {
-        List<CaseResult> results = new ArrayList<>();
-        long totalLatency = 0;
-        for (AnswerRegressionCase testCase : regressionSet.cases()) {
-            Instant started = Instant.now();
-            AnswerCreation creation = answers.evaluateWithRun(
-                    testCase.question(),
-                    new QuestionContext(
-                            documentVersionId,
-                            null,
-                            testCase.gamePhase(),
-                            testCase.playerCount(),
-                            Set.of(),
-                            testCase.previousQuestion(),
-                            null),
-                    username,
-                    documentVersionId);
-            long latency = Duration.between(started, Instant.now()).toMillis();
-            totalLatency += latency;
-            results.add(check(testCase, creation, latency));
-        }
-        int passed = (int) results.stream().filter(CaseResult::passed).count();
-        return new AnswerRegressionReport(
-                regressionSet.name(), documentVersionId, results.size(), passed, totalLatency, results);
+        return evaluate(documentVersionId, username, 1, null);
     }
 
-    private CaseResult check(AnswerRegressionCase testCase, AnswerCreation creation, long latency) {
+    public AnswerRegressionReport evaluate(UUID documentVersionId, String username, int attempts) {
+        return evaluate(documentVersionId, username, attempts, null);
+    }
+
+    public AnswerRegressionReport evaluate(
+            UUID documentVersionId, String username, int attempts, String caseId) {
+        if (attempts < 1 || attempts > 3) {
+            throw new IllegalArgumentException("answer regression attempts must be between 1 and 3");
+        }
+        List<AnswerRegressionCase> selectedCases = caseId == null || caseId.isBlank()
+                ? regressionSet.cases()
+                : regressionSet.cases().stream().filter(testCase -> testCase.id().equals(caseId)).toList();
+        if (selectedCases.isEmpty()) {
+            throw new IllegalArgumentException("answer regression case does not exist");
+        }
+        List<CaseResult> results = new ArrayList<>();
+        long totalLatency = 0;
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            for (AnswerRegressionCase testCase : selectedCases) {
+                Instant started = Instant.now();
+                AnswerCreation creation = answers.evaluateWithRun(
+                        testCase.question(),
+                        new QuestionContext(
+                                documentVersionId,
+                                null,
+                                testCase.gamePhase(),
+                                testCase.playerCount(),
+                                Set.of(),
+                                testCase.previousQuestion(),
+                                null),
+                        username,
+                        documentVersionId);
+                long latency = Duration.between(started, Instant.now()).toMillis();
+                totalLatency += latency;
+                results.add(check(testCase, attempt, creation, latency));
+            }
+        }
+        int passedExecutions = (int) results.stream().filter(CaseResult::passed).count();
+        int stableCases = (int) selectedCases.stream()
+                .filter(testCase -> results.stream()
+                        .filter(result -> result.caseId().equals(testCase.id()))
+                        .allMatch(CaseResult::passed))
+                .count();
+        return new AnswerRegressionReport(
+                regressionSet.name(), documentVersionId, selectedCases.size(), attempts,
+                results.size(), passedExecutions, stableCases, totalLatency, results);
+    }
+
+    private CaseResult check(
+            AnswerRegressionCase testCase, int attempt, AnswerCreation creation, long latency) {
         StructuredRuleAnswer answer = creation.answer();
         List<String> failures = new ArrayList<>();
         if (answer.status() != testCase.expectedStatus()) {
@@ -84,7 +111,7 @@ public class AnswerRegressionService {
         }
         if (latency > testCase.maxLatencyMillis()) failures.add("LATENCY_BUDGET");
         return new CaseResult(
-                testCase.id(), failures.isEmpty(), answer.status(), List.copyOf(pages), failures,
+                testCase.id(), attempt, failures.isEmpty(), answer.status(), List.copyOf(pages), failures,
                 latency, creation.assistantRunId());
     }
 }

@@ -2,8 +2,12 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.domain.AnswerFeedback;
 import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
+import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -38,5 +42,13 @@ public class AnswerFeedbackService {
                 submitted.rating(),
                 submitted.createdBy(),
                 submitted.createdAt());
+    }
+
+    @Transactional(readOnly = true)
+    public Map<UUID, Rating> ratingsFor(List<GameSessionConversationTurn> turns, String username) {
+        Set<UUID> turnIds = turns.stream()
+                .map(GameSessionConversationTurn::id)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return feedback.findRatings(turnIds, username);
     }
 }

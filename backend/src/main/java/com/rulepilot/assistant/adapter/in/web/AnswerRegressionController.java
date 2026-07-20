@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -22,7 +23,11 @@ public class AnswerRegressionController {
     }
 
     @PostMapping
-    AnswerRegressionReport evaluate(@PathVariable UUID versionId, Principal principal) {
-        return regressions.evaluate(versionId, principal.getName());
+    AnswerRegressionReport evaluate(
+            @PathVariable UUID versionId,
+            @RequestParam(defaultValue = "1") int attempts,
+            @RequestParam(required = false) String caseId,
+            Principal principal) {
+        return regressions.evaluate(versionId, principal.getName(), attempts, caseId);
     }
 }

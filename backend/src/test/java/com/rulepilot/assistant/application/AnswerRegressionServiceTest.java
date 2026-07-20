@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -47,5 +48,47 @@ class AnswerRegressionServiceTest {
 
         assertThat(report.isPassed()).isFalse();
         assertThat(report.cases().getFirst().failures()).containsExactly("MISSING_PAGE_17");
+    }
+
+    @Test
+    void requiresEveryAttemptToPassBeforeCallingACaseStable() {
+        UUID versionId = UUID.randomUUID();
+        StructuredRuleAnswerService answers = mock(StructuredRuleAnswerService.class);
+        when(answers.evaluateWithRun(any(), any(), any(), any()))
+                .thenReturn(creation(versionId, 17), creation(versionId, 11), creation(versionId, 17));
+        AnswerRegressionSet cases = new AnswerRegressionSet() {
+            @Override
+            public String name() {
+                return "stability-v1";
+            }
+
+            @Override
+            public List<AnswerRegressionCase> cases() {
+                return List.of(new AnswerRegressionCase(
+                        "moon", "费用？", null, "主要行动", 4, AnswerStatus.ANSWERED,
+                        List.of(17), List.of(List.of("相同", "一样")), List.of(), 10_000));
+            }
+        };
+
+        var report = new AnswerRegressionService(answers, cases).evaluate(versionId, "admin", 3);
+
+        assertThat(report.executionCount()).isEqualTo(3);
+        assertThat(report.passedExecutionCount()).isEqualTo(2);
+        assertThat(report.stableCaseCount()).isZero();
+        assertThat(report.isPassed()).isFalse();
+        assertThat(report.cases()).extracting(result -> result.attempt()).containsExactly(1, 2, 3);
+        assertThatThrownBy(() -> new AnswerRegressionService(answers, cases)
+                        .evaluate(versionId, "admin", 1, "unknown"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private AnswerCreation creation(UUID versionId, int page) {
+        return new AnswerCreation(
+                UUID.randomUUID(),
+                new StructuredRuleAnswer(
+                        versionId, AnswerStatus.ANSWERED, "费用一样", "按相同费用支付",
+                        List.of(new RuleCitation(
+                                UUID.randomUUID(), versionId, "ACTIONS", "Moon", "same cost", page, page)),
+                        List.of(), AnswerConfidence.HIGH, false, null, null, null));
     }
 }

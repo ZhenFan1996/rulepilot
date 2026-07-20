@@ -4,6 +4,9 @@ import com.rulepilot.assistant.application.AnswerFeedbackRepository;
 import com.rulepilot.assistant.domain.AnswerFeedback;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -35,5 +38,27 @@ public class JpaAnswerFeedbackRepository implements AnswerFeedbackRepository {
                 .setParameter("createdAt", feedback.createdAt())
                 .getSingleResult();
         return id instanceof UUID uuid ? uuid : UUID.fromString(id.toString());
+    }
+
+    @Override
+    public Map<UUID, AnswerFeedback.Rating> findRatings(Set<UUID> conversationTurnIds, String username) {
+        if (conversationTurnIds.isEmpty()) {
+            return Map.of();
+        }
+        @SuppressWarnings("unchecked")
+        var rows = (java.util.List<Object[]>) entityManager.createNativeQuery("""
+                        select conversation_turn_id, rating
+                        from answer_feedback
+                        where conversation_turn_id in (:turnIds) and created_by = :username
+                        """)
+                .setParameter("turnIds", conversationTurnIds)
+                .setParameter("username", username)
+                .getResultList();
+        Map<UUID, AnswerFeedback.Rating> ratings = new LinkedHashMap<>();
+        for (Object[] row : rows) {
+            UUID turnId = row[0] instanceof UUID uuid ? uuid : UUID.fromString(row[0].toString());
+            ratings.put(turnId, AnswerFeedback.Rating.valueOf(row[1].toString()));
+        }
+        return Map.copyOf(ratings);
     }
 }

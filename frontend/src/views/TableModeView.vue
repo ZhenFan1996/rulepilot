@@ -43,6 +43,7 @@ interface ConversationTurn {
   question: string
   answer: RuleAnswer
   createdAt: string
+  feedback: FeedbackRating | null
 }
 
 interface CsrfResponse {
@@ -117,6 +118,11 @@ async function loadConversation() {
   )
   if (!response.ok) throw new Error('无法恢复这局的问答记录。')
   turns.value = (await response.json()) as ConversationTurn[]
+  feedbackByTurn.value = Object.fromEntries(
+    turns.value
+      .filter((turn) => turn.feedback !== null)
+      .map((turn) => [turn.id, turn.feedback as FeedbackRating]),
+  )
 }
 
 async function loadTable() {
@@ -162,7 +168,7 @@ async function ask() {
     })
     if (!response.ok) throw new Error('这次裁定没有完成，请重试。')
     const creation = (await response.json()) as { answer: RuleAnswer; conversationTurnId: string }
-    turns.value.push({ id: creation.conversationTurnId, question: text, answer: creation.answer, createdAt: new Date().toISOString() })
+    turns.value.push({ id: creation.conversationTurnId, question: text, answer: creation.answer, createdAt: new Date().toISOString(), feedback: null })
     question.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '提问失败。'

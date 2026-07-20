@@ -7,6 +7,8 @@ import com.rulepilot.assistant.domain.AnswerFeedback;
 import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import java.util.Optional;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +27,11 @@ class AnswerFeedbackServiceTest {
 
         assertThat(submitted.id()).isEqualTo(persistedId);
         assertThat(feedback.saved.rating()).isEqualTo(Rating.UNCLEAR);
+        feedback.ratings = Map.of(turnId, Rating.UNCLEAR);
+        GameSessionConversationTurn turn = org.mockito.Mockito.mock(GameSessionConversationTurn.class);
+        org.mockito.Mockito.when(turn.id()).thenReturn(turnId);
+        assertThat(service.ratingsFor(java.util.List.of(turn), "alice"))
+                .containsEntry(turnId, Rating.UNCLEAR);
         assertThatThrownBy(() -> service.submit(sessionId, turnId, Rating.HELPFUL, "bob"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -52,6 +59,7 @@ class AnswerFeedbackServiceTest {
     private static final class CapturingFeedback implements AnswerFeedbackRepository {
         private final UUID persistedId;
         private AnswerFeedback saved;
+        private Map<UUID, Rating> ratings = Map.of();
 
         private CapturingFeedback(UUID persistedId) {
             this.persistedId = persistedId;
@@ -61,6 +69,13 @@ class AnswerFeedbackServiceTest {
         public UUID save(AnswerFeedback feedback) {
             saved = feedback;
             return persistedId;
+        }
+
+        @Override
+        public Map<UUID, Rating> findRatings(Set<UUID> conversationTurnIds, String username) {
+            return ratings.entrySet().stream()
+                    .filter(entry -> conversationTurnIds.contains(entry.getKey()))
+                    .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, Map.Entry::getValue));
         }
     }
 }

@@ -7,7 +7,10 @@ public record AnswerRegressionReport(
         String evaluationSet,
         UUID documentVersionId,
         int caseCount,
-        int passedCount,
+        int attempts,
+        int executionCount,
+        int passedExecutionCount,
+        int stableCaseCount,
         long totalLatencyMillis,
         List<CaseResult> cases) {
 
@@ -16,11 +19,12 @@ public record AnswerRegressionReport(
     }
 
     public boolean isPassed() {
-        return caseCount == passedCount;
+        return caseCount == stableCaseCount;
     }
 
     public record CaseResult(
             String caseId,
+            int attempt,
             boolean passed,
             AnswerStatus actualStatus,
             List<Integer> citedPages,
