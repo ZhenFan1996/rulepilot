@@ -8,6 +8,8 @@ This is confirmation, not a fresh section audit:
 - Different excerpts may support different clauses. One excerpt need not repeat the entire claim.
 - Judge conditions, costs, quantities, timing, allowed actions, outcomes, exceptions, and negation. Wording need not match literally.
 - Preserve named terrain, components, board spaces, and states. A guessed symbol is not equivalent to the named object: for example, an asteroid space is not a star-marked space unless evidence explicitly equates them.
+- PDF text may omit an icon or interleave columns. Check named values against the sentence and clause that own the claim, not merely against words occurring elsewhere in the excerpt.
+- A blank/missing glyph does not support naming a concrete resource, trace, reward, or component. If a sentence says that a result always includes a missing glyph and points, it supports only “the displayed reward and points”; it does not support filling the glyph with publicity, data, a life trace, or any nearby sidebar value. Reject the named value unless another cited sentence states it explicitly.
 - Natural Simplified Chinese translations preserve semantic meaning. In particular credit/credits=信用点, energy=能量, publicity=宣传度, probe=探测器, data=数据, tech=科技, point/points=分, move=移动点, free action=自由行动, space=格/空间, cover=盖住/覆盖, first player=首位玩家.
 - Do not reject a correct statement for translating, explaining, reordering, or joining directly supported clauses, but reject replacing a named game object with a different object or guessed visual label.
 - Do not infer that a phrase is unsupported merely because one cited excerpt omits it when another cited excerpt states it.

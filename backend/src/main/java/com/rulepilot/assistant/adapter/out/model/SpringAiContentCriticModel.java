@@ -61,16 +61,14 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
         if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)
-                && request.reviewMode() != ReviewMode.ATOMIC_CONFIRMATION) {
+                && request.reviewMode() == ReviewMode.DISCOVERY) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.temperature(0.0);
             options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             prompt = prompt.options(options);
         }
         ModelCritiqueDraft draft = prompt
-                .system(request.reviewMode() == ReviewMode.ATOMIC_CONFIRMATION
-                        ? prompts.atomicCriticSystem()
-                        : prompts.criticSystem())
+                .system(systemPrompt(request.reviewMode()))
                 .user(user -> user.text(prompts.criticUser())
                         .param("type", request.contentType())
                         .param("mode", request.reviewMode())
@@ -89,6 +87,14 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                         resolveReferences(issue.evidenceIds(), evidenceIds),
                         issue.summary()))
                 .toList());
+    }
+
+    private String systemPrompt(ReviewMode mode) {
+        return switch (mode) {
+            case DISCOVERY -> prompts.criticSystem();
+            case ATOMIC_CONFIRMATION -> prompts.atomicCriticSystem();
+            case OBJECTIVE_COVERAGE -> prompts.objectiveCoverageCriticSystem();
+        };
     }
 
     private List<ModelClaim> modelClaims(ReviewRequest request) {

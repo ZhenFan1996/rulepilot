@@ -15,6 +15,7 @@ import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.teaching.TeachingLessonModel;
@@ -68,6 +69,28 @@ public class GroundedTeachingAgent {
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
             "(?i)(attached|attachment|image|rulebook|page\\s*\\d|图片|附件|规则书|第\\s*\\d+\\s*页|页面)");
+    private static final Pattern INTERNAL_EVIDENCE_MARKER = Pattern.compile(
+            "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
+                    + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
+    private static final Pattern MISSING_INLINE_ICON_EVIDENCE = Pattern.compile(
+            "(?is)\\binclude(?:s|ing)?\\b.{0,120}?\\ba\\s+(?:and|or)\\b");
+    private static final Pattern SPECIFIC_MISSING_ICON_CLAIM = Pattern.compile(
+            "(?i)(?:总(?:是)?|始终|至少|必定)包含.{0,16}(?:数据|宣传度|信用点|能量|生命痕迹|资源)|"
+                    + "奖励.{0,16}(?:包含|包括).{0,16}(?:数据|宣传度|信用点|能量|生命痕迹|资源)|"
+                    + "(?:always|at least) includes?.{0,24}(?:data|publicity|credits?|energy|life trace|resource)|"
+                    + "rewards?.{0,16}includes?.{0,24}(?:data|publicity|credits?|energy|life trace|resource)");
+    private static final Pattern MOON_LANDING_OBJECTIVE = Pattern.compile("(?i)land(?:ing)? on a planet or moon");
+    private static final Pattern DIRECT_MOON_LANDING_EVIDENCE =
+            Pattern.compile("(?i)land on a planet['’]?s moon");
+    private static final Pattern POSITIVE_MOON_LANDING_RULE = Pattern.compile(
+            "(?is)(?:(?:can|may|可以|可|能够|允许).{0,50}(?:moon|卫星|月球)|"
+                    + "(?:moon|卫星|月球).{0,50}(?:can|may|可以|可|能够|允许))");
+    private static final Pattern NUMERIC_MOON_LANDING_RULE = Pattern.compile(
+            "(?is)(?:(?:moon|卫星|月球)[^。.!！?？]{0,80}(?:\\d+|能量)|"
+                    + "(?:\\d+|能量)[^。.!！?？]{0,80}(?:moon|卫星|月球))");
+    private static final Pattern INVENTED_HYPOTHETICAL_BASELINE = Pattern.compile(
+            "(?i)假设.{0,60}(?:手上|拥有|现有|有)\\s*\\d+\\s*(?:能量|信用点|宣传度|数据|卡)|"
+                    + "suppose.{0,60}(?:have|start with)\\s*\\d+\\s*(?:energy|credits?|publicity|data|cards?)");
     private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
@@ -462,6 +485,8 @@ public class GroundedTeachingAgent {
                 .collect(Collectors.toUnmodifiableMap(
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         validateVisualBlockEvidence(draft, modelRequest, allowedEvidence);
+        validateObjectiveAlternatives(planned, draft, evidence);
+        validateMissingInlineIconClaims(draft, allowedEvidence);
         List<UUID> visualCitationIds = validatedVisualCitationIds(draft, allowedEvidence);
         List<EvidenceClaim> generatedClaims = new ArrayList<>();
         generatedClaims.add(new EvidenceClaim(draft.visualCaption(), visualCitationIds));
@@ -517,6 +542,42 @@ public class GroundedTeachingAgent {
                     .collect(Collectors.joining("; ")));
         }
 
+        var coverageReview = critic.review(
+                new ReviewRequest(
+                        assistantRunId,
+                        ContentType.LESSON,
+                        ReviewMode.OBJECTIVE_COVERAGE,
+                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
+                        Stream.concat(
+                                        Stream.of(new Claim(1, draft.visualCaption(), visualCitationIds)),
+                                        IntStream.range(0, draft.steps().size())
+                                                .mapToObj(index -> new Claim(
+                                                        index + 2,
+                                                        draft.steps().get(index).heading() + "："
+                                                                + draft.steps().get(index).text(),
+                                                        draft.steps().get(index).citationIds())))
+                                .toList(),
+                        evidence.stream()
+                                .map(source -> new GeneratedContentCritic.Evidence(
+                                        source.chunkId(), source.excerpt()))
+                                .toList()),
+                ReviewRisk.LOW_CONFIDENCE);
+        if (!coverageReview.accepted()) {
+            String fingerprint = coverageReview.issues().stream()
+                    .map(issue -> issue.type() + ":" + issue.claimPosition() + ":" + issue.evidenceIds().stream()
+                            .map(UUID::toString)
+                            .sorted()
+                            .collect(Collectors.joining(",")))
+                    .sorted()
+                    .collect(Collectors.joining(";"));
+            throw new RejectedTeachingDraftException(
+                    fingerprint,
+                    criticDiagnostic(coverageReview.issues()),
+                    "Objective coverage review rejected the draft: " + coverageReview.issues().stream()
+                            .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
+                            .collect(Collectors.joining("; ")));
+        }
+
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
@@ -550,6 +611,51 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException("teaching visual cites evidence outside retrieval scope");
         }
         return List.copyOf(citationIds);
+    }
+
+    private void validateMissingInlineIconClaims(
+            SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
+        Stream.concat(
+                        Stream.of(new EvidenceClaim(draft.visualCaption(), draft.visualCitationIds())),
+                        draft.steps().stream()
+                                .map(step -> new EvidenceClaim(step.heading() + "：" + step.text(), step.citationIds())))
+                .filter(claim -> SPECIFIC_MISSING_ICON_CLAIM.matcher(claim.text()).find())
+                .filter(claim -> claim.citationIds().stream()
+                        .map(allowedEvidence::get)
+                        .filter(java.util.Objects::nonNull)
+                        .map(RuleEvidence::excerpt)
+                        .anyMatch(excerpt -> MISSING_INLINE_ICON_EVIDENCE.matcher(excerpt).find()))
+                .findFirst()
+                .ifPresent(claim -> {
+                    throw new IllegalArgumentException(
+                            "A missing inline PDF icon cannot be assigned a specific reward. Replace that clause with exactly "
+                                    + "‘获得行星中央显示的奖励和若干分数。’ Keep any first-player data bonus in a separate sentence.");
+                });
+    }
+
+    private void validateObjectiveAlternatives(
+            TeachingPlan.PlannedSection planned, SectionDraft draft, List<RuleEvidence> evidence) {
+        if (!MOON_LANDING_OBJECTIVE.matcher(planned.objective()).find()) return;
+        List<UUID> directEvidenceIds = evidence.stream()
+                .filter(source -> DIRECT_MOON_LANDING_EVIDENCE.matcher(source.excerpt()).find())
+                .map(RuleEvidence::chunkId)
+                .toList();
+        if (directEvidenceIds.isEmpty()) return;
+        String playerFacingText = Stream.concat(
+                        Stream.of(draft.visualCaption()),
+                        draft.steps().stream().map(step -> step.heading() + "：" + step.text()))
+                .collect(Collectors.joining("\n"));
+        if (!POSITIVE_MOON_LANDING_RULE.matcher(playerFacingText).find()) {
+            throw new IllegalArgumentException(
+                    "Teach the evidenced moon-landing branch as a positive rule and cite direct evidence "
+                            + directEvidenceIds + ".");
+        }
+        if (NUMERIC_MOON_LANDING_RULE.matcher(playerFacingText).find()) {
+            throw new IllegalArgumentException(
+                    "Do not repeat numeric energy costs in the moon-landing rule. Write exactly "
+                            + "‘获得对应科技后，你可以登陆行星的卫星，费用与登陆该行星相同。’ and cite direct evidence "
+                            + directEvidenceIds + ".");
+        }
     }
 
     private void validateVisualBlockEvidence(
@@ -679,6 +785,20 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Replace inferred emoji icons with an evidenced natural-language rule term.");
         }
+        if (INTERNAL_EVIDENCE_MARKER.matcher(draft.visualCaption()).find()
+                || draft.steps().stream().anyMatch(step -> step != null
+                        && ((step.heading() != null && INTERNAL_EVIDENCE_MARKER.matcher(step.heading()).find())
+                                || (step.text() != null && INTERNAL_EVIDENCE_MARKER.matcher(step.text()).find())))) {
+            throw new IllegalArgumentException(
+                    "Remove internal evidence or retrieval language and teach the player-facing rule directly.");
+        }
+        if (draft.steps().stream().anyMatch(step -> step != null
+                && step.kind() == TeachingMove.EXAMPLE
+                && step.text() != null
+                && INVENTED_HYPOTHETICAL_BASELINE.matcher(step.text()).find())) {
+            throw new IllegalArgumentException(
+                    "Remove the invented hypothetical starting resources and teach only evidenced costs or states.");
+        }
     }
 
     private String rejectionFingerprint(IllegalArgumentException rejection) {
@@ -705,6 +825,11 @@ public class GroundedTeachingAgent {
         if (message.contains("visual caption has no evidence")) return "VISUAL_CITATION_MISSING";
         if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
         if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
+        if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
+        if (message.contains("missing inline PDF icon")) return "AMBIGUOUS_INLINE_ICON";
+        if (message.contains("moon-landing branch")) return "OBJECTIVE_ALTERNATIVE_MISSING";
+        if (message.contains("numeric energy costs in the moon-landing rule")) return "MOON_RELATIVE_COST_REQUIRED";
+        if (message.contains("invented hypothetical starting resources")) return "INVENTED_EXAMPLE_BASELINE";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
         if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";

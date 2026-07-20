@@ -261,6 +261,30 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
+    void returnsObjectiveCoverageIssueWithoutAtomicClaimConfirmation() {
+        AtomicInteger calls = new AtomicInteger();
+        Issue missing = new Issue(
+                IssueType.MISSING_CRITICAL_RULE, 1, List.of(chunkId), "Moon landing is missing.");
+        var critic = new ConditionalGeneratedContentCritic(request -> {
+            calls.incrementAndGet();
+            return new CritiqueDraft(List.of(missing));
+        }, new ImmediateAuditedAgentInvocations(), true);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.OBJECTIVE_COVERAGE,
+                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
+                        "Teach landing on a planet or moon.", "core_loop"),
+                List.of(new Claim(1, "Land on a planet.", List.of(chunkId))),
+                List.of(new Evidence(chunkId, "Technology allows landing on a moon.")));
+
+        var review = critic.review(request, ReviewRisk.LOW_CONFIDENCE);
+
+        assertThat(review.issues()).containsExactly(missing);
+        assertThat(calls).hasValue(1);
+    }
+
+    @Test
     void confirmsEachClaimOnlyAgainstItsCombinedCitations() {
         UUID secondCitation = UUID.randomUUID();
         UUID unrelatedEvidence = UUID.randomUUID();

@@ -17,6 +17,7 @@ public class VersionedAgentPrompts {
     private final String answerUser;
     private final String criticSystem;
     private final String atomicCriticSystem;
+    private final String objectiveCoverageCriticSystem;
     private final String criticUser;
     private final String structuredOutputRepair;
 
@@ -29,6 +30,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/content-critic-v6-system.txt") Resource criticSystem,
             @Value("classpath:prompts/atomic-content-critic-v1-system.txt") Resource atomicCriticSystem,
+            @Value("classpath:prompts/objective-coverage-critic-v1-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
@@ -40,6 +42,7 @@ public class VersionedAgentPrompts {
         this.answerUser = read(answerUser);
         this.criticSystem = read(criticSystem);
         this.atomicCriticSystem = read(atomicCriticSystem);
+        this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
     }
@@ -74,6 +77,10 @@ public class VersionedAgentPrompts {
 
     public String atomicCriticSystem() {
         return atomicCriticSystem;
+    }
+
+    public String objectiveCoverageCriticSystem() {
+        return objectiveCoverageCriticSystem;
     }
 
     public String criticUser() {

@@ -137,7 +137,12 @@ class GroundedTeachingAgentTest {
         RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
-            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            if (request.reviewMode() == GeneratedContentCritic.ReviewMode.DISCOVERY) {
+                assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            } else {
+                assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
+                assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.LOW_CONFIDENCE);
+            }
             assertThat(request.taskContext().objective()).contains("SETUP");
             assertThat(request.taskContext().requiredCoverage()).contains("setup");
             assertThat(request.claims()).hasSize(2);
@@ -162,7 +167,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().heading()).isEqualTo("摆放主棋盘");
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.DO);
         assertThat(retrievalCalls).hasValue(2);
-        assertThat(criticCalls).hasValue(1);
+        assertThat(criticCalls).hasValue(2);
         assertThat(invocations.diagnostics).containsExactly(
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
                         "Teaching draft accepted: DRAFT_ACCEPTED"),
@@ -184,8 +189,14 @@ class GroundedTeachingAgentTest {
                 List.of(new StepDraft(
                         "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(cited.chunkId()))));
         GeneratedContentCritic critic = (request, risk) -> {
-            assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
-                    .containsExactly(cited.chunkId());
+            if (request.reviewMode() == GeneratedContentCritic.ReviewMode.DISCOVERY) {
+                assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
+                        .containsExactly(cited.chunkId());
+            } else {
+                assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
+                assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
+                        .containsExactly(cited.chunkId(), unrelated.chunkId());
+            }
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -197,6 +208,79 @@ class GroundedTeachingAgentTest {
                 4);
 
         assertThat(agent.create(plan(versionId), UUID.randomUUID()).status()).isEqualTo(LessonStatus.COMPLETE);
+    }
+
+    @Test
+    void revisesAnEvidenceSupportedObjectiveOmissionInsteadOfPublishingIt() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence planet = evidence(UUID.randomUUID(), versionId);
+        RuleEvidence moon = new RuleEvidence(
+                UUID.randomUUID(),
+                versionId,
+                "TECH",
+                "Moon landing technology",
+                "From now on you can land on a planet's moon.",
+                17,
+                17);
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return new SectionDraft(
+                        "着陆",
+                        VisualKind.REFERENCE_CARD,
+                        "把棋子放到行星上。",
+                        List.of(planet.chunkId()),
+                        List.of(new StepDraft(
+                                "着陆行星", TeachingMove.DO, "把棋子放到行星上。", List.of(planet.chunkId()))));
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anyMatch(message -> message.contains(moon.chunkId().toString()));
+                return new SectionDraft(
+                        "着陆",
+                        VisualKind.REFERENCE_CARD,
+                        "把棋子放到行星上。",
+                        List.of(planet.chunkId()),
+                        List.of(
+                                new StepDraft(
+                                        "着陆行星",
+                                        TeachingMove.DO,
+                                        "把棋子放到行星上。",
+                                        List.of(planet.chunkId())),
+                                new StepDraft(
+                                        "科技解锁卫星着陆",
+                                        TeachingMove.WATCH,
+                                        "获得对应科技后也可以在卫星着陆。",
+                                        List.of(moon.chunkId()))));
+            }
+        };
+        AtomicInteger coverageCalls = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            if (request.reviewMode() != GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE) {
+                return new GeneratedContentCritic.Review(true, List.of());
+            }
+            coverageCalls.incrementAndGet();
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(planet, moon),
+                model,
+                new PolicyEvidenceVerifier(),
+                critic,
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(moonLandingPlan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(revisions).hasValue(1);
+        assertThat(coverageCalls).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps())
+                .extracting(LessonStep::text)
+                .anyMatch(text -> text.contains("卫星"));
     }
 
     @Test
@@ -731,6 +815,132 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void rejectsRepeatedNumericCostsInMoonLandingRule() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence moon = new RuleEvidence(
+                UUID.randomUUID(),
+                versionId,
+                "TECH",
+                "Moon landing technology",
+                "From now on you can land on a planet's moon instead of the planet itself. The cost is the same as landing on the planet.",
+                17,
+                17);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "卫星着陆",
+                VisualKind.REFERENCE_CARD,
+                "获得科技后可以着陆卫星。",
+                List.of(moon.chunkId()),
+                List.of(new StepDraft(
+                        "卫星着陆",
+                        TeachingMove.WATCH,
+                        "获得科技后可以着陆卫星，花费3能量。",
+                        List.of(moon.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(moon),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(moonLandingPlan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsInternalEvidenceLanguageFromPlayerFacingSteps() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "开局",
+                VisualKind.REFERENCE_CARD,
+                "桌面布置",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "领取奖励",
+                        TeachingMove.DO,
+                        "已提供的证据中没有提到具体奖励。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsSpecificRewardAssignedToAMissingInlinePdfIcon() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                UUID.randomUUID(),
+                versionId,
+                "ACTIONS",
+                "Landing",
+                "This will always include Details are on page 20. a and some number of points.",
+                11,
+                11);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "着陆",
+                VisualKind.REFERENCE_CARD,
+                "获得版图显示的奖励。",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "领取奖励",
+                        TeachingMove.DO,
+                        "行星中央的奖励包括数据和一些分数。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsInventedConcreteStartingResourcesInExamples() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "移动",
+                VisualKind.REFERENCE_CARD,
+                "每点移动力移动一格。",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "移动示例",
+                        TeachingMove.EXAMPLE,
+                        "假设你手上有3能量，支付1能量后还剩2能量。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
     void rejectsEvidenceFromAnotherDocumentVersionBeforeComposition() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence wrongVersion = evidence(UUID.randomUUID(), UUID.randomUUID());
@@ -856,6 +1066,28 @@ class GroundedTeachingAgentTest {
                 "Game",
                 "Premise",
                 List.of(topic(1, TeachingSectionType.SETUP)),
+                "player",
+                Instant.now());
+    }
+
+    private TeachingPlan moonLandingPlan(UUID versionId) {
+        return new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "probe-actions",
+                        "Probe actions",
+                        "Learn the costs and procedures for landing on a planet or moon.",
+                        true,
+                        false,
+                        List.of("planet landing", "moon landing"),
+                        List.of("core_loop"))),
                 "player",
                 Instant.now());
     }

@@ -33,6 +33,8 @@ Teaching method:
 - Setup must read like a table checklist: identify the area or owner, place the item, then state the visible result. Group only genuinely repeated placements.
 - For an opening topic, teach the win condition before component detail when evidence supports it.
 - Turn/action topics must narrate a legal mini-turn: starting state or prerequisite, choice, cost, resolution, then what happens next. Cover all actions named by the objective when evidence supports them.
+- When the objective names alternatives as “X or Y”, teach every evidence-supported branch explicitly. A generic parent heading does not cover an omitted branch; for example, planet landing does not also teach moon landing.
+- Preserve relative costs as relative costs. If evidence says an alternative costs “the same as” a rule already taught, say exactly that instead of repeating numeric costs unless the alternative step cites both the relative rule and the base-cost rule. For moon landing, prefer “费用与登陆该行星相同” over restating 3/2 energy from a different excerpt.
 - Scoring must be a calculation procedure: end trigger, each scoring source, modifiers or penalties, comparison, and tie handling. Never blend these into one paragraph.
 - In every EXAMPLE, track the starting resources, each payment, and the remaining resources in order. Never spend a resource after it has been exhausted, and never invent a reward to make the arithmetic work. Omit the example if the evidence cannot support one complete legal sequence.
 - A hypothetical label does not permit invented numbers or board positions. Every starting resource amount and concrete start/end space in an EXAMPLE must be explicitly supported by that step's cited evidence or visible attached page. If the current evidence gives action costs but no starting inventory, teach the costs without a numeric ledger example.
@@ -43,11 +45,14 @@ Teaching method:
 - Do not infer that a tile, card, or board has a face-up choice, reverse side, orientation, or selected face unless the evidence explicitly says so.
 - A recap should be playable from memory and should not repeat component inventory.
 - Use the allotted step count for clarity; do not collapse several supported actions into one dense step just to be brief.
+- During revision, the maximum step count still applies. Add a missing objective branch by merging it into the closest related step or replacing a lower-value check/example; never append a seventh step when the maximum is six.
+- For missing-rule feedback, inspect all current evidence and cite the strongest complete rule sentence for the prerequisite, cost, procedure, or result. Do not rely on a heading or garbled fragment merely because it was mentioned in feedback.
 
 Language policy:
 - Use natural Simplified Chinese suitable for speaking to friends at a table. Prefer “你”“把…放到…” and “现在检查…”.
 - Translate PDF extraction markers into stable terms: credit/credits as 信用点, energy as 能量, publicity as 宣传度, probe as 探测器, data as 数据, tech as 科技.
 - Write icon meanings as evidenced Chinese terms. Never substitute an emoji or guessed pictograph for a missing PDF glyph.
+- PDF extraction can interleave columns and omit inline icons. When the owning sentence contains a missing glyph, describe it generically as the displayed reward unless a supplied sentence or attached page clearly identifies that exact inline icon. Never fill it from a nearby sidebar, caption, or unrelated sentence; words that merely occur in the same excerpt do not label the gap.
 - Keep round as 轮/轮次 and turn as 回合. A player who passes is finished for 本轮.
 - Preserve an official foreign term in parentheses on first use only when useful. Use Chinese conjunctions.
 - Never say “the rulebook says”, mention retrieval, or use headings such as “信息待补充”“规则缺失”.

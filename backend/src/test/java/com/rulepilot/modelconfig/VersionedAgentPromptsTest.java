@@ -18,6 +18,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v6-system.txt"),
                 resource("atomic-content-critic-v1-system.txt"),
+                resource("objective-coverage-critic-v1-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -37,10 +38,15 @@ class VersionedAgentPromptsTest {
                         "solo rival",
                         "hypothetical label",
                         "Never substitute an emoji",
+                        "describe it generically as the displayed reward",
                         "separate concepts",
                         "inclusive ownership",
                         "win condition",
+                        "planet landing does not also teach moon landing",
+                        "费用与登陆该行星相同",
                         "maximum step count",
+                        "never append a seventh step",
+                        "strongest complete rule sentence",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
                 .contains(
@@ -100,7 +106,21 @@ class VersionedAgentPromptsTest {
                         "credit/credits=信用点",
                         "at most 160 characters");
         assertThat(prompts.atomicCriticSystem())
-                .contains("combined evidence set", "semantic meaning", "asteroid space", "return an empty issues list");
+                .contains(
+                        "combined evidence set",
+                        "semantic meaning",
+                        "asteroid space",
+                        "missing glyph",
+                        "nearby sidebar value",
+                        "return an empty issues list");
+        assertThat(prompts.objectiveCoverageCriticSystem())
+                .contains(
+                        "objective coverage",
+                        "MISSING_CRITICAL_RULE",
+                        "all supplied evidence",
+                        "X or Y",
+                        "landing on a planet or moon",
+                        "complete rule sentence");
         assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }
