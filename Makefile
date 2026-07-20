@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help bootstrap dev dev-split demo-data format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -9,26 +9,13 @@ bootstrap: ## Validate the current repository foundation
 	@sh scripts/verify-foundation.sh
 
 dev: ## Start backend and frontend development servers
-	@set -e; \
-		set -a; \
-		if [ -f .env ]; then . ./.env; fi; \
-		set +a; \
-		trap 'kill 0' INT TERM EXIT; \
-		(cd backend && ./mvnw spring-boot:run) & \
-		(cd frontend && npm run dev -- --host 127.0.0.1) & \
-		wait
+	@bash scripts/run-dev.sh combined
 
 dev-split: ## Start separate API and worker processes plus the frontend
-	@set -e; \
-		set -a; \
-		if [ -f .env ]; then . ./.env; fi; \
-		set +a; \
-		(cd backend && ./mvnw -q -DskipTests package); \
-		trap 'kill 0' INT TERM EXIT; \
-		java -jar backend/target/rulepilot-backend-0.1.0-SNAPSHOT.jar --spring.profiles.active=api & \
-		java -jar backend/target/rulepilot-backend-0.1.0-SNAPSHOT.jar --spring.profiles.active=worker & \
-		(cd frontend && npm run dev -- --host 127.0.0.1) & \
-		wait
+	@bash scripts/run-dev.sh split
+
+dev-stop: ## Stop RulePilot processes left on local development ports
+	@bash scripts/stop-dev.sh
 
 demo-data: ## Load the self-authored demo rulebook into a running local backend
 	@sh scripts/load-demo-data.sh

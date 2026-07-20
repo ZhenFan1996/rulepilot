@@ -155,6 +155,8 @@ make compose-down
 make dev
 ```
 
+按一次 `Ctrl+C` 会同时关闭 Spring Boot、Maven、Vite 和 npm 子进程，并释放 8080/5173 端口。如果旧版本启动器曾留下本项目进程，可运行 `make dev-stop` 后重新执行 `make dev`；该命令只会停止工作目录属于当前 RulePilot 仓库的端口进程，不会终止其他项目。
+
 `make dev` 为快速本地开发保留单进程后端。需要验证生产式进程边界时，先启动依赖，再用同一后端制品分别运行 API 和无 Web 端口的 RabbitMQ Worker：
 
 ```sh
