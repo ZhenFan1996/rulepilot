@@ -114,8 +114,10 @@ class AnswerRetrievalPlannerTest {
                 question, new QuestionContext(versionId, null, "主要行动", 4, Set.of()));
 
         assertThat(intents.getFirst().query())
-                .contains("probe tech", "moon", "same as landing on planet", "prerequisite");
+                .contains("Some planets have moons", "unless an effect or tech allows");
         assertThat(intents.get(1).query())
+                .contains("From now on", "planet's moon", "same as landing on the planet");
+        assertThat(intents.get(2).query())
                 .contains("moon", "tech", "same cost as landing on the planet", "prerequisite");
         assertThat(intents.getLast().sectionTypes()).contains("ACTIONS");
     }

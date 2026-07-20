@@ -222,6 +222,35 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void letsDifferentRetrievalIntentsContributeDistinctEvidence() {
+        RuleEvidenceHit ending = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "END_CONDITIONS", "Game end",
+                "The game ends after the final round.", 20, 20, 0.8);
+        RuleEvidenceHit ties = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TIE_BREAKERS", "Ties",
+                "The tied player with more credits wins.", 21, 21, 0.8);
+        var repeatedRanking = List.of(
+                new HybridEvidenceHit(ending, 0.04, 1, 1, false),
+                new HybridEvidenceHit(ties, 0.03, 2, 2, false));
+        var service = answerService(
+                (version, query, options) -> repeatedRanking,
+                request -> {
+                    assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId)
+                            .contains(ending.chunkId(), ties.chunkId());
+                    return new ModelDraft(
+                            "同分时比较信用点。", "游戏结束后，同分玩家比较信用点。",
+                            List.of(ties.chunkId()), List.of(), "HIGH");
+                });
+
+        var answer = service.answer(
+                "When does the game end, and how are ties resolved?",
+                new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(ties.chunkId());
+    }
+
+    @Test
     void keepsPrimaryEvidenceWhenSupplementaryRetrievalFails() {
         RuleEvidenceHit source = evidence("SCORING");
         AtomicInteger retrievalCalls = new AtomicInteger();

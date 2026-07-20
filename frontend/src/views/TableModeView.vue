@@ -50,6 +50,8 @@ interface CsrfResponse {
   token: string
 }
 
+type FeedbackRating = 'HELPFUL' | 'UNCLEAR' | 'INCORRECT'
+
 const route = useRoute()
 const router = useRouter()
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -60,6 +62,8 @@ const question = ref('')
 const loading = ref(true)
 const asking = ref(false)
 const updating = ref(false)
+const feedbackByTurn = ref<Record<string, FeedbackRating>>({})
+const feedbackSubmitting = ref(false)
 const errorMessage = ref('')
 const elapsedSeconds = ref(0)
 let elapsedTimer: number | undefined
@@ -157,14 +161,35 @@ async function ask() {
       body: JSON.stringify({ question: text, gameSessionId: session.value.id }),
     })
     if (!response.ok) throw new Error('这次裁定没有完成，请重试。')
-    const creation = (await response.json()) as { answer: RuleAnswer }
-    turns.value.push({ id: crypto.randomUUID(), question: text, answer: creation.answer, createdAt: new Date().toISOString() })
+    const creation = (await response.json()) as { answer: RuleAnswer; conversationTurnId: string }
+    turns.value.push({ id: creation.conversationTurnId, question: text, answer: creation.answer, createdAt: new Date().toISOString() })
     question.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '提问失败。'
   } finally {
     asking.value = false
     if (elapsedTimer !== undefined) window.clearInterval(elapsedTimer)
+  }
+}
+
+async function submitFeedback(turnId: string, rating: FeedbackRating) {
+  if (!session.value || feedbackSubmitting.value) return
+  feedbackSubmitting.value = true
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/game-sessions/${session.value.id}/conversation/${turnId}/feedback`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({ rating }),
+    })
+    if (!response.ok) throw new Error('反馈暂时没有保存，请稍后再试。')
+    feedbackByTurn.value[turnId] = rating
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '反馈暂时没有保存。'
+  } finally {
+    feedbackSubmitting.value = false
   }
 }
 
@@ -265,6 +290,23 @@ onUnmounted(() => {
                 </div>
               </div>
             </details>
+            <div class="border-t border-ink/10 px-5 py-4 sm:px-7">
+              <p class="text-xs font-semibold text-ink/45">这条裁定讲清楚了吗？</p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button
+                  v-for="option in ([['HELPFUL', '有帮助'], ['UNCLEAR', '没讲清'], ['INCORRECT', '规则有误']] as const)"
+                  :key="option[0]"
+                  type="button"
+                  :disabled="feedbackSubmitting"
+                  class="min-h-10 rounded-full border px-3 text-sm font-semibold disabled:opacity-40"
+                  :class="feedbackByTurn[latestTurn.id] === option[0] ? 'border-indigo bg-indigo text-white' : 'border-ink/15 text-ink/65'"
+                  @click="submitFeedback(latestTurn.id, option[0])"
+                >
+                  {{ option[1] }}
+                </button>
+              </div>
+              <p v-if="feedbackByTurn[latestTurn.id]" class="mt-2 text-xs text-emerald-700" role="status">已记下，会用于复查这类问题。</p>
+            </div>
           </article>
 
           <div v-else class="mt-5 rounded-3xl border border-white/10 p-6 text-center">

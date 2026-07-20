@@ -38,7 +38,7 @@ public class StructuredRuleAnswerController {
     }
 
     @PostMapping
-    AnswerCreation answer(
+    AnswerResponse answer(
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
         String username = principal.getName();
         var session = validateSession(request.gameSessionId(), versionId, username);
@@ -57,10 +57,10 @@ public class StructuredRuleAnswerController {
                         request.learningIntent()),
                 username,
                 request.gameSessionId());
-        if (session != null) {
-            conversations.record(session.sessionId(), request.question(), creation.answer(), username);
-        }
-        return creation;
+        GameSessionConversationTurn turn = session == null
+                ? null
+                : conversations.record(session.sessionId(), request.question(), creation.answer(), username);
+        return new AnswerResponse(creation.assistantRunId(), creation.answer(), turn == null ? null : turn.id());
     }
 
     @GetMapping("/conversation")
@@ -101,4 +101,9 @@ public class StructuredRuleAnswerController {
             UUID gameSessionId,
             String previousQuestion,
             com.rulepilot.assistant.domain.LearningIntent learningIntent) {}
+
+    record AnswerResponse(
+            UUID assistantRunId,
+            com.rulepilot.assistant.domain.StructuredRuleAnswer answer,
+            UUID conversationTurnId) {}
 }

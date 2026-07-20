@@ -18,7 +18,7 @@ public final class AnswerRetrievalPlanner {
 
     private static final int MAX_QUERY_LENGTH = 500;
     private static final int MAX_SECTION_FILTERS = 4;
-    private static final int MAX_INTENTS = 6;
+    private static final int MAX_INTENTS = 5;
     private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
             java.util.regex.Pattern.compile("[?？!！;；,，]+");
     private static final Map<String, String> SEARCH_VOCABULARY = searchVocabulary();
@@ -47,11 +47,12 @@ public final class AnswerRetrievalPlanner {
                 ? Set.of(currentSection)
                 : Set.of();
         addNamedRuleAnchor(intents, question.normalizedQuestion());
+        int questionIntentBudget = Math.max(1, MAX_INTENTS - intents.size() - 1);
         if (parts.size() == 1) {
             intents.add(new RetrievalIntent(
                     expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection));
         } else {
-            parts.forEach(part -> intents.add(new RetrievalIntent(
+            parts.stream().limit(questionIntentBudget).forEach(part -> intents.add(new RetrievalIntent(
                     expandSearchTerms(part), learningScope, currentSection)));
         }
         intents.add(new RetrievalIntent(
@@ -64,7 +65,12 @@ public final class AnswerRetrievalPlanner {
     private static void addNamedRuleAnchor(List<RetrievalIntent> intents, String question) {
         if (question.contains("月球")) {
             intents.add(new RetrievalIntent(
-                    "probe tech moon instead of planet cost same as landing on planet prerequisite",
+                    "Some planets have moons cannot land on them unless an effect or tech allows you to do so",
+                    Set.of("ACTIONS"),
+                    "ACTIONS"));
+            intents.add(new RetrievalIntent(
+                    "From now on you can land on a planet's moon instead of the planet itself "
+                            + "cost is the same as landing on the planet",
                     Set.of("ACTIONS"),
                     "ACTIONS"));
         }

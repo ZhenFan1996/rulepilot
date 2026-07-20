@@ -1,0 +1,38 @@
+[
+  {
+    "id": "moon-prerequisite-and-cost",
+    "question": "我还没有解锁行星所在技术列的月球格，现在能登陆月球吗？如果以后能，费用怎么算？",
+    "previousQuestion": null,
+    "gamePhase": "主要行动",
+    "playerCount": 4,
+    "expectedStatus": "ANSWERED",
+    "requiredPages": [17],
+    "requiredTermGroups": [["不能", "不可以", "需要先", "解锁后"], ["相同", "一样"]],
+    "forbiddenTerms": ["月球科技给予1能量减免", "月球科技给予 1 能量减免"],
+    "maxLatencyMillis": 45000
+  },
+  {
+    "id": "same-turn-second-main-action",
+    "question": "那之后还能再做一次主要行动吗？",
+    "previousQuestion": "我刚完成了月球登陆。",
+    "gamePhase": "主要行动",
+    "playerCount": 4,
+    "expectedStatus": "ANSWERED",
+    "requiredPages": [7],
+    "requiredTermGroups": [["不能", "不可以"], ["一个主要行动", "一次主要行动"]],
+    "forbiddenTerms": [],
+    "maxLatencyMillis": 45000
+  },
+  {
+    "id": "unlocked-moon-relative-cost",
+    "question": "我已经解锁了对应技术列的月球格，登陆这个行星的月球要支付多少能量？",
+    "previousQuestion": null,
+    "gamePhase": "主要行动",
+    "playerCount": 4,
+    "expectedStatus": "ANSWERED",
+    "requiredPages": [17],
+    "requiredTermGroups": [["相同", "一样"]],
+    "forbiddenTerms": ["月球科技给予1能量减免", "月球科技给予 1 能量减免"],
+    "maxLatencyMillis": 45000
+  }
+]

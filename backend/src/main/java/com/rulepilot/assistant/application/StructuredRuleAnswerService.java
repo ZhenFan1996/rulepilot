@@ -124,17 +124,25 @@ public class StructuredRuleAnswerService {
             String question, QuestionContext context, String username, UUID gameSessionId) {
         return Observation.createNotStarted("rulepilot.answer.workflow", observations)
                 .contextualName("answer-workflow")
-                .observe(() -> answerWithRunObserved(question, context, username, gameSessionId));
+                .observe(() -> answerWithRunObserved(question, context, username, gameSessionId, true));
+    }
+
+    public AnswerCreation evaluateWithRun(
+            String question, QuestionContext context, String username, UUID evaluationSessionId) {
+        return Observation.createNotStarted("rulepilot.answer.evaluation", observations)
+                .contextualName("answer-evaluation")
+                .observe(() -> answerWithRunObserved(question, context, username, evaluationSessionId, false));
     }
 
     private AnswerCreation answerWithRunObserved(
-            String question, QuestionContext context, String username, UUID gameSessionId) {
+            String question, QuestionContext context, String username, UUID gameSessionId, boolean useCache) {
         RunSnapshot run = runs.start(
                 AssistantRunMode.QUESTION_ANSWER,
                 gameSessionId == null ? context.documentVersionId() : gameSessionId,
                 username);
         try {
-            StructuredRuleAnswer answer = answerInternal(question, context, username, gameSessionId, run.id());
+            StructuredRuleAnswer answer = answerInternal(
+                    question, context, username, gameSessionId, run.id(), useCache);
             run = finishRun(run, answer);
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
@@ -153,6 +161,16 @@ public class StructuredRuleAnswerService {
 
     private StructuredRuleAnswer answerInternal(
             String question, QuestionContext context, String username, UUID gameSessionId, UUID assistantRunId) {
+        return answerInternal(question, context, username, gameSessionId, assistantRunId, true);
+    }
+
+    private StructuredRuleAnswer answerInternal(
+            String question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            UUID assistantRunId,
+            boolean useCache) {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
             return clarification(understood);
@@ -172,12 +190,14 @@ public class StructuredRuleAnswerService {
         }
         rateLimiter.checkUser(username);
         AnswerCacheKey cacheKey = cacheKey(understood, context, gameSessionId);
-        var cached = findCached(cacheKey);
-        if (cached.isPresent()) {
-            cacheHits.increment();
-            return cached.get();
+        if (useCache) {
+            var cached = findCached(cacheKey);
+            if (cached.isPresent()) {
+                cacheHits.increment();
+                return cached.get();
+            }
+            cacheMisses.increment();
         }
-        cacheMisses.increment();
         RetrievalResult retrievalResult = retrieveEvidence(assistantRunId, understood, context);
         List<HybridEvidenceHit> evidence = retrievalResult.evidence();
         if (retrievalResult.conflicting()) {
@@ -272,7 +292,9 @@ public class StructuredRuleAnswerService {
                     exception.getClass().getSimpleName());
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
         }
-        saveCached(cacheKey, answer);
+        if (useCache) {
+            saveCached(cacheKey, answer);
+        }
         return answer;
     }
 
@@ -415,7 +437,11 @@ public class StructuredRuleAnswerService {
                         this::evidenceTokens);
                 boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
                 if (!retrieved.isEmpty() && !supplementaryIntent) {
-                    intentAnchors.putIfAbsent(retrieved.getFirst().evidence().chunkId(), retrieved.getFirst());
+                    HybridEvidenceHit diverseAnchor = retrieved.stream()
+                            .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))
+                            .findFirst()
+                            .orElse(retrieved.getFirst());
+                    intentAnchors.putIfAbsent(diverseAnchor.evidence().chunkId(), diverseAnchor);
                 }
                 for (HybridEvidenceHit hit : retrieved) {
                     HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());

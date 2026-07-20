@@ -67,5 +67,15 @@ class GameSessionConversationServiceTest {
                     .toList();
             return recent;
         }
+
+        @Override
+        public java.util.Optional<GameSessionConversationTurn> findOwned(
+                UUID turnId, UUID sessionId, String username) {
+            return values.stream()
+                    .filter(turn -> turn.id().equals(turnId)
+                            && turn.sessionId().equals(sessionId)
+                            && turn.createdBy().equals(username))
+                    .findFirst();
+        }
     }
 }

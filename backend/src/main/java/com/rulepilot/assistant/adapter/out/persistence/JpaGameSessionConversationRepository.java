@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
@@ -54,6 +55,20 @@ public class JpaGameSessionConversationRepository implements GameSessionConversa
                 .toList());
         Collections.reverse(recent);
         return List.copyOf(recent);
+    }
+
+    @Override
+    public Optional<GameSessionConversationTurn> findOwned(UUID turnId, UUID sessionId, String username) {
+        List<GameSessionConversationTurnEntity> matches = entityManager.createQuery(
+                        "select t from GameSessionConversationTurnEntity t "
+                                + "where t.id = :turnId and t.sessionId = :sessionId and t.createdBy = :username",
+                        GameSessionConversationTurnEntity.class)
+                .setParameter("turnId", turnId)
+                .setParameter("sessionId", sessionId)
+                .setParameter("username", username)
+                .setMaxResults(1)
+                .getResultList();
+        return matches.isEmpty() ? Optional.empty() : Optional.of(matches.getFirst().toDomain());
     }
 }
 
