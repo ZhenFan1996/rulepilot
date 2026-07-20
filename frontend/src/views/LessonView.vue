@@ -19,6 +19,17 @@ import {
   loadOfflineKnowledge,
   type OfflineKnowledgeEntry,
 } from '@/lib/offlineKnowledge'
+import {
+  mergeTeachingRunProgress,
+  processedTeachingChapterCount,
+  supportedTeachingChapterCount,
+  teachingActivityCursor,
+  teachingActivityText,
+  teachingElapsedLabel,
+  teachingRemainingTimeText,
+  type TeachingActivity,
+  type TeachingRunProgress,
+} from '@/lib/teachingProgress'
 import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
 
 interface TeachingPlan {
@@ -29,23 +40,17 @@ interface TeachingPlan {
   durationMinutes: number
   gameTitle: string
   premise: string
+  sections: Array<{
+    position: number
+    title: string
+    visualEvidenceRecommended: boolean
+  }>
 }
 
 interface IllustratedLesson {
   id: string
   status: 'COMPLETE' | 'INCOMPLETE'
   sections: LessonSection[]
-}
-
-interface TeachingRunProgress {
-  run: {
-    id: string
-    state: string
-    createdAt: string
-    updatedAt: string
-    completedAt: string | null
-    lastErrorCode: string | null
-  }
 }
 
 interface LessonSection {
@@ -274,7 +279,9 @@ const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
 const waitingForNextChapter = ref(false)
+const generationNow = ref(Date.now())
 let generationRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let lessonViewDisposed = false
 
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -285,6 +292,28 @@ const generationActive = computed(
 const readingCurrentLastChapter = computed(
   () => Boolean(lesson.value?.sections.length) && progress.value.currentIndex === lesson.value!.sections.length - 1,
 )
+const generationActivities = computed(() => teachingRun.value?.activities ?? [])
+const currentGenerationActivity = computed(() => generationActivities.value.at(-1))
+const currentGenerationText = computed(() => plan.value
+  ? teachingActivityText(plan.value, generationActivities.value, currentGenerationActivity.value)
+  : '正在准备规则依据和章节顺序')
+const generationElapsed = computed(() => teachingElapsedLabel(teachingRun.value, generationNow.value))
+const processedGenerationChapters = computed(() => processedTeachingChapterCount(teachingRun.value))
+const supportedGenerationChapters = computed(() => supportedTeachingChapterCount(teachingRun.value))
+const generationProgressWidth = computed(() => `${Math.round(
+  processedGenerationChapters.value / Math.max(1, plan.value?.sections.length ?? 1) * 100,
+)}%`)
+const generationRemainingTime = computed(() => plan.value
+  ? teachingRemainingTimeText(plan.value, teachingRun.value, generationNow.value)
+  : '')
+const recentGenerationActivities = computed(() => generationActivities.value.slice(-3).reverse())
+
+function generationActivityText(activity: TeachingActivity) {
+  return plan.value
+    ? teachingActivityText(plan.value, generationActivities.value, activity)
+    : '正在整理并核对讲解'
+}
+
 const currentVisualPageUrl = computed(() => {
   const page = currentSection.value?.visualSourcePages[0]
   return pageImageUrl(page)
@@ -539,9 +568,10 @@ function terminalGenerationMessage(state: string) {
 async function refreshGeneration() {
   if (!generationActive.value || !online.value || lessonViewDisposed) return
   const wasActive = generationActive.value
+  const activityCursor = teachingActivityCursor(teachingRun.value)
   try {
     const [runResponse, lessonResponse] = await Promise.all([
-      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId.value)}`, { credentials: 'include' }),
+      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId.value)}${activityCursor}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest`, { credentials: 'include' }),
     ])
     if (runResponse.status === 401 || lessonResponse.status === 401) {
@@ -553,13 +583,14 @@ async function refreshGeneration() {
     }
 
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
+    const acceptedRun = mergeTeachingRunProgress(teachingRun.value, incomingRun)
     const incomingLesson = await lessonResponse.json() as IllustratedLesson
     const previousLesson = lesson.value
     const previousCount = previousLesson?.sections.length ?? 0
     const acceptedLesson = acceptProgressiveLesson(previousLesson, incomingLesson)
     const lessonReplaced = previousLesson !== null && acceptedLesson.id !== previousLesson.id
     lesson.value = acceptedLesson
-    teachingRun.value = incomingRun
+    teachingRun.value = acceptedRun
     generationStatusUnknown.value = false
     generationRefreshError.value = ''
 
@@ -579,7 +610,7 @@ async function refreshGeneration() {
     }
 
     if (wasActive && !generationActive.value) {
-      generationFinishedMessage.value = terminalGenerationMessage(incomingRun?.run.state ?? '')
+      generationFinishedMessage.value = terminalGenerationMessage(acceptedRun?.run.state ?? '')
       await loadSupportingContent(planId.value)
     }
   } catch (error) {
@@ -1090,6 +1121,7 @@ function updateOnlineStatus() {
 
 onMounted(() => {
   lessonViewDisposed = false
+  generationClockTimer = setInterval(() => { generationNow.value = Date.now() }, 1000)
   void loadLesson()
   window.addEventListener('online', updateOnlineStatus)
   window.addEventListener('offline', updateOnlineStatus)
@@ -1099,6 +1131,8 @@ onMounted(() => {
 onUnmounted(() => {
   lessonViewDisposed = true
   clearGenerationRefresh()
+  if (generationClockTimer) clearInterval(generationClockTimer)
+  generationClockTimer = undefined
   window.removeEventListener('online', updateOnlineStatus)
   window.removeEventListener('offline', updateOnlineStatus)
   window.removeEventListener('keydown', handleKeydown)
@@ -1126,11 +1160,34 @@ onUnmounted(() => {
       <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
         <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
       </div>
-      <div v-if="generationActive" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3 text-center" role="status" aria-live="polite">
-        <p class="text-sm font-semibold text-indigo">{{ generationStatusUnknown ? '正在确认后台生成状态' : '整本仍在后台生成' }} · 当前已有 {{ lesson?.sections.length ?? 0 }} 节可以阅读</p>
-        <p class="mt-1 text-xs text-ink/55">停在当前章节不会丢失进度；新章节完成后会自动出现在目录里。</p>
-        <p v-if="generationRefreshError" class="mt-1 text-xs font-semibold text-amber-800">暂时没有取得最新章节，正在自动重试。现有内容不受影响。</p>
-      </div>
+      <section v-if="generationActive" class="border-b border-indigo/15 bg-indigo/5 px-5 py-4">
+        <div class="mx-auto max-w-4xl">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-sm font-semibold text-indigo" role="status" aria-live="polite" aria-atomic="true">{{ generationStatusUnknown ? '正在确认后台生成状态' : currentGenerationText }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/55">整本仍在后台生成 · 当前已有 {{ lesson?.sections.length ?? 0 }} 节可以阅读。停在这里不会丢失进度。</p>
+            </div>
+            <span v-if="!generationStatusUnknown" class="shrink-0 font-mono text-sm font-semibold text-indigo" aria-label="已用时">{{ generationElapsed }}</span>
+          </div>
+          <template v-if="!generationStatusUnknown && plan">
+            <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="processedGenerationChapters" :aria-label="`已处理 ${processedGenerationChapters} 个章节，共 ${plan.sections.length} 个`">
+              <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: generationProgressWidth }" />
+            </div>
+            <div class="mt-2 flex flex-wrap justify-between gap-2 text-xs text-ink/55">
+              <span>后台已处理 {{ processedGenerationChapters }}/{{ plan.sections.length }} 节，其中 {{ supportedGenerationChapters }} 节通过核对</span>
+              <span>{{ teachingRun?.budget.usedModelCalls ?? 0 }} 次模型调用</span>
+            </div>
+            <p class="mt-2 text-xs leading-5 text-ink/50">{{ generationRemainingTime }} 新章节完成后会自动出现在目录里。</p>
+            <ol v-if="recentGenerationActivities.length" class="mt-3 grid gap-1.5 border-t border-indigo/10 pt-3 sm:grid-cols-3" aria-label="最近生成进度">
+              <li v-for="activity in recentGenerationActivities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
+                <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
+                <span>{{ generationActivityText(activity) }}</span>
+              </li>
+            </ol>
+          </template>
+          <p v-if="generationRefreshError" class="mt-2 text-xs font-semibold text-amber-800" role="status">暂时没有取得最新章节，正在自动重试。现有内容不受影响。</p>
+        </div>
+      </section>
       <p v-else-if="generationFinishedMessage" class="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-center text-sm font-semibold text-emerald-800" role="status">{{ generationFinishedMessage }}</p>
 
       <section v-if="!online && offlineKnowledge.length" class="mx-auto max-w-4xl px-5 pt-7 sm:px-8" aria-labelledby="offline-knowledge-title">

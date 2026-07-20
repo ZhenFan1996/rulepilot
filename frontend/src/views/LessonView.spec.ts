@@ -8,6 +8,7 @@ describe('LessonView progressive reading', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-21T00:02:00Z'))
   })
 
   afterEach(() => {
@@ -19,12 +20,16 @@ describe('LessonView progressive reading', () => {
     let runReads = 0
     let lessonReads = 0
     let qualityReads = 0
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
           id: 'plan-1', documentVersionId: 'version-1', playerCount: 4,
           beginnerCount: 3, durationMinutes: 25, gameTitle: 'SETI', premise: '寻找生命',
+          sections: [
+            { position: 1, title: '先摆主板', visualEvidenceRecommended: true },
+            { position: 2, title: '开始第一轮', visualEvidenceRecommended: false },
+          ],
         })
       }
       if (path.includes('/api/v1/assistant-runs/latest')) {
@@ -37,6 +42,16 @@ describe('LessonView progressive reading', () => {
             createdAt: '2026-07-21T00:00:00Z', updatedAt: '2026-07-21T00:01:00Z',
             completedAt: runReads >= 3 ? '2026-07-21T00:02:00Z' : null, lastErrorCode: null,
           },
+          budget: { usedModelCalls: runReads >= 3 ? 2 : 1, maxModelCalls: 144 },
+          activities: runReads >= 3
+            ? [{
+                sequence: 2, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'published',
+                outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-21T00:02:00Z',
+              }]
+            : [{
+                sequence: 1, type: 'MODEL', operation: 'composeTeachingSection|1', summary: 'internal',
+                outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-21T00:01:00Z',
+              }],
         })
       }
       if (path.endsWith('/illustrated-lessons/latest')) {
@@ -53,7 +68,8 @@ describe('LessonView progressive reading', () => {
       }
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createMemoryRouter()
     await router.push('/lesson/plan-1')
     await router.isReady()
@@ -86,6 +102,11 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('第 2 / 2 节')
     expect(wrapper.text()).toContain('开始第一轮')
     expect(wrapper.text()).toContain('整本仍在后台生成')
+    expect(wrapper.text()).toContain('正在阅读规则书图片并编写“先摆主板”')
+    expect(wrapper.text()).toContain('后台已处理 0/2 节')
+    expect(wrapper.text()).toContain('1 次模型调用')
+    expect(wrapper.text()).toContain('第一节完成后')
+    expect(wrapper.text()).not.toContain('internal')
     expect(wrapper.text()).toContain('这节看懂了，等待下一节')
 
     await vi.advanceTimersByTimeAsync(1500)
@@ -94,6 +115,10 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('我学完了')
     expect(wrapper.text()).not.toContain('整本仍在后台生成')
     expect(qualityReads).toBe(1)
+    const progressPaths = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
+    expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
     wrapper.unmount()
   })
 })
