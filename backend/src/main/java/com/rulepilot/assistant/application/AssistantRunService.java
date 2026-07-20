@@ -96,13 +96,40 @@ public class AssistantRunService implements AssistantRuns {
     @Transactional(readOnly = true)
     public Optional<RunDetails> findLatestOwned(
             AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        return latestOwnedRun(mode, subjectId, ownerUsername)
+                .map(run -> details(run, execution.activities(run.id())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<RunDetails> findLatestOwned(
+            AssistantRunMode mode,
+            UUID subjectId,
+            String ownerUsername,
+            UUID activityRunId,
+            long afterActivitySequence) {
+        if (afterActivitySequence < 0) {
+            throw new IllegalArgumentException("activity sequence cursor is invalid");
+        }
+        return latestOwnedRun(mode, subjectId, ownerUsername)
+                .map(run -> details(
+                        run,
+                        execution.activitiesAfter(
+                                run.id(), run.id().equals(activityRunId) ? afterActivitySequence : 0)));
+    }
+
+    private Optional<AssistantRun> latestOwnedRun(
+            AssistantRunMode mode, UUID subjectId, String ownerUsername) {
         if (mode == null || subjectId == null || ownerUsername == null || ownerUsername.isBlank()) {
             return Optional.empty();
         }
-        return repository.findLatest(mode, subjectId, ownerUsername.strip())
-                .map(run -> new RunDetails(
-                        snapshot(run), repository.steps(run.id()), execution.budget(run.id()),
-                        execution.activities(run.id())));
+        return repository.findLatest(mode, subjectId, ownerUsername.strip());
+    }
+
+    private RunDetails details(
+            AssistantRun run, List<AgentExecutionControl.ActivitySnapshot> activities) {
+        return new RunDetails(
+                snapshot(run), repository.steps(run.id()), execution.budget(run.id()), activities);
     }
 
     @Override

@@ -75,5 +75,10 @@ public interface AgentExecutionControl {
 
     List<ActivitySnapshot> activities(UUID runId);
 
+    default List<ActivitySnapshot> activitiesAfter(UUID runId, long afterSequence) {
+        if (afterSequence < 0) throw new IllegalArgumentException("activity sequence cursor is invalid");
+        return activities(runId).stream().filter(activity -> activity.sequence() > afterSequence).toList();
+    }
+
     record InvocationReservation(UUID id, UUID runId, ActivityType type, String operation, int inputTokens) {}
 }

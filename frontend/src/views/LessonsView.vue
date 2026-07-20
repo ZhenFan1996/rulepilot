@@ -219,16 +219,31 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
 
 async function loadProgress(plan: TeachingPlan) {
   try {
+    const previousRun = progress.value[plan.id]?.run
+    const previousSequence = previousRun?.activities.at(-1)?.sequence ?? 0
+    const activityCursor = previousRun
+      ? `&activityRunId=${encodeURIComponent(previousRun.run.id)}&afterActivitySequence=${previousSequence}`
+      : ''
     const [runResponse, lessonResponse] = await Promise.all([
-      checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}`),
+      checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`),
       checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
     ])
     if (!runResponse.ok && runResponse.status !== 404) throw new Error('讲解任务进度暂时不可用。')
     if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error('讲解内容进度暂时不可用。')
+    const incomingRun = runResponse.ok ? await runResponse.json() as AssistantRun : null
+    const run = incomingRun && previousRun?.run.id === incomingRun.run.id
+      ? {
+          ...incomingRun,
+          activities: Array.from(new Map(
+            [...previousRun.activities, ...incomingRun.activities]
+              .map((activity) => [activity.sequence, activity]),
+          ).values()).sort((left, right) => left.sequence - right.sequence),
+        }
+      : incomingRun
     progress.value = {
       ...progress.value,
       [plan.id]: {
-        run: runResponse.ok ? await runResponse.json() as AssistantRun : null,
+        run,
         lesson: lessonResponse.ok ? await lessonResponse.json() as LessonSummary : null,
       },
     }

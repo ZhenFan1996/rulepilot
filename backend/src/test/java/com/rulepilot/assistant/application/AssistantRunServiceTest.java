@@ -100,6 +100,26 @@ class AssistantRunServiceTest {
         verify(repository).findLatest(AssistantRunMode.TEACHING, planId, "player");
     }
 
+    @Test
+    void appliesActivityCursorOnlyToTheSameLatestRun() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        UUID planId = UUID.randomUUID();
+        AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now());
+        when(repository.findLatest(AssistantRunMode.TEACHING, planId, "player"))
+                .thenReturn(java.util.Optional.of(run));
+        when(repository.steps(run.id())).thenReturn(List.of());
+        when(execution.activitiesAfter(run.id(), 18)).thenReturn(List.of());
+        when(execution.activitiesAfter(run.id(), 0)).thenReturn(List.of());
+
+        service.findLatestOwned(AssistantRunMode.TEACHING, planId, "player", run.id(), 18);
+        service.findLatestOwned(AssistantRunMode.TEACHING, planId, "player", UUID.randomUUID(), 18);
+
+        verify(execution).activitiesAfter(run.id(), 18);
+        verify(execution).activitiesAfter(run.id(), 0);
+    }
+
     private AssistantRunService service(AssistantRunRepository repository, AgentExecutionControl execution) {
         return new AssistantRunService(
                 repository,

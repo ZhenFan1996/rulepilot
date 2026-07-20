@@ -251,12 +251,23 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Override
     @Transactional(readOnly = true)
     public List<ActivitySnapshot> activities(UUID runId) {
+        return activitiesAfter(runId, 0);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ActivitySnapshot> activitiesAfter(UUID runId, long afterSequence) {
+        if (afterSequence < 0) throw new IllegalArgumentException("activity sequence cursor is invalid");
         return entityManager.createNativeQuery("""
                         select sequence_number, activity_type, operation_name, outcome,
                                estimated_input_tokens, estimated_output_tokens, latency_ms, summary, occurred_at
-                        from assistant_run_activity where assistant_run_id = :runId order by sequence_number
+                        from assistant_run_activity
+                        where assistant_run_id = :runId
+                          and sequence_number > :afterSequence
+                        order by sequence_number
                         """)
                 .setParameter("runId", runId)
+                .setParameter("afterSequence", afterSequence)
                 .getResultList().stream()
                 .map(result -> activity((Object[]) result))
                 .toList();

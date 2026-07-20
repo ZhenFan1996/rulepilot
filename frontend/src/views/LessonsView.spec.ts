@@ -13,7 +13,7 @@ describe('LessonsView', () => {
   it('shows a persisted active run as safe background work instead of a finished lesson', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') {
         return Response.json([{
@@ -35,7 +35,8 @@ describe('LessonsView', () => {
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -63,6 +64,13 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('第一节完成后')
     expect(wrapper.text()).toContain('可以关闭或离开此页')
     expect(wrapper.text()).not.toContain('目录已生成')
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushPromises()
+    const progressPaths = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
+    expect(progressPaths[1]).toContain('activityRunId=run-1&afterActivitySequence=1')
+    expect(wrapper.findAll('[aria-label="最近进度"] li')).toHaveLength(1)
     wrapper.unmount()
   })
 

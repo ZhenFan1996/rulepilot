@@ -36,8 +36,11 @@ public class AssistantRunController {
     AssistantRuns.RunDetails latest(
             @RequestParam AssistantRunMode mode,
             @RequestParam UUID subjectId,
+            @RequestParam(required = false) UUID activityRunId,
+            @RequestParam(defaultValue = "0") long afterActivitySequence,
             Principal principal) {
-        return runs.findLatestOwned(mode, subjectId, principal.getName())
+        return runs.findLatestOwned(
+                        mode, subjectId, principal.getName(), activityRunId, afterActivitySequence)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "assistant run does not exist"));
     }
 
