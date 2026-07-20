@@ -1,8 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import {
+  forgetPendingRulebookLesson,
+  readPendingRulebookLessons,
+  rememberPendingRulebookLesson,
+  type PendingRulebookLesson,
+} from '@/lib/pendingRulebookLesson'
 
 interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
@@ -14,6 +20,7 @@ interface DocumentResponse {
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
 interface TeachingPlanResponse { id: string }
+interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; complete: boolean }
 interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
@@ -21,6 +28,7 @@ interface ModelConfigurationResponse {
 
 const router = useRouter()
 const route = useRoute()
+const username = ref('')
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
@@ -40,6 +48,10 @@ const message = ref('')
 const errorMessage = ref('')
 const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
 const modelConfiguration = ref<ModelConfigurationResponse | null>(null)
+const progressConnections = new Map<string, EventSource>()
+const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const progressRetryAttempts = new Map<string, number>()
+let disposed = false
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
@@ -89,16 +101,20 @@ async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const [catalogResponse, modelResponse] = await Promise.all([
+    const [sessionResponse, catalogResponse, modelResponse] = await Promise.all([
+      checkedFetch('/api/auth/session'),
       checkedFetch('/api/v1/games'),
       checkedFetch('/api/v1/model-configuration'),
     ])
+    if (!sessionResponse.ok) throw new Error('无法读取登录状态。')
     if (!catalogResponse.ok) throw new Error('无法读取游戏目录。')
+    username.value = ((await sessionResponse.json()) as { username: string }).username
     games.value = await catalogResponse.json() as GameResponse[]
     if (modelResponse.ok) modelConfiguration.value = await modelResponse.json() as ModelConfigurationResponse
     const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
     editionId.value = editionOptions.value.some((item) => item.id === requestedEdition) ? requestedEdition : ''
     await loadDocuments()
+    await recoverPendingHandoff()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '加载失败。'
   } finally {
@@ -116,8 +132,17 @@ function titleFromFile(selected: File) {
   return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || '规则书'
 }
 
-async function startLesson(versionId: string) {
-  if (beginnerCount.value > playerCount.value) throw new Error('新手人数不能超过玩家人数。')
+function currentPreferences(versionId: string): PendingRulebookLesson {
+  return {
+    versionId,
+    playerCount: playerCount.value,
+    beginnerCount: beginnerCount.value,
+    durationMinutes: durationMinutes.value,
+  }
+}
+
+async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
+  if (preferences.beginnerCount > preferences.playerCount) throw new Error('新手人数不能超过玩家人数。')
   preparingVersionId.value = versionId
   message.value = '正在整理讲解顺序…'
   try {
@@ -126,9 +151,9 @@ async function startLesson(versionId: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({
-        playerCount: playerCount.value,
-        beginnerCount: beginnerCount.value,
-        durationMinutes: durationMinutes.value,
+        playerCount: preferences.playerCount,
+        beginnerCount: preferences.beginnerCount,
+        durationMinutes: preferences.durationMinutes,
       }),
     })
     if (!planResponse.ok) throw new Error('暂时无法开始讲解，请确认规则书已经读取完成。')
@@ -138,6 +163,7 @@ async function startLesson(versionId: string) {
       method: 'POST', headers: { [csrf.headerName]: csrf.token },
     })
     if (!lessonResponse.ok) throw new Error('讲解任务没有启动，请稍后重试。')
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
     localStorage.setItem('rulepilot:last-plan-id', plan.id)
     await router.push({ name: 'lessons', query: { started: plan.id } })
   } finally {
@@ -145,25 +171,123 @@ async function startLesson(versionId: string) {
   }
 }
 
-function watchProgress(versionId: string) {
+function closeProgressConnection(versionId: string) {
+  progressConnections.get(versionId)?.close()
+  progressConnections.delete(versionId)
+  const timer = progressRetryTimers.get(versionId)
+  if (timer) clearTimeout(timer)
+  progressRetryTimers.delete(versionId)
+}
+
+function watchProgress(pending: PendingRulebookLesson) {
+  const versionId = pending.versionId
+  closeProgressConnection(versionId)
+  if (disposed) return
   processingVersionId.value = versionId
   const events = new EventSource(`/api/v1/document-versions/${versionId}/progress`, { withCredentials: true })
+  progressConnections.set(versionId, events)
   events.addEventListener('progress', (event) => {
-    const snapshot = JSON.parse((event as MessageEvent<string>).data) as {
-      stage: string; percentage: number; processedPages: number; complete: boolean
+    const snapshot = parseProgressSnapshot((event as MessageEvent<string>).data)
+    if (!snapshot) {
+      events.close()
+      progressConnections.delete(versionId)
+      void reconcileProgressAfterDisconnect(pending)
+      return
     }
+    progressRetryAttempts.set(versionId, 0)
     progress.value = { ...progress.value, [versionId]: snapshot }
     message.value = `正在读取规则书：${snapshot.percentage}%`
     if (snapshot.complete) {
-      events.close()
-      processingVersionId.value = ''
-      void loadDocuments()
-      void startLesson(versionId).catch((error: unknown) => {
-        errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
-      })
+      void handleTerminalProgress(pending, snapshot.stage)
     }
   })
-  events.onerror = () => events.close()
+  events.onerror = () => {
+    events.close()
+    progressConnections.delete(versionId)
+    if (!disposed) void reconcileProgressAfterDisconnect(pending)
+  }
+}
+
+async function handleTerminalProgress(pending: PendingRulebookLesson, stage: string) {
+  closeProgressConnection(pending.versionId)
+  progressRetryAttempts.delete(pending.versionId)
+  processingVersionId.value = ''
+  await loadDocuments().catch(() => undefined)
+  if (stage === 'READY') {
+    await startLesson(pending.versionId, pending).catch((error: unknown) => {
+      errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
+    })
+    return
+  }
+  if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+  errorMessage.value = '规则书读取失败，没有启动讲解。你可以重新上传，或稍后重试处理。'
+}
+
+async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) {
+  try {
+    await loadDocuments()
+    const status = documents.value.find((entry) => entry.latestVersion.id === pending.versionId)?.latestVersion.status
+    if (status === 'READY' || status === 'FAILED') {
+      await handleTerminalProgress(pending, status)
+      return
+    }
+    if (!status) {
+      if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+      processingVersionId.value = ''
+      errorMessage.value = '这次规则书读取记录已经不存在，没有启动讲解。'
+      return
+    }
+    message.value = '暂时没有收到最新读取进度，正在重新连接；后台处理不会停止。'
+  } catch {
+    message.value = '暂时无法确认读取进度，正在重新连接；后台处理不会停止。'
+  }
+  scheduleProgressReconnect(pending)
+}
+
+function scheduleProgressReconnect(pending: PendingRulebookLesson) {
+  if (disposed || progressRetryTimers.has(pending.versionId)) return
+  const attempt = Math.min((progressRetryAttempts.get(pending.versionId) ?? 0) + 1, 4)
+  progressRetryAttempts.set(pending.versionId, attempt)
+  const delay = [1000, 2000, 5000, 10000][attempt - 1]!
+  progressRetryTimers.set(pending.versionId, setTimeout(() => {
+    progressRetryTimers.delete(pending.versionId)
+    watchProgress(pending)
+  }, delay))
+}
+
+function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
+  try {
+    const snapshot = JSON.parse(value) as Partial<ProcessingSnapshot>
+    return typeof snapshot.stage === 'string'
+      && snapshot.stage.length > 0
+      && typeof snapshot.percentage === 'number'
+      && snapshot.percentage >= 0
+      && snapshot.percentage <= 100
+      && typeof snapshot.processedPages === 'number'
+      && snapshot.processedPages >= 0
+      && typeof snapshot.complete === 'boolean'
+      ? snapshot as ProcessingSnapshot
+      : null
+  } catch {
+    return null
+  }
+}
+
+async function recoverPendingHandoff() {
+  if (!username.value || preparingVersionId.value) return
+  for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
+    const entry = documents.value.find((candidate) => candidate.latestVersion.id === pending.versionId)
+    if (!entry) {
+      forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+      continue
+    }
+    if (entry.latestVersion.status === 'READY' || entry.latestVersion.status === 'FAILED') {
+      await handleTerminalProgress(pending, entry.latestVersion.status)
+      return
+    }
+    watchProgress(pending)
+    return
+  }
 }
 
 async function uploadRulebook() {
@@ -186,14 +310,18 @@ async function uploadRulebook() {
     })
     if (!response.ok) throw new Error('上传失败，请确认文件是 50 MiB 以内的 PDF。')
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
+    const pending = currentPreferences(result.version.id)
+    if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
     file.value = null
     title.value = ''
     await loadDocuments()
     if (result.version.status === 'READY') {
-      await startLesson(result.version.id)
+      await startLesson(result.version.id, pending)
+    } else if (result.version.status === 'FAILED') {
+      await handleTerminalProgress(pending, 'FAILED')
     } else {
       message.value = result.duplicate ? '已找到这本规则书，继续等待读取完成…' : '上传完成，正在读取页面和图片…'
-      watchProgress(result.version.id)
+      watchProgress(pending)
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '上传失败。'
@@ -224,7 +352,16 @@ async function assignDocument(entry: DocumentResponse) {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  disposed = false
+  void load()
+})
+onBeforeUnmount(() => {
+  disposed = true
+  for (const versionId of new Set([...progressConnections.keys(), ...progressRetryTimers.keys()])) {
+    closeProgressConnection(versionId)
+  }
+})
 </script>
 
 <template>

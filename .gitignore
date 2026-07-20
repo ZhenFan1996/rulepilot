@@ -27,6 +27,7 @@ test-results/
 local-data/
 uploads/
 rulebooks/
+backend/tmp/
 *.log
 
 # IDE files
