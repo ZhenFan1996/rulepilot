@@ -134,6 +134,27 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
     }
 
     @Override
+    public List<AssistantRun> findNonTerminalOwned(AssistantRunMode mode, String ownerUsername) {
+        return entityManager
+                .createNativeQuery(
+                        """
+                        select id, mode, subject_id, owner_username, state, revision,
+                               created_at, updated_at, completed_at, last_error_code
+                        from assistant_run
+                        where mode = :mode
+                          and owner_username = :owner
+                          and state not in ('COMPLETED', 'INSUFFICIENT_EVIDENCE', 'FAILED', 'DEGRADED')
+                        order by created_at
+                        """)
+                .setParameter("mode", mode.name())
+                .setParameter("owner", ownerUsername)
+                .getResultList()
+                .stream()
+                .map(result -> run((Object[]) result))
+                .toList();
+    }
+
+    @Override
     public List<StepSnapshot> steps(UUID runId) {
         return entityManager
                 .createNativeQuery(

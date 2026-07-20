@@ -133,6 +133,17 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<RunSnapshot> findActiveOwned(AssistantRunMode mode, String ownerUsername) {
+        if (mode == null || ownerUsername == null || ownerUsername.isBlank()) {
+            return List.of();
+        }
+        return repository.findNonTerminalOwned(mode, ownerUsername.strip()).stream()
+                .map(this::snapshot)
+                .toList();
+    }
+
+    @Override
     @Transactional
     public int failInterrupted(AssistantRunMode mode) {
         List<AssistantRun> interrupted = repository.findNonTerminal(mode);

@@ -120,6 +120,27 @@ class AssistantRunServiceTest {
         verify(execution).activitiesAfter(run.id(), 0);
     }
 
+    @Test
+    void returnsOnlyTheOwnersActiveRunsWithoutLoadingAuditDetails() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        AssistantRun active = AssistantRun.start(
+                AssistantRunMode.TEACHING, UUID.randomUUID(), "player", Instant.now());
+        when(repository.findNonTerminalOwned(AssistantRunMode.TEACHING, "player"))
+                .thenReturn(List.of(active));
+
+        var runs = service.findActiveOwned(AssistantRunMode.TEACHING, " player ");
+
+        assertThat(runs).singleElement().satisfies(run -> {
+            assertThat(run.id()).isEqualTo(active.id());
+            assertThat(run.subjectId()).isEqualTo(active.subjectId());
+            assertThat(run.ownerUsername()).isEqualTo("player");
+        });
+        verify(repository).findNonTerminalOwned(AssistantRunMode.TEACHING, "player");
+        verify(execution, times(0)).activities(any());
+    }
+
     private AssistantRunService service(AssistantRunRepository repository, AgentExecutionControl execution) {
         return new AssistantRunService(
                 repository,

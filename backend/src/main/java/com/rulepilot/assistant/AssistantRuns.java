@@ -26,6 +26,8 @@ public interface AssistantRuns {
             UUID activityRunId,
             long afterActivitySequence);
 
+    List<RunSnapshot> findActiveOwned(AssistantRunMode mode, String ownerUsername);
+
     int failInterrupted(AssistantRunMode mode);
 
     record RunSnapshot(

@@ -3,6 +3,7 @@ package com.rulepilot.assistant.adapter.in.web;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRunMode;
 import java.security.Principal;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -42,6 +43,13 @@ public class AssistantRunController {
         return runs.findLatestOwned(
                         mode, subjectId, principal.getName(), activityRunId, afterActivitySequence)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "assistant run does not exist"));
+    }
+
+    @GetMapping("/active")
+    List<AssistantRuns.RunSnapshot> active(
+            @RequestParam AssistantRunMode mode,
+            Principal principal) {
+        return runs.findActiveOwned(mode, principal.getName());
     }
 
     @PostMapping("/{runId}/cancellation")

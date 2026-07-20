@@ -19,5 +19,7 @@ public interface AssistantRunRepository {
 
     List<AssistantRun> findNonTerminal(AssistantRunMode mode);
 
+    List<AssistantRun> findNonTerminalOwned(AssistantRunMode mode, String ownerUsername);
+
     List<StepSnapshot> steps(UUID runId);
 }
