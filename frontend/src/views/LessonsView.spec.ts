@@ -32,7 +32,12 @@ describe('LessonsView', () => {
           }],
         })
       }
-      if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', status: 'INCOMPLETE',
+          sections: [{ evidenceStatus: 'SUPPORTED' }],
+        })
+      }
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
       return new Response(null, { status: 404 })
     })
@@ -63,6 +68,7 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('1 次模型调用')
     expect(wrapper.text()).toContain('第一节完成后')
     expect(wrapper.text()).toContain('可以关闭或离开此页')
+    expect(wrapper.text()).toContain('阅读已完成章节')
     expect(wrapper.text()).not.toContain('目录已生成')
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()

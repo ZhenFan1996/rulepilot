@@ -403,7 +403,7 @@ onBeforeUnmount(() => {
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">上次打开</span>
             <span v-else class="text-xs text-ink/35">{{ plan.sections.length }} 个章节</span>
-            <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
+            <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ stateOf(plan.id) === 'GENERATING' ? '阅读已完成章节' : stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
             <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? '正在启动…' : stateOf(plan.id) === 'FAILED' ? '重新生成' : '开始生成' }}</button>
             <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />后台处理中</span>
           </div>

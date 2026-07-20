@@ -102,6 +102,43 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void publishesTheSameIncompleteLessonAfterEachChapterBeforeFinalCompletion() {
+        UUID versionId = UUID.randomUUID();
+        TeachingPlan plan = plan(versionId);
+        LessonSection verified = new LessonSection(
+                1,
+                TeachingSectionType.SETUP.name(),
+                List.of("setup"),
+                "已验证的开局",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.TABLE_LAYOUT,
+                "桌面布置",
+                List.of(2),
+                List.of(UUID.randomUUID()),
+                List.of(new LessonStep(1, "将棋盘放在桌面中央。", List.of(2), List.of(UUID.randomUUID()))));
+        IllustratedLesson previous = new IllustratedLesson(
+                UUID.randomUUID(), plan.id(), LessonStatus.COMPLETE, List.of(verified),
+                GroundedTeachingAgent.GENERATOR_VERSION, Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> { throw new AssertionError("verified topic must not be retrieved again"); },
+                request -> { throw new AssertionError("verified topic must not be regenerated"); },
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+        List<IllustratedLesson> publications = new ArrayList<>();
+
+        IllustratedLesson completed = agent.create(plan, UUID.randomUUID(), previous, publications::add);
+
+        assertThat(publications).hasSize(2);
+        assertThat(publications.getFirst().status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(publications.getFirst().sections()).containsExactly(verified);
+        assertThat(publications.getLast()).isEqualTo(completed);
+        assertThat(publications).extracting(IllustratedLesson::id).containsOnly(completed.id());
+    }
+
+    @Test
     void regeneratesPreviouslyVerifiedVisualTopicThatNeverUsedItsPageImage() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

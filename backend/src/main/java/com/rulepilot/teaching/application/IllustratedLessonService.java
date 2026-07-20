@@ -27,6 +27,7 @@ public class IllustratedLessonService {
     private final AssistantRuns runs;
     private final DocumentVersionScopeLookup documents;
     private final ObservationRegistry observations;
+    private final IllustratedLessonProgressPublisher progressPublisher;
 
     public IllustratedLessonService(
             TeachingPlanRepository plans,
@@ -34,13 +35,15 @@ public class IllustratedLessonService {
             IllustratedLessonRepository repository,
             AssistantRuns runs,
             DocumentVersionScopeLookup documents,
-            ObservationRegistry observations) {
+            ObservationRegistry observations,
+            IllustratedLessonProgressPublisher progressPublisher) {
         this.plans = plans;
         this.agent = agent;
         this.repository = repository;
         this.runs = runs;
         this.documents = documents;
         this.observations = observations;
+        this.progressPublisher = progressPublisher;
     }
 
     @Transactional
@@ -65,7 +68,8 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
             IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
-            IllustratedLesson lesson = repository.save(agent.create(plan, run.id(), previousLesson));
+            IllustratedLesson lesson = agent.create(
+                    plan, run.id(), previousLesson, progressPublisher::publish);
             run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentExecutionStoppedException stopped) {

@@ -33,7 +33,24 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
 
     @Override
     public IllustratedLesson save(IllustratedLesson lesson) {
-        entityManager.persist(new IllustratedLessonEntity(lesson));
+        IllustratedLessonEntity existing = entityManager.find(IllustratedLessonEntity.class, lesson.id());
+        if (existing == null) {
+            entityManager.persist(new IllustratedLessonEntity(lesson));
+        } else {
+            existing.update(lesson);
+            entityManager.createNativeQuery("""
+                            delete from illustrated_lesson_step
+                            where lesson_section_id in (
+                                select id from illustrated_lesson_section where lesson_id = :lessonId
+                            )
+                            """)
+                    .setParameter("lessonId", lesson.id())
+                    .executeUpdate();
+            entityManager.createNativeQuery(
+                            "delete from illustrated_lesson_section where lesson_id = :lessonId")
+                    .setParameter("lessonId", lesson.id())
+                    .executeUpdate();
+        }
         lesson.sections().forEach(section -> {
             UUID sectionId = UUID.randomUUID();
             entityManager.persist(new IllustratedLessonSectionEntity(sectionId, lesson.id(), section));
@@ -98,6 +115,14 @@ class IllustratedLessonEntity {
         status = lesson.status().name();
         generatorVersion = lesson.generatorVersion();
         createdAt = lesson.createdAt();
+    }
+
+    void update(IllustratedLesson lesson) {
+        if (!id.equals(lesson.id()) || !teachingPlanId.equals(lesson.teachingPlanId())) {
+            throw new IllegalArgumentException("lesson progress identity cannot change");
+        }
+        status = lesson.status().name();
+        generatorVersion = lesson.generatorVersion();
     }
 
     IllustratedLesson toDomain(List<LessonSection> sections) {

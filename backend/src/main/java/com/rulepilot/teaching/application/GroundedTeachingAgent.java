@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -126,6 +127,17 @@ public class GroundedTeachingAgent {
 
     public IllustratedLesson create(
             TeachingPlan plan, UUID assistantRunId, IllustratedLesson previousLesson) {
+        return create(plan, assistantRunId, previousLesson, ignored -> {});
+    }
+
+    public IllustratedLesson create(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher) {
+        if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
+        UUID lessonId = UUID.randomUUID();
+        Instant createdAt = Instant.now();
         List<LessonSection> sections = new ArrayList<>();
         Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
@@ -137,12 +149,14 @@ public class GroundedTeachingAgent {
                 log.info("Teaching topic {} reuses a previously verified section", planned.topicKey());
                 sections.add(reusable);
                 recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
+                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
                 continue;
             }
             if (toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 sections.add(insufficient(planned));
+                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
                 continue;
             }
 
@@ -191,6 +205,7 @@ public class GroundedTeachingAgent {
             if (evidence.isEmpty()) {
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_RETRIEVED_EVIDENCE");
                 sections.add(insufficient(planned));
+                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
                 continue;
             }
             if (!evidenceVerifier.verify(new VerificationRequest(
@@ -198,6 +213,7 @@ public class GroundedTeachingAgent {
                     .verified()) {
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "RETRIEVED_EVIDENCE_INVALID");
                 sections.add(insufficient(planned));
+                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
                 continue;
             }
 
@@ -227,18 +243,36 @@ public class GroundedTeachingAgent {
                         "DRAFT_WITHHELD_AFTER_BOUNDED_REVISIONS");
                 sections.add(insufficient(planned));
             }
+            publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
         }
 
         boolean complete = sections.stream()
                 .filter(LessonSection::required)
                 .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
-        return new IllustratedLesson(
-                UUID.randomUUID(),
+        IllustratedLesson lesson = new IllustratedLesson(
+                lessonId,
                 plan.id(),
                 complete ? LessonStatus.COMPLETE : LessonStatus.INCOMPLETE,
                 sections,
                 GENERATOR_VERSION,
-                Instant.now());
+                createdAt);
+        progressPublisher.accept(lesson);
+        return lesson;
+    }
+
+    private void publishProgress(
+            Consumer<IllustratedLesson> progressPublisher,
+            UUID lessonId,
+            UUID teachingPlanId,
+            List<LessonSection> sections,
+            Instant createdAt) {
+        progressPublisher.accept(new IllustratedLesson(
+                lessonId,
+                teachingPlanId,
+                LessonStatus.INCOMPLETE,
+                sections,
+                GENERATOR_VERSION,
+                createdAt));
     }
 
     private Map<String, LessonSection> reusableSections(
