@@ -68,10 +68,27 @@ interface LessonQualityReport {
   status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED'
   score: number
   checks: Array<{
-    topicKey: string
+    type: string
     status: 'PASS' | 'FAIL' | 'NOT_EVALUATED'
     summary: string
     detail: string
+  }>
+}
+
+interface LessonComprehensionReport {
+  lessonId: string
+  readyTaskCount: number
+  taskCount: number
+  canDoCount: number
+  needsHelpCount: number
+  tasks: Array<{
+    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME'
+    label: string
+    prompt: string
+    readiness: 'READY' | 'MISSING_LESSON_CHECK'
+    result: 'NOT_TRIED' | 'CAN_DO' | 'NEEDS_HELP'
+    chapterPositions: number[]
+    sourcePages: number[]
   }>
 }
 
@@ -198,6 +215,9 @@ const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const quality = ref<LessonQualityReport | null>(null)
+const comprehension = ref<LessonComprehensionReport | null>(null)
+const comprehensionSaving = ref<string | null>(null)
+const comprehensionError = ref('')
 const narration = ref<NarrationScript | null>(null)
 const video = ref<ChapterVideo | null>(null)
 const mediaConsistency = ref<MediaConsistencyReport | null>(null)
@@ -342,6 +362,8 @@ async function loadLesson() {
   narration.value = null
   video.value = null
   mediaConsistency.value = null
+  comprehension.value = null
+  comprehensionError.value = ''
   mediaWarnings.value = []
   audioAvailable.value = false
   narrationProvider.value = ''
@@ -356,10 +378,11 @@ async function loadLesson() {
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
-    const [planResponse, lessonResponse, qualityResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
+    const [planResponse, lessonResponse, qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
+      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/comprehension`),
       optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`),
       optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
       optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
@@ -367,7 +390,8 @@ async function loadLesson() {
     if (
       planResponse.status === 401 ||
       lessonResponse.status === 401 ||
-      qualityResponse.status === 401
+      qualityResponse.status === 401 ||
+      comprehensionResponse?.status === 401
     ) {
       await router.push({ name: 'login' })
       return
@@ -382,6 +406,11 @@ async function loadLesson() {
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
     quality.value = (await qualityResponse.json()) as LessonQualityReport
+    if (comprehensionResponse?.ok) {
+      comprehension.value = (await comprehensionResponse.json()) as LessonComprehensionReport
+    } else {
+      comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
+    }
     if (narrationResponse?.ok) {
       const playback = (await narrationResponse.json()) as NarrationPlayback
       narration.value = playback.script
@@ -437,6 +466,35 @@ function selectSection(index: number) {
   editingRuling.value = false
   saveProgress()
   seekToChapter(index)
+}
+
+async function recordComprehension(
+  taskType: LessonComprehensionReport['tasks'][number]['type'],
+  result: 'CAN_DO' | 'NEEDS_HELP',
+) {
+  if (comprehensionSaving.value || !online.value) return
+  comprehensionSaving.value = taskType
+  comprehensionError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/${taskType}`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({ result }),
+    })
+    if (!response.ok) throw new Error('这次学习检查没有保存，请重试。')
+    comprehension.value = (await response.json()) as LessonComprehensionReport
+  } catch (error) {
+    comprehensionError.value = error instanceof Error ? error.message : '这次学习检查没有保存。'
+  } finally {
+    comprehensionSaving.value = null
+  }
+}
+
+function revisitComprehensionTask(task: LessonComprehensionReport['tasks'][number]) {
+  const chapterPosition = task.chapterPositions[0]
+  if (chapterPosition) selectSection(chapterPosition - 1)
 }
 
 function learningIntentLabel(intent: LearningIntent | null) {
@@ -974,7 +1032,7 @@ onUnmounted(() => {
               </span>
             </summary>
             <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
-              <li v-for="check in quality.checks" :key="check.topicKey" class="text-xs leading-5">
+              <li v-for="check in quality.checks" :key="check.type" class="text-xs leading-5">
                 <p class="font-semibold"><span aria-hidden="true">{{ check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '×' : '?' }}</span> {{ check.summary }}</p>
                 <p class="mt-0.5 text-ink/50">{{ check.detail }}</p>
               </li>
@@ -1202,6 +1260,63 @@ onUnmounted(() => {
                 </div>
               </div>
             </details>
+
+            <section
+              v-if="progress.currentIndex === lesson.sections.length - 1 && (comprehension || comprehensionError)"
+              class="mt-8 rounded-3xl border border-copper/20 bg-copper/[0.06] p-5 sm:p-6"
+              aria-labelledby="comprehension-title"
+            >
+              <div class="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p class="text-xs font-semibold text-copper">上桌前，自己试一遍</p>
+                  <h3 id="comprehension-title" class="mt-1 font-display text-2xl font-semibold">这四件事，你现在会做了吗？</h3>
+                  <p class="mt-2 text-sm leading-6 text-ink/55">不用背原文，试着说出或在桌上完成。不会的可以直接回到相关章节。</p>
+                </div>
+                <p v-if="comprehension" class="text-sm font-semibold text-copper">已掌握 {{ comprehension.canDoCount }} / {{ comprehension.readyTaskCount }}</p>
+              </div>
+
+              <p v-if="comprehensionError" class="mt-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ comprehensionError }}</p>
+              <ol v-if="comprehension" class="mt-5 grid gap-3 sm:grid-cols-2">
+                <li v-for="task in comprehension.tasks" :key="task.type" class="rounded-2xl border border-ink/10 bg-paper p-4">
+                  <div class="flex items-start justify-between gap-3">
+                    <h4 class="font-semibold leading-6">{{ task.label }}</h4>
+                    <span class="shrink-0 text-xs font-semibold" :class="task.result === 'CAN_DO' ? 'text-emerald-700' : task.result === 'NEEDS_HELP' ? 'text-amber-800' : 'text-ink/40'">
+                      {{ task.result === 'CAN_DO' ? '会了' : task.result === 'NEEDS_HELP' ? '待补一遍' : '未检查' }}
+                    </span>
+                  </div>
+                  <p class="mt-2 text-sm leading-6 text-ink/65">{{ task.prompt }}</p>
+                  <p v-if="task.sourcePages.length" class="mt-2 text-xs font-semibold text-indigo">可核对规则书第 {{ task.sourcePages.join('、') }} 页</p>
+                  <div v-if="task.readiness === 'READY'" class="mt-4 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      class="min-h-11 rounded-xl border px-3 text-sm font-semibold disabled:opacity-40"
+                      :class="task.result === 'CAN_DO' ? 'border-emerald-700 bg-emerald-50 text-emerald-900' : 'border-ink/15'"
+                      :disabled="comprehensionSaving !== null || !online"
+                      @click="recordComprehension(task.type, 'CAN_DO')"
+                    >
+                      我能做到
+                    </button>
+                    <button
+                      type="button"
+                      class="min-h-11 rounded-xl border px-3 text-sm font-semibold disabled:opacity-40"
+                      :class="task.result === 'NEEDS_HELP' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'"
+                      :disabled="comprehensionSaving !== null || !online"
+                      @click="recordComprehension(task.type, 'NEEDS_HELP')"
+                    >
+                      还不清楚
+                    </button>
+                  </div>
+                  <button
+                    v-if="task.result === 'NEEDS_HELP' && task.chapterPositions.length"
+                    type="button"
+                    class="mt-3 min-h-10 w-full rounded-xl bg-copper px-3 text-sm font-semibold text-white"
+                    @click="revisitComprehensionTask(task)"
+                  >
+                    回到第 {{ task.chapterPositions[0] }} 节再讲一遍
+                  </button>
+                </li>
+              </ol>
+            </section>
 
             <details class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
               <summary class="cursor-pointer list-none rounded-2xl border border-ink/10 px-4 py-4 font-semibold hover:bg-canvas">还有没明白的？展开问这一节</summary>
