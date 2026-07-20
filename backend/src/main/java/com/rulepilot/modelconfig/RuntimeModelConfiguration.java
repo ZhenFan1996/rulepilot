@@ -92,11 +92,18 @@ public class RuntimeModelConfiguration {
     }
 
     public boolean supportsVision(Role role) {
-        return supportsVisionProvider(providerFor(role));
+        State current = currentState();
+        ConfiguredProvider configured = current.providers().get(current.assignments().forRole(role));
+        return configured != null && configured.visionCapable();
     }
 
     public synchronized Snapshot configure(
-            String username, String provider, String apiKey, String baseUrl, String model) {
+            String username,
+            String provider,
+            String apiKey,
+            String baseUrl,
+            String model,
+            boolean visionCapable) {
         String id = providerId(provider);
         String checkedModel = required(model, "model name", 200);
         String checkedBaseUrl = "gemini".equals(id) ? "" : validBaseUrl(baseUrl);
@@ -106,8 +113,9 @@ public class RuntimeModelConfiguration {
         AtomicReference<State> userState = userState(username);
         State current = userState.get();
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>(current.providers());
-        providers.put(id, new ConfiguredProvider(id, checkedBaseUrl, checkedModel, client));
-        userState.set(new State(Map.copyOf(providers), current.assignments(), current.revision() + 1));
+        providers.put(id, new ConfiguredProvider(id, checkedBaseUrl, checkedModel, client, visionCapable));
+        Assignments assignments = visionCapable ? current.assignments() : current.assignments().withoutVisual(id);
+        userState.set(new State(Map.copyOf(providers), assignments, current.revision() + 1));
         return snapshot(username);
     }
 
@@ -146,7 +154,7 @@ public class RuntimeModelConfiguration {
                     configured == null ? defaultBaseUrl(id) : configured.baseUrl(),
                     configured == null ? defaultModel(id) : configured.modelName(),
                     configured != null,
-                    supportsVisionProvider(id)));
+                    configured == null ? defaultVisionCapable(id) : configured.visionCapable()));
         }
         return new Snapshot(List.copyOf(providers), current.assignments(), current.revision(), true);
     }
@@ -176,7 +184,7 @@ public class RuntimeModelConfiguration {
         String baseUrl = "gemini".equals(id) ? "" : validBaseUrl(properties.baseUrl());
         String model = required(properties.model(), "model name", 200);
         ChatModel client = factory.create(id, properties.apiKey(), baseUrl, model);
-        providers.put(id, new ConfiguredProvider(id, baseUrl, model, client));
+        providers.put(id, new ConfiguredProvider(id, baseUrl, model, client, properties.visionCapable()));
     }
 
     private String assignment(String adapter, String provider, Map<String, ConfiguredProvider> providers) {
@@ -191,7 +199,7 @@ public class RuntimeModelConfiguration {
         if ("spring-ai".equalsIgnoreCase(adapter)) {
             return selectableVisual(provider, providers);
         }
-        return supportsVisionProvider(teachingAssignment) ? teachingAssignment : "fake";
+        return supportsVision(teachingAssignment, providers) ? teachingAssignment : "fake";
     }
 
     private String selectable(String provider, Map<String, ConfiguredProvider> providers) {
@@ -207,7 +215,7 @@ public class RuntimeModelConfiguration {
 
     private String selectableVisual(String provider, Map<String, ConfiguredProvider> providers) {
         String selected = selectable(provider, providers);
-        if (!"fake".equals(selected) && !supportsVisionProvider(selected)) {
+        if (!"fake".equals(selected) && !supportsVision(selected, providers)) {
             throw new IllegalArgumentException("visual model provider must support page images");
         }
         return selected;
@@ -277,11 +285,17 @@ public class RuntimeModelConfiguration {
         };
     }
 
-    private boolean supportsVisionProvider(String provider) {
+    private boolean supportsVision(String provider, Map<String, ConfiguredProvider> providers) {
+        ConfiguredProvider configured = providers.get(provider);
+        return configured != null && configured.visionCapable();
+    }
+
+    private boolean defaultVisionCapable(String provider) {
         return "gemini".equals(provider) || "openai".equals(provider) || "qwen".equals(provider);
     }
 
-    private record ConfiguredProvider(String id, String baseUrl, String modelName, ChatModel model) {}
+    private record ConfiguredProvider(
+            String id, String baseUrl, String modelName, ChatModel model, boolean visionCapable) {}
 
     private record State(Map<String, ConfiguredProvider> providers, Assignments assignments, long revision) {}
 
@@ -309,6 +323,10 @@ public class RuntimeModelConfiguration {
                     visual.equals(current) ? replacement : visual,
                     answer.equals(current) ? replacement : answer,
                     critic.equals(current) ? replacement : critic);
+        }
+
+        Assignments withoutVisual(String provider) {
+            return visual.equals(provider) ? new Assignments(teaching, "fake", answer, critic) : this;
         }
     }
 

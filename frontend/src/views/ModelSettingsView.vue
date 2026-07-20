@@ -38,6 +38,7 @@ const selectedProvider = ref('gemini')
 const apiKey = ref('')
 const baseUrl = ref('')
 const modelName = ref('')
+const visionCapable = ref(false)
 const loading = ref(true)
 const savingProvider = ref(false)
 const savingAssignments = ref(false)
@@ -73,6 +74,7 @@ function selectProvider(id: string) {
   apiKey.value = ''
   baseUrl.value = selected?.baseUrl ?? ''
   modelName.value = selected?.model ?? ''
+  visionCapable.value = selected?.visionCapable ?? false
   message.value = ''
   errorMessage.value = ''
 }
@@ -132,6 +134,7 @@ async function saveProvider() {
       apiKey: apiKey.value,
       baseUrl: needsBaseUrl.value ? baseUrl.value : '',
       model: modelName.value,
+      visionCapable: visionCapable.value,
     })
     apiKey.value = ''
     message.value = `${providerLabels[selectedProvider.value]} 已连接。`
@@ -243,6 +246,11 @@ onMounted(loadConfiguration)
               <label class="block text-sm font-semibold">
                 模型名称
                 <input v-model="modelName" required maxlength="200" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-mono text-sm outline-none focus:border-indigo">
+              </label>
+
+              <label class="flex min-h-11 items-start gap-3 rounded-lg border border-ink/10 bg-canvas px-4 py-3 text-sm">
+                <input v-model="visionCapable" type="checkbox" class="mt-1 size-4 accent-indigo">
+                <span><strong class="block">当前模型支持图片输入</strong><span class="mt-1 block font-normal leading-5 text-ink/45">只有模型文档明确支持图片时才启用；关闭后会自动取消它的“规则书页面视觉”用途。</span></span>
               </label>
 
               <div class="flex flex-col gap-3 sm:flex-row">

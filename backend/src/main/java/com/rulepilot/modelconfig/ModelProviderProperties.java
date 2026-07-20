@@ -10,5 +10,5 @@ public record ModelProviderProperties(
         Provider qwen,
         Provider compatible) {
 
-    public record Provider(boolean enabled, String apiKey, String baseUrl, String model) {}
+    public record Provider(boolean enabled, String apiKey, String baseUrl, String model, boolean visionCapable) {}
 }

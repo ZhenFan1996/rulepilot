@@ -10,7 +10,7 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v10-system.txt"),
+                resource("teaching-agent-v11-system.txt"),
                 resource("teaching-agent-v8-user.txt"),
                 resource("teaching-outline-v3-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
@@ -47,6 +47,8 @@ class VersionedAgentPromptsTest {
                         "maximum step count",
                         "never append a seventh step",
                         "strongest complete rule sentence",
+                        "one or two indispensable visual relationships",
+                        "within four high-value steps",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
                 .contains(

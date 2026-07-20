@@ -31,7 +31,8 @@ public class ModelConfigurationController {
     Snapshot configure(
             @PathVariable String provider, @RequestBody ConfigureProviderRequest request, Principal principal) {
         return configuration.configure(
-                principal.getName(), provider, request.apiKey(), request.baseUrl(), request.model());
+                principal.getName(), provider, request.apiKey(), request.baseUrl(), request.model(),
+                request.visionCapable());
     }
 
     @DeleteMapping("/providers/{provider}")
@@ -46,7 +47,7 @@ public class ModelConfigurationController {
                 principal.getName(), request.teaching(), request.visual(), request.answer(), request.critic());
     }
 
-    record ConfigureProviderRequest(String apiKey, String baseUrl, String model) {}
+    record ConfigureProviderRequest(String apiKey, String baseUrl, String model, boolean visionCapable) {}
 
     record AssignmentsRequest(String teaching, String visual, String answer, String critic) {}
 }

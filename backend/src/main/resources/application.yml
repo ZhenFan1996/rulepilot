@@ -153,26 +153,31 @@ rulepilot:
       api-key: ${OPENAI_API_KEY:}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
       model: ${OPENAI_MODEL:gpt-5-mini}
+      vision-capable: ${OPENAI_VISION_CAPABLE:true}
     gemini:
       enabled: ${GEMINI_ENABLED:false}
       api-key: ${GEMINI_API_KEY:}
       model: ${GEMINI_MODEL:gemini-2.5-flash}
+      vision-capable: ${GEMINI_VISION_CAPABLE:true}
     deepseek:
       enabled: ${DEEPSEEK_ENABLED:false}
       api-key: ${DEEPSEEK_API_KEY:}
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
       generation-thinking: ${DEEPSEEK_GENERATION_THINKING:false}
+      vision-capable: ${DEEPSEEK_VISION_CAPABLE:false}
     qwen:
       enabled: ${QWEN_ENABLED:false}
       api-key: ${QWEN_API_KEY:}
       base-url: ${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
       model: ${QWEN_MODEL:qwen3-vl-plus}
+      vision-capable: ${QWEN_VISION_CAPABLE:true}
     compatible:
       enabled: ${COMPATIBLE_MODEL_ENABLED:false}
       api-key: ${COMPATIBLE_MODEL_API_KEY:}
       base-url: ${COMPATIBLE_MODEL_BASE_URL:http://localhost:11434/v1}
       model: ${COMPATIBLE_MODEL_NAME:local-model}
+      vision-capable: ${COMPATIBLE_MODEL_VISION_CAPABLE:false}
   bgg:
     base-url: ${BGG_BASE_URL:https://boardgamegeek.com}
     api-token: ${BGG_API_TOKEN:}

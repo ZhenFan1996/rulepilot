@@ -3,6 +3,7 @@ package com.rulepilot.modelconfig;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -24,7 +25,7 @@ class RuntimeModelConfigurationTest {
                 .thenReturn(model);
         when(factory.create("gemini", "gemini-secret", "", "gemini-2.5-flash"))
                 .thenReturn(visualModel);
-        Provider disabled = new Provider(false, "", "", "");
+        Provider disabled = new Provider(false, "", "", "", false);
         RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
@@ -40,8 +41,8 @@ class RuntimeModelConfigurationTest {
         assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.TEACHING)).isFalse();
 
         RuntimeModelConfiguration.Snapshot configured = configuration.configure(
-                "player", "deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash");
-        configuration.configure("player", "gemini", "gemini-secret", "", "gemini-2.5-flash");
+                "player", "deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash", false);
+        configuration.configure("player", "gemini", "gemini-secret", "", "gemini-2.5-flash", true);
         assertThatThrownBy(() -> configuration.assign("player", "deepseek", "deepseek", "deepseek", "fake"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must support page images");
@@ -86,7 +87,7 @@ class RuntimeModelConfigurationTest {
                         "https://dashscope.aliyuncs.com/compatible-mode/v1",
                         "qwen3-vl-plus"))
                 .thenReturn(qwenModel);
-        Provider disabled = new Provider(false, "", "", "");
+        Provider disabled = new Provider(false, "", "", "", false);
         RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
@@ -115,7 +116,8 @@ class RuntimeModelConfigurationTest {
                 "qwen",
                 "qwen-secret",
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "qwen3-vl-plus");
+                "qwen3-vl-plus",
+                true);
         RuntimeModelConfiguration.Snapshot assigned =
                 configuration.assign("player", "qwen", "qwen", "qwen", "qwen");
 
@@ -129,11 +131,51 @@ class RuntimeModelConfigurationTest {
         } finally {
             SecurityContextHolder.clearContext();
         }
-        verify(factory)
+        RuntimeModelConfiguration.Snapshot textOnly = configuration.configure(
+                "player",
+                "qwen",
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3-vl-plus",
+                false);
+        assertThat(textOnly.assignments().visual()).isEqualTo("fake");
+        verify(factory, times(2))
                 .create(
                         "qwen",
                         "qwen-secret",
                         "https://dashscope.aliyuncs.com/compatible-mode/v1",
                         "qwen3-vl-plus");
+    }
+
+    @Test
+    void rejectsAConfiguredTextOnlyModelFromTheVisualRole() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel qwenModel = mock(ChatModel.class);
+        when(factory.create(
+                        "qwen", "qwen-secret", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"))
+                .thenReturn(qwenModel);
+        Provider disabled = new Provider(false, "", "", "", false);
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
+                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini", false);
+
+        RuntimeModelConfiguration.Snapshot configured = configuration.configure(
+                "player",
+                "qwen",
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-plus",
+                false);
+
+        assertThat(configured.providers().stream()
+                        .filter(provider -> provider.id().equals("qwen"))
+                        .findFirst()
+                        .orElseThrow()
+                        .visionCapable())
+                .isFalse();
+        assertThatThrownBy(() -> configuration.assign("player", "qwen", "qwen", "qwen", "qwen"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must support page images");
     }
 }

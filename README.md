@@ -255,6 +255,7 @@ QWEN_ENABLED=true
 QWEN_API_KEY=你的_DashScope_API_Key
 QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 QWEN_MODEL=qwen3-vl-plus
+QWEN_VISION_CAPABLE=true
 
 VISUAL_PROVIDER=spring-ai
 VISUAL_MODEL_PROVIDER=qwen

@@ -55,5 +55,6 @@ describe('ModelSettingsView', () => {
     expect(wrapper.text()).toContain('Qwen VL 可以读取规则书页面图片')
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value)
       .toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
+    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
   })
 })
