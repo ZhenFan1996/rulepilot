@@ -32,7 +32,7 @@ public class ChatModelFactory {
     public ChatModel create(String provider, String apiKey, String baseUrl, String model) {
         return switch (provider) {
             case "gemini" -> gemini(apiKey, model);
-            case "openai", "deepseek", "compatible" -> openAi(apiKey, baseUrl, model);
+            case "openai", "deepseek", "qwen", "compatible" -> openAi(apiKey, baseUrl, model);
             default -> throw new IllegalArgumentException("unsupported model provider: " + provider);
         };
     }

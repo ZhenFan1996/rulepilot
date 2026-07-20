@@ -27,7 +27,7 @@ class RuntimeModelConfigurationTest {
         Provider disabled = new Provider(false, "", "", "");
         RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
                 factory,
-                new ModelProviderProperties(disabled, disabled, disabled, disabled),
+                new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
                 "fake",
                 "gemini",
                 "fake",
@@ -74,5 +74,66 @@ class RuntimeModelConfigurationTest {
         assertThat(configuration.disable("player", "deepseek").assignments().teaching()).isEqualTo("fake");
         verify(factory).create("deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash");
         verify(factory).create("gemini", "gemini-secret", "", "gemini-2.5-flash");
+    }
+
+    @Test
+    void exposesQwenAsAFirstClassVisionProvider() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel qwenModel = mock(ChatModel.class);
+        when(factory.create(
+                        "qwen",
+                        "qwen-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3-vl-plus"))
+                .thenReturn(qwenModel);
+        Provider disabled = new Provider(false, "", "", "");
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
+                "fake",
+                "gemini",
+                "fake",
+                "gemini",
+                "fake",
+                "gemini",
+                "fake",
+                "gemini",
+                false);
+
+        RuntimeModelConfiguration.Snapshot defaults = configuration.snapshot("player");
+        RuntimeModelConfiguration.ProviderView qwen = defaults.providers().stream()
+                .filter(provider -> provider.id().equals("qwen"))
+                .findFirst()
+                .orElseThrow();
+        assertThat(qwen.configured()).isFalse();
+        assertThat(qwen.visionCapable()).isTrue();
+        assertThat(qwen.baseUrl()).isEqualTo("https://dashscope.aliyuncs.com/compatible-mode/v1");
+        assertThat(qwen.model()).isEqualTo("qwen3-vl-plus");
+
+        configuration.configure(
+                "player",
+                "qwen",
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3-vl-plus");
+        RuntimeModelConfiguration.Snapshot assigned =
+                configuration.assign("player", "qwen", "qwen", "qwen", "qwen");
+
+        assertThat(assigned.assignments().visual()).isEqualTo("qwen");
+        try {
+            SecurityContextHolder.getContext()
+                    .setAuthentication(
+                            UsernamePasswordAuthenticationToken.authenticated("player", "", java.util.List.of()));
+            assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.VISUAL)).isTrue();
+            assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.VISUAL)).isSameAs(qwenModel);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+        verify(factory)
+                .create(
+                        "qwen",
+                        "qwen-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3-vl-plus");
     }
 }

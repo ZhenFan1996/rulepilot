@@ -205,7 +205,7 @@ BGG 元数据只用于目录识别，不进入规则讲解、Agent 或 RAG 证�
 
 ### 配置大模型 API
 
-登录后打开 http://127.0.0.1:5173/settings/models，可以为当前账号配置 Gemini、OpenAI、DeepSeek 或其他 OpenAI 兼容服务，并分别指定规则讲解、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
+登录后打开 http://127.0.0.1:5173/settings/models，可以为当前账号配置 Gemini、OpenAI、DeepSeek、Qwen 或其他 OpenAI 兼容服务，并分别指定规则讲解、规则书页面视觉、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
 
 网页中保存的密钥仅存在于当前后端进程内存，重启后恢复启动配置。这适合本地开发和单进程演示；跨主机访问必须使用 HTTPS。需要重启后自动恢复时，仍可把配置放在被 Git 忽略的根目录 `.env`：
 
@@ -213,7 +213,7 @@ BGG 元数据只用于目录识别，不进入规则讲解、Agent 或 RAG 证�
 cp .env.example .env
 ```
 
-每个业务角色可以独立选择模型：`TEACHING_MODEL_PROVIDER` 用于规则讲解，`ANSWER_MODEL_PROVIDER` 用于答疑，`CRITIC_MODEL_PROVIDER` 用于事实审校。可选值为 `gemini`、`openai`、`deepseek` 或 `compatible`。例如让启动配置全部使用 Gemini：
+每个业务角色可以独立选择模型：`TEACHING_MODEL_PROVIDER` 用于规则讲解，`VISUAL_MODEL_PROVIDER` 用于读取规则书页面图片，`ANSWER_MODEL_PROVIDER` 用于答疑，`CRITIC_MODEL_PROVIDER` 用于事实审校。可选值为 `gemini`、`openai`、`deepseek`、`qwen` 或 `compatible`。例如让启动配置全部使用 Gemini：
 
 ```dotenv
 GEMINI_ENABLED=true
@@ -244,6 +244,18 @@ ANSWER_PROVIDER=spring-ai
 ANSWER_MODEL_PROVIDER=deepseek
 CRITIC_PROVIDER=spring-ai
 CRITIC_MODEL_PROVIDER=openai
+```
+
+Qwen 使用阿里云百炼的 OpenAI 兼容多模态接口。下面的地址是中国内地公共接入点；其他地域或工作空间请按百炼控制台替换 Base URL。把 Qwen 分配给 `VISUAL` 后，Agent 会在需要理解组件、版图或图示的章节中发送筛选后的规则书页面图片：
+
+```dotenv
+QWEN_ENABLED=true
+QWEN_API_KEY=你的_DashScope_API_Key
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_MODEL=qwen3-vl-plus
+
+VISUAL_PROVIDER=spring-ai
+VISUAL_MODEL_PROVIDER=qwen
 ```
 
 对于提供 OpenAI 兼容 Chat Completions API 的其他模型服务（包括本地服务），使用通用入口：

@@ -29,7 +29,7 @@ public class RuntimeModelConfiguration {
         CRITIC
     }
 
-    private static final List<String> SUPPORTED = List.of("gemini", "openai", "deepseek", "compatible");
+    private static final List<String> SUPPORTED = List.of("gemini", "openai", "deepseek", "qwen", "compatible");
 
     private final ChatModelFactory factory;
     private final State startupState;
@@ -54,6 +54,7 @@ public class RuntimeModelConfiguration {
         addStartupProvider(providers, "gemini", properties.gemini());
         addStartupProvider(providers, "openai", properties.openai());
         addStartupProvider(providers, "deepseek", properties.deepseek());
+        addStartupProvider(providers, "qwen", properties.qwen());
         addStartupProvider(providers, "compatible", properties.compatible());
         String teachingAssignment = assignment(teachingAdapter, teachingProvider, providers);
         this.startupState = new State(
@@ -260,6 +261,7 @@ public class RuntimeModelConfiguration {
         return switch (provider) {
             case "openai" -> "https://api.openai.com";
             case "deepseek" -> "https://api.deepseek.com";
+            case "qwen" -> "https://dashscope.aliyuncs.com/compatible-mode/v1";
             case "compatible" -> "http://localhost:11434/v1";
             default -> "";
         };
@@ -270,12 +272,13 @@ public class RuntimeModelConfiguration {
             case "gemini" -> "gemini-2.5-flash";
             case "openai" -> "gpt-5-mini";
             case "deepseek" -> "deepseek-v4-flash";
+            case "qwen" -> "qwen3-vl-plus";
             default -> "local-model";
         };
     }
 
     private boolean supportsVisionProvider(String provider) {
-        return "gemini".equals(provider) || "openai".equals(provider);
+        return "gemini".equals(provider) || "openai".equals(provider) || "qwen".equals(provider);
     }
 
     private record ConfiguredProvider(String id, String baseUrl, String modelName, ChatModel model) {}

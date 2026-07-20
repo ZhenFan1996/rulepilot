@@ -51,7 +51,7 @@ const visualProvider = computed(() => modelConfiguration.value?.providers.find(
 ))
 const visualVisionCapable = computed(() => visualProvider.value?.visionCapable === true)
 const visualProviderLabel = computed(() => ({
-  gemini: 'Gemini', openai: 'OpenAI', deepseek: 'DeepSeek', compatible: '兼容模型', fake: '内置演示',
+  gemini: 'Gemini', openai: 'OpenAI', deepseek: 'DeepSeek', qwen: 'Qwen', compatible: '兼容模型', fake: '内置演示',
 }[modelConfiguration.value?.assignments.visual ?? 'fake'] ?? '当前模型'))
 
 function editionLabel(id: string | null) {
@@ -259,7 +259,7 @@ onMounted(load)
 
           <div v-if="modelConfiguration && !visualVisionCapable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
             <p><span class="font-semibold">{{ visualProviderLabel }}目前不读取页面图片。</span>讲解仍可生成并附上原文页，但不会识别组件照片、版图位置或图标。</p>
-            <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">连接支持图片的 Gemini 或 OpenAI</RouterLink>
+            <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">连接支持图片的 Gemini、OpenAI 或 Qwen VL</RouterLink>
           </div>
 
           <details class="mt-4 border-t border-ink/10 pt-4">

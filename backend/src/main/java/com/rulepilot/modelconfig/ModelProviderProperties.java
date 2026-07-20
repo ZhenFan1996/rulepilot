@@ -7,6 +7,7 @@ public record ModelProviderProperties(
         Provider openai,
         Provider gemini,
         Provider deepseek,
+        Provider qwen,
         Provider compatible) {
 
     public record Provider(boolean enabled, String apiKey, String baseUrl, String model) {}

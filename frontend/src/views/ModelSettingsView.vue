@@ -48,6 +48,7 @@ const providerLabels: Record<string, string> = {
   gemini: 'Gemini',
   openai: 'OpenAI',
   deepseek: 'DeepSeek',
+  qwen: 'Qwen',
   compatible: '其他兼容模型',
 }
 
@@ -58,6 +59,7 @@ const needsBaseUrl = computed(() => selectedProvider.value !== 'gemini')
 const visualProvider = computed(() => snapshot.value?.providers.find(
   (entry) => entry.id === snapshot.value?.assignments.visual,
 ))
+const qwenSelected = computed(() => selectedProvider.value === 'qwen')
 const roleDefinitions = [
   ['teaching', '讲解文字与结构'],
   ['visual', '规则书页面视觉'],
@@ -224,6 +226,10 @@ onMounted(loadConfiguration)
                 </span>
               </div>
 
+              <p v-if="qwenSelected" class="rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-ink/65">
+                Qwen VL 可以读取规则书页面图片。默认使用 qwen3-vl-plus；如果你的百炼账号位于其他地域或使用工作空间，请按控制台信息替换 Base URL。
+              </p>
+
               <label class="block text-sm font-semibold">
                 API Key
                 <input v-model="apiKey" required type="password" autocomplete="new-password" maxlength="4096" placeholder="保存后不会再次显示" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-mono text-sm outline-none focus:border-indigo">
@@ -251,7 +257,7 @@ onMounted(loadConfiguration)
             <h2 class="mt-2 font-display text-2xl font-semibold">各项功能使用哪个模型</h2>
             <p class="mt-3 text-sm leading-6 text-ink/55">未连接外部服务时，可以继续使用不联网的内置演示。</p>
             <p v-if="!visualProvider" class="mt-4 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
-              当前未启用页面视觉。讲解仍会引用并展示原文页，但 Agent 不会识别棋盘布局、组件照片和图标；连接 Gemini 或 OpenAI 后，可只把页面视觉交给它，讲解文字仍由你选择的模型完成。
+              当前未启用页面视觉。讲解仍会引用并展示原文页，但 Agent 不会识别棋盘布局、组件照片和图标；连接 Gemini、OpenAI 或 Qwen VL 后，可只把页面视觉交给它，讲解文字仍由你选择的模型完成。
             </p>
 
             <form class="mt-7 space-y-5" @submit.prevent="saveAssignments">

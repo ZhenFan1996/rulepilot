@@ -163,6 +163,11 @@ rulepilot:
       base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
       model: ${DEEPSEEK_MODEL:deepseek-v4-flash}
       generation-thinking: ${DEEPSEEK_GENERATION_THINKING:false}
+    qwen:
+      enabled: ${QWEN_ENABLED:false}
+      api-key: ${QWEN_API_KEY:}
+      base-url: ${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      model: ${QWEN_MODEL:qwen3-vl-plus}
     compatible:
       enabled: ${COMPATIBLE_MODEL_ENABLED:false}
       api-key: ${COMPATIBLE_MODEL_API_KEY:}
