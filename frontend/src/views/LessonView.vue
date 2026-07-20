@@ -6,6 +6,7 @@ import AppShell from '@/components/AppShell.vue'
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { buildCardQuestion } from '@/lib/cardOcr'
+import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import {
   finishSection,
   initialLessonProgress,
@@ -34,6 +35,17 @@ interface IllustratedLesson {
   id: string
   status: 'COMPLETE' | 'INCOMPLETE'
   sections: LessonSection[]
+}
+
+interface TeachingRunProgress {
+  run: {
+    id: string
+    state: string
+    createdAt: string
+    updatedAt: string
+    completedAt: string | null
+    lastErrorCode: string | null
+  }
 }
 
 interface LessonSection {
@@ -257,9 +269,22 @@ const cardOcrOpen = ref(false)
 const visualImageFailed = ref(false)
 const failedComprehensionImages = ref<number[]>([])
 const resumingLesson = ref(false)
+const teachingRun = ref<TeachingRunProgress | null>(null)
+const generationStatusUnknown = ref(false)
+const generationRefreshError = ref('')
+const generationFinishedMessage = ref('')
+const waitingForNextChapter = ref(false)
+let generationRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let lessonViewDisposed = false
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const generationActive = computed(
+  () => generationStatusUnknown.value || teachingRunIsActive(teachingRun.value?.run.state),
+)
+const readingCurrentLastChapter = computed(
+  () => Boolean(lesson.value?.sections.length) && progress.value.currentIndex === lesson.value!.sections.length - 1,
+)
 const currentVisualPageUrl = computed(() => {
   const page = currentSection.value?.visualSourcePages[0]
   return pageImageUrl(page)
@@ -368,9 +393,8 @@ function addMediaWarning(message: string) {
   if (!mediaWarnings.value.includes(message)) mediaWarnings.value.push(message)
 }
 
-async function loadLesson() {
-  loading.value = true
-  errorMessage.value = ''
+function clearSupportingContent() {
+  quality.value = null
   narration.value = null
   video.value = null
   mediaConsistency.value = null
@@ -382,7 +406,72 @@ async function loadLesson() {
   narrationDurationMillis.value = 0
   narrationCues.value = []
   narrationMillis.value = 0
-  let targetPlanId = planId.value
+}
+
+async function loadSupportingContent(targetPlanId: string) {
+  clearSupportingContent()
+  const [qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
+    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`),
+    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/comprehension`),
+    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`),
+    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
+    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
+  ])
+  if ([qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse]
+    .some((response) => response?.status === 401)) {
+    await router.push({ name: 'login' })
+    return
+  }
+  if (qualityResponse?.ok) {
+    quality.value = (await qualityResponse.json()) as LessonQualityReport
+  } else {
+    addMediaWarning('讲解诊断暂不可用，不影响继续阅读。')
+  }
+  if (comprehensionResponse?.ok) {
+    comprehension.value = (await comprehensionResponse.json()) as LessonComprehensionReport
+  } else {
+    comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
+  }
+  if (narrationResponse?.ok) {
+    const playback = (await narrationResponse.json()) as NarrationPlayback
+    narration.value = playback.script
+    narrationProvider.value = playback.provider
+    narrationDurationMillis.value = playback.durationMillis
+    narrationCues.value = playback.cues
+    audioAvailable.value = true
+  } else {
+    addMediaWarning('语音暂不可用，已保留完整图文讲解。')
+  }
+  if (videoResponse?.ok) {
+    video.value = (await videoResponse.json()) as ChapterVideo
+  } else {
+    addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
+  }
+  if (consistencyResponse?.ok) {
+    mediaConsistency.value = (await consistencyResponse.json()) as MediaConsistencyReport
+  }
+  const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
+  if (
+    Number.isFinite(restoredNarration) &&
+    restoredNarration >= 0 &&
+    restoredNarration < narrationDurationMillis.value
+  ) {
+    narrationRestoreTarget.value = restoredNarration
+    narrationMillis.value = restoredNarration
+  }
+}
+
+async function loadLesson() {
+  clearGenerationRefresh()
+  loading.value = true
+  errorMessage.value = ''
+  teachingRun.value = null
+  generationStatusUnknown.value = false
+  generationRefreshError.value = ''
+  generationFinishedMessage.value = ''
+  waitingForNextChapter.value = false
+  clearSupportingContent()
+  const targetPlanId = planId.value
   if (!targetPlanId) {
     await router.replace({ name: 'lessons' })
     loading.value = false
@@ -390,57 +479,23 @@ async function loadLesson() {
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
-    const [planResponse, lessonResponse, qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
+    const [planResponse, lessonResponse, runResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`, { credentials: 'include' }),
-      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/comprehension`),
-      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`),
-      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
-      optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
+      optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
     ])
-    if (
-      planResponse.status === 401 ||
-      lessonResponse.status === 401 ||
-      qualityResponse.status === 401 ||
-      comprehensionResponse?.status === 401
-    ) {
+    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401) {
       await router.push({ name: 'login' })
       return
     }
-    if (
-      !planResponse.ok ||
-      !lessonResponse.ok ||
-      !qualityResponse.ok
-    ) {
+    if (!planResponse.ok || !lessonResponse.ok) {
       throw new Error('无法读取这份讲解，请重新生成。')
     }
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
-    quality.value = (await qualityResponse.json()) as LessonQualityReport
-    if (comprehensionResponse?.ok) {
-      comprehension.value = (await comprehensionResponse.json()) as LessonComprehensionReport
-    } else {
-      comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
-    }
-    if (narrationResponse?.ok) {
-      const playback = (await narrationResponse.json()) as NarrationPlayback
-      narration.value = playback.script
-      narrationProvider.value = playback.provider
-      narrationDurationMillis.value = playback.durationMillis
-      narrationCues.value = playback.cues
-      audioAvailable.value = true
-    } else {
-      addMediaWarning('语音暂不可用，已保留完整图文讲解。')
-    }
-    if (videoResponse?.ok) {
-      video.value = (await videoResponse.json()) as ChapterVideo
-    } else {
-      addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
-    }
-    if (consistencyResponse?.ok) {
-      mediaConsistency.value = (await consistencyResponse.json()) as MediaConsistencyReport
-    }
+    teachingRun.value = runResponse?.ok ? await runResponse.json() as TeachingRunProgress : null
+    generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
+    if (generationStatusUnknown.value) generationRefreshError.value = '暂时无法确认后台生成状态。'
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = {
       ...restoreLessonProgress(
@@ -449,15 +504,8 @@ async function loadLesson() {
       ),
       paused: false,
     }
-    const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
-    if (
-      Number.isFinite(restoredNarration) &&
-      restoredNarration >= 0 &&
-      restoredNarration < narrationDurationMillis.value
-    ) {
-      narrationRestoreTarget.value = restoredNarration
-      narrationMillis.value = restoredNarration
-    }
+    if (generationActive.value) scheduleGenerationRefresh()
+    else await loadSupportingContent(targetPlanId)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
   } finally {
@@ -465,7 +513,84 @@ async function loadLesson() {
   }
 }
 
+function clearGenerationRefresh() {
+  if (generationRefreshTimer) clearTimeout(generationRefreshTimer)
+  generationRefreshTimer = undefined
+}
+
+function scheduleGenerationRefresh(delay = 1500) {
+  clearGenerationRefresh()
+  if (lessonViewDisposed || !online.value || !generationActive.value) return
+  generationRefreshTimer = setTimeout(() => {
+    generationRefreshTimer = undefined
+    void refreshGeneration()
+  }, delay)
+}
+
+function terminalGenerationMessage(state: string) {
+  if (state === 'COMPLETED') return '讲解已经生成完成，全部章节都已载入。'
+  if (state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
+    return '本轮生成已经结束；已通过核对的章节仍可阅读，缺少依据的部分可以继续补全。'
+  }
+  if (state === 'FAILED') return '后台生成已经停止，已完成章节仍然保留，可以稍后重新补全。'
+  return ''
+}
+
+async function refreshGeneration() {
+  if (!generationActive.value || !online.value || lessonViewDisposed) return
+  const wasActive = generationActive.value
+  try {
+    const [runResponse, lessonResponse] = await Promise.all([
+      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId.value)}`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest`, { credentials: 'include' }),
+    ])
+    if (runResponse.status === 401 || lessonResponse.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if ((!runResponse.ok && runResponse.status !== 404) || !lessonResponse.ok) {
+      throw new Error('暂时没有取得最新章节。')
+    }
+
+    const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
+    const incomingLesson = await lessonResponse.json() as IllustratedLesson
+    const previousLesson = lesson.value
+    const previousCount = previousLesson?.sections.length ?? 0
+    const acceptedLesson = acceptProgressiveLesson(previousLesson, incomingLesson)
+    const lessonReplaced = previousLesson !== null && acceptedLesson.id !== previousLesson.id
+    lesson.value = acceptedLesson
+    teachingRun.value = incomingRun
+    generationStatusUnknown.value = false
+    generationRefreshError.value = ''
+
+    if (lessonReplaced) {
+      progress.value = {
+        ...restoreLessonProgress(
+          localStorage.getItem(`rulepilot:lesson-progress:${acceptedLesson.id}`),
+          acceptedLesson.sections.length,
+        ),
+        paused: false,
+      }
+      selectSection(progress.value.currentIndex)
+      waitingForNextChapter.value = false
+    } else if (acceptedLesson.sections.length > previousCount && waitingForNextChapter.value) {
+      waitingForNextChapter.value = false
+      selectSection(previousCount)
+    }
+
+    if (wasActive && !generationActive.value) {
+      generationFinishedMessage.value = terminalGenerationMessage(incomingRun?.run.state ?? '')
+      await loadSupportingContent(planId.value)
+    }
+  } catch (error) {
+    generationRefreshError.value = error instanceof Error ? error.message : '暂时没有取得最新章节。'
+  } finally {
+    scheduleGenerationRefresh()
+  }
+}
+
 function selectSection(index: number) {
+  waitingForNextChapter.value = false
   progress.value = { ...progress.value, currentIndex: index }
   question.value = ''
   answer.value = null
@@ -805,7 +930,9 @@ function previousSection() {
 
 function finish(outcome: 'completed' | 'skipped') {
   if (!lesson.value || progress.value.paused) return
+  const waitForNext = generationActive.value && readingCurrentLastChapter.value
   progress.value = finishSection(progress.value, lesson.value.sections.length, outcome)
+  waitingForNextChapter.value = waitForNext
   saveProgress()
 }
 
@@ -957,9 +1084,12 @@ function handleKeydown(event: KeyboardEvent) {
 function updateOnlineStatus() {
   online.value = navigator.onLine
   if (!online.value) refreshOfflineKnowledge()
+  if (online.value && generationActive.value) scheduleGenerationRefresh(0)
+  else if (!online.value) clearGenerationRefresh()
 }
 
 onMounted(() => {
+  lessonViewDisposed = false
   void loadLesson()
   window.addEventListener('online', updateOnlineStatus)
   window.addEventListener('offline', updateOnlineStatus)
@@ -967,6 +1097,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  lessonViewDisposed = true
+  clearGenerationRefresh()
   window.removeEventListener('online', updateOnlineStatus)
   window.removeEventListener('offline', updateOnlineStatus)
   window.removeEventListener('keydown', handleKeydown)
@@ -980,7 +1112,7 @@ onUnmounted(() => {
         <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← 我的讲解</RouterLink>
           <div class="flex items-center gap-4">
-            <RouterLink v-if="plan" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
+            <RouterLink v-if="plan && !generationActive" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
             <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
               <p class="font-semibold text-ink/75">这次讲解</p>
               <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
@@ -994,6 +1126,12 @@ onUnmounted(() => {
       <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
         <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
       </div>
+      <div v-if="generationActive" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3 text-center" role="status" aria-live="polite">
+        <p class="text-sm font-semibold text-indigo">{{ generationStatusUnknown ? '正在确认后台生成状态' : '整本仍在后台生成' }} · 当前已有 {{ lesson?.sections.length ?? 0 }} 节可以阅读</p>
+        <p class="mt-1 text-xs text-ink/55">停在当前章节不会丢失进度；新章节完成后会自动出现在目录里。</p>
+        <p v-if="generationRefreshError" class="mt-1 text-xs font-semibold text-amber-800">暂时没有取得最新章节，正在自动重试。现有内容不受影响。</p>
+      </div>
+      <p v-else-if="generationFinishedMessage" class="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-center text-sm font-semibold text-emerald-800" role="status">{{ generationFinishedMessage }}</p>
 
       <section v-if="!online && offlineKnowledge.length" class="mx-auto max-w-4xl px-5 pt-7 sm:px-8" aria-labelledby="offline-knowledge-title">
         <div class="rounded-3xl border border-amber-300 bg-amber-50 p-5 sm:p-6">
@@ -1057,10 +1195,10 @@ onUnmounted(() => {
       <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
         <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" aria-label="讲解章节">
           <div class="flex items-end justify-between">
-            <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">完整规则讲解</h1></div>
+            <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">{{ generationActive ? '已完成章节' : '完整规则讲解' }}</h1></div>
             <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
           </div>
-          <details v-if="quality" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
+          <details v-if="quality && !generationActive" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
             <summary class="cursor-pointer list-none text-sm font-semibold">
               <span class="flex items-center justify-between gap-3">
                 <span>讲解有问题？查看诊断</span>
@@ -1074,7 +1212,7 @@ onUnmounted(() => {
               </li>
             </ul>
           </details>
-          <div v-if="lesson.status === 'INCOMPLETE'" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
+          <div v-if="lesson.status === 'INCOMPLETE' && !generationActive" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
             <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ lesson.sections.length }} 节</p>
             <p class="mt-1 text-xs leading-5 text-amber-900/75">继续时会保留已经通过引用与事实检查的章节，只补尚未通过的部分。</p>
             <button
@@ -1085,7 +1223,7 @@ onUnmounted(() => {
               {{ resumingLesson ? '正在补全…' : '继续补全讲解' }}
             </button>
           </div>
-          <details v-if="mediaConsistency" class="mt-3 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
+          <details v-if="mediaConsistency && !generationActive" class="mt-3 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
             <summary class="cursor-pointer list-none text-sm font-semibold">
               <span class="flex items-center justify-between gap-3">
                 <span>图文与音视频状态</span>
@@ -1099,7 +1237,7 @@ onUnmounted(() => {
               </li>
             </ul>
           </details>
-          <div class="mt-4 grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1" aria-label="讲解形式">
+          <div v-if="!generationActive" class="mt-4 grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1" aria-label="讲解形式">
             <button
               v-for="mode in ([['TEXT', '图文'], ['AUDIO', '语音'], ['VIDEO', '视频']] as const)"
               :key="mode[0]"
@@ -1133,6 +1271,10 @@ onUnmounted(() => {
               <div><p class="text-xs font-semibold text-ink/45">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p><h2 class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ currentSection.title }}</h2></div>
               <span v-if="currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900">原文内容不足</span>
               <span v-else class="rounded-md bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">可查看原文</span>
+            </div>
+            <div v-if="generationActive && readingCurrentLastChapter" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-indigo" role="status">
+              <p class="font-semibold">这是当前最后一节，后续章节仍在生成。</p>
+              <p class="mt-1 text-ink/55">你可以先读完并标记本节；下一节完成后，页面会自动继续。</p>
             </div>
 
             <div class="mt-6 rounded-2xl border border-copper/20 bg-copper/8 px-4 py-4 sm:px-5">
@@ -1298,7 +1440,7 @@ onUnmounted(() => {
             </details>
 
             <section
-              v-if="progress.currentIndex === lesson.sections.length - 1 && (comprehension || comprehensionError)"
+              v-if="!generationActive && progress.currentIndex === lesson.sections.length - 1 && (comprehension || comprehensionError)"
               class="mt-8 rounded-3xl border border-copper/20 bg-copper/[0.06] p-5 sm:p-6"
               aria-labelledby="comprehension-title"
             >
@@ -1560,7 +1702,7 @@ onUnmounted(() => {
         <div class="mx-auto grid max-w-3xl grid-cols-[0.8fr_1fr_1.5fr] gap-2">
           <button :disabled="progress.currentIndex === 0" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="previousSection">上一节</button>
           <button class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="finish('skipped')">稍后再看</button>
-          <button class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white" @click="finish('completed')">{{ progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
+          <button :disabled="waitingForNextChapter" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60" @click="finish('completed')">{{ generationActive && readingCurrentLastChapter ? (waitingForNextChapter ? '等待下一节…' : '这节看懂了，等待下一节') : progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
         </div>
       </nav>
 
