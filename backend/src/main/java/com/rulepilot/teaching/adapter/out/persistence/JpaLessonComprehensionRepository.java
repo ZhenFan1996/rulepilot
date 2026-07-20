@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.out.persistence;
 import com.rulepilot.teaching.application.LessonComprehensionRepository;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.PlayerResult;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.TaskType;
+import com.rulepilot.teaching.domain.LessonComprehensionReport.VisualAidResult;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.time.Instant;
@@ -20,25 +21,31 @@ public class JpaLessonComprehensionRepository implements LessonComprehensionRepo
     private EntityManager entityManager;
 
     @Override
-    public Map<TaskType, PlayerResult> findResults(UUID lessonId, String username) {
+    public Map<TaskType, SavedResult> findResults(UUID lessonId, String username) {
         @SuppressWarnings("unchecked")
         var rows = (java.util.List<Object[]>) entityManager.createNativeQuery("""
-                        select task_type, result
+                        select task_type, result, visual_aid_result
                         from lesson_comprehension_result
                         where lesson_id = :lessonId and created_by = :username
                         """)
                 .setParameter("lessonId", lessonId)
                 .setParameter("username", username)
                 .getResultList();
-        Map<TaskType, PlayerResult> found = new EnumMap<>(TaskType.class);
+        Map<TaskType, SavedResult> found = new EnumMap<>(TaskType.class);
         for (Object[] row : rows) {
-            found.put(TaskType.valueOf(row[0].toString()), PlayerResult.valueOf(row[1].toString()));
+            found.put(
+                    TaskType.valueOf(row[0].toString()),
+                    new SavedResult(
+                            PlayerResult.valueOf(row[1].toString()),
+                            row[2] == null
+                                    ? VisualAidResult.NOT_RATED
+                                    : VisualAidResult.valueOf(row[2].toString())));
         }
         return Map.copyOf(found);
     }
 
     @Override
-    public void save(
+    public void savePlayerResult(
             UUID id, UUID lessonId, TaskType taskType, PlayerResult result, String username, Instant updatedAt) {
         entityManager.createNativeQuery("""
                         insert into lesson_comprehension_result (
@@ -56,5 +63,28 @@ public class JpaLessonComprehensionRepository implements LessonComprehensionRepo
                 .setParameter("username", username)
                 .setParameter("updatedAt", updatedAt)
                 .executeUpdate();
+    }
+
+    @Override
+    public boolean saveVisualAidResult(
+            UUID lessonId,
+            TaskType taskType,
+            VisualAidResult result,
+            String username,
+            Instant updatedAt) {
+        int updated = entityManager.createNativeQuery("""
+                        update lesson_comprehension_result
+                        set visual_aid_result = :result, updated_at = :updatedAt
+                        where lesson_id = :lessonId
+                          and created_by = :username
+                          and task_type = :taskType
+                        """)
+                .setParameter("lessonId", lessonId)
+                .setParameter("username", username)
+                .setParameter("taskType", taskType.name())
+                .setParameter("result", result.name())
+                .setParameter("updatedAt", updatedAt)
+                .executeUpdate();
+        return updated == 1;
     }
 }

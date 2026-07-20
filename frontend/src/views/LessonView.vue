@@ -81,14 +81,19 @@ interface LessonComprehensionReport {
   taskCount: number
   canDoCount: number
   needsHelpCount: number
+  readyVisualTaskCount: number
+  visualAidRatedCount: number
+  visualAidHelpfulCount: number
   tasks: Array<{
-    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME'
+    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME' | 'IDENTIFY_COMPONENTS' | 'COMPLETE_VISUAL_SETUP'
     label: string
     prompt: string
-    readiness: 'READY' | 'MISSING_LESSON_CHECK'
+    readiness: 'READY' | 'MISSING_LESSON_CHECK' | 'MISSING_VISUAL_EVIDENCE'
     result: 'NOT_TRIED' | 'CAN_DO' | 'NEEDS_HELP'
     chapterPositions: number[]
     sourcePages: number[]
+    visualFocus: LessonSection['steps'][number]['visualFocus']
+    visualAidResult: 'NOT_RATED' | 'HELPFUL' | 'NOT_HELPFUL'
   }>
 }
 
@@ -250,6 +255,7 @@ const editedExplanation = ref('')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
 const visualImageFailed = ref(false)
+const failedComprehensionImages = ref<number[]>([])
 const resumingLesson = ref(false)
 
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -270,6 +276,12 @@ function visualFocusStyle(focus: NonNullable<LessonSection['steps'][number]['vis
     top: `${focus.y / 10}%`,
     width: `${focus.width / 10}%`,
     height: `${focus.height / 10}%`,
+  }
+}
+
+function comprehensionImageFailed(pageNumber: number) {
+  if (!failedComprehensionImages.value.includes(pageNumber)) {
+    failedComprehensionImages.value.push(pageNumber)
   }
 }
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
@@ -487,6 +499,30 @@ async function recordComprehension(
     comprehension.value = (await response.json()) as LessonComprehensionReport
   } catch (error) {
     comprehensionError.value = error instanceof Error ? error.message : '这次学习检查没有保存。'
+  } finally {
+    comprehensionSaving.value = null
+  }
+}
+
+async function recordVisualAid(
+  taskType: LessonComprehensionReport['tasks'][number]['type'],
+  result: 'HELPFUL' | 'NOT_HELPFUL',
+) {
+  if (comprehensionSaving.value || !online.value) return
+  comprehensionSaving.value = `${taskType}-visual`
+  comprehensionError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/${taskType}/visual-aid`, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({ result }),
+    })
+    if (!response.ok) throw new Error('图片帮助反馈没有保存，请重试。')
+    comprehension.value = (await response.json()) as LessonComprehensionReport
+  } catch (error) {
+    comprehensionError.value = error instanceof Error ? error.message : '图片帮助反馈没有保存。'
   } finally {
     comprehensionSaving.value = null
   }
@@ -1269,10 +1305,13 @@ onUnmounted(() => {
               <div class="flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <p class="text-xs font-semibold text-copper">上桌前，自己试一遍</p>
-                  <h3 id="comprehension-title" class="mt-1 font-display text-2xl font-semibold">这四件事，你现在会做了吗？</h3>
-                  <p class="mt-2 text-sm leading-6 text-ink/55">不用背原文，试着说出或在桌上完成。不会的可以直接回到相关章节。</p>
+                  <h3 id="comprehension-title" class="mt-1 font-display text-2xl font-semibold">这些关键动作，你现在会做了吗？</h3>
+                  <p class="mt-2 text-sm leading-6 text-ink/55">不用背原文，试着认组件、照图摆放，再完成一轮和计分。不会的可以直接回到相关章节。</p>
                 </div>
-                <p v-if="comprehension" class="text-sm font-semibold text-copper">已掌握 {{ comprehension.canDoCount }} / {{ comprehension.readyTaskCount }}</p>
+                <div v-if="comprehension" class="text-right text-sm font-semibold text-copper">
+                  <p>已掌握 {{ comprehension.canDoCount }} / {{ comprehension.readyTaskCount }}</p>
+                  <p v-if="comprehension.visualAidRatedCount" class="mt-1 text-xs text-ink/50">焦点图有帮助 {{ comprehension.visualAidHelpfulCount }} / {{ comprehension.visualAidRatedCount }}</p>
+                </div>
               </div>
 
               <p v-if="comprehensionError" class="mt-4 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">{{ comprehensionError }}</p>
@@ -1284,6 +1323,29 @@ onUnmounted(() => {
                       {{ task.result === 'CAN_DO' ? '会了' : task.result === 'NEEDS_HELP' ? '待补一遍' : '未检查' }}
                     </span>
                   </div>
+                  <figure
+                    v-if="task.visualFocus && !failedComprehensionImages.includes(task.visualFocus.pageNumber)"
+                    class="mt-3 overflow-hidden rounded-xl border border-indigo/15 bg-canvas"
+                  >
+                    <a :href="pageImageUrl(task.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
+                      <img
+                        :src="pageImageUrl(task.visualFocus.pageNumber)"
+                        :alt="`规则书第 ${task.visualFocus.pageNumber} 页，框选 ${task.visualFocus.label}`"
+                        class="block h-auto w-full"
+                        loading="lazy"
+                        @error="comprehensionImageFailed(task.visualFocus.pageNumber)"
+                      >
+                      <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(task.visualFocus)" aria-hidden="true" />
+                    </a>
+                    <figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold text-indigo">
+                      <span>先看框内：{{ task.visualFocus.label }}</span>
+                      <span>第 {{ task.visualFocus.pageNumber }} 页</span>
+                    </figcaption>
+                  </figure>
+                  <p v-else-if="task.visualFocus" class="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+                    图片暂时没有载入，仍可回到相关章节或
+                    <a :href="pageImageUrl(task.visualFocus.pageNumber)" target="_blank" rel="noopener" class="font-semibold underline">打开原图</a>。
+                  </p>
                   <p class="mt-2 text-sm leading-6 text-ink/65">{{ task.prompt }}</p>
                   <p v-if="task.sourcePages.length" class="mt-2 text-xs font-semibold text-indigo">可核对规则书第 {{ task.sourcePages.join('、') }} 页</p>
                   <div v-if="task.readiness === 'READY'" class="mt-4 grid grid-cols-2 gap-2">
@@ -1305,6 +1367,29 @@ onUnmounted(() => {
                     >
                       还不清楚
                     </button>
+                  </div>
+                  <div v-if="task.visualFocus && task.result !== 'NOT_TRIED'" class="mt-3 border-t border-ink/8 pt-3">
+                    <p class="text-xs font-semibold text-ink/55">框选位置对完成这项任务有帮助吗？</p>
+                    <div class="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40"
+                        :class="task.visualAidResult === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'"
+                        :disabled="comprehensionSaving !== null || !online"
+                        @click="recordVisualAid(task.type, 'HELPFUL')"
+                      >
+                        有帮助
+                      </button>
+                      <button
+                        type="button"
+                        class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40"
+                        :class="task.visualAidResult === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'"
+                        :disabled="comprehensionSaving !== null || !online"
+                        @click="recordVisualAid(task.type, 'NOT_HELPFUL')"
+                      >
+                        没帮上忙
+                      </button>
+                    </div>
                   </div>
                   <button
                     v-if="task.result === 'NEEDS_HELP' && task.chapterPositions.length"
