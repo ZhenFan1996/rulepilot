@@ -49,6 +49,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             log.info("Visual locator is unavailable for section {}", request.sectionTitle());
             return Optional.empty();
         }
+        LocateAttempt first = locateOnce(request, owner, false);
+        if (first.region().isPresent() || !first.retryable()) return first.region();
+        log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
+        return locateOnce(request, owner, true).region();
+    }
+
+    private LocateAttempt locateOnce(VisualLocationRequest request, String owner, boolean correction) {
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(qwenJsonOptions());
@@ -60,13 +67,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Section: {section}
                                     Claims: {claims}
                                     Candidate rectangles: {candidates}
+                                    {correction}
                                     Return JSON with pageNumber, label, x, y, width, height and supportedClaimRefs; or null.
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())
                                     .mapToObj(index -> Map.of("ref", "C" + (index + 1), "text", request.claims().get(index).text()))
                                     .toList())
-                            .param("candidates", request.candidates());
+                            .param("candidates", request.candidates())
+                            .param("correction", correction
+                                    ? "The previous response was rejected. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000."
+                                    : "");
                     request.pages().forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
@@ -75,7 +86,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         Optional<ModelRegion> parsed = parseModelRegion(content);
         if (parsed.isEmpty()) {
             log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
-            return Optional.empty();
+            return new LocateAttempt(Optional.empty(), !isExplicitNoRegion(content));
         }
         ModelRegion response = parsed.get();
         List<UUID> supported = response.supportedClaimRefs().stream()
@@ -85,14 +96,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .toList();
         if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
             log.info("Visual locator returned an unsupported claim or page for section {}", request.sectionTitle());
-            return Optional.empty();
+            return new LocateAttempt(Optional.empty(), true);
         }
         try {
-            return Optional.of(new LocatedRegion(
-                    response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported));
+            return new LocateAttempt(Optional.of(new LocatedRegion(
+                    response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported)), false);
         } catch (IllegalArgumentException invalidModelOutput) {
             log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
-            return Optional.empty();
+            return new LocateAttempt(Optional.empty(), true);
         }
     }
 
@@ -106,6 +117,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return OpenAiChatOptions.builder()
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+    }
+
+    static boolean isExplicitNoRegion(String content) {
+        return content != null && content.strip().equals("null");
     }
 
     static Optional<ModelRegion> parseModelRegion(String content) {
@@ -136,4 +151,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
         }
     }
+
+    private record LocateAttempt(Optional<LocatedRegion> region, boolean retryable) {}
 }

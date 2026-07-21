@@ -54,4 +54,10 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
     }
+
+    @Test
+    void treats_an_explicit_null_as_a_terminal_no_region_response() {
+        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" null ")).isTrue();
+        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion("not valid JSON")).isFalse();
+    }
 }
