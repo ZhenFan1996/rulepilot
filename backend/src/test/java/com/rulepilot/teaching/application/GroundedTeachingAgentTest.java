@@ -21,6 +21,7 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
@@ -133,6 +134,95 @@ class GroundedTeachingAgentTest {
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+    }
+
+    @Test
+    void turnsPersistedVisualPageFactsIntoCitedLessonEvidence() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence pageEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "GENERAL",
+                "Visual rulebook page 4",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of(pageEvidence);
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId, java.util.Set<Integer> pages, boolean includePageImages) {
+                return List.of(pageEvidence);
+            }
+        };
+        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID documentVersionId, List<PageFact> pages) {}
+
+            @Override
+            public List<PageFact> find(UUID documentVersionId, java.util.Set<Integer> pages) {
+                return List.of(new PageFact(
+                        4,
+                        "Overpopulation: 3 of the same Wildlife Token",
+                        "3 个相同动物标记时，当前玩家可以清除这 3 个标记；每回合只能这样做一次。",
+                        List.of("Overpopulation", "Wildlife Token")));
+            }
+        };
+        TeachingLessonModel model = request -> {
+            assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
+                    .asString()
+                    .contains("每回合只能这样做一次");
+            return new SectionDraft(
+                    "种群过剩",
+                    VisualKind.FLOW_DIAGRAM,
+                    "查看同类动物标记。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "每回合一次",
+                            TeachingMove.WATCH,
+                            "出现 3 个相同动物标记时，当前玩家可以清除这 3 个标记；每回合只能这样做一次。",
+                            List.of(chunkId))));
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "overpopulation",
+                        "种群过剩",
+                        "Explain overpopulation",
+                        true,
+                        true,
+                        List.of("overpopulation"),
+                        List.of("core_loop"),
+                        List.of(4))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                facts,
+                4,
+                1);
+
+        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.sections()).singleElement().satisfies(section -> assertThat(section.evidenceStatus())
+                .isEqualTo(EvidenceStatus.CITED_DRAFT));
     }
 
     @Test

@@ -8,6 +8,13 @@ Evidence policy:
 - Ignore optional technologies, expansions, and advanced variants unless the objective asks for them or they are necessary to explain an evidenced exception in the core rule.
 - Do not rely on outside knowledge or familiar board-game conventions.
 - Every factual heading and step must cite supplied evidence references that directly support the whole step. Keep each cost, restriction, timing condition, and exception with the action it qualifies.
+- For image-derived rules, transcribe the visible procedure before explaining it. Preserve every modal and scope word
+  exactly: may versus must, any versus all, once versus repeatedly, before versus after, and which exact components
+  are discarded, drawn, paired, moved, or left unchanged. Do not fill in a missing transition from normal board-game
+  practice. If the page does not visibly say that turn order is clockwise, that tiles are redrawn, or that an object
+  must match a terrain, do not write it.
+- A visual page fact is a page-scoped reading aid, not permission to generalize. When its concise summary and the
+  attached page differ in apparent detail, prefer the visible page and state only the shared, directly observable rule.
 - Evidence uses short references E1, E2, and so on. Return only these exact references; never invent one or copy a UUID.
 - The visual caption must contain visualCitationIds that cite evidence. Images help identify components, states, and icon-to-label relationships, but never replace text evidence.
 - Omit unsupported details. Never turn a missing rule into advice to read the manual; the application handles evidence gaps separately.

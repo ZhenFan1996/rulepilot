@@ -19,6 +19,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -93,6 +94,7 @@ public class GroundedTeachingAgent {
     private final EvidenceVerifier evidenceVerifier;
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
+    private final VisualRulebookPageFacts visualFacts;
     private final int maxToolCalls;
     private final int baseSectionParallelism;
 
@@ -103,6 +105,7 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
         this.tools = tools;
@@ -110,6 +113,7 @@ public class GroundedTeachingAgent {
         this.evidenceVerifier = evidenceVerifier;
         this.critic = critic;
         this.invocations = invocations;
+        this.visualFacts = visualFacts;
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
     }
@@ -120,8 +124,27 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
+            int maxToolCalls,
+            int baseSectionParallelism) {
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                VisualRulebookPageFacts.empty(),
+                maxToolCalls,
+                baseSectionParallelism);
+    }
+
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
             int maxToolCalls) {
-        this(tools, model, evidenceVerifier, critic, invocations, maxToolCalls, 3);
+        this(tools, model, evidenceVerifier, critic, invocations, VisualRulebookPageFacts.empty(), maxToolCalls, 3);
     }
 
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
@@ -527,12 +550,40 @@ public class GroundedTeachingAgent {
                 log.info(
                         "Teaching topic {} is bound to visual source pages {}",
                         planned.topicKey(), planned.sourcePageNumbers());
-                return pageEvidence;
+                return enrichVisualPageFacts(plan.documentVersionId(), pageEvidence);
             }
         } catch (RuntimeException failure) {
             log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
         }
         return retrieved;
+    }
+
+    private List<RuleEvidence> enrichVisualPageFacts(UUID documentVersionId, List<RuleEvidence> evidence) {
+        Set<Integer> pages = evidence.stream()
+                .filter(source -> source.pageFrom() == source.pageTo())
+                .map(RuleEvidence::pageFrom)
+                .collect(Collectors.toUnmodifiableSet());
+        if (pages.isEmpty()) return evidence;
+        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        VisualRulebookPageFacts.PageFact::pageNumber,
+                        VisualRulebookPageFacts.PageFact::evidenceText));
+        if (factsByPage.isEmpty()) return evidence;
+        return evidence.stream()
+                .map(source -> {
+                    String facts = source.pageFrom() == source.pageTo() ? factsByPage.get(source.pageFrom()) : null;
+                    if (facts == null || !VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt())) return source;
+                    return new RuleEvidence(
+                            source.chunkId(),
+                            source.documentVersionId(),
+                            source.sectionType(),
+                            source.heading(),
+                            facts,
+                            source.pageFrom(),
+                            source.pageTo(),
+                            source.pageImages());
+                })
+                .toList();
     }
 
     private List<String> objectiveQueries(String objective) {

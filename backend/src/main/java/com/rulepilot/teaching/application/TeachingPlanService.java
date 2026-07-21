@@ -9,6 +9,8 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
@@ -40,6 +42,7 @@ public class TeachingPlanService {
     private final DocumentVersionScopeLookup documentScopes;
     private final DocumentTeachingPreparation documentPreparation;
     private final VisualRulebookPageCatalogModel visualCatalog;
+    private final VisualRulebookPageFacts visualFacts;
     private final TeachingOutlineModel outlines;
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
@@ -50,6 +53,7 @@ public class TeachingPlanService {
             DocumentVersionScopeLookup documentScopes,
             DocumentTeachingPreparation documentPreparation,
             VisualRulebookPageCatalogModel visualCatalog,
+            VisualRulebookPageFacts visualFacts,
             TeachingOutlineModel outlines,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository) {
@@ -58,6 +62,7 @@ public class TeachingPlanService {
         this.documentScopes = documentScopes;
         this.documentPreparation = documentPreparation;
         this.visualCatalog = visualCatalog;
+        this.visualFacts = visualFacts;
         this.outlines = outlines;
         this.plans = plans;
         this.repository = repository;
@@ -161,8 +166,13 @@ public class TeachingPlanService {
                 summaries.addAll(awaitCatalog(future).pages());
             }
         }
-        return summaries.stream()
+        List<PageFact> facts = summaries.stream()
                 .sorted(java.util.Comparator.comparingInt(VisualRulebookPageCatalogModel.PageSummary::pageNumber))
+                .map(summary -> new PageFact(
+                        summary.pageNumber(), summary.printedTerms(), summary.factualSummary(), summary.keywords()))
+                .toList();
+        visualFacts.replace(documentVersionId, facts);
+        return facts.stream()
                 .map(summary -> new PageInput(
                         summary.pageNumber(),
                         "[Visual page catalog; verify against page image]\nPrinted terms: " + summary.printedTerms()

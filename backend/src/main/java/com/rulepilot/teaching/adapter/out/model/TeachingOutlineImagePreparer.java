@@ -19,8 +19,10 @@ import javax.imageio.stream.ImageOutputStream;
 /** Reduces overview images before they are sent to a vision model; original pages remain stored unchanged. */
 final class TeachingOutlineImagePreparer {
 
-    private static final int MAX_EDGE_PIXELS = 768;
-    private static final float JPEG_QUALITY = 0.76f;
+    // Rulebook pages often encode the decisive exception in small callouts. Keep those labels readable for the
+    // rule-writing pass; each chapter sends at most two pages, so this does not widen the request unboundedly.
+    private static final int MAX_EDGE_PIXELS = 1_200;
+    private static final float JPEG_QUALITY = 0.86f;
 
     PageImageInput prepare(PageImageInput input) {
         try {
