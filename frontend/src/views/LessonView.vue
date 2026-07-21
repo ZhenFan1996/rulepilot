@@ -377,6 +377,18 @@ function visualFocusStyle(focus: NonNullable<LessonSection['steps'][number]['vis
   }
 }
 
+function visualAidFor(sectionPosition: number, stepPosition: number) {
+  return comprehension.value?.visualAids.find((aid) => aid.key === visualAidKey(sectionPosition, stepPosition)) ?? null
+}
+
+function visualAidKey(sectionPosition: number, stepPosition: number) {
+  return `s${sectionPosition}-v${stepPosition}`
+}
+
+function visualAidResult(sectionPosition: number, stepPosition: number) {
+  return visualAidFor(sectionPosition, stepPosition)?.result ?? 'NOT_RATED'
+}
+
 function comprehensionImageFailed(pageNumber: number) {
   if (!failedComprehensionImages.value.includes(pageNumber)) {
     failedComprehensionImages.value.push(pageNumber)
@@ -1500,6 +1512,13 @@ onUnmounted(() => {
                               <img :src="focusedPageImageUrl(step.visualFocus)" :alt="`${step.visualFocus.label}，截自规则书第 ${step.visualFocus.pageNumber} 页`" class="block max-h-72 w-full object-contain" loading="lazy">
                             </a>
                             <figcaption class="border-t border-indigo/10 px-3 py-2 text-xs font-semibold text-copper">{{ step.visualFocus.label }} · 第 {{ step.visualFocus.pageNumber }} 页局部</figcaption>
+                            <div v-if="visualAidFor(currentSection.position, step.position)" class="border-t border-indigo/10 px-3 py-2">
+                              <p class="text-xs font-semibold text-ink/55">这张图有帮到你吗？</p>
+                              <div class="mt-2 grid grid-cols-2 gap-2">
+                                <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(currentSection.position, step.position) === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'" :disabled="comprehensionSaving !== null || !online" @click="recordVisualAid(visualAidKey(currentSection.position, step.position), 'HELPFUL')">有帮助</button>
+                                <button type="button" class="min-h-9 rounded-lg border px-2 text-xs font-semibold disabled:opacity-40" :class="visualAidResult(currentSection.position, step.position) === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'" :disabled="comprehensionSaving !== null || !online" @click="recordVisualAid(visualAidKey(currentSection.position, step.position), 'NOT_HELPFUL')">没帮上忙</button>
+                              </div>
+                            </div>
                           </figure>
                         </div>
                         <template v-else>

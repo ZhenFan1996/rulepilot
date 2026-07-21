@@ -146,8 +146,8 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.find('img[alt*="行动区"]').attributes('src'))
       .toContain('/pages/2/image/crop?x=100&y=200&width=500&height=400')
     const helpfulButtons = wrapper.findAll('button').filter((button) => button.text() === '有帮助')
-    expect(helpfulButtons).toHaveLength(2)
-    await helpfulButtons[1]!.trigger('click')
+    expect(helpfulButtons).toHaveLength(3)
+    await helpfulButtons[2]!.trigger('click')
     await flushPromises()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/v1/teaching-plans/plan-1/comprehension/visual-aids/s2-v3')
     const progressPaths = fetchMock.mock.calls
