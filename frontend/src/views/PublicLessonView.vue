@@ -76,8 +76,8 @@ onMounted(() => { void load() })
   <main class="min-h-screen bg-canvas text-ink">
     <header class="border-b border-ink/10 bg-paper/95">
       <div class="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold tracking-tight">RulePilot</RouterLink>
-        <span class="text-sm text-ink/50">公开讲解</span>
+        <RouterLink :to="{ name: 'public-library' }" class="font-display text-xl font-semibold tracking-tight">RulePilot</RouterLink>
+        <RouterLink :to="{ name: 'public-library' }" class="text-sm font-semibold text-indigo">公开讲解库</RouterLink>
       </div>
     </header>
 

@@ -30,6 +30,7 @@ describe('PublicLessonView', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
       ],
     })

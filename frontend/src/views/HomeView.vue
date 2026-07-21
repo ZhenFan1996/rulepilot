@@ -104,6 +104,7 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames()]))
             <RouterLink v-if="latestPlan" :to="{ name: 'lesson', params: { planId: latestPlan.id } }" class="inline-flex min-h-12 items-center rounded-lg bg-copper px-5 font-semibold text-white hover:bg-copper-dark">继续上次的讲解</RouterLink>
             <RouterLink v-else :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center rounded-lg bg-copper px-5 font-semibold text-white hover:bg-copper-dark">添加规则书</RouterLink>
             <RouterLink :to="{ name: latestPlan ? 'teach' : 'lessons' }" class="inline-flex min-h-12 items-center rounded-lg border border-white/30 bg-black/20 px-5 font-semibold text-white backdrop-blur-sm hover:bg-black/35">{{ latestPlan ? '准备新讲解' : '我的讲解' }}</RouterLink>
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center rounded-lg border border-white/30 bg-black/20 px-5 font-semibold text-white backdrop-blur-sm hover:bg-black/35">浏览公开讲解</RouterLink>
           </div>
           <p class="mt-6 text-sm text-white/55">{{ latestPlan ? `${latestPlan.playerCount} 人 · 约 ${latestPlan.durationMinutes} 分钟讲完` : '支持规则书文字、页面图片与页码引用' }}</p>
         </div>

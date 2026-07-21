@@ -15,5 +15,7 @@ public interface TeachingPlanRepository {
 
     List<TeachingPlan> findAllByCreatedBy(String createdBy);
 
+    List<TeachingPlan> findRecent(int limit);
+
     Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy);
 }

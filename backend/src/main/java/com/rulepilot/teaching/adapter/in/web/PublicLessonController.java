@@ -2,8 +2,10 @@ package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonReader;
 import java.net.URI;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -25,14 +27,24 @@ import org.springframework.web.server.ResponseStatusException;
 public class PublicLessonController {
 
     private final PublicLessonReader lessons;
+    private final PublicLessonCatalog catalog;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper crops;
 
     public PublicLessonController(
-            PublicLessonReader lessons, DocumentPageImages pageImages, DocumentPageImageCropper crops) {
+            PublicLessonReader lessons,
+            PublicLessonCatalog catalog,
+            DocumentPageImages pageImages,
+            DocumentPageImageCropper crops) {
         this.lessons = lessons;
+        this.catalog = catalog;
         this.pageImages = pageImages;
         this.crops = crops;
+    }
+
+    @GetMapping
+    List<PublicLessonCatalog.Entry> catalog(@RequestParam(defaultValue = "24") int limit) {
+        return catalog.latest(limit);
     }
 
     @GetMapping("/{planId}")
