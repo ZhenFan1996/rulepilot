@@ -13,6 +13,20 @@ import org.junit.jupiter.api.Test;
 class VisualRegionCandidateSelectorTest {
 
     @Test
+    void matches_chinese_rulebook_phrases_when_the_lesson_uses_different_wording() {
+        var understanding = new RulebookUnderstanding(
+                List.of(new RulebookUnderstanding.PageBlock(
+                        8, 0, 0, RulebookUnderstanding.BlockRole.BODY, "将探测器移动到行星轨道",
+                        new RulebookUnderstanding.Rectangle(100, 200, 420, 120), null)),
+                List.of(), List.of(), List.of());
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding, Set.of(8), List.of("进入行星轨道的费用与操作"));
+
+        assertThat(selected).singleElement().extracting(VisualRegionCandidateSelector.Candidate::pageNumber).isEqualTo(8);
+    }
+
+    @Test
     void selects_compact_term_matched_blocks_only_from_cited_pages() {
         var understanding = new RulebookUnderstanding(
                 List.of(

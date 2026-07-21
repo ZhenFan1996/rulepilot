@@ -51,9 +51,29 @@ public final class VisualRegionCandidateSelector {
     private Set<String> normalizedTerms(List<String> values) {
         return values.stream()
                 .filter(value -> value != null)
-                .flatMap(value -> Stream.of(value.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
-                .filter(term -> term.length() >= 2)
+                .flatMap(this::terms)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private Stream<String> terms(String value) {
+        String normalized = value.toLowerCase(Locale.ROOT);
+        Set<String> terms = new LinkedHashSet<>();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("[\\p{IsHan}]+|[\\p{L}\\p{N}]+")
+                .matcher(normalized);
+        while (matcher.find()) {
+            String token = matcher.group();
+            if (token.codePoints().allMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)) {
+                if (token.length() >= 2) {
+                    for (int offset = 0; offset < token.length() - 1; offset++) {
+                        terms.add(token.substring(offset, offset + 2));
+                    }
+                }
+            } else if (token.length() >= 2) {
+                terms.add(token);
+            }
+        }
+        return terms.stream();
     }
 
     public record Candidate(int pageNumber, Rectangle rectangle, String sourceText) {
