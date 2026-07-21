@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.TeachingLessonModel;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -29,6 +30,18 @@ final class TeachingOutlineImagePreparer {
             return new PageImageInput(input.pageNumber(), "image/jpeg", encode(resized));
         } catch (IOException exception) {
             throw new UncheckedIOException("could not prepare rulebook outline page image", exception);
+        }
+    }
+
+    TeachingLessonModel.PageImageInput prepare(TeachingLessonModel.PageImageInput input) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(input.content()));
+            if (source == null) throw new IllegalArgumentException("rulebook lesson page image cannot be decoded");
+            BufferedImage resized = resize(source);
+            return new TeachingLessonModel.PageImageInput(
+                    input.pageNumber(), "image/jpeg", encode(resized), resized.getWidth(), resized.getHeight());
+        } catch (IOException exception) {
+            throw new UncheckedIOException("could not prepare rulebook lesson page image", exception);
         }
     }
 

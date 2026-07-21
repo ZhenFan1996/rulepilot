@@ -72,6 +72,8 @@ public class GroundedTeachingAgent {
     private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
     private static final int MAX_REVIEW_UNCITED_EVIDENCE_PER_SECTION = 2;
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
+    private static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TRAILING_INCOMPLETE_THOUGHT = Pattern.compile(
@@ -140,8 +142,8 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Publishes the complete text-first lesson without waiting for visual localization or
-     * whole-lesson correction. Those are enrichment work and must not block a player reading.
+     * Publishes the lesson incrementally. Text-backed sections stay fast; image-only rulebooks
+     * use their cited pages as primary evidence instead of guessing from placeholder text.
      */
     public IllustratedLesson createBase(
             TeachingPlan plan,
@@ -546,7 +548,9 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int sectionIndex,
             boolean includeVisualEvidence) {
-        List<TeachingLessonModel.PageImageInput> pageImages = includeVisualEvidence
+        boolean requiresVisualGrounding = includeVisualEvidence || evidence.stream()
+                .anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        List<TeachingLessonModel.PageImageInput> pageImages = requiresVisualGrounding
                 ? selectedPageImages(planned, evidence, plan.createdBy())
                 : List.of();
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
@@ -826,7 +830,10 @@ public class GroundedTeachingAgent {
 
     private List<TeachingLessonModel.PageImageInput> selectedPageImages(
             TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence, String modelConfigurationOwner) {
-        if (!planned.visualEvidenceRecommended() || !model.supportsVisualEvidence(modelConfigurationOwner)) return List.of();
+        boolean imageOnlyEvidence = evidence.stream()
+                .anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        if ((!planned.visualEvidenceRecommended() && !imageOnlyEvidence)
+                || !model.supportsVisualEvidence(modelConfigurationOwner)) return List.of();
         Map<Integer, com.rulepilot.assistant.AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         Map<Integer, Integer> scores = new LinkedHashMap<>();
         Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();

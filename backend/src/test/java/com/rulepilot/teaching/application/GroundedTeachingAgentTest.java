@@ -88,6 +88,54 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void givesImageOnlyRulebookPagesToTheBaseLessonModel() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualOnlyEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "GENERAL",
+                "Visual rulebook page 4",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4);
+                return new SectionDraft(
+                        "立即可读的开局",
+                        VisualKind.TABLE_LAYOUT,
+                        "依据规则书页面完成开局。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "找到主棋盘",
+                                TeachingMove.VISUAL,
+                                "在图中找到主棋盘，再把它放在桌面中央。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(4, "主棋盘", 150, 150, 500, 500))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualOnlyEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+    }
+
+    @Test
     void generatesPostFirstBaseSectionsConcurrentlyAndPublishesOnlyContiguousReadingOrder() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

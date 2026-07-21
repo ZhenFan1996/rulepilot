@@ -27,6 +27,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
     private final VersionedAgentPrompts prompts;
+    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
 
     public SpringAiTeachingLessonModel(
             RuntimeModelConfiguration models,
@@ -147,7 +148,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                                     .toList())
                             .param("repair", repairInstruction);
                     if (role == Role.VISUAL) {
-                        request.pageImages().forEach(image -> user.media(
+                        request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
                                 MimeTypeUtils.parseMimeType(image.mediaType()),
                                 new ByteArrayResource(image.content())));
                     }
