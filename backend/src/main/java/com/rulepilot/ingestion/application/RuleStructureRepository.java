@@ -1,7 +1,9 @@
 package com.rulepilot.ingestion.application;
 
 import com.rulepilot.ingestion.domain.LessonRuleSectionType;
+import com.rulepilot.ingestion.domain.RulebookUnderstanding;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface RuleStructureRepository {
@@ -9,9 +11,12 @@ public interface RuleStructureRepository {
     void replace(
             UUID documentVersionId,
             List<DetectedRuleSection> sections,
-            List<DetectedRuleChunk> chunks);
+            List<DetectedRuleChunk> chunks,
+            RulebookUnderstanding understanding);
 
     List<DetectedRuleSection> findByDocumentVersion(UUID documentVersionId);
+
+    Optional<RulebookUnderstanding> findUnderstanding(UUID documentVersionId);
 
     record DetectedRuleSection(
             LessonRuleSectionType type, String content, List<Integer> pageNumbers) {

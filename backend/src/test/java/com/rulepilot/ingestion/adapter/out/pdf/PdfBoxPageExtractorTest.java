@@ -10,6 +10,8 @@ import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.junit.jupiter.api.Test;
 
 class PdfBoxPageExtractorTest {
@@ -54,6 +56,35 @@ class PdfBoxPageExtractorTest {
         assertThatThrownBy(() -> new PdfBoxPageExtractor(10, 10_000).extract(new ByteArrayInputStream(pdf)))
                 .isInstanceOf(PdfExtractionException.class)
                 .hasMessage("PDF contains active or embedded content");
+    }
+
+    @Test
+    void capturesPositionedTextBlocksInPageRelativeCoordinates() throws IOException {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            document.addPage(page);
+            try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
+                stream.beginText();
+                stream.setFont(new PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA_BOLD), 14);
+                stream.newLineAtOffset(72, 720);
+                stream.showText("SETUP");
+                stream.endText();
+            }
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+
+        var page = new PdfBoxPageExtractor(10, 10_000).extract(new ByteArrayInputStream(pdf)).getFirst();
+
+        assertThat(page.text()).contains("SETUP");
+        assertThat(page.textBlocks()).singleElement().satisfies(block -> {
+            assertThat(block.text()).isEqualTo("SETUP");
+            assertThat(block.x()).isBetween(1, 999);
+            assertThat(block.y()).isBetween(1, 999);
+            assertThat(block.width()).isPositive();
+            assertThat(block.height()).isPositive();
+        });
     }
 
     private byte[] pdfWithPages(int pages) throws IOException {

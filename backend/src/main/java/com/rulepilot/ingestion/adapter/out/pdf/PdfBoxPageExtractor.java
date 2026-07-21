@@ -22,7 +22,9 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.io.IOUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -80,19 +82,20 @@ public class PdfBoxPageExtractor implements PdfPageExtractor {
                 throw new PdfExtractionException("PDF exceeds the configured page limit");
             }
             rejectActiveContent(document.getDocument().getTrailer());
-            PDFTextStripper stripper = new PDFTextStripper();
+            LayoutTextStripper stripper = new LayoutTextStripper();
             stripper.setSortByPosition(true);
             List<DocumentProcessing.ExtractedPage> pages = new ArrayList<>(document.getNumberOfPages());
             int extractedCharacters = 0;
             for (int pageNumber = 1; pageNumber <= document.getNumberOfPages(); pageNumber++) {
                 stripper.setStartPage(pageNumber);
                 stripper.setEndPage(pageNumber);
+                stripper.preparePage(document.getPage(pageNumber - 1));
                 String text = stripper.getText(document).replace("\r\n", "\n").strip();
                 extractedCharacters = Math.addExact(extractedCharacters, text.length());
                 if (extractedCharacters > maxExtractedCharacters) {
                     throw new PdfExtractionException("PDF exceeds the configured extracted-text limit");
                 }
-                pages.add(new DocumentProcessing.ExtractedPage(pageNumber, text));
+                pages.add(new DocumentProcessing.ExtractedPage(pageNumber, text, stripper.capturedBlocks()));
             }
             return List.copyOf(pages);
         }
@@ -128,6 +131,58 @@ public class PdfBoxPageExtractor implements PdfPageExtractor {
                     }
                 });
             }
+        }
+    }
+
+    private static final class LayoutTextStripper extends PDFTextStripper {
+
+        private final List<DocumentProcessing.ExtractedTextBlock> blocks = new ArrayList<>();
+        private float pageWidth;
+        private float pageHeight;
+
+        private LayoutTextStripper() throws IOException {}
+
+        void preparePage(PDPage page) {
+            pageWidth = page.getMediaBox().getWidth();
+            pageHeight = page.getMediaBox().getHeight();
+            blocks.clear();
+        }
+
+        List<DocumentProcessing.ExtractedTextBlock> capturedBlocks() {
+            return List.copyOf(blocks);
+        }
+
+        @Override
+        protected void writeString(String string, List<TextPosition> positions) throws IOException {
+            super.writeString(string, positions);
+            String text = string == null ? "" : string.replaceAll("\\s+", " ").strip();
+            if (text.isEmpty() || positions == null || positions.isEmpty() || pageWidth <= 0 || pageHeight <= 0) {
+                return;
+            }
+
+            float minX = Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE;
+            float maxX = 0;
+            float maxY = 0;
+            for (TextPosition position : positions) {
+                minX = Math.min(minX, position.getXDirAdj());
+                minY = Math.min(minY, position.getYDirAdj());
+                maxX = Math.max(maxX, position.getXDirAdj() + position.getWidthDirAdj());
+                maxY = Math.max(maxY, position.getYDirAdj() + position.getHeightDir());
+            }
+            int x = Math.min(999, normalized(minX, pageWidth));
+            int y = Math.min(999, normalized(minY, pageHeight));
+            int right = normalized(maxX, pageWidth);
+            int bottom = normalized(maxY, pageHeight);
+            int width = Math.max(1, right - x);
+            int height = Math.max(1, bottom - y);
+            if (x + width > 1_000) width = 1_000 - x;
+            if (y + height > 1_000) height = 1_000 - y;
+            blocks.add(new DocumentProcessing.ExtractedTextBlock(blocks.size(), text, x, y, width, height));
+        }
+
+        private int normalized(float value, float dimension) {
+            return Math.max(0, Math.min(1_000, Math.round(value * 1_000 / dimension)));
         }
     }
 }
