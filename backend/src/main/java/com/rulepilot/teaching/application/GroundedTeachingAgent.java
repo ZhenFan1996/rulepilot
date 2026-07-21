@@ -616,7 +616,7 @@ public class GroundedTeachingAgent {
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
                 if (repair == MAX_DRAFT_REPAIR_ATTEMPTS || isVisualLocalizationFailure(rejectedDraft)) {
-                    if (!modelRequest.pageImages().isEmpty()) {
+                    if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
                         return fallbackToTextDraft(
                                 plan,
                                 planned,
@@ -718,6 +718,11 @@ public class GroundedTeachingAgent {
 
     private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
         return rejectionCategory(rejection).startsWith("VISUAL_");
+    }
+
+    private boolean hasOnlyVisualPageEvidence(List<RuleEvidence> evidence) {
+        return !evidence.isEmpty()
+                && evidence.stream().allMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
     }
 
     private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {

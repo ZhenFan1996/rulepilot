@@ -53,6 +53,17 @@ class SpringAiTeachingLessonModelTest {
         assertThat(model.supportsVisualEvidence("player")).isTrue();
     }
 
+    @Test
+    void resolvesTheVisualModelFromTheLessonOwnerRatherThanWorkerThreadState() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.usesFake(Role.VISUAL, "player")).thenReturn(false);
+        when(configuration.usesFake(Role.VISUAL)).thenReturn(true);
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+
+        assertThat(model.usesFake(Role.VISUAL, "player")).isFalse();
+    }
+
     private SectionRequest request(List<PageImageInput> pageImages) {
         return new SectionRequest(
                 "setup",

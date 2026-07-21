@@ -62,7 +62,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public SectionDraft compose(SectionRequest request) {
         Role role = roleFor(request);
-        if (models.usesFake(role)) {
+        if (usesFake(role, request.modelConfigurationOwner())) {
             return fakeModel.compose(request);
         }
         RuntimeException firstFailure;
@@ -82,7 +82,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     @Override
     public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
         Role role = roleFor(request);
-        if (models.usesFake(role)) {
+        if (usesFake(role, request.modelConfigurationOwner())) {
             return fakeModel.revise(request, previousDraft, feedback);
         }
         String revisionInstruction = """
@@ -178,6 +178,12 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 ? models.providerFor(role)
                 : models.providerFor(role, modelConfigurationOwner);
         return "qwen".equals(provider);
+    }
+
+    boolean usesFake(Role role, String modelConfigurationOwner) {
+        return modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                ? models.usesFake(role)
+                : models.usesFake(role, modelConfigurationOwner);
     }
 
     Role roleFor(SectionRequest request) {
