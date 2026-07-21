@@ -9,8 +9,23 @@ const pages = text
   .slice(1)
   .map((page) => page.trim().split('\n').map((line) => line.trim()).filter(Boolean))
 
-if (pages.length === 0 || pages.some((page) => page.length > 28)) {
+if (pages.length === 0 || pages.some((page) => page.filter((line) => !line.startsWith('[[DIAGRAM:')).length > 28)) {
   throw new Error('demo rule source must contain non-empty page markers with at most 28 lines per page')
+}
+
+function diagramCommands(markers) {
+  if (!markers.includes('[[DIAGRAM:HARBOR_SETUP]]')) return ''
+  return [
+    '0.06 0.19 0.31 rg 84 292 270 130 re f',
+    '0.96 0.70 0.14 rg 114 332 48 48 re f',
+    '0.10 0.54 0.37 rg 210 332 78 48 re f',
+    '0.12 0.12 0.12 RG 162 356 m 210 356 l S',
+    '0.12 0.12 0.12 RG 201 364 m 210 356 l 201 348 l S',
+    '1 1 1 rg BT /F1 12 Tf 150 392 Td (HARBOR SETUP) Tj ET',
+    '1 1 1 rg BT /F1 10 Tf 103 350 Td (BOARD) Tj ET',
+    '1 1 1 rg BT /F1 10 Tf 220 350 Td (DECK) Tj ET',
+    '1 1 1 rg BT /F1 10 Tf 124 308 Td (ROUND 1) Tj ET',
+  ].join('\n')
 }
 
 function escapePdfText(value) {
@@ -27,10 +42,12 @@ pages.forEach((lines, index) => {
   const pageId = 4 + (index * 2)
   const contentId = pageId + 1
   pageObjectIds.push(`${pageId} 0 R`)
-  const commands = lines.map((line, lineIndex) => {
+  const markers = lines.filter((line) => line.startsWith('[[DIAGRAM:'))
+  const textLines = lines.filter((line) => !line.startsWith('[[DIAGRAM:'))
+  const commands = textLines.map((line, lineIndex) => {
     const fontSize = lineIndex === 0 ? 15 : 11
     return `BT /F1 ${fontSize} Tf 54 ${744 - (lineIndex * 25)} Td (${escapePdfText(line)}) Tj ET`
-  }).join('\n')
+  }).concat(diagramCommands(markers)).filter(Boolean).join('\n')
   objects[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`
   objects[contentId] = `<< /Length ${Buffer.byteLength(commands, 'ascii')} >>\nstream\n${commands}\nendstream`
 })

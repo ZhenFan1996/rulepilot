@@ -25,6 +25,7 @@ SETUP - HOW TO SET UP THE GAME BEFORE PLAYING
 4. Put every score marker on zero and every boat at the harbor entrance.
 5. Deal three lantern cards to each player. Keep hands secret.
 6. Give the first-player beacon to the player who most recently saw a lighthouse.
+[[DIAGRAM:HARBOR_SETUP]]
 
 === PAGE 3 ===
 ROUND STRUCTURE AND PHASES
