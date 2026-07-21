@@ -10,6 +10,7 @@ public record RuleDocument(
         String title,
         DocumentSourceType sourceType,
         String officialSourceUrl,
+        String officialCoverUrl,
         String createdBy,
         Instant createdAt) {
 
@@ -19,6 +20,7 @@ public record RuleDocument(
         }
         title = normalized(title, "title", 160);
         officialSourceUrl = officialSourceUrl(officialSourceUrl);
+        officialCoverUrl = officialSourceUrl(officialCoverUrl);
         createdBy = normalized(createdBy, "creator", 120);
     }
 
@@ -29,7 +31,29 @@ public record RuleDocument(
             DocumentSourceType sourceType,
             String createdBy,
             Instant createdAt) {
-        this(id, gameEditionId, title, sourceType, null, createdBy, createdAt);
+        this(id, gameEditionId, title, sourceType, null, null, createdBy, createdAt);
+    }
+
+    public RuleDocument(
+            UUID id,
+            UUID gameEditionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            String createdBy,
+            Instant createdAt) {
+        this(id, gameEditionId, title, sourceType, officialSourceUrl, null, createdBy, createdAt);
+    }
+
+    public static RuleDocument create(
+            UUID gameEditionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            String officialCoverUrl,
+            String createdBy,
+            Instant now) {
+        return new RuleDocument(UUID.randomUUID(), gameEditionId, title, sourceType, officialSourceUrl, officialCoverUrl, createdBy, now);
     }
 
     public static RuleDocument create(
@@ -39,12 +63,12 @@ public record RuleDocument(
             String officialSourceUrl,
             String createdBy,
             Instant now) {
-        return new RuleDocument(UUID.randomUUID(), gameEditionId, title, sourceType, officialSourceUrl, createdBy, now);
+        return create(gameEditionId, title, sourceType, officialSourceUrl, null, createdBy, now);
     }
 
     public static RuleDocument create(
             UUID gameEditionId, String title, DocumentSourceType sourceType, String createdBy, Instant now) {
-        return create(gameEditionId, title, sourceType, null, createdBy, now);
+        return create(gameEditionId, title, sourceType, null, null, createdBy, now);
     }
 
     public RuleDocument assignTo(UUID editionId) {
@@ -55,7 +79,7 @@ public record RuleDocument(
             throw new IllegalStateException("rule document is already assigned to another game edition");
         }
         return gameEditionId == null
-                ? new RuleDocument(id, editionId, title, sourceType, officialSourceUrl, createdBy, createdAt)
+                ? new RuleDocument(id, editionId, title, sourceType, officialSourceUrl, officialCoverUrl, createdBy, createdAt)
                 : this;
     }
 
@@ -63,7 +87,14 @@ public record RuleDocument(
         String normalized = officialSourceUrl(sourceUrl);
         return java.util.Objects.equals(officialSourceUrl, normalized)
                 ? this
-                : new RuleDocument(id, gameEditionId, title, sourceType, normalized, createdBy, createdAt);
+                : new RuleDocument(id, gameEditionId, title, sourceType, normalized, officialCoverUrl, createdBy, createdAt);
+    }
+
+    public RuleDocument withOfficialCoverUrl(String coverUrl) {
+        String normalized = officialSourceUrl(coverUrl);
+        return java.util.Objects.equals(officialCoverUrl, normalized)
+                ? this
+                : new RuleDocument(id, gameEditionId, title, sourceType, officialSourceUrl, normalized, createdBy, createdAt);
     }
 
     private static String officialSourceUrl(String value) {

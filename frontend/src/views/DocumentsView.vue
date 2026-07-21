@@ -16,7 +16,7 @@ interface GameResponse {
   editions: Array<{ id: string; name: string; language: string }>
 }
 interface DocumentResponse {
-  document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null }
+  document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
 interface TeachingPlanResponse { id: string }

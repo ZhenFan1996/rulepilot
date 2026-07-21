@@ -41,10 +41,21 @@ public class PublicLessonReader {
                         rulebook.documentVersionId(),
                         rulebook.title(),
                         rulebook.officialSourceUrl(),
-                        rulebook.gameEditionId() == null
-                                ? null
-                                : covers.findByEdition(rulebook.gameEditionId()).orElse(null),
+                        cover(rulebook),
                         lesson))));
+    }
+
+    private PublicCover cover(PublicRulebookReferenceLookup.Reference rulebook) {
+        if (rulebook.gameEditionId() != null) {
+            var catalogCover = covers.findByEdition(rulebook.gameEditionId());
+            if (catalogCover.isPresent()) {
+                var value = catalogCover.get();
+                return new PublicCover(value.gameName(), value.thumbnailUrl(), value.bggUrl(), "BoardGameGeek");
+            }
+        }
+        return rulebook.officialCoverUrl() == null
+                ? null
+                : new PublicCover(rulebook.title(), rulebook.officialCoverUrl(), rulebook.officialSourceUrl(), "出版方官方封面");
     }
 
     @Transactional(readOnly = true)
@@ -63,7 +74,7 @@ public class PublicLessonReader {
             UUID documentVersionId,
             String rulebookTitle,
             String officialSourceUrl,
-            PublicGameCoverLookup.Cover gameCover,
+            PublicCover gameCover,
             IllustratedLesson lesson) {
         public PublicLesson {
             if (teachingPlanId == null || documentVersionId == null || rulebookTitle == null || rulebookTitle.isBlank()
@@ -80,6 +91,27 @@ public class PublicLessonReader {
                 section.steps().forEach(step -> pages.addAll(step.sourcePages()));
             });
             return Set.copyOf(pages);
+        }
+    }
+
+    public record PublicCover(String gameName, String imageUrl, String attributionUrl, String attributionLabel) {
+        public PublicCover {
+            if (gameName == null || gameName.isBlank() || imageUrl == null || imageUrl.isBlank()
+                    || attributionUrl == null || attributionUrl.isBlank() || attributionLabel == null || attributionLabel.isBlank()) {
+                throw new IllegalArgumentException("public cover is invalid");
+            }
+            gameName = gameName.strip();
+            imageUrl = requireHttps(imageUrl, "image URL");
+            attributionUrl = requireHttps(attributionUrl, "attribution URL");
+            attributionLabel = attributionLabel.strip();
+        }
+
+        private static String requireHttps(String value, String field) {
+            java.net.URI uri = java.net.URI.create(value.strip());
+            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null) {
+                throw new IllegalArgumentException(field + " must be a public HTTPS URL");
+            }
+            return uri.toASCIIString();
         }
     }
 }

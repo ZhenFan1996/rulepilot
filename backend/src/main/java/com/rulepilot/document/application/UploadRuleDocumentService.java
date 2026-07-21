@@ -43,6 +43,7 @@ public class UploadRuleDocumentService {
             String title,
             DocumentSourceType sourceType,
             String officialSourceUrl,
+            String officialCoverUrl,
             String originalFilename,
             String contentType,
             long size,
@@ -53,13 +54,18 @@ public class UploadRuleDocumentService {
         }
 
         Instant now = Instant.now(clock);
-        RuleDocument candidate = RuleDocument.create(editionId, title, sourceType, officialSourceUrl, username, now);
+        RuleDocument candidate = RuleDocument.create(
+                editionId, title, sourceType, officialSourceUrl, officialCoverUrl, username, now);
         var existing = editionId == null
                 ? repository.findUnassignedDocument(username, candidate.title(), sourceType)
                 : repository.findDocument(editionId, username, candidate.title(), sourceType);
         RuleDocument document = existing.orElseGet(() -> repository.save(candidate));
         if (document.officialSourceUrl() == null && candidate.officialSourceUrl() != null) {
             document = document.withOfficialSourceUrl(candidate.officialSourceUrl());
+            repository.update(document);
+        }
+        if (document.officialCoverUrl() == null && candidate.officialCoverUrl() != null) {
+            document = document.withOfficialCoverUrl(candidate.officialCoverUrl());
             repository.update(document);
         }
 
@@ -88,6 +94,20 @@ public class UploadRuleDocumentService {
             storage.delete(stored.objectKey());
             throw exception;
         }
+    }
+
+    public UploadResult upload(
+            UUID editionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            String originalFilename,
+            String contentType,
+            long size,
+            InputStream content,
+            String username) {
+        return upload(
+                editionId, title, sourceType, officialSourceUrl, null, originalFilename, contentType, size, content, username);
     }
 
     @Transactional(readOnly = true)

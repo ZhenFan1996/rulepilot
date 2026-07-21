@@ -10,7 +10,7 @@ describe('PublicLibraryView', () => {
   it('shows an anonymous public lesson with its game cover and reading route', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json([{
       teachingPlanId: 'plan-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: 'https://publisher.example/rules.pdf',
-      gameCover: { gameName: 'Wingspan', bggId: 266192, thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg', bggUrl: 'https://boardgamegeek.com/boardgame/266192' },
+      gameCover: { gameName: 'Wingspan', imageUrl: 'https://cf.geekdo-images.com/wingspan.jpg', attributionUrl: 'https://boardgamegeek.com/boardgame/266192', attributionLabel: 'BoardGameGeek' },
       sectionCount: 8, stepCount: 51,
     }])))
     const router = createRouter({

@@ -8,7 +8,7 @@ public interface PublicRulebookReferenceLookup {
 
     Optional<Reference> findReference(UUID documentVersionId);
 
-    record Reference(UUID documentVersionId, UUID gameEditionId, String title, String officialSourceUrl) {
+    record Reference(UUID documentVersionId, UUID gameEditionId, String title, String officialSourceUrl, String officialCoverUrl) {
         public Reference {
             if (documentVersionId == null || title == null || title.isBlank()) {
                 throw new IllegalArgumentException("public rulebook reference is invalid");

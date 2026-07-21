@@ -35,7 +35,7 @@ public class IdentitySecurityConfiguration {
                                 "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; "
                                         + "form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; "
                                         + "worker-src 'self' blob:; style-src 'self'; "
-                                        + "img-src 'self' data: https://cf.geekdo-images.com; font-src 'self'; media-src 'self' blob:; "
+                                        + "img-src 'self' data: https:; font-src 'self'; media-src 'self' blob:; "
                                         + "connect-src 'self'"))
                         .referrerPolicy(referrer -> referrer.policy(ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
                         .permissionsPolicyHeader(permissions -> permissions.policy(

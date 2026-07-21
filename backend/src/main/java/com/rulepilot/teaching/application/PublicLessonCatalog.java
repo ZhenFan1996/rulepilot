@@ -1,6 +1,5 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.catalog.PublicGameCoverLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -43,7 +42,7 @@ public class PublicLessonCatalog {
             UUID teachingPlanId,
             String rulebookTitle,
             String officialSourceUrl,
-            PublicGameCoverLookup.Cover gameCover,
+            PublicLessonReader.PublicCover gameCover,
             int sectionCount,
             int stepCount) {
         static Entry from(PublicLessonReader.PublicLesson lesson) {

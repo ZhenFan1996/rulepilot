@@ -6,7 +6,7 @@ interface PublicLessonEntry {
   teachingPlanId: string
   rulebookTitle: string
   officialSourceUrl: string
-  gameCover: { gameName: string; bggId: number; thumbnailUrl: string; bggUrl: string } | null
+  gameCover: { gameName: string; imageUrl: string; attributionUrl: string; attributionLabel: string } | null
   sectionCount: number
   stepCount: number
 }
@@ -61,7 +61,7 @@ onMounted(() => { void load() })
       <div v-else-if="lessons.length" class="mt-10 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
         <RouterLink v-for="lesson in lessons" :key="lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: lesson.teachingPlanId } }" class="group min-w-0">
           <div class="relative aspect-[3/4] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition duration-200 group-hover:-translate-y-1 group-hover:shadow-lg">
-            <img v-if="lesson.gameCover" :src="lesson.gameCover.thumbnailUrl" :alt="`${lesson.gameCover.gameName} 的游戏封面`" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer">
+            <img v-if="lesson.gameCover" :src="lesson.gameCover.imageUrl" :alt="`${lesson.gameCover.gameName} 的游戏封面`" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer">
             <div v-else class="flex h-full items-end bg-[linear-gradient(145deg,#282018,#604531)] p-4 text-paper">
               <span class="font-display text-2xl font-semibold leading-tight">{{ lesson.rulebookTitle }}</span>
             </div>

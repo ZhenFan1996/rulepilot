@@ -89,6 +89,8 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
             throw new IllegalArgumentException("rule document does not exist");
         }
         entity.gameEditionId = document.gameEditionId();
+        entity.officialSourceUrl = document.officialSourceUrl();
+        entity.officialCoverUrl = document.officialCoverUrl();
         entityManager.flush();
     }
 
@@ -290,6 +292,9 @@ class RuleDocumentEntity {
     @Column(name = "official_source_url")
     String officialSourceUrl;
 
+    @Column(name = "official_cover_url")
+    String officialCoverUrl;
+
     @Column(name = "created_by", nullable = false)
     String createdBy;
 
@@ -304,13 +309,14 @@ class RuleDocumentEntity {
         this.title = document.title();
         this.sourceType = document.sourceType().name();
         this.officialSourceUrl = document.officialSourceUrl();
+        this.officialCoverUrl = document.officialCoverUrl();
         this.createdBy = document.createdBy();
         this.createdAt = document.createdAt();
     }
 
     RuleDocument toDomain() {
         return new RuleDocument(
-                id, gameEditionId, title, DocumentSourceType.valueOf(sourceType), officialSourceUrl, createdBy, createdAt);
+                id, gameEditionId, title, DocumentSourceType.valueOf(sourceType), officialSourceUrl, officialCoverUrl, createdBy, createdAt);
     }
 }
 

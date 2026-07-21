@@ -18,6 +18,6 @@ class DocumentPublicRulebookReferenceService implements PublicRulebookReferenceL
     public java.util.Optional<Reference> findReference(java.util.UUID documentVersionId) {
         return documents.findVersion(documentVersionId).flatMap(version -> documents.findDocument(version.documentId())
                 .map(document -> new Reference(
-                        version.id(), document.gameEditionId(), document.title(), document.officialSourceUrl())));
+                        version.id(), document.gameEditionId(), document.title(), document.officialSourceUrl(), document.officialCoverUrl())));
     }
 }

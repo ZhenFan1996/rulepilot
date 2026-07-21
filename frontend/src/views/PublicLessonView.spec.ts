@@ -14,8 +14,8 @@ describe('PublicLessonView', () => {
       rulebookTitle: 'Wingspan Rules',
       officialSourceUrl: 'https://publisher.example/rules.pdf',
       gameCover: {
-        gameName: 'Wingspan', bggId: 266192, thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
-        bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+        gameName: 'Wingspan', imageUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
+        attributionUrl: 'https://boardgamegeek.com/boardgame/266192', attributionLabel: 'BoardGameGeek',
       },
       lesson: {
         id: 'lesson-1', status: 'DRAFT_READY', sections: [{

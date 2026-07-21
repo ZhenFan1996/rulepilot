@@ -44,6 +44,7 @@ public class UserRuleDocumentController {
             @RequestParam String title,
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
+            @RequestParam(required = false) String officialCoverUrl,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -52,6 +53,7 @@ public class UserRuleDocumentController {
                     title,
                     sourceType,
                     officialSourceUrl,
+                    officialCoverUrl,
                     file.getOriginalFilename(),
                     file.getContentType(),
                     file.getSize(),

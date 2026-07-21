@@ -45,6 +45,7 @@ public class RuleDocumentController {
             @RequestParam String title,
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
+            @RequestParam(required = false) String officialCoverUrl,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -53,6 +54,7 @@ public class RuleDocumentController {
                     title,
                     sourceType,
                     officialSourceUrl,
+                    officialCoverUrl,
                     file.getOriginalFilename(),
                     file.getContentType(),
                     file.getSize(),
@@ -84,6 +86,7 @@ public class RuleDocumentController {
             String title,
             DocumentSourceType sourceType,
             String officialSourceUrl,
+            String officialCoverUrl,
             String createdBy,
             Instant createdAt) {
         static DocumentDetails from(RuleDocument document) {
@@ -93,6 +96,7 @@ public class RuleDocumentController {
                     document.title(),
                     document.sourceType(),
                     document.officialSourceUrl(),
+                    document.officialCoverUrl(),
                     document.createdBy(),
                     document.createdAt());
         }

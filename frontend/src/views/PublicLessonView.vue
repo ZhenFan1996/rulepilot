@@ -32,7 +32,7 @@ interface PublicLessonResponse {
   documentVersionId: string
   rulebookTitle: string
   officialSourceUrl: string | null
-  gameCover: { gameName: string; bggId: number; thumbnailUrl: string; bggUrl: string } | null
+  gameCover: { gameName: string; imageUrl: string; attributionUrl: string; attributionLabel: string } | null
   lesson: { id: string; status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'; sections: LessonSection[] }
 }
 
@@ -95,8 +95,8 @@ onMounted(() => { void load() })
     <article v-else-if="publicLesson" class="mx-auto max-w-4xl px-5 py-10 sm:px-8 lg:py-14">
       <div class="border-b border-ink/10 pb-8">
         <div class="flex items-start gap-5 sm:gap-7">
-          <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.bggUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="`在 BGG 查看 ${publicLesson.gameCover.gameName}`">
-            <img :src="publicLesson.gameCover.thumbnailUrl" :alt="`${publicLesson.gameCover.gameName} 的游戏封面`" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
+          <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="`查看 ${publicLesson.gameCover.gameName} 的${publicLesson.gameCover.attributionLabel}`">
+            <img :src="publicLesson.gameCover.imageUrl" :alt="`${publicLesson.gameCover.gameName} 的游戏封面`" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
           </a>
           <div>
             <p class="text-sm font-semibold text-copper">从规则书到开桌</p>

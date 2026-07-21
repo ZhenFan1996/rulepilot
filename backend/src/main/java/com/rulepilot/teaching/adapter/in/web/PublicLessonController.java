@@ -111,7 +111,7 @@ public class PublicLessonController {
             UUID documentVersionId,
             String rulebookTitle,
             String officialSourceUrl,
-            com.rulepilot.catalog.PublicGameCoverLookup.Cover gameCover,
+            PublicLessonReader.PublicCover gameCover,
             com.rulepilot.teaching.domain.IllustratedLesson lesson) {
         static PublicLessonResponse from(PublicLessonReader.PublicLesson lesson) {
             return new PublicLessonResponse(

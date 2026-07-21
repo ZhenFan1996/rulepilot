@@ -45,7 +45,7 @@ class PublicLessonReaderTest {
         Fixture fixture = fixture();
         UUID editionId = UUID.randomUUID();
         var reference = new PublicRulebookReferenceLookup.Reference(
-                fixture.plan.documentVersionId(), editionId, "Orbit Rules", "https://publisher.example/rules.pdf");
+                fixture.plan.documentVersionId(), editionId, "Orbit Rules", "https://publisher.example/rules.pdf", null);
         var cover = new PublicGameCoverLookup.Cover(
                 "Orbit", 123, "https://cf.geekdo-images.com/orbit.jpg", "https://boardgamegeek.com/boardgame/123");
         when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
@@ -54,8 +54,28 @@ class PublicLessonReaderTest {
         when(covers.findByEdition(editionId)).thenReturn(Optional.of(cover));
 
         assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
-            assertThat(value.gameCover()).isEqualTo(cover);
+            assertThat(value.gameCover().imageUrl()).isEqualTo(cover.thumbnailUrl());
+            assertThat(value.gameCover().attributionLabel()).isEqualTo("BoardGameGeek");
             assertThat(value.gameCover().gameName()).isEqualTo("Orbit");
+        });
+    }
+
+    @Test
+    void falls_back_to_a_recorded_publisher_cover_when_bgg_metadata_is_absent() {
+        Fixture fixture = fixture();
+        var reference = new PublicRulebookReferenceLookup.Reference(
+                fixture.plan.documentVersionId(),
+                null,
+                "Orbit Rules",
+                "https://publisher.example/rules.pdf",
+                "https://publisher.example/orbit-cover.jpg");
+        when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
+        when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(fixture.lesson));
+        when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(reference));
+
+        assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
+            assertThat(value.gameCover().imageUrl()).isEqualTo("https://publisher.example/orbit-cover.jpg");
+            assertThat(value.gameCover().attributionLabel()).isEqualTo("出版方官方封面");
         });
     }
 
@@ -101,7 +121,7 @@ class PublicLessonReaderTest {
                 plan,
                 lesson,
                 new PublicRulebookReferenceLookup.Reference(
-                        versionId, null, "Orbit Rules", "https://publisher.example/rules.pdf"));
+                        versionId, null, "Orbit Rules", "https://publisher.example/rules.pdf", null));
     }
 
     private record Fixture(
