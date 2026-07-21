@@ -37,20 +37,27 @@ public final class VisualRegionCandidateSelector {
                         .thenComparing(candidate -> candidate.block().pageNumber())
                         .thenComparing(candidate -> candidate.block().readingOrder()))
                 .toList();
-        return (lexicalMatches.isEmpty() ? fallback(citedBlocks) : lexicalMatches).stream()
+        if (lexicalMatches.isEmpty()) {
+            return citedPageCandidates(citedBlocks);
+        }
+        return lexicalMatches.stream()
                 .limit(MAX_CANDIDATES)
                 .map(candidate -> Candidate.from(candidate.block()))
                 .toList();
     }
 
-    private List<ScoredBlock> fallback(List<ScoredBlock> citedBlocks) {
+    private List<Candidate> citedPageCandidates(List<ScoredBlock> citedBlocks) {
         return citedBlocks.stream()
-                .sorted(Comparator.comparing((ScoredBlock candidate) -> candidate.block().role()
-                                != RulebookUnderstanding.BlockRole.HEADING)
-                        .thenComparingLong(candidate -> (long) candidate.block().rectangle().width()
-                                * candidate.block().rectangle().height())
-                        .thenComparing(candidate -> candidate.block().pageNumber())
-                        .thenComparing(candidate -> candidate.block().readingOrder()))
+                .map(candidate -> candidate.block().pageNumber())
+                .distinct()
+                .sorted()
+                .limit(MAX_CANDIDATES)
+                // A translated lesson has no reliable text-level anchor in an English (or other-language)
+                // source. Keep the page citation boundary, but let vision locate the visible teaching aid.
+                .map(pageNumber -> new Candidate(
+                        pageNumber,
+                        new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000),
+                        "Cited page " + pageNumber))
                 .toList();
     }
 

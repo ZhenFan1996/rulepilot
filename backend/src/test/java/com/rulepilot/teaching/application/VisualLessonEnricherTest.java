@@ -51,6 +51,35 @@ class VisualLessonEnricherTest {
         assertThat(enriched.sections().getFirst().steps()).hasSize(1);
     }
 
+    @Test
+    void accepts_a_vision_crop_from_a_cited_page_when_translation_has_no_text_anchor() {
+        UUID version = UUID.randomUUID();
+        UUID chunk = UUID.randomUUID();
+        RulebookUnderstanding EnglishSource = new RulebookUnderstanding(
+                List.of(new RulebookUnderstanding.PageBlock(
+                        2, 0, 0, RulebookUnderstanding.BlockRole.BODY, "Place the probe on its orbit track",
+                        new RulebookUnderstanding.Rectangle(100, 200, 300, 30), null)),
+                List.of(), List.of(), List.of());
+        DocumentPageImages images = (ignored, pages) -> List.of(
+                new DocumentPageImages.PageImage(2, "image/png", new byte[] {1}, 1_000, 1_000));
+        VisualRegionLocator locator = request -> {
+            assertThat(request.candidates()).singleElement().satisfies(candidate -> {
+                assertThat(candidate.rectangle()).isEqualTo(new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000));
+                assertThat(candidate.sourceText()).isEqualTo("Cited page 2");
+            });
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    2, "Orbit track", 640, 700, 180, 120, List.of(chunk)));
+        };
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> EnglishSource, images, new VisualRegionCandidateSelector(), locator)
+                .enrich(version, lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps())
+                .anySatisfy(step -> assertThat(step.visualFocus())
+                        .isEqualTo(new IllustratedLesson.VisualFocus(2, "Orbit track", 640, 700, 180, 120)));
+    }
+
     private RulebookUnderstanding understanding() {
         return new RulebookUnderstanding(
                 List.of(new RulebookUnderstanding.PageBlock(

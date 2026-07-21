@@ -20,6 +20,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +32,8 @@ import org.springframework.stereotype.Service;
 @Service
 @Profile("!test")
 public class VisualLessonEnricher {
+
+    private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
@@ -92,7 +96,10 @@ public class VisualLessonEnricher {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
                 understanding, citedPages, terms(section));
-        if (selected.isEmpty()) return section;
+        if (selected.isEmpty()) {
+            log.info("No cited visual candidates for section {}", section.title());
+            return section;
+        }
         Set<Integer> candidatePages = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<PageImage> pages = pageImages.read(documentVersionId, candidatePages).stream()
@@ -100,15 +107,24 @@ public class VisualLessonEnricher {
                 .limit(2)
                 .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
-        if (pages.isEmpty()) return section;
+        if (pages.isEmpty()) {
+            log.info("No page image available for visual section {}", section.title());
+            return section;
+        }
         List<Claim> claims = claims(section);
-        return locator.locate(new VisualRegionLocator.VisualLocationRequest(
+        var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
                         section.title(), claims, selected, pages, modelConfigurationOwner))
-                .filter(region -> intersectsCandidate(region, selected))
-                .filter(region -> claims.stream().map(Claim::evidenceId).collect(Collectors.toSet())
-                        .containsAll(region.supportedEvidenceIds()))
-                .map(region -> appendVisual(section, region))
-                .orElse(section);
+                .filter(region -> intersectsCandidate(region, selected));
+        if (located.isEmpty()) {
+            log.info("No cited visual region accepted for section {}", section.title());
+            return section;
+        }
+        Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
+        if (!evidenceIds.containsAll(located.get().supportedEvidenceIds())) {
+            log.info("Visual region cited an unknown claim for section {}", section.title());
+            return section;
+        }
+        return appendVisual(section, located.get());
     }
 
     private List<String> terms(LessonSection section) {

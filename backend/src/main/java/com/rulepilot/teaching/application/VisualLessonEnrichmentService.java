@@ -33,6 +33,7 @@ public class VisualLessonEnrichmentService {
     }
 
     public void enrichLatest(UUID teachingPlanId) {
+        log.info("Starting visual enrichment for teaching plan {}", teachingPlanId);
         try {
             var plan = plans.findById(teachingPlanId)
                     .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
@@ -40,7 +41,11 @@ public class VisualLessonEnrichmentService {
             if (lesson == null) return;
             publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
         } catch (RuntimeException failure) {
-            log.warn("Visual lesson enrichment failed for plan {}: {}", teachingPlanId, failure.getMessage());
+            log.warn(
+                    "Visual lesson enrichment failed for plan {} ({}): {}",
+                    teachingPlanId,
+                    failure.getClass().getSimpleName(),
+                    failure.getMessage());
         }
     }
 

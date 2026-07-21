@@ -47,18 +47,23 @@ class VisualRegionCandidateSelectorTest {
     }
 
     @Test
-    void falls_back_to_a_compact_cited_region_when_rulebook_and_lesson_languages_differ() {
+    void falls_back_to_cited_pages_when_rulebook_and_lesson_languages_differ() {
         var understanding = new RulebookUnderstanding(
                 List.of(
                         block(2, 0, BlockRole.BODY, "Place the probe", 100, 200, 300, 160),
-                        block(2, 1, BlockRole.HEADING, "Probe movement", 80, 100, 250, 50)),
+                        block(2, 1, BlockRole.HEADING, "Probe movement", 80, 100, 250, 50),
+                        block(3, 0, BlockRole.BODY, "An uncited example", 100, 200, 300, 160)),
                 List.of(),
                 List.of(),
                 List.of());
 
         assertThat(new VisualRegionCandidateSelector().select(understanding, Set.of(2), List.of("探测器移动规则")))
-                .extracting(VisualRegionCandidateSelector.Candidate::sourceText)
-                .containsExactly("Probe movement", "Place the probe");
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.pageNumber()).isEqualTo(2);
+                    assertThat(candidate.rectangle()).isEqualTo(new Rectangle(0, 0, 1_000, 1_000));
+                    assertThat(candidate.sourceText()).isEqualTo("Cited page 2");
+                });
     }
 
     private PageBlock block(int page, int index, BlockRole role, String text, int x, int y, int width, int height) {

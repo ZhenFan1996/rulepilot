@@ -102,7 +102,7 @@ interface LessonComprehensionReport {
   visualAidRatedCount: number
   visualAidHelpfulCount: number
   tasks: Array<{
-    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME' | 'IDENTIFY_COMPONENTS' | 'COMPLETE_VISUAL_SETUP'
+    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME' | 'VERIFY_VISUAL_AID' | 'IDENTIFY_COMPONENTS' | 'COMPLETE_VISUAL_SETUP'
     label: string
     prompt: string
     readiness: 'READY' | 'MISSING_LESSON_CHECK' | 'MISSING_VISUAL_EVIDENCE'
@@ -1637,7 +1637,7 @@ onUnmounted(() => {
                   </p>
                   <p class="mt-2 text-sm leading-6 text-ink/65">{{ task.prompt }}</p>
                   <p v-if="task.sourcePages.length" class="mt-2 text-xs font-semibold text-indigo">可核对规则书第 {{ task.sourcePages.join('、') }} 页</p>
-                  <div v-if="task.readiness === 'READY'" class="mt-4 grid grid-cols-2 gap-2">
+                  <div v-if="task.readiness === 'READY' && task.type !== 'VERIFY_VISUAL_AID'" class="mt-4 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       class="min-h-11 rounded-xl border px-3 text-sm font-semibold disabled:opacity-40"
@@ -1657,7 +1657,7 @@ onUnmounted(() => {
                       还不清楚
                     </button>
                   </div>
-                  <div v-if="task.visualFocus && task.result !== 'NOT_TRIED'" class="mt-3 border-t border-ink/8 pt-3">
+                  <div v-if="task.visualFocus && (task.result !== 'NOT_TRIED' || task.type === 'VERIFY_VISUAL_AID')" class="mt-3 border-t border-ink/8 pt-3">
                     <p class="text-xs font-semibold text-ink/55">框选位置对完成这项任务有帮助吗？</p>
                     <div class="mt-2 grid grid-cols-2 gap-2">
                       <button

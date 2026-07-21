@@ -44,7 +44,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     @Override
     public Optional<LocatedRegion> locate(VisualLocationRequest request) {
         String owner = request.modelConfigurationOwner();
-        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) return Optional.empty();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            log.info("Visual locator is unavailable for section {}", request.sectionTitle());
+            return Optional.empty();
+        }
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(OpenAiChatOptions.builder().extraBody(Map.of("enable_thinking", false)));
@@ -69,7 +72,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .call()
                 .content();
         Optional<ModelRegion> parsed = parseModelRegion(content);
-        if (parsed.isEmpty()) return Optional.empty();
+        if (parsed.isEmpty()) {
+            log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
+            return Optional.empty();
+        }
         ModelRegion response = parsed.get();
         List<UUID> supported = response.supportedClaimRefs().stream()
                 .map(ref -> claimId(ref, request))
@@ -77,13 +83,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .distinct()
                 .toList();
         if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
+            log.info("Visual locator returned an unsupported claim or page for section {}", request.sectionTitle());
             return Optional.empty();
         }
         try {
             return Optional.of(new LocatedRegion(
                     response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported));
         } catch (IllegalArgumentException invalidModelOutput) {
-            log.debug("Rejected invalid visual locator output: {}", invalidModelOutput.getMessage());
+            log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
             return Optional.empty();
         }
     }

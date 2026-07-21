@@ -82,7 +82,7 @@ public class LessonComprehensionService {
         if (task.readiness() != TaskReadiness.READY || task.visualFocus() == null) {
             throw new IllegalArgumentException("visual comprehension task is not ready");
         }
-        if (task.result() == PlayerResult.NOT_TRIED) {
+        if (task.result() == PlayerResult.NOT_TRIED && taskType != TaskType.VERIFY_VISUAL_AID) {
             throw new IllegalArgumentException("complete the player task before rating its visual aid");
         }
         if (!results.saveVisualAidResult(

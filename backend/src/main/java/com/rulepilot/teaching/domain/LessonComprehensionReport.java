@@ -32,6 +32,7 @@ public record LessonComprehensionReport(
         PLAY_A_ROUND,
         FINISH_GAME,
         SCORE_GAME,
+        VERIFY_VISUAL_AID,
         IDENTIFY_COMPONENTS,
         COMPLETE_VISUAL_SETUP
     }

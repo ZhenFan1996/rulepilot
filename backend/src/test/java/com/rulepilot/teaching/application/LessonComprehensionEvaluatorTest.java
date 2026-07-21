@@ -41,6 +41,7 @@ class LessonComprehensionEvaluatorTest {
                 TaskType.PLAY_A_ROUND,
                 TaskType.FINISH_GAME,
                 TaskType.SCORE_GAME,
+                TaskType.VERIFY_VISUAL_AID,
                 TaskType.IDENTIFY_COMPONENTS,
                 TaskType.COMPLETE_VISUAL_SETUP);
         assertThat(report.readyVisualTaskCount()).isZero();
@@ -65,17 +66,19 @@ class LessonComprehensionEvaluatorTest {
                 TaskType.COMPLETE_VISUAL_SETUP,
                 saved(PlayerResult.NEEDS_HELP, VisualAidResult.NOT_HELPFUL)));
 
-        assertThat(report.readyTaskCount()).isEqualTo(2);
-        assertThat(report.readyVisualTaskCount()).isEqualTo(2);
+        assertThat(report.readyTaskCount()).isEqualTo(3);
+        assertThat(report.readyVisualTaskCount()).isEqualTo(3);
         assertThat(report.visualAidRatedCount()).isEqualTo(2);
         assertThat(report.visualAidHelpfulCount()).isEqualTo(1);
         assertThat(report.canDoCount()).isEqualTo(1);
         assertThat(report.needsHelpCount()).isEqualTo(1);
-        var componentTask = report.tasks().get(4);
+        var genericVisualTask = report.tasks().get(4);
+        assertThat(genericVisualTask.prompt()).contains("这张图是否让本节规则更容易理解");
+        var componentTask = report.tasks().get(5);
         assertThat(componentTask.prompt()).contains("框选的“主板与组件区”");
         assertThat(componentTask.visualFocus()).isNotNull();
         assertThat(componentTask.sourcePages()).containsExactly(11);
-        assertThat(report.tasks().get(5).prompt()).contains("按照本节步骤");
+        assertThat(report.tasks().get(6).prompt()).contains("按照本节步骤");
     }
 
     @Test
@@ -90,8 +93,8 @@ class LessonComprehensionEvaluatorTest {
 
         var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of());
 
-        assertThat(report.readyVisualTaskCount()).isEqualTo(2);
-        assertThat(report.tasks().subList(4, 6))
+        assertThat(report.readyVisualTaskCount()).isEqualTo(3);
+        assertThat(report.tasks().subList(4, 7))
                 .allMatch(task -> task.readiness() == TaskReadiness.READY && task.visualFocus() != null);
     }
 
@@ -109,9 +112,27 @@ class LessonComprehensionEvaluatorTest {
         assertThat(report.canDoCount()).isZero();
         assertThat(report.tasks().subList(0, 4))
                 .allMatch(task -> task.readiness() == TaskReadiness.MISSING_LESSON_CHECK);
-        assertThat(report.tasks().subList(4, 6))
+        assertThat(report.tasks().subList(4, 7))
                 .allMatch(task -> task.readiness() == TaskReadiness.MISSING_VISUAL_EVIDENCE);
         assertThat(report.tasks()).allMatch(task -> task.result() == PlayerResult.NOT_TRIED);
+    }
+
+    @Test
+    void makes_any_cited_visual_available_for_feedback_without_an_unrelated_setup_task() {
+        var lesson = lesson(List.of(section(
+                1,
+                "finish",
+                List.of("end"),
+                EvidenceStatus.CITED_DRAFT,
+                TeachingMove.UNDERSTAND,
+                TeachingMove.VISUAL)));
+
+        var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of());
+
+        var task = report.tasks().get(4);
+        assertThat(task.type()).isEqualTo(TaskType.VERIFY_VISUAL_AID);
+        assertThat(task.readiness()).isEqualTo(TaskReadiness.READY);
+        assertThat(task.visualFocus()).isNotNull();
     }
 
     private IllustratedLesson lesson(List<LessonSection> sections) {

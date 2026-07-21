@@ -45,6 +45,11 @@ public class LessonComprehensionEvaluator {
 
     private static final List<VisualTaskDefinition> VISUAL_TASKS = List.of(
             new VisualTaskDefinition(
+                    TaskType.VERIFY_VISUAL_AID,
+                    "这张配图有帮到我吗？",
+                    List.of(),
+                    Set.of()),
+            new VisualTaskDefinition(
                     TaskType.IDENTIFY_COMPONENTS,
                     "我能认出关键组件和用途",
                     List.of("components", "setup"),
@@ -110,7 +115,10 @@ public class LessonComprehensionEvaluator {
 
     private PlayerTask visualTask(
             IllustratedLesson lesson, VisualTaskDefinition definition, SavedResult saved) {
-        List<LessonSection> readySections = matchingSections(lesson, definition.coverageTags()).stream()
+        List<LessonSection> candidateSections = definition.coverageTags().isEmpty()
+                ? eligibleSections(lesson)
+                : matchingSections(lesson, definition.coverageTags());
+        List<LessonSection> readySections = candidateSections.stream()
                 .filter(section -> visualSectionSatisfies(section, definition.requiredMoves()))
                 .toList();
         LessonStep visualStep = readySections.stream()
@@ -152,6 +160,8 @@ public class LessonComprehensionEvaluator {
                 "先只看框选的“%s”：指出框内关键组件，并说出它在本节中的用途。".formatted(focusLabel);
             case COMPLETE_VISUAL_SETUP ->
                 "先看框选的“%s”，再按照本节步骤把相关组件摆到对应位置。".formatted(focusLabel);
+            case VERIFY_VISUAL_AID ->
+                "先看框选的“%s”。这张图是否让本节规则更容易理解？".formatted(focusLabel);
             default -> throw new IllegalArgumentException("task is not a visual comprehension task");
         };
     }
@@ -180,6 +190,13 @@ public class LessonComprehensionEvaluator {
             }
         }
         return List.of();
+    }
+
+    private List<LessonSection> eligibleSections(IllustratedLesson lesson) {
+        return lesson.sections().stream()
+                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED
+                        || section.evidenceStatus() == EvidenceStatus.CITED_DRAFT)
+                .toList();
     }
 
     private record TaskDefinition(

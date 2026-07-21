@@ -73,15 +73,19 @@ public class JpaLessonComprehensionRepository implements LessonComprehensionRepo
             String username,
             Instant updatedAt) {
         int updated = entityManager.createNativeQuery("""
-                        update lesson_comprehension_result
-                        set visual_aid_result = :result, updated_at = :updatedAt
-                        where lesson_id = :lessonId
-                          and created_by = :username
-                          and task_type = :taskType
+                        insert into lesson_comprehension_result (
+                            id, lesson_id, task_type, result, visual_aid_result, created_by, updated_at
+                        ) values (
+                            :id, :lessonId, :taskType, :playerResult, :result, :username, :updatedAt
+                        )
+                        on conflict (lesson_id, created_by, task_type) do update
+                        set visual_aid_result = excluded.visual_aid_result, updated_at = excluded.updated_at
                         """)
+                .setParameter("id", UUID.randomUUID())
                 .setParameter("lessonId", lessonId)
                 .setParameter("username", username)
                 .setParameter("taskType", taskType.name())
+                .setParameter("playerResult", PlayerResult.NOT_TRIED.name())
                 .setParameter("result", result.name())
                 .setParameter("updatedAt", updatedAt)
                 .executeUpdate();
