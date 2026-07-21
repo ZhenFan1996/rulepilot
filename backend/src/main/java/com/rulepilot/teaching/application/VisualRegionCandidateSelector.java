@@ -25,17 +25,32 @@ public final class VisualRegionCandidateSelector {
             throw new IllegalArgumentException("visual region selection input is required");
         }
         Set<String> terms = normalizedTerms(sectionTerms);
-        if (citedPages.isEmpty() || terms.isEmpty()) return List.of();
-        return understanding.pageBlocks().stream()
+        if (citedPages.isEmpty()) return List.of();
+        List<ScoredBlock> citedBlocks = understanding.pageBlocks().stream()
                 .filter(block -> block.role() != RulebookUnderstanding.BlockRole.FOOTER)
                 .filter(block -> citedPages.contains(block.pageNumber()))
                 .map(block -> new ScoredBlock(block, score(block, terms)))
+                .toList();
+        List<ScoredBlock> lexicalMatches = citedBlocks.stream()
                 .filter(candidate -> candidate.score() > 0)
                 .sorted(Comparator.comparingInt(ScoredBlock::score).reversed()
                         .thenComparing(candidate -> candidate.block().pageNumber())
                         .thenComparing(candidate -> candidate.block().readingOrder()))
+                .toList();
+        return (lexicalMatches.isEmpty() ? fallback(citedBlocks) : lexicalMatches).stream()
                 .limit(MAX_CANDIDATES)
                 .map(candidate -> Candidate.from(candidate.block()))
+                .toList();
+    }
+
+    private List<ScoredBlock> fallback(List<ScoredBlock> citedBlocks) {
+        return citedBlocks.stream()
+                .sorted(Comparator.comparing((ScoredBlock candidate) -> candidate.block().role()
+                                != RulebookUnderstanding.BlockRole.HEADING)
+                        .thenComparingLong(candidate -> (long) candidate.block().rectangle().width()
+                                * candidate.block().rectangle().height())
+                        .thenComparing(candidate -> candidate.block().pageNumber())
+                        .thenComparing(candidate -> candidate.block().readingOrder()))
                 .toList();
     }
 
