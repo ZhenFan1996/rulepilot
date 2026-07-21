@@ -49,6 +49,7 @@ public class IdentitySecurityConfiguration {
                                 "/api/auth/login",
                                 "/api/auth/register",
                                 "/api/v1/bgg/hot",
+                                "/api/public/lessons/**",
                                 "/error")
                         .permitAll()
                         .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")

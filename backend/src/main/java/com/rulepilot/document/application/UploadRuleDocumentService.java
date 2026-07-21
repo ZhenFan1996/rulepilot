@@ -42,6 +42,7 @@ public class UploadRuleDocumentService {
             UUID editionId,
             String title,
             DocumentSourceType sourceType,
+            String officialSourceUrl,
             String originalFilename,
             String contentType,
             long size,
@@ -52,12 +53,15 @@ public class UploadRuleDocumentService {
         }
 
         Instant now = Instant.now(clock);
-        RuleDocument candidate = RuleDocument.create(editionId, title, sourceType, username, now);
+        RuleDocument candidate = RuleDocument.create(editionId, title, sourceType, officialSourceUrl, username, now);
         var existing = editionId == null
                 ? repository.findUnassignedDocument(username, candidate.title(), sourceType)
                 : repository.findDocument(editionId, username, candidate.title(), sourceType);
-        RuleDocument document = existing
-                .orElseGet(() -> repository.save(candidate));
+        RuleDocument document = existing.orElseGet(() -> repository.save(candidate));
+        if (document.officialSourceUrl() == null && candidate.officialSourceUrl() != null) {
+            document = document.withOfficialSourceUrl(candidate.officialSourceUrl());
+            repository.update(document);
+        }
 
         DocumentStorage.StoredDocument stored =
                 storageService.storePdf(content, size, contentType, originalFilename);

@@ -43,6 +43,7 @@ public class UserRuleDocumentController {
     RuleDocumentController.UploadResponse upload(
             @RequestParam String title,
             @RequestParam DocumentSourceType sourceType,
+            @RequestParam(required = false) String officialSourceUrl,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -50,6 +51,7 @@ public class UserRuleDocumentController {
                     null,
                     title,
                     sourceType,
+                    officialSourceUrl,
                     file.getOriginalFilename(),
                     file.getContentType(),
                     file.getSize(),

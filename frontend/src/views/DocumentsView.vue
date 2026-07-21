@@ -16,7 +16,7 @@ interface GameResponse {
   editions: Array<{ id: string; name: string; language: string }>
 }
 interface DocumentResponse {
-  document: { id: string; gameEditionId: string | null; title: string }
+  document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null }
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
 interface TeachingPlanResponse { id: string }
@@ -34,6 +34,7 @@ const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const file = ref<File | null>(null)
 const title = ref('')
+const officialSourceUrl = ref('')
 const sourceType = ref('BASE_RULEBOOK')
 const playerCount = ref(4)
 const beginnerCount = ref(4)
@@ -301,6 +302,7 @@ async function uploadRulebook() {
     const form = new FormData()
     form.append('title', title.value.trim() || titleFromFile(selectedFile))
     form.append('sourceType', sourceType.value)
+    if (officialSourceUrl.value.trim()) form.append('officialSourceUrl', officialSourceUrl.value.trim())
     form.append('file', selectedFile)
     const path = editionId.value
       ? `/api/v1/editions/${editionId.value}/documents`
@@ -314,6 +316,7 @@ async function uploadRulebook() {
     if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
     file.value = null
     title.value = ''
+    officialSourceUrl.value = ''
     await loadDocuments()
     if (result.version.status === 'READY') {
       await startLesson(result.version.id, pending)
@@ -381,6 +384,11 @@ onBeforeUnmount(() => {
 
           <label class="mt-4 block text-sm font-semibold">标题 <span class="font-normal text-ink/40">（可选）</span>
             <input v-model="title" maxlength="160" :placeholder="file ? titleFromFile(file) : '留空则使用 PDF 文件名'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+          </label>
+
+          <label class="mt-4 block text-sm font-semibold">官方原文链接 <span class="font-normal text-ink/40">（可选）</span>
+            <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+            <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">填写厂商公开页面或 PDF。公开讲解只会跳转回这个官方来源，不会重新托管原文件。</span>
           </label>
 
           <label v-if="editionOptions.length" class="mt-4 block text-sm font-semibold">关联游戏 <span class="font-normal text-ink/40">（可稍后）</span>

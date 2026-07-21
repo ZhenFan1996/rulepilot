@@ -44,6 +44,7 @@ public class RuleDocumentController {
             @PathVariable UUID editionId,
             @RequestParam String title,
             @RequestParam DocumentSourceType sourceType,
+            @RequestParam(required = false) String officialSourceUrl,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -51,6 +52,7 @@ public class RuleDocumentController {
                     editionId,
                     title,
                     sourceType,
+                    officialSourceUrl,
                     file.getOriginalFilename(),
                     file.getContentType(),
                     file.getSize(),
@@ -81,6 +83,7 @@ public class RuleDocumentController {
             UUID gameEditionId,
             String title,
             DocumentSourceType sourceType,
+            String officialSourceUrl,
             String createdBy,
             Instant createdAt) {
         static DocumentDetails from(RuleDocument document) {
@@ -89,6 +92,7 @@ public class RuleDocumentController {
                     document.gameEditionId(),
                     document.title(),
                     document.sourceType(),
+                    document.officialSourceUrl(),
                     document.createdBy(),
                     document.createdAt());
         }

@@ -287,6 +287,9 @@ class RuleDocumentEntity {
     @Column(name = "source_type", nullable = false)
     String sourceType;
 
+    @Column(name = "official_source_url")
+    String officialSourceUrl;
+
     @Column(name = "created_by", nullable = false)
     String createdBy;
 
@@ -300,13 +303,14 @@ class RuleDocumentEntity {
         this.gameEditionId = document.gameEditionId();
         this.title = document.title();
         this.sourceType = document.sourceType().name();
+        this.officialSourceUrl = document.officialSourceUrl();
         this.createdBy = document.createdBy();
         this.createdAt = document.createdAt();
     }
 
     RuleDocument toDomain() {
         return new RuleDocument(
-                id, gameEditionId, title, DocumentSourceType.valueOf(sourceType), createdBy, createdAt);
+                id, gameEditionId, title, DocumentSourceType.valueOf(sourceType), officialSourceUrl, createdBy, createdAt);
     }
 }
 

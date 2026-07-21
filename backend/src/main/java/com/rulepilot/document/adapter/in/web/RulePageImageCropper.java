@@ -1,6 +1,7 @@
 package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.DocumentPageImages.PageImage;
+import com.rulepilot.document.DocumentPageImageCropper;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -11,12 +12,13 @@ import javax.imageio.ImageIO;
 import org.springframework.stereotype.Component;
 
 @Component
-final class RulePageImageCropper {
+final class RulePageImageCropper implements DocumentPageImageCropper {
 
     private static final int NORMALIZED_PAGE_SIZE = 1_000;
     private static final int CONTEXT_PADDING = 35;
 
-    byte[] crop(PageImage page, int x, int y, int width, int height) {
+    @Override
+    public byte[] crop(PageImage page, int x, int y, int width, int height) {
         validateFocus(x, y, width, height);
         try {
             BufferedImage source = ImageIO.read(new ByteArrayInputStream(page.content()));

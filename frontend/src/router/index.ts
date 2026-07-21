@@ -4,6 +4,7 @@ import CatalogView from '@/views/CatalogView.vue'
 import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LessonView from '@/views/LessonView.vue'
+import PublicLessonView from '@/views/PublicLessonView.vue'
 import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
@@ -59,6 +60,11 @@ const router = createRouter({
       path: '/lesson/:planId?',
       name: 'lesson',
       component: LessonView,
+    },
+    {
+      path: '/read/:planId',
+      name: 'public-lesson',
+      component: PublicLessonView,
     },
     {
       path: '/table/:planId',
