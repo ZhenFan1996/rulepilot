@@ -49,15 +49,16 @@ public interface TeachingOutlineModel {
             List<String> retrievalQueries,
             List<String> coverageTags) {
         public TopicDraft {
-            if (key == null || key.isBlank() || key.length() > 100
-                    || title == null || title.isBlank() || title.length() > 160
+            if (title == null || title.isBlank() || title.length() > 160
                     || objective == null || objective.isBlank() || objective.length() > 600
-                    || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 5
-                    || retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)
-                    || coverageTags == null) {
+                    || (key != null && key.length() > 100)
+                    || (retrievalQueries != null && (retrievalQueries.size() > 8 || retrievalQueries.stream()
+                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)))) {
                 throw new IllegalArgumentException("teaching outline topic is invalid");
             }
+            key = key == null ? "" : key.strip();
+            title = title.strip();
+            objective = objective.strip();
             retrievalQueries = retrievalQueries == null ? List.of() : List.copyOf(retrievalQueries);
             coverageTags = coverageTags == null ? List.of() : List.copyOf(coverageTags);
         }

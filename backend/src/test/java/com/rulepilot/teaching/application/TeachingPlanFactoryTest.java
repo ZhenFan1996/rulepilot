@@ -45,6 +45,15 @@ class TeachingPlanFactoryTest {
                 .hasMessage("teaching outline topic is invalid");
     }
 
+    @Test
+    void accepts_omitted_optional_audit_labels_so_the_plan_factory_can_apply_its_existing_contract() {
+        var topic = new TopicDraft(
+                null, "开局", "完成开局设置。", true, true, List.of("Starting Set-up"), null);
+
+        assertThat(topic.key()).isBlank();
+        assertThat(topic.coverageTags()).isEmpty();
+    }
+
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {
         return new TopicDraft(
                 key, title, "Explain " + title, true, visualEvidenceRecommended, List.of(title), tags);
