@@ -69,7 +69,7 @@ describe('LessonView progressive reading', () => {
       if (path.endsWith('/comprehension')) {
         return Response.json({
           lessonId: 'lesson-1', readyTaskCount: 0, taskCount: 0, canDoCount: 0, needsHelpCount: 0,
-          readyVisualTaskCount: 2, visualAidRatedCount: 1, visualAidHelpfulCount: 1, tasks: [],
+          readyVisualTaskCount: 2, visualAidRatedCount: 1, visualAidHelpfulCount: 1, visualAidHelpfulPercent: 100, tasks: [],
           visualAids: [
             { key: 's1-v3', label: '主棋盘区域', chapterPosition: 1, sourcePages: [1], result: 'HELPFUL',
               visualFocus: { pageNumber: 1, label: '主棋盘区域', x: 100, y: 200, width: 500, height: 400 } },
@@ -82,7 +82,7 @@ describe('LessonView progressive reading', () => {
       if (path.includes('/comprehension/visual-aids/s2-v3')) {
         return Response.json({
           lessonId: 'lesson-1', readyTaskCount: 0, taskCount: 0, canDoCount: 0, needsHelpCount: 0,
-          readyVisualTaskCount: 2, visualAidRatedCount: 2, visualAidHelpfulCount: 2, tasks: [], visualAids: [],
+          readyVisualTaskCount: 2, visualAidRatedCount: 2, visualAidHelpfulCount: 2, visualAidHelpfulPercent: 100, tasks: [], visualAids: [],
         })
       }
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -142,7 +142,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).not.toContain('整本仍在后台生成')
     expect(qualityReads).toBe(1)
     expect(wrapper.text()).toContain('逐张看看这些规则书裁剪图')
-    expect(wrapper.text()).toContain('焦点图有帮助 1 / 1')
+    expect(wrapper.text()).toContain('焦点图有帮助 1 / 1（100%）')
     expect(wrapper.find('img[alt*="行动区"]').attributes('src'))
       .toContain('/pages/2/image/crop?x=100&y=200&width=500&height=400')
     const helpfulButtons = wrapper.findAll('button').filter((button) => button.text() === '有帮助')

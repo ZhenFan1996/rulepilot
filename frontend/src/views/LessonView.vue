@@ -101,6 +101,7 @@ interface LessonComprehensionReport {
   readyVisualTaskCount: number
   visualAidRatedCount: number
   visualAidHelpfulCount: number
+  visualAidHelpfulPercent: number | null
   visualAids: Array<{
     key: string
     label: string
@@ -1626,7 +1627,7 @@ onUnmounted(() => {
                 </div>
                 <div v-if="comprehension" class="text-right text-sm font-semibold text-copper">
                   <p>已掌握 {{ comprehension.canDoCount }} / {{ comprehension.readyTaskCount }}</p>
-                  <p v-if="comprehension.visualAidRatedCount" class="mt-1 text-xs text-ink/50">焦点图有帮助 {{ comprehension.visualAidHelpfulCount }} / {{ comprehension.visualAidRatedCount }}</p>
+                  <p v-if="comprehension.visualAidRatedCount" class="mt-1 text-xs text-ink/50">焦点图有帮助 {{ comprehension.visualAidHelpfulCount }} / {{ comprehension.visualAidRatedCount }}（{{ comprehension.visualAidHelpfulPercent }}%）</p>
                 </div>
               </div>
 

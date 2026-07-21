@@ -83,9 +83,10 @@ public class LessonComprehensionEvaluator {
         int readyVisual = visualAids.size();
         int visualRated = (int) visualAids.stream().filter(aid -> aid.result() != VisualAidResult.NOT_RATED).count();
         int visualHelpful = (int) visualAids.stream().filter(aid -> aid.result() == VisualAidResult.HELPFUL).count();
+        Integer visualHelpfulPercent = visualRated == 0 ? null : Math.round(visualHelpful * 100f / visualRated);
         return new LessonComprehensionReport(
                 lesson.id(), ready, tasks.size(), canDo, needsHelp,
-                readyVisual, visualRated, visualHelpful, tasks, visualAids);
+                readyVisual, visualRated, visualHelpful, visualHelpfulPercent, tasks, visualAids);
     }
 
     private List<VisualAid> visualAids(

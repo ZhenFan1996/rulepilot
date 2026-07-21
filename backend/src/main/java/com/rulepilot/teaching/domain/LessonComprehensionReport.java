@@ -13,6 +13,7 @@ public record LessonComprehensionReport(
         int readyVisualTaskCount,
         int visualAidRatedCount,
         int visualAidHelpfulCount,
+        Integer visualAidHelpfulPercent,
         List<PlayerTask> tasks,
         List<VisualAid> visualAids) {
 
@@ -24,6 +25,11 @@ public record LessonComprehensionReport(
         if (readyVisualTaskCount < 0 || visualAidRatedCount < 0 || visualAidHelpfulCount < 0
                 || visualAidRatedCount > readyVisualTaskCount || visualAidHelpfulCount > visualAidRatedCount) {
             throw new IllegalArgumentException("lesson visual comprehension totals are invalid");
+        }
+        if ((visualAidRatedCount == 0 && visualAidHelpfulPercent != null)
+                || (visualAidRatedCount > 0 && (visualAidHelpfulPercent == null
+                        || visualAidHelpfulPercent < 0 || visualAidHelpfulPercent > 100))) {
+            throw new IllegalArgumentException("lesson visual helpfulness percentage is invalid");
         }
         tasks = List.copyOf(tasks);
         visualAids = List.copyOf(visualAids);
