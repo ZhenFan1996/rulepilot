@@ -20,6 +20,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -32,22 +34,43 @@ public class VisualLessonEnricher {
     private final DocumentPageImages pageImages;
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
+    private final VisualSectionPrioritizer prioritizer;
+    private final int maxSections;
+
+    @Autowired
+    public VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator,
+            VisualSectionPrioritizer prioritizer,
+            @Value("${rulepilot.visual.max-sections:3}") int maxSections) {
+        this.understanding = understanding;
+        this.pageImages = pageImages;
+        this.candidates = candidates;
+        this.locator = locator;
+        this.prioritizer = prioritizer;
+        if (maxSections < 1 || maxSections > 6) {
+            throw new IllegalArgumentException("visual section limit must be between one and six");
+        }
+        this.maxSections = maxSections;
+    }
 
     public VisualLessonEnricher(
             RulebookUnderstandingCatalog understanding,
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this.understanding = understanding;
-        this.pageImages = pageImages;
-        this.candidates = candidates;
-        this.locator = locator;
+        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 3);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
         var map = understanding.understanding(documentVersionId);
+        Set<Integer> selectedPositions = prioritizer.positions(lesson.sections(), maxSections);
         List<LessonSection> sections = lesson.sections().stream()
-                .map(section -> enrichSection(map, documentVersionId, section))
+                .map(section -> selectedPositions.contains(section.position())
+                        ? enrichSection(map, documentVersionId, section)
+                        : section)
                 .toList();
         return new IllustratedLesson(
                 lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
