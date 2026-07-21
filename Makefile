@@ -3,7 +3,7 @@ SHELL := /bin/sh
 PRODUCT_EVAL_DATASET ?= examples/evaluation/lantern-relay/product-evaluation.json
 PRODUCT_EVAL_OUTPUT ?= .local/product-evaluation/latest-report.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -25,6 +25,12 @@ demo-data: ## Load the self-authored demo rulebook into a running local backend
 
 product-eval: ## Evaluate a lesson against an external ordinary-player product dataset
 	@node scripts/evaluate-product.mjs --dataset "$(PRODUCT_EVAL_DATASET)" --output "$(PRODUCT_EVAL_OUTPUT)"
+
+corpus-preflight: ## Validate one local publisher rulebook before public-corpus generation (PDF= SOURCE= COVER=)
+	@test -n "$(PDF)" || (echo "PDF is required"; exit 2)
+	@test -n "$(SOURCE)" || (echo "SOURCE is required"; exit 2)
+	@test -n "$(COVER)" || (echo "COVER is required"; exit 2)
+	@node scripts/preflight-public-rulebook.mjs --pdf "$(PDF)" --source "$(SOURCE)" --cover "$(COVER)"
 
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
@@ -69,6 +75,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/run-deployment.sh config
 	@sh scripts/verify-architecture.sh
 	@node --test scripts/evaluate-product.test.mjs
+	@node --test scripts/preflight-public-rulebook.test.mjs
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \
