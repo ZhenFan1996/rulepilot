@@ -28,6 +28,8 @@ import org.springframework.stereotype.Component;
 public class RulebookUnderstandingBuilder {
 
     private static final int MAX_TERM_LENGTH = 100;
+    static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final Pattern CAPITALIZED_PHRASE = Pattern.compile(
             "\\b(?:[A-Z][\\p{L}\\p{N}'-]*)(?:\\s+[A-Z][\\p{L}\\p{N}'-]*){0,3}\\b");
     private static final Pattern ACRONYM = Pattern.compile("\\b[A-Z][A-Z0-9]{1,11}\\b");
@@ -77,9 +79,8 @@ public class RulebookUnderstandingBuilder {
 
     private List<ExtractedTextBlock> fallbackBlock(ExtractedPage page) {
         String text = page.text().strip();
-        return text.isEmpty()
-                ? List.of()
-                : List.of(new ExtractedTextBlock(0, text, 0, 0, 1_000, 1_000));
+        String evidence = text.isEmpty() ? VISUAL_PAGE_PLACEHOLDER : text;
+        return List.of(new ExtractedTextBlock(0, evidence, 0, 0, 1_000, 1_000));
     }
 
     private BlockRole role(ExtractedTextBlock block) {

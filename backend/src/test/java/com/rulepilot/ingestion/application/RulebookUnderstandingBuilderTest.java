@@ -48,4 +48,16 @@ class RulebookUnderstandingBuilderTest {
         });
         assertThat(understanding.inventory()).hasSize(1);
     }
+
+    @Test
+    void retainsImageOnlyPagesAsWholePageVisualEvidence() {
+        var understanding = builder.build(List.of(new ExtractedPage(6, "")));
+
+        assertThat(understanding.pageBlocks()).singleElement().satisfies(block -> {
+            assertThat(block.text()).isEqualTo(RulebookUnderstandingBuilder.VISUAL_PAGE_PLACEHOLDER);
+            assertThat(block.rectangle().width()).isEqualTo(1_000);
+            assertThat(block.rectangle().height()).isEqualTo(1_000);
+        });
+        assertThat(understanding.inventory()).extracting(item -> item.key()).containsExactly("p6-b0");
+    }
 }

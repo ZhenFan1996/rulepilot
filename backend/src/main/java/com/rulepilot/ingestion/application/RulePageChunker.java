@@ -15,6 +15,8 @@ import org.springframework.stereotype.Component;
 public class RulePageChunker {
 
     static final int MAX_CHUNK_CHARACTERS = 1_800;
+    static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final int MAX_HEADING_CHARACTERS = 160;
     private static final Pattern PARAGRAPH_BREAK = Pattern.compile("(?:\\R\\s*){2,}");
     private static final Pattern SENTENCE_BREAK = Pattern.compile("(?<=[.!?。！？;；:：])\\s+");
@@ -27,6 +29,11 @@ public class RulePageChunker {
         for (ExtractedPage page : pages) {
             String text = page.text() == null ? "" : page.text().strip();
             if (text.isEmpty()) {
+                chunks.add(new DetectedRuleChunk(
+                        "GENERAL",
+                        "Visual rulebook page " + page.pageNumber(),
+                        VISUAL_PAGE_PLACEHOLDER,
+                        page.pageNumber()));
                 continue;
             }
             String heading = heading(text, page.pageNumber());

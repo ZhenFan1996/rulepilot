@@ -31,4 +31,15 @@ class RulePageChunkerTest {
         assertThat(chunks).allMatch(chunk -> chunk.pageNumber() == 12);
         assertThat(chunks).allMatch(chunk -> chunk.content().length() <= RulePageChunker.MAX_CHUNK_CHARACTERS);
     }
+
+    @Test
+    void retainsImageOnlyPagesAsVisualEvidenceInsteadOfRejectingTheRulebook() {
+        var chunks = chunker.chunk(List.of(new ExtractedPage(9, "")));
+
+        assertThat(chunks).singleElement().satisfies(chunk -> {
+            assertThat(chunk.heading()).isEqualTo("Visual rulebook page 9");
+            assertThat(chunk.content()).isEqualTo(RulePageChunker.VISUAL_PAGE_PLACEHOLDER);
+            assertThat(chunk.pageNumber()).isEqualTo(9);
+        });
+    }
 }
