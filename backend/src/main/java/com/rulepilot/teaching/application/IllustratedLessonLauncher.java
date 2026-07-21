@@ -6,6 +6,7 @@ import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
@@ -17,14 +18,25 @@ public class IllustratedLessonLauncher {
     private final IllustratedLessonService lessons;
     private final AssistantRuns runs;
     private final TaskExecutor executor;
+    private final VisualLessonEnrichmentService visuals;
+
+    @Autowired
+    public IllustratedLessonLauncher(
+            IllustratedLessonService lessons,
+            AssistantRuns runs,
+            @Qualifier("teachingGenerationExecutor") TaskExecutor executor,
+            VisualLessonEnrichmentService visuals) {
+        this.lessons = lessons;
+        this.runs = runs;
+        this.executor = executor;
+        this.visuals = visuals;
+    }
 
     public IllustratedLessonLauncher(
             IllustratedLessonService lessons,
             AssistantRuns runs,
-            @Qualifier("teachingGenerationExecutor") TaskExecutor executor) {
-        this.lessons = lessons;
-        this.runs = runs;
-        this.executor = executor;
+            TaskExecutor executor) {
+        this(lessons, runs, executor, null);
     }
 
     public synchronized LessonLaunch launch(UUID teachingPlanId, String ownerUsername) {
@@ -41,6 +53,9 @@ public class IllustratedLessonLauncher {
             executor.execute(() -> {
                 var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
                 lessons.finish(outcome);
+                if (visuals != null && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
+                    visuals.enrichLatest(teachingPlanId);
+                }
             });
         } catch (RuntimeException schedulingFailure) {
             lessons.failScheduling(run);

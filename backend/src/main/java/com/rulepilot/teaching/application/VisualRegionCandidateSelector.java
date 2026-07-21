@@ -9,8 +9,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.springframework.stereotype.Component;
 
 /** Chooses compact, document-derived regions before a vision model is asked to locate a final crop. */
+@Component
 public final class VisualRegionCandidateSelector {
 
     private static final int MAX_CANDIDATES = 4;

@@ -20,8 +20,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
 
 /** Adds a verified visual reference without changing an already published text lesson. */
+@Service
+@Profile("!test")
 public class VisualLessonEnricher {
 
     private final RulebookUnderstandingCatalog understanding;

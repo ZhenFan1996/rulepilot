@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.AgentExecutionControl;
@@ -45,6 +46,23 @@ class IllustratedLessonLauncherTest {
         assertThat(launch.reused()).isFalse();
         verify(lessons).generate(planId, "alice", run);
         verify(lessons).finish(outcome);
+    }
+
+    @Test
+    void enriches_visuals_only_after_the_base_lesson_is_finished() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        var visuals = mock(VisualLessonEnrichmentService.class);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(planId, "alice")).thenReturn(run);
+        var outcome = new GenerationOutcome(run, LessonStatus.DRAFT_READY);
+        when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
+
+        launcher.launch(planId, "alice");
+
+        var order = inOrder(lessons, visuals);
+        order.verify(lessons).finish(outcome);
+        order.verify(visuals).enrichLatest(planId);
     }
 
     @Test
