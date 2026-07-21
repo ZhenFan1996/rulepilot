@@ -285,6 +285,31 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
+    void boundsAnOverlongPostPublicationReviewInsteadOfDiscardingIt() {
+        List<Issue> issues = java.util.stream.IntStream.rangeClosed(1, 15)
+                .mapToObj(position -> new Issue(
+                        IssueType.UNSUPPORTED_CLAIM,
+                        1,
+                        List.of(chunkId),
+                        "Unsupported detail " + position + "."))
+                .toList();
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> new CritiqueDraft(issues),
+                new ImmediateAuditedAgentInvocations(),
+                true);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.POST_PUBLICATION,
+                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
+                        "Teach the complete lesson.", "All material rules."),
+                List.of(new Claim(1, "A generated claim.", List.of(chunkId))),
+                List.of(new Evidence(chunkId, "The cited rule.")));
+
+        assertThat(critic.review(request, ReviewRisk.HIGH_IMPACT).issues()).hasSize(12);
+    }
+
+    @Test
     void confirmsEachClaimOnlyAgainstItsCombinedCitations() {
         UUID secondCitation = UUID.randomUUID();
         UUID unrelatedEvidence = UUID.randomUUID();

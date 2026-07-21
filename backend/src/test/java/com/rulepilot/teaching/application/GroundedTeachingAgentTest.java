@@ -47,7 +47,7 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
-    void publishesTextFirstBaseLessonWithoutWaitingForVisualOrWholeLessonReview() {
+    void publishesTextFirstBaseLessonBeforeRunningOneBoundedWholeLessonReview() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -60,6 +60,7 @@ class GroundedTeachingAgentTest {
                 4,
                 List.of(new RulePageImage(4, "image/jpeg", new byte[] {1}, 1_086, 1_511)));
         AtomicInteger criticCalls = new AtomicInteger();
+        List<IllustratedLesson> publications = new ArrayList<>();
         TeachingLessonModel model = request -> {
             assertThat(request.pageImages()).isEmpty();
             return new SectionDraft(
@@ -76,16 +77,19 @@ class GroundedTeachingAgentTest {
                 new PolicyEvidenceVerifier(),
                 (request, risk) -> {
                     criticCalls.incrementAndGet();
-                    throw new AssertionError("base lesson must not block on whole-lesson review");
+                    assertThat(publications).isNotEmpty();
+                    assertThat(publications.getLast().status()).isEqualTo(LessonStatus.DRAFT_READY);
+                    assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+                    return new GeneratedContentCritic.Review(true, List.of());
                 },
                 new ImmediateAuditedAgentInvocations(),
                 4);
 
-        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, publications::add);
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
-        assertThat(criticCalls).hasValue(0);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(criticCalls).hasValue(1);
     }
 
     @Test
@@ -133,7 +137,7 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
     }
 
     @Test
@@ -222,7 +226,7 @@ class GroundedTeachingAgentTest {
         IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
 
         assertThat(lesson.sections()).singleElement().satisfies(section -> assertThat(section.evidenceStatus())
-                .isEqualTo(EvidenceStatus.CITED_DRAFT));
+                .isEqualTo(EvidenceStatus.SUPPORTED));
     }
 
     @Test
@@ -254,7 +258,7 @@ class GroundedTeachingAgentTest {
                 request -> List.of(evidence(chunkId, versionId)),
                 model,
                 new PolicyEvidenceVerifier(),
-                (request, risk) -> { throw new AssertionError("base path must not invoke critic"); },
+                acceptedCritic(),
                 new ImmediateAuditedAgentInvocations(),
                 12,
                 2);
@@ -299,6 +303,38 @@ class GroundedTeachingAgentTest {
 
         assertThat(revisions).hasValue(1);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("……");
+    }
+
+    @Test
+    void repairsASetupCheckThatClaimsDrawnTokensStillAllRemainInTheBag() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return setupInventoryDraft(chunkId, "中央摆好4个标记；布袋里有所有野生动物标记。");
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString().contains("remaining supply");
+                return setupInventoryDraft(chunkId, "中央摆好4个标记；其余野生动物标记留在布袋里。");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(revisions).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getLast().text()).contains("其余").doesNotContain("所有");
     }
 
     @Test
@@ -506,7 +542,7 @@ class GroundedTeachingAgentTest {
         RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
             assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
             assertThat(request.taskContext().objective()).contains("SETUP");
             assertThat(request.taskContext().requiredCoverage()).contains("setup");
@@ -597,7 +633,7 @@ class GroundedTeachingAgentTest {
                 List.of(new StepDraft(
                         "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(cited.chunkId()))));
         GeneratedContentCritic critic = (request, risk) -> {
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
             assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
                     .containsExactly(cited.chunkId(), unrelated.chunkId());
             return new GeneratedContentCritic.Review(true, List.of());
@@ -670,7 +706,7 @@ class GroundedTeachingAgentTest {
         AtomicInteger reviewCalls = new AtomicInteger();
         List<String> retrievalQueries = new ArrayList<>();
         GeneratedContentCritic critic = (request, risk) -> {
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
             reviewCalls.incrementAndGet();
             boolean tunnelCovered = request.claims().stream().anyMatch(claim -> claim.text().contains("隧道"));
             return tunnelCovered
@@ -694,10 +730,10 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(alternativeRoutePlan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
         assertThat(revisions).hasValue(1);
-        assertThat(reviewCalls).hasValue(1);
+        assertThat(reviewCalls).hasValue(2);
         assertThat(retrievalQueries).anyMatch(query -> query.contains("tunnel route"));
         assertThat(lesson.sections().getFirst().steps())
                 .extracting(LessonStep::text)
@@ -1622,13 +1658,19 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.CITED_DRAFT);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("任意放置");
-        assertThat(modelCalls).hasValue(2);
-        assertThat(criticCalls).hasValue(1);
+        assertThat(modelCalls).hasValue(3);
+        assertThat(criticCalls).hasValue(2);
         assertThat(invocations.diagnostics).containsExactly(
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
                         "Teaching draft accepted: CITED_DRAFT_ACCEPTED"),
                 new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
                         "Teaching section published: CITED_DRAFT_PUBLISHED"),
+                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
+                        "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
+                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"),
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
                         "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
                 new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
@@ -1733,6 +1775,21 @@ class GroundedTeachingAgentTest {
                 "按引用完成这一节。",
                 List.of(chunkId),
                 List.of(new StepDraft("照着做", TeachingMove.DO, text, List.of(chunkId))));
+    }
+
+    private SectionDraft setupInventoryDraft(UUID chunkId, String finalCheck) {
+        return new SectionDraft(
+                "摆好中央展示区",
+                VisualKind.TABLE_LAYOUT,
+                "按顺序摆好组件。",
+                List.of(chunkId),
+                List.of(
+                        new StepDraft(
+                                "抽取标记",
+                                TeachingMove.DO,
+                                "从布袋中随机抽取4个野生动物标记，摆到中央。",
+                                List.of(chunkId)),
+                        new StepDraft("检查供应", TeachingMove.CHECK, finalCheck, List.of(chunkId))));
     }
 
     private TeachingPlan alternativeRoutePlan(UUID versionId) {

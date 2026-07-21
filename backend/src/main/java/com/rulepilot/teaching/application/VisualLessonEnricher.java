@@ -138,7 +138,7 @@ public class VisualLessonEnricher {
             log.info("Visual region cited an unknown claim for section {}", section.title());
             return section;
         }
-        return appendVisual(section, located.get());
+        return mergeVisualIntoSupportedStep(section, located.get());
     }
 
     private List<String> terms(LessonSection section) {
@@ -190,25 +190,44 @@ public class VisualLessonEnricher {
                 && candidate.y() < y + height && y < candidate.y() + candidate.height();
     }
 
-    private LessonSection appendVisual(LessonSection section, VisualRegionLocator.LocatedRegion region) {
+    private LessonSection mergeVisualIntoSupportedStep(
+            LessonSection section, VisualRegionLocator.LocatedRegion region) {
         List<LessonStep> steps = new ArrayList<>(section.steps());
+        Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
+        int supportedStepIndex = java.util.stream.IntStream.range(0, steps.size())
+                .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
+                .findFirst()
+                .orElse(0);
+        LessonStep supportedStep = steps.get(supportedStepIndex);
         String observation = stripTrailingPunctuation(region.visibleDescription());
-        String visualText = observation.isBlank()
-                ? "查看图中的“" + region.label() + "”。"
-                : "看图：" + observation + "。这就是本节要定位的“" + region.label() + "”。";
-        steps.add(new LessonStep(
-                steps.size() + 1,
-                "看图定位",
+        String visualText = visualText(observation, supportedStep.text());
+        String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
+        steps.set(supportedStepIndex, new LessonStep(
+                supportedStep.position(),
+                supportedStep.heading(),
                 TeachingMove.VISUAL,
                 visualText,
-                List.of(region.pageNumber()),
-                region.supportedEvidenceIds(),
-                new VisualFocus(region.pageNumber(), region.label(), region.x(), region.y(), region.width(), region.height())));
+                distinct(supportedStep.sourcePages(), region.pageNumber()),
+                distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
+                new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
         return new LessonSection(
                 section.position(), section.topicKey(), section.coverageTags(), section.title(), section.required(),
                 section.evidenceStatus(), section.visualKind(), section.visualCaption(),
                 distinct(section.visualSourcePages(), region.pageNumber()),
                 distinct(section.visualSourceChunkIds(), region.supportedEvidenceIds()), steps);
+    }
+
+    private String visualText(String observation, String ruleText) {
+        String prefix = observation.isBlank() || !containsHan(observation)
+                ? "结合旁边的规则图示完成这一步："
+                : "图中可见" + observation + "。结合图片完成这一步：";
+        String combined = prefix + ruleText;
+        return combined.length() <= 600 ? combined : ruleText;
+    }
+
+    private boolean containsHan(String text) {
+        return text != null && text.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint)
+                == Character.UnicodeScript.HAN);
     }
 
     private <T> List<T> distinct(List<T> existing, T addition) {

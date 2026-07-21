@@ -120,6 +120,10 @@ class VersionedAgentPromptsTest {
                         "Never emit an issue as an audit note",
                         "semantic rule meaning",
                         "combined evidence set",
+                        "Recount every enumerated list",
+                        "invented species",
+                        "same official term",
+                        "at most 12 issues",
                         "ATOMIC_CONFIRMATION",
                         "faithful contextual translation",
                         "at most 160 characters");

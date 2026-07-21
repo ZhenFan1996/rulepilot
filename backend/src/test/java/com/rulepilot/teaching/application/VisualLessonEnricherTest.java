@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 class VisualLessonEnricherTest {
 
     @Test
-    void appends_a_cited_visual_step_without_rewriting_existing_text() {
+    void attaches_a_cited_crop_to_the_supported_rule_without_adding_a_seventh_step() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();
         RulebookUnderstandingCatalog catalog = ignored -> understanding();
@@ -31,10 +31,10 @@ class VisualLessonEnricherTest {
                 catalog, images, new VisualRegionCandidateSelector(), locator).enrich(version, source);
 
         var section = enriched.sections().getFirst();
-        assertThat(section.steps()).hasSize(2);
-        assertThat(section.steps().getFirst().text()).isEqualTo("把探测器放到轨道上。");
-        assertThat(section.steps().get(1).kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(section.steps().get(1).visualFocus().pageNumber()).isEqualTo(2);
+        assertThat(section.steps()).hasSize(1);
+        assertThat(section.steps().getFirst().text()).contains("把探测器放到轨道上。");
+        assertThat(section.steps().getFirst().kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(section.steps().getFirst().visualFocus().pageNumber()).isEqualTo(2);
         assertThat(section.visualSourcePages()).containsExactly(2);
     }
 
@@ -58,8 +58,8 @@ class VisualLessonEnricherTest {
                                 List.of(chunk))))
                 .enrich(version, lesson(chunk));
 
-        assertThat(enriched.sections().getFirst().steps().get(1).text())
-                .isEqualTo("看图：圆形标记位于一条弧形刻度旁，箭头指向前进方向。这就是本节要定位的“轨道”。");
+        assertThat(enriched.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("图中可见圆形标记位于一条弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。");
     }
 
     @Test
@@ -145,7 +145,7 @@ class VisualLessonEnricherTest {
 
         assertThat(enriched.sections().getFirst().steps())
                 .anySatisfy(step -> assertThat(step.visualFocus())
-                        .isEqualTo(new IllustratedLesson.VisualFocus(2, "Orbit track", 640, 700, 180, 120)));
+                        .isEqualTo(new IllustratedLesson.VisualFocus(2, "放置探测器", 640, 700, 180, 120)));
     }
 
     @Test
@@ -190,7 +190,8 @@ class VisualLessonEnricherTest {
                         ignored -> understanding, images, new VisualRegionCandidateSelector(), locator)
                 .enrich(version, twoPageLesson(chunk));
 
-        assertThat(enriched.sections().getFirst().steps()).hasSize(2);
+        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+        assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
     }
 
     private RulebookUnderstanding understanding() {

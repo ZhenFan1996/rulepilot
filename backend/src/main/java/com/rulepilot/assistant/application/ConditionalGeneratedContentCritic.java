@@ -91,7 +91,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 successSummary,
                 () -> model.critique(request),
                 result -> estimateTokens(result.toString()));
-        if (draft == null || draft.issues().size() > MAX_ISSUES) {
+        if (draft == null) {
             throw new IllegalArgumentException("critic output is invalid");
         }
         Set<UUID> allowedEvidence = request.evidence().stream()
@@ -105,6 +105,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                         || issue.summary() == null
                         || !explicitlyDescribesNoDefect(issue.summary()))
                 .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
+                .limit(MAX_ISSUES)
                 .toList();
     }
 

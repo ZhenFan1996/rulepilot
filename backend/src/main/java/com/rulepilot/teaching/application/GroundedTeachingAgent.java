@@ -64,13 +64,14 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v21-vision-observations";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v23-reviewed-visual";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private static final int EVIDENCE_PER_INTENT = 3;
     private static final int MAX_STEPS_PER_SECTION = 6;
     private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
+    private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 2;
     private static final int MAX_REVIEW_UNCITED_EVIDENCE_PER_SECTION = 2;
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final String VISUAL_PAGE_PLACEHOLDER =
@@ -85,6 +86,11 @@ public class GroundedTeachingAgent {
             "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
                     + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
     private static final Pattern INTERNAL_SHORT_EVIDENCE_REFERENCE = Pattern.compile("(?<![\\p{L}\\p{N}])E\\d{1,2}(?![\\p{L}\\p{N}])");
+    private static final Pattern DRAW_FROM_BAG = Pattern.compile(
+            "(?i)(?:从.{0,12}(?:布袋|袋中|bag).{0,24}(?:抽|取|draw)|(?:抽|取|draw).{0,24}(?:布袋|袋中|bag))");
+    private static final Pattern FINAL_CHECK_CLAIMS_ALL_IN_BAG = Pattern.compile(
+            "(?i)(?:(?:所有|全部|all).{0,24}(?:标记|token).{0,24}(?:布袋|袋中|bag)|"
+                    + "(?:布袋|袋中|bag).{0,24}(?:所有|全部|all).{0,24}(?:标记|token))");
     private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
@@ -180,8 +186,9 @@ public class GroundedTeachingAgent {
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         List<LessonSection> sections = new ArrayList<>();
+        List<DraftCandidate> reviewCandidates = new ArrayList<>();
         TeachingPlan.PlannedSection first = plan.sections().getFirst();
-        sections.add(baseSection(
+        SectionOutcome firstOutcome = baseSection(
                 plan,
                 first,
                 pacing.get(first.position()),
@@ -189,42 +196,54 @@ public class GroundedTeachingAgent {
                 reusable,
                 assistantRunId,
                 queriesPerTopic,
-                false));
+                false);
+        sections.add(firstOutcome.section());
+        if (firstOutcome.reviewCandidate() != null) reviewCandidates.add(firstOutcome.reviewCandidate());
         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
 
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
         if (!remaining.isEmpty()) {
             List<PriorSectionContext> sharedContext = continuityContext(sections);
-            Map<Integer, LessonSection> completed = new LinkedHashMap<>();
+            Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
             try (var executor = Executors.newFixedThreadPool(Math.min(baseSectionParallelism, remaining.size()))) {
                 List<Future<SectionOutcome>> futures = remaining.stream()
-                        .map(planned -> executor.submit(() -> {
-                            LessonSection section = baseSection(
-                                    plan,
-                                    planned,
-                                    pacing.get(planned.position()),
-                                    sharedContext,
-                                    reusable,
-                                    assistantRunId,
-                                    queriesPerTopic,
-                                    false);
-                            return new SectionOutcome(planned.position(), section);
-                        }))
+                        .map(planned -> executor.submit(() -> baseSection(
+                                plan,
+                                planned,
+                                pacing.get(planned.position()),
+                                sharedContext,
+                                reusable,
+                                assistantRunId,
+                                queriesPerTopic,
+                                false)))
                         .toList();
                 for (Future<SectionOutcome> future : futures) {
                     SectionOutcome outcome = await(future);
-                    completed.put(outcome.position(), outcome.section());
+                    completed.put(outcome.position(), outcome);
                     while (completed.containsKey(sections.size() + 1)) {
-                        sections.add(completed.remove(sections.size() + 1));
+                        SectionOutcome contiguous = completed.remove(sections.size() + 1);
+                        sections.add(contiguous.section());
+                        if (contiguous.reviewCandidate() != null) {
+                            reviewCandidates.add(contiguous.reviewCandidate());
+                        }
                         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                     }
                 }
             }
         }
+        IllustratedLesson readableDraft = lesson(lessonId, plan, sections, createdAt);
+        if (readableDraft.status() == LessonStatus.DRAFT_READY && !reviewCandidates.isEmpty()) {
+            reviewPublishedLesson(
+                    plan,
+                    reviewCandidates,
+                    sections,
+                    assistantRunId,
+                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
+        }
         return lesson(lessonId, plan, sections, createdAt);
     }
 
-    private LessonSection baseSection(
+    private SectionOutcome baseSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             TeachingPacingPolicy.SectionPacing pacing,
@@ -236,7 +255,7 @@ public class GroundedTeachingAgent {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-            return reusable;
+            return new SectionOutcome(planned.position(), reusable, null);
         }
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
@@ -272,7 +291,7 @@ public class GroundedTeachingAgent {
                         plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
                 .verified()) {
             recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_VALID_BASE_EVIDENCE");
-            return insufficient(planned);
+            return new SectionOutcome(planned.position(), insufficient(planned), null);
         }
         try {
             DraftCandidate composed = composeDraft(
@@ -285,13 +304,13 @@ public class GroundedTeachingAgent {
                     planned.position() - 1,
                     includeVisualEvidence);
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_BASE_SECTION_PUBLISHED");
-            return composed.section();
+            return new SectionOutcome(planned.position(), composed.section(), composed);
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException invalidDraft) {
             log.warn("Base teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "BASE_DRAFT_WITHHELD");
-            return insufficient(planned);
+            return new SectionOutcome(planned.position(), insufficient(planned), null);
         }
     }
 
@@ -1028,7 +1047,13 @@ public class GroundedTeachingAgent {
             List<LessonSection> sections,
             UUID assistantRunId,
             Runnable progressPublisher) {
-        reviewPublishedBatch(plan, candidates, sections, assistantRunId, progressPublisher);
+        reviewPublishedBatch(
+                plan,
+                candidates,
+                sections,
+                assistantRunId,
+                progressPublisher,
+                MAX_POST_PUBLICATION_REVIEW_PASSES);
     }
 
     private boolean reviewPublishedBatch(
@@ -1036,7 +1061,8 @@ public class GroundedTeachingAgent {
             List<DraftCandidate> candidates,
             List<LessonSection> sections,
             UUID assistantRunId,
-            Runnable progressPublisher) {
+            Runnable progressPublisher,
+            int remainingPasses) {
         LessonReviewBatch batch = lessonReviewBatch(candidates, assistantRunId);
         GeneratedContentCritic.Review review;
         try {
@@ -1049,7 +1075,7 @@ public class GroundedTeachingAgent {
                     "POST_PUBLICATION_REVIEW_DEFERRED_BY_BUDGET"));
             return false;
         } catch (RuntimeException reviewFailure) {
-            log.warn("Whole-lesson objective coverage review retained cited draft: {}", reviewFailure.getMessage());
+            log.warn("Whole-lesson factual review retained cited draft: {}", reviewFailure.getMessage());
             candidates.forEach(candidate -> recordPublication(
                     assistantRunId,
                     candidate.planned(),
@@ -1061,6 +1087,7 @@ public class GroundedTeachingAgent {
         Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
                 .collect(Collectors.groupingBy(issue -> batch.claimOwners()
                         .get(issue.claimPosition()).sectionIndex()));
+        List<DraftCandidate> correctedCandidates = new ArrayList<>();
         for (DraftCandidate candidate : candidates) {
             List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
                     candidate.sectionIndex(), List.of());
@@ -1071,21 +1098,28 @@ public class GroundedTeachingAgent {
                     issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
                     issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(issues));
             try {
-                LessonSection reviewed = issues.isEmpty()
-                        ? validatedSection(
+                DraftCandidate reviewed = issues.isEmpty()
+                        ? new DraftCandidate(
+                                candidate.sectionIndex(),
+                                candidate.planned(),
+                                candidate.evidence(),
+                                candidate.modelRequest(),
+                                candidate.draft(),
+                                validatedSection(
                                 plan,
                                 candidate.planned(),
                                 candidate.evidence(),
                                 candidate.modelRequest(),
                                 candidate.draft(),
-                                EvidenceStatus.SUPPORTED)
+                                EvidenceStatus.SUPPORTED))
                         : correctedPublishedDraft(plan, candidate, issues, assistantRunId);
-                sections.set(candidate.sectionIndex(), reviewed);
+                sections.set(candidate.sectionIndex(), reviewed.section());
+                if (!issues.isEmpty()) correctedCandidates.add(reviewed);
                 recordPublication(
                         assistantRunId,
                         candidate.planned(),
                         ActivityOutcome.SUCCEEDED,
-                        reviewed.evidenceStatus() == EvidenceStatus.SUPPORTED
+                        reviewed.section().evidenceStatus() == EvidenceStatus.SUPPORTED
                                 ? "POST_PUBLICATION_REVIEW_ACCEPTED"
                                 : "POST_PUBLICATION_REVIEW_PENDING");
                 progressPublisher.run();
@@ -1107,6 +1141,15 @@ public class GroundedTeachingAgent {
                         ActivityOutcome.SUCCEEDED,
                         "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT");
             }
+        }
+        if (!correctedCandidates.isEmpty() && remainingPasses > 1) {
+            return reviewPublishedBatch(
+                    plan,
+                    correctedCandidates,
+                    sections,
+                    assistantRunId,
+                    progressPublisher,
+                    remainingPasses - 1);
         }
         return true;
     }
@@ -1142,7 +1185,7 @@ public class GroundedTeachingAgent {
         ReviewRequest request = new ReviewRequest(
                 assistantRunId,
                 ContentType.LESSON,
-                ReviewMode.OBJECTIVE_COVERAGE,
+                ReviewMode.POST_PUBLICATION,
                 new TaskContext(objective, requiredCoverage),
                 claims,
                 evidence.values().stream()
@@ -1171,14 +1214,19 @@ public class GroundedTeachingAgent {
         return List.copyOf(selected);
     }
 
-    private LessonSection correctedPublishedDraft(
+    private DraftCandidate correctedPublishedDraft(
             TeachingPlan plan,
             DraftCandidate candidate,
             List<GeneratedContentCritic.Issue> issues,
             UUID assistantRunId) {
         List<String> feedback = List.of("Whole-lesson objective coverage review found: " + issues.stream()
                 .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
-                .collect(Collectors.joining("; ")));
+                .collect(Collectors.joining("; "))
+                + ". Correct only from the supplied evidence and audit the entire revised section for new claims. "
+                + "If any issue touches a worked example whose concrete species, component, quantity, pairing, or "
+                + "board state is not directly stated in evidence, delete that concrete example or replace it with "
+                + "a neutral procedure; do not invent a different example. Recount setup inventory against items "
+                + "already moved out of a supply. Do not add a new factual sentence merely to replace a removed one.");
         SectionDraft corrected = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -1189,7 +1237,7 @@ public class GroundedTeachingAgent {
                 () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
                 result -> estimateTokens(result.toString()));
         corrected = normalizeDraft(corrected, candidate.modelRequest());
-        LessonSection correctedDraft = validatedSection(
+        LessonSection correctedSection = validatedSection(
                 plan,
                 candidate.planned(),
                 candidate.evidence(),
@@ -1202,7 +1250,13 @@ public class GroundedTeachingAgent {
                 1,
                 ActivityOutcome.SUCCEEDED,
                 "POST_PUBLICATION_CORRECTION_APPLIED");
-        return correctedDraft;
+        return new DraftCandidate(
+                candidate.sectionIndex(),
+                candidate.planned(),
+                candidate.evidence(),
+                candidate.modelRequest(),
+                corrected,
+                correctedSection);
     }
 
     private String requiredCoverage(TeachingPlan.PlannedSection planned) {
@@ -1394,6 +1448,18 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Remove internal short evidence references such as E1 from player-facing teaching text.");
         }
+        boolean drawsFromBag = draft.steps().stream()
+                .anyMatch(step -> step != null && step.text() != null && DRAW_FROM_BAG.matcher(step.text()).find());
+        boolean finalCheckClaimsAllRemain = draft.steps().stream()
+                .anyMatch(step -> step != null
+                        && step.kind() == TeachingMove.CHECK
+                        && step.text() != null
+                        && FINAL_CHECK_CLAIMS_ALL_IN_BAG.matcher(step.text()).find());
+        if (drawsFromBag && finalCheckClaimsAllRemain) {
+            throw new IllegalArgumentException(
+                    "The final setup check cannot say all tokens remain in the bag after tokens were drawn from it; "
+                            + "describe only the remaining supply.");
+        }
     }
 
     private String rejectionCategory(IllegalArgumentException rejection) {
@@ -1413,6 +1479,7 @@ public class GroundedTeachingAgent {
         if (message.contains("do not end a rule")) return "STEP_TRUNCATED";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
+        if (message.contains("all tokens remain in the bag")) return "FINAL_SUPPLY_STATE_CONTRADICTION";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
         if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";
@@ -1480,7 +1547,7 @@ public class GroundedTeachingAgent {
             SectionDraft draft,
             LessonSection section) {}
 
-    private record SectionOutcome(int position, LessonSection section) {}
+    private record SectionOutcome(int position, LessonSection section, DraftCandidate reviewCandidate) {}
 
     private record LessonReviewBatch(
             ReviewRequest request,
