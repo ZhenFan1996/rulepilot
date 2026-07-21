@@ -275,7 +275,7 @@ onMounted(loadConfiguration)
                   <option value="fake">{{ role[0] === 'visual' ? '不读取页面图片' : '内置演示（不联网）' }}</option>
                   <option v-for="item in role[0] === 'visual' ? configuredVisualProviders : configuredProviders" :key="item.id" :value="item.id">{{ providerLabels[item.id] }}</option>
                 </select>
-                <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-ink/40">只处理需要理解版图、组件或图示的章节，不会增加一次额外调用。</span>
+                <span v-if="role[0] === 'visual'" class="mt-1.5 block font-normal leading-5 text-ink/40">基础讲解发布后，它会为少量最需要看图的章节单独定位规则书区域。这会产生额外视觉调用，但不会阻塞讲解阅读；慢或无效结果会被跳过。</span>
               </label>
 
               <button :disabled="savingAssignments" class="min-h-11 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-50">{{ savingAssignments ? '正在应用…' : '保存用途设置' }}</button>

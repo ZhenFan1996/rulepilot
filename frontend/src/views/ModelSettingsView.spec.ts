@@ -47,7 +47,7 @@ describe('ModelSettingsView', () => {
     expect(wrapper.text()).toContain('已配置')
     expect(wrapper.text()).toContain('规则书页面视觉')
     expect(wrapper.text()).toContain('Qwen')
-    expect(wrapper.text()).toContain('只处理需要理解版图')
+    expect(wrapper.text()).toContain('基础讲解发布后')
     expect(wrapper.get('input[autocomplete="new-password"]').attributes('type')).toBe('password')
     expect(wrapper.text()).not.toContain('secret')
 

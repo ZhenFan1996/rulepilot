@@ -25,4 +25,19 @@ class TeachingGenerationConfiguration {
         executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
         return executor;
     }
+
+    /**
+     * Vision calls are deliberately isolated from base lesson generation. A provider that ignores interruption can
+     * occupy this one slot, but cannot starve publication work or accumulate a queue of costly image requests.
+     */
+    @Bean(name = "visualLocationExecutor")
+    ThreadPoolTaskExecutor visualLocationExecutor() {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(0);
+        executor.setThreadNamePrefix("visual-location-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        return executor;
+    }
 }
