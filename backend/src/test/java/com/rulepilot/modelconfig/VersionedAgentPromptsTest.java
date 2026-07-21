@@ -16,6 +16,8 @@ class VersionedAgentPromptsTest {
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v5-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
+                resource("rule-answer-retrieval-rewrite-v1-system.txt"),
+                resource("rule-answer-retrieval-rewrite-v1-user.txt"),
                 resource("content-critic-v7-system.txt"),
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
@@ -95,6 +97,8 @@ class VersionedAgentPromptsTest {
                         "empty exceptions list");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
+        assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");
+        assertThat(prompts.answerRetrievalRewriteUser()).contains("{question}");
         assertThat(prompts.criticSystem())
                 .contains(
                         "MISSING_EXCEPTION",

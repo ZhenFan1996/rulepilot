@@ -11,13 +11,19 @@ public interface TeachingOutlineModel {
             int playerCount,
             int beginnerCount,
             int durationMinutes,
-            List<PageInput> pages) {
+            List<PageInput> pages,
+            List<PageImageInput> pageImages) {
         public OutlineRequest {
             if (playerCount < 1 || beginnerCount < 0 || beginnerCount > playerCount
-                    || durationMinutes < 2 || pages == null || pages.isEmpty()) {
+                    || durationMinutes < 2 || pages == null || pages.isEmpty() || pageImages == null) {
                 throw new IllegalArgumentException("teaching outline request is invalid");
             }
             pages = List.copyOf(pages);
+            pageImages = List.copyOf(pageImages);
+        }
+
+        public OutlineRequest(int playerCount, int beginnerCount, int durationMinutes, List<PageInput> pages) {
+            this(playerCount, beginnerCount, durationMinutes, pages, List.of());
         }
     }
 
@@ -27,6 +33,21 @@ public interface TeachingOutlineModel {
                 throw new IllegalArgumentException("rulebook page input is invalid");
             }
             text = text.strip();
+        }
+    }
+
+    record PageImageInput(int pageNumber, String mediaType, byte[] content) {
+        public PageImageInput {
+            if (pageNumber < 1 || mediaType == null || mediaType.isBlank() || content == null || content.length == 0) {
+                throw new IllegalArgumentException("rulebook outline page image is invalid");
+            }
+            mediaType = mediaType.strip();
+            content = content.clone();
+        }
+
+        @Override
+        public byte[] content() {
+            return content.clone();
         }
     }
 
