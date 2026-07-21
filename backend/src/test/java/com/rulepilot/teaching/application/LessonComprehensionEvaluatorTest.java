@@ -79,6 +79,23 @@ class LessonComprehensionEvaluatorTest {
     }
 
     @Test
+    void lets_players_rate_a_cited_draft_visual_before_post_publication_review() {
+        var lesson = lesson(List.of(section(
+                1,
+                "board-assembly",
+                List.of("setup", "components"),
+                EvidenceStatus.CITED_DRAFT,
+                TeachingMove.DO,
+                TeachingMove.VISUAL)));
+
+        var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of());
+
+        assertThat(report.readyVisualTaskCount()).isEqualTo(2);
+        assertThat(report.tasks().subList(4, 6))
+                .allMatch(task -> task.readiness() == TaskReadiness.READY && task.visualFocus() != null);
+    }
+
+    @Test
     void doesNotInviteSelfAssessmentWhenAnActionOrCitedCheckIsMissing() {
         var lesson = lesson(List.of(
                 section(1, "setup", List.of("setup"), TeachingMove.UNDERSTAND, TeachingMove.CHECK),
@@ -104,6 +121,15 @@ class LessonComprehensionEvaluatorTest {
 
     private LessonSection section(
             int position, String topicKey, List<String> tags, TeachingMove... moves) {
+        return section(position, topicKey, tags, EvidenceStatus.SUPPORTED, moves);
+    }
+
+    private LessonSection section(
+            int position,
+            String topicKey,
+            List<String> tags,
+            EvidenceStatus evidenceStatus,
+            TeachingMove... moves) {
         List<LessonStep> steps = java.util.stream.IntStream.range(0, moves.length)
                 .mapToObj(index -> new LessonStep(
                         index + 1,
@@ -122,7 +148,7 @@ class LessonComprehensionEvaluatorTest {
                 tags,
                 topicKey,
                 true,
-                EvidenceStatus.SUPPORTED,
+                evidenceStatus,
                 VisualKind.REFERENCE_CARD,
                 "原文页",
                 steps);

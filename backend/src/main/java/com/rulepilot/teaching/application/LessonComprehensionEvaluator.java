@@ -171,7 +171,8 @@ public class LessonComprehensionEvaluator {
     private List<LessonSection> matchingSections(IllustratedLesson lesson, List<String> preferredTags) {
         for (String tag : preferredTags) {
             List<LessonSection> matches = lesson.sections().stream()
-                    .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                    .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED
+                            || section.evidenceStatus() == EvidenceStatus.CITED_DRAFT)
                     .filter(section -> section.coverageTags().contains(tag))
                     .toList();
             if (!matches.isEmpty()) {
