@@ -22,6 +22,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final RuntimeModelConfiguration models;
     private final VersionedAgentPrompts prompts;
     private final FakeTeachingOutlineModel fake;
+    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
 
     public SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models, VersionedAgentPrompts prompts, FakeTeachingOutlineModel fake) {
@@ -68,7 +69,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                                     .toList())
                             .param("repair", repair);
                     if (role == Role.VISUAL) {
-                        request.pageImages().forEach(image -> user.media(
+                        request.pageImages().stream().map(images::prepare).forEach(image -> user.media(
                                 MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
                     }
                 })
