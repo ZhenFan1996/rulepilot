@@ -165,18 +165,18 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void discardsComplaintAgainstRequiredChineseGlossaryTranslation() {
-        Issue falsePositive = new Issue(
+    void keepsTranslationDisputeWhenNoDocumentGlossaryResolvesIt() {
+        Issue translationDispute = new Issue(
                 IssueType.UNSUPPORTED_CLAIM,
                 1,
                 List.of(chunkId),
                 "‘信用点’ is an incorrect translation; the source says credits and should be credits.");
         var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(falsePositive)),
+                request -> new CritiqueDraft(List.of(translationDispute)),
                 new ImmediateAuditedAgentInvocations(),
                 true);
 
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
+        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(translationDispute);
     }
 
     @Test

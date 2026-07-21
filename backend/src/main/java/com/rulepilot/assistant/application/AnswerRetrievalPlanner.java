@@ -6,11 +6,9 @@ import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -21,7 +19,6 @@ public final class AnswerRetrievalPlanner {
     private static final int MAX_INTENTS = 5;
     private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
             java.util.regex.Pattern.compile("[?？!！;；,，]+");
-    private static final Map<String, String> SEARCH_VOCABULARY = searchVocabulary();
     private static final Set<String> KNOWN_SECTIONS = Set.of(
             "OBJECTIVE",
             "COMPONENTS",
@@ -46,7 +43,6 @@ public final class AnswerRetrievalPlanner {
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
                 : Set.of();
-        addNamedRuleAnchor(intents, question.normalizedQuestion());
         int questionIntentBudget = Math.max(1, MAX_INTENTS - intents.size() - 1);
         if (parts.size() == 1) {
             intents.add(new RetrievalIntent(
@@ -60,20 +56,6 @@ public final class AnswerRetrievalPlanner {
                 inferredSections(question, currentSection),
                 currentSection));
         return intents.stream().limit(MAX_INTENTS).toList();
-    }
-
-    private static void addNamedRuleAnchor(List<RetrievalIntent> intents, String question) {
-        if (question.contains("月球")) {
-            intents.add(new RetrievalIntent(
-                    "Some planets have moons cannot land on them unless an effect or tech allows you to do so",
-                    Set.of("ACTIONS"),
-                    "ACTIONS"));
-            intents.add(new RetrievalIntent(
-                    "From now on you can land on a planet's moon instead of the planet itself "
-                            + "cost is the same as landing on the planet",
-                    Set.of("ACTIONS"),
-                    "ACTIONS"));
-        }
     }
 
     private static String contextualQuestion(String question, String previousQuestion) {
@@ -94,43 +76,7 @@ public final class AnswerRetrievalPlanner {
     }
 
     private static String expandSearchTerms(String questionPart) {
-        StringBuilder query = new StringBuilder(questionPart);
-        append(query, translatedTerms(questionPart));
-        return bounded(query.toString());
-    }
-
-    private static String translatedTerms(String text) {
-        return SEARCH_VOCABULARY.entrySet().stream()
-                .filter(entry -> text.contains(entry.getKey()))
-                .map(Map.Entry::getValue)
-                .distinct()
-                .collect(Collectors.joining(" "));
-    }
-
-    private static Map<String, String> searchVocabulary() {
-        Map<String, String> vocabulary = new LinkedHashMap<>();
-        vocabulary.put("第一轮", "round 1");
-        vocabulary.put("开局", "setup starting resources");
-        vocabulary.put("开始", "starting");
-        vocabulary.put("信用点", "credits");
-        vocabulary.put("能量", "energy");
-        vocabulary.put("月球", "moon planet tech same cost as landing on the planet");
-        vocabulary.put("登陆", "land landing probe cost prerequisite");
-        vocabulary.put("宣传度", "publicity");
-        vocabulary.put("手牌", "hand cards");
-        vocabulary.put("收入", "income");
-        vocabulary.put("买牌", "buying a card");
-        vocabulary.put("打牌", "play a card");
-        vocabulary.put("数据", "data computer place data");
-        vocabulary.put("主要行动", "one main action on your turn");
-        vocabulary.put("自由行动", "any number free actions before or after");
-        vocabulary.put("研究科技", "research a tech");
-        vocabulary.put("分析", "analyze");
-        vocabulary.put("结束", "end of game");
-        vocabulary.put("同分", "tie tied");
-        vocabulary.put("平局", "tie tied");
-        vocabulary.put("获胜", "winner wins");
-        return Map.copyOf(vocabulary);
+        return bounded(questionPart);
     }
 
     private static String supplementaryQuery(UnderstoodQuestion question, QuestionContext context) {
@@ -140,7 +86,6 @@ public final class AnswerRetrievalPlanner {
             append(query, String.join(" ", question.terms()));
         }
         append(query, facets(question.type()));
-        append(query, translatedTerms(question.normalizedQuestion()));
         if (context.currentLessonSection() != null) {
             append(query, context.currentLessonSection().replace('_', ' '));
         }
@@ -188,7 +133,7 @@ public final class AnswerRetrievalPlanner {
         }
         addWhenContains(sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数");
         addWhenContains(sections, text, "END_CONDITIONS", "game end", "ending", "结束条件", "游戏结束");
-        addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌", "登陆", "月球");
+        addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
         addWhenContains(sections, text, "PHASES", "phase", "阶段");
         addWhenContains(sections, text, "ROUND_STRUCTURE", "round", "turn order", "轮次", "回合顺序");
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
@@ -223,7 +168,7 @@ public final class AnswerRetrievalPlanner {
             return "ROUND_STRUCTURE";
         }
         if (containsAny(
-                normalized, "ACTION", "PROBE", "SCAN", "ANALYZE", "CARD", "TECH", "CORE_LOOP", "行动")) {
+                normalized, "ACTION", "CARD", "CORE_LOOP", "行动")) {
             return "ACTIONS";
         }
         if (containsAny(normalized, "COMPONENT", "组件", "配件")) return "COMPONENTS";

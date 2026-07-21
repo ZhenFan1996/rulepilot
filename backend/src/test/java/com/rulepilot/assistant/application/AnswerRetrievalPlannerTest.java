@@ -79,46 +79,44 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void expandsChineseTableTermsForEnglishRulebooks() {
+    void preservesDocumentTermsWithoutInjectingAnotherGamesVocabulary() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
-                "我的回合能先买牌，再打牌，再把数据放进电脑吗？",
-                "我的回合能先买牌，再打牌，再把数据放进电脑吗？",
+                "我的回合能先激活潮汐门，再移动船只吗？",
+                "我的回合能先激活潮汐门，再移动船只吗？",
                 QuestionType.SITUATION_QUERY,
-                List.of("行动"),
+                List.of("潮汐门", "船只"),
                 Set.of(),
                 "ACTIONS");
 
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
 
-        assertThat(intents.get(0).query()).contains("buying a card");
-        assertThat(intents.get(1).query()).contains("play a card");
-        assertThat(intents.get(2).query()).contains("place data", "computer");
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .allMatch(query -> !query.contains("moon") && !query.contains("probe") && !query.contains("publicity"))
+                .anyMatch(query -> query.contains("潮汐门"))
+                .anyMatch(query -> query.contains("船只"));
     }
 
     @Test
-    void anchorsMoonLandingQuestionsToTheSpecificEnglishTechnologyRule() {
+    void usesOnlyQuestionAndUnderstoodTermsForAnUnknownGameMechanic() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
-                "登陆月球需要支付多少费用？",
-                "登陆月球需要支付多少费用？",
+                "穿过潮汐门需要满足什么条件，费用怎么算？",
+                "穿过潮汐门需要满足什么条件，费用怎么算？",
                 QuestionType.SITUATION_QUERY,
-                List.of("月球", "费用"),
+                List.of("潮汐门", "条件", "费用"),
                 Set.of(),
                 "ACTIONS");
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, null, "主要行动", 4, Set.of()));
+                question, new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()));
 
-        assertThat(intents.getFirst().query())
-                .contains("Some planets have moons", "unless an effect or tech allows");
-        assertThat(intents.get(1).query())
-                .contains("From now on", "planet's moon", "same as landing on the planet");
-        assertThat(intents.get(2).query())
-                .contains("moon", "tech", "same cost as landing on the planet", "prerequisite");
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anyMatch(query -> query.contains("潮汐门"))
+                .allMatch(query -> !query.contains("moon") && !query.contains("planet") && !query.contains("probe"));
         assertThat(intents.getLast().sectionTypes()).contains("ACTIONS");
     }
 

@@ -483,31 +483,42 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void critiquesAndRepairsARejectedLiveTableRuling() {
-        RuleEvidenceHit source = evidence("ACTIONS");
+    void critiquesAndRepairsAnyDocumentSpecificLiveTableRuling() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Tidal gate",
+                "A ship may cross the tidal gate only after raising its sail. Its crossing cost is the same as "
+                        + "the cost of entering the current channel.",
+                12, 12, 0.9);
         AtomicInteger revisions = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
             public ModelDraft compose(ModelRequest request) {
                 return new ModelDraft(
-                        "月球固定支付3能量。", "普通登陆费用直接适用于月球。",
+                        "穿过潮汐门固定支付3枚硬币。", "无需检查船帆状态。",
                         List.of(source.chunkId()), List.of(), "HIGH");
             }
 
             @Override
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                 revisions.incrementAndGet();
+                assertThat(feedback).anyMatch(message -> message.contains("prerequisite and relative cost"));
                 return new ModelDraft(
-                        "先满足月球登陆科技；费用与登陆该行星相同。",
-                        "月球规则采用相对费用，不能脱离当前行星状态写成固定数字。",
+                        "先升起船帆；费用与进入当前航道相同。",
+                        "潮汐门使用相对费用，不能脱离当前航道写成固定数字。",
                         List.of(source.chunkId()), List.of(), "HIGH");
             }
         };
         AtomicInteger reviews = new AtomicInteger();
         GeneratedContentCritic critic = (request, risk) -> {
             assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-            reviews.incrementAndGet();
-            return new GeneratedContentCritic.Review(true, List.of());
+            int call = reviews.getAndIncrement();
+            return call == 0
+                    ? new GeneratedContentCritic.Review(true, List.of(new Issue(
+                            IssueType.CONTRADICTION,
+                            1,
+                            List.of(source.chunkId()),
+                            "The prerequisite and relative cost are replaced by unsupported claims.")))
+                    : new GeneratedContentCritic.Review(true, List.of());
         };
         var service = answerService(
                 (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, true)),
@@ -515,24 +526,24 @@ class StructuredRuleAnswerServiceTest {
                 critic);
 
         var answer = service.answer(
-                "登陆月球要付多少？",
+                "我的船现在能穿过潮汐门吗，费用是多少？",
                 new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
                 "alice",
                 UUID.randomUUID());
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).contains("先满足", "相同");
+        assertThat(answer.shortVerdict()).contains("先升起船帆", "相同");
         assertThat(revisions).hasValue(1);
-        assertThat(reviews).hasValue(1);
+        assertThat(reviews).hasValue(2);
     }
 
     @Test
-    void reconsidersALiveTableAbstentionWhenDirectMoonEvidenceIsPresent() {
+    void reconsidersALiveTableAbstentionUsingOnlyTheCurrentDocumentsEvidence() {
         RuleEvidenceHit source = new RuleEvidenceHit(
-                UUID.randomUUID(), versionId, "ACTIONS", "PROBE TECHS",
-                "From now on you can land on a planet's moon instead of the planet itself. "
-                        + "The cost is the same as landing on the planet.",
-                17, 17, 0.9);
+                UUID.randomUUID(), versionId, "ACTIONS", "TIDAL GATE",
+                "After raising its sail, a ship may cross the tidal gate. The cost is the same as entering the "
+                        + "current channel.",
+                12, 12, 0.9);
         AtomicInteger revisions = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
@@ -543,10 +554,11 @@ class StructuredRuleAnswerServiceTest {
             @Override
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                 revisions.incrementAndGet();
-                assertThat(feedback).singleElement().asString().contains("EVIDENCE_SUFFICIENCY");
+                assertThat(feedback).singleElement().asString()
+                        .contains("EVIDENCE_SUFFICIENCY", "conditional branch", "relative rules");
                 return new ModelDraft(
-                        "未解锁前不能登陆；解锁后费用与登陆该行星相同。",
-                        "月球登陆由探测器科技解锁，费用沿用该行星的登陆费用。",
+                        "未升起船帆前不能通过；升起后费用与进入当前航道相同。",
+                        "先检查船帆条件，再沿用当前航道的进入费用。",
                         List.of(source.chunkId()), List.of(), "HIGH");
             }
         };
@@ -555,13 +567,13 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "我还没有解锁月球科技，现在能登陆吗？以后费用怎么算？",
+                "我还没有升起船帆，现在能穿过潮汐门吗？之后费用怎么算？",
                 new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
                 "alice",
                 UUID.randomUUID());
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(17);
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(12);
         assertThat(revisions).hasValue(1);
     }
 

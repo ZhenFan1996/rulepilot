@@ -48,7 +48,9 @@ public class AnswerRegressionService {
                 ? regressionSet.cases()
                 : regressionSet.cases().stream().filter(testCase -> testCase.id().equals(caseId)).toList();
         if (selectedCases.isEmpty()) {
-            throw new IllegalArgumentException("answer regression case does not exist");
+            throw new IllegalArgumentException(caseId == null || caseId.isBlank()
+                    ? "answer regression dataset is not configured"
+                    : "answer regression case does not exist");
         }
         List<CaseResult> results = new ArrayList<>();
         long totalLatency = 0;

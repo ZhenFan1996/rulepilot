@@ -103,8 +103,7 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         return draft.issues().stream()
                 .filter(issue -> issue == null
                         || issue.summary() == null
-                        || (!explicitlyDescribesNoDefect(issue.summary())
-                                && !rejectsRequiredChineseTranslation(issue.summary())))
+                        || !explicitlyDescribesNoDefect(issue.summary()))
                 .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
                 .toList();
     }
@@ -288,28 +287,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             return false;
         }
         return noDefectConclusion && !contrast;
-    }
-
-    private boolean rejectsRequiredChineseTranslation(String summary) {
-        String normalized = summary.toLowerCase(java.util.Locale.ROOT);
-        boolean translationComplaint = normalized.contains("translation")
-                || normalized.contains("correct is")
-                || normalized.contains("should be")
-                || normalized.contains("应译")
-                || normalized.contains("应为英文");
-        if (!translationComplaint) {
-            return false;
-        }
-        return containsPair(normalized, "信用点", "credit")
-                || containsPair(normalized, "能量", "energy")
-                || containsPair(normalized, "宣传度", "publicity")
-                || containsPair(normalized, "探测器", "probe")
-                || containsPair(normalized, "数据", "data")
-                || containsPair(normalized, "科技", "tech");
-    }
-
-    private boolean containsPair(String value, String chinese, String sourceTerm) {
-        return value.contains(chinese) && value.contains(sourceTerm);
     }
 
     private int estimateTokens(String value) {

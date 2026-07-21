@@ -63,7 +63,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v5";
+    private static final String ANSWER_POLICY_VERSION = "answer-v6-document-driven";
 
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
@@ -261,23 +261,12 @@ public class StructuredRuleAnswerService {
         if (draft == null) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
-        if (!draft.answerable() && gameSessionId != null && hasDirectMoonRuleEvidence(understood, evidence)) {
+        if (!draft.answerable() && gameSessionId != null) {
             draft = reviseEvidenceBackedAbstention(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
         }
         if (!draft.answerable()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
-        }
-        if (gameSessionId != null) {
-            String safetyIssue = liveTableSafetyIssue(understood, draft);
-            if (safetyIssue != null) {
-                draft = reviseUnsafeLiveTableDraft(
-                        assistantRunId, username, gameSessionId, modelRequest, draft, safetyIssue);
-                if (draft == null || !draft.answerable() || liveTableSafetyIssue(understood, draft) != null) {
-                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
-                            "裁定未能可靠区分规则书中的相邻条目，请直接查看规则出处。");
-                }
-            }
         }
         StructuredRuleAnswer answer;
         try {
@@ -361,39 +350,17 @@ public class StructuredRuleAnswerService {
         return validate(context.documentVersionId(), revised, evidence);
     }
 
-    private ModelDraft reviseUnsafeLiveTableDraft(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft,
-            String safetyIssue) {
-        RuleAnswerRateLimiter.Permit permit =
-                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
-        try {
-            return invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "reviseUnsafeLiveTableRuling",
-                    estimateTokens(modelRequest.toString()) + estimateTokens(safetyIssue),
-                    "Live table ruling revised after deterministic rule-scope rejection",
-                    () -> model.revise(modelRequest, previousDraft, List.of("OVERREACH: " + safetyIssue)),
-                    result -> estimateTokens(result.toString()));
-        } finally {
-            permit.close();
-        }
-    }
-
     private ModelDraft reviseEvidenceBackedAbstention(
             UUID assistantRunId,
             String username,
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft previousDraft) {
-        String feedback = "EVIDENCE_SUFFICIENCY: The supplied Probe Tech evidence directly states when moon landing "
-                + "becomes available and that its cost is the same as landing on the planet. Re-evaluate the "
-                + "conditional question from those exact excerpts; preserve the prerequisite and relative cost, "
-                + "and abstain only if those excerpts still cannot answer it.";
+        String feedback = "EVIDENCE_SUFFICIENCY: Re-evaluate the question against every supplied excerpt. If the "
+                + "evidence gives a prerequisite or conditional branch but the current table state is unknown, "
+                + "answer conditionally instead of assuming the condition or refusing. Preserve relative rules, "
+                + "scope, timing, negation, and exceptions exactly. Remain unanswerable when the excerpts still "
+                + "do not directly resolve the question.";
         RuleAnswerRateLimiter.Permit permit =
                 rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
@@ -408,38 +375,6 @@ public class StructuredRuleAnswerService {
         } finally {
             permit.close();
         }
-    }
-
-    private boolean hasDirectMoonRuleEvidence(
-            UnderstoodQuestion question, List<HybridEvidenceHit> evidence) {
-        String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
-        if (!(normalizedQuestion.contains("月球") || normalizedQuestion.contains("moon"))) {
-            return false;
-        }
-        String suppliedEvidence = evidence.stream()
-                .map(hit -> hit.evidence().heading() + " " + hit.evidence().excerpt())
-                .collect(Collectors.joining(" "))
-                .toLowerCase(Locale.ROOT);
-        return suppliedEvidence.contains("probe tech")
-                && suppliedEvidence.contains("planet's moon")
-                && suppliedEvidence.contains("same as landing on the planet");
-    }
-
-    private String liveTableSafetyIssue(UnderstoodQuestion question, ModelDraft draft) {
-        String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
-        if (!(normalizedQuestion.contains("月球") || normalizedQuestion.contains("moon"))) {
-            return null;
-        }
-        String answer = (draft.shortVerdict() + " " + draft.explanation()).toLowerCase(Locale.ROOT);
-        boolean preservesRelativeCost = answer.contains("相同")
-                || answer.contains("一样")
-                || answer.contains("same as landing")
-                || answer.contains("same cost as");
-        if (!preservesRelativeCost) {
-            return "The moon permission says its cost is the same as landing on that planet. "
-                    + "Preserve that relative rule and do not merge an adjacent technology-column discount into it.";
-        }
-        return null;
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {

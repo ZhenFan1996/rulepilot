@@ -59,7 +59,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v19-complete-refined-crops";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v20-document-driven";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -76,26 +76,6 @@ public class GroundedTeachingAgent {
             "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
                     + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
     private static final Pattern INTERNAL_SHORT_EVIDENCE_REFERENCE = Pattern.compile("(?<![\\p{L}\\p{N}])E\\d{1,2}(?![\\p{L}\\p{N}])");
-    private static final Pattern MISSING_INLINE_ICON_EVIDENCE = Pattern.compile(
-            "(?is)\\binclude(?:s|ing)?\\b.{0,120}?\\ba\\s+(?:and|or)\\b");
-    private static final Pattern SPECIFIC_MISSING_ICON_CLAIM = Pattern.compile(
-            "(?i)(?:总(?:是)?|始终|至少|必定)包含.{0,16}(?:数据|宣传度|信用点|能量|生命痕迹|资源)|"
-                    + "奖励.{0,16}(?:包含|包括).{0,16}(?:数据|宣传度|信用点|能量|生命痕迹|资源)|"
-                    + "(?:always|at least) includes?.{0,24}(?:data|publicity|credits?|energy|life trace|resource)|"
-                    + "rewards?.{0,16}includes?.{0,24}(?:data|publicity|credits?|energy|life trace|resource)");
-    private static final Pattern MOON_LANDING_OBJECTIVE = Pattern.compile("(?i)land(?:ing)? on a planet or moon");
-    private static final Pattern DIRECT_MOON_LANDING_EVIDENCE =
-            Pattern.compile("(?i)land on a planet['’]?s moon");
-    private static final Pattern POSITIVE_MOON_LANDING_RULE = Pattern.compile(
-            "(?is)(?:(?:can|may|可以|可|能够|允许).{0,50}(?:moon|卫星|月球)|"
-                    + "(?:moon|卫星|月球).{0,50}(?:can|may|可以|可|能够|允许))");
-    private static final Pattern RELATIVE_MOON_LANDING_COST = Pattern.compile(
-            "(?is)(?:费用|cost)[^。.!！?？]{0,50}(?:相同|same)");
-    private static final Pattern REDUNDANT_RELATIVE_COST_PARENTHETICAL = Pattern.compile(
-            "(?is)((?:费用|cost)[^。.!！?？]{0,40}(?:相同|same))\\s*[（(][^）)]*(?:\\d+|能量|energy)[^）)]*[）)]");
-    private static final Pattern INVENTED_HYPOTHETICAL_BASELINE = Pattern.compile(
-            "(?i)假设.{0,60}(?:手上|拥有|现有|有)\\s*\\d+\\s*(?:能量|信用点|宣传度|数据|卡)|"
-                    + "suppose.{0,60}(?:have|start with)\\s*\\d+\\s*(?:energy|credits?|publicity|data|cards?)");
     private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
@@ -345,18 +325,9 @@ public class GroundedTeachingAgent {
     }
 
     private List<String> retrievalQueries(TeachingPlan.PlannedSection topic, int limit) {
-        Stream<String> queries = topic.retrievalQueries().stream();
-        if (topic.retrievalQueries().size() == 4) {
-            queries = Stream.concat(objectiveQueries(topic.objective()).stream(), queries);
-        }
-        queries = Stream.concat(criticalAlternativeQueries(topic).stream(), queries);
+        Stream<String> queries = Stream.concat(
+                topic.retrievalQueries().stream(), objectiveQueries(topic.objective()).stream());
         return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
-    }
-
-    private List<String> criticalAlternativeQueries(TeachingPlan.PlannedSection topic) {
-        return requiresMoonLanding(topic)
-                ? List.of("land on a planet's moon cost is the same as landing on the planet")
-                : List.of();
     }
 
     private List<String> objectiveQueries(String objective) {
@@ -587,33 +558,8 @@ public class GroundedTeachingAgent {
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
         SectionDraft normalized = normalizePresentationMetadata(draft, request.pageImages().isEmpty());
-        normalized = normalizeRelativeMoonCost(normalized);
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
         return alignVisualCaptionWithStep(normalized, request.pageImages().isEmpty());
-    }
-
-    private SectionDraft normalizeRelativeMoonCost(SectionDraft draft) {
-        if (draft == null || draft.steps() == null) return draft;
-        boolean changed = false;
-        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
-        for (StepDraft step : draft.steps()) {
-            if (step == null || step.text() == null || !POSITIVE_MOON_LANDING_RULE.matcher(step.text()).find()) {
-                steps.add(step);
-                continue;
-            }
-            String normalizedText = REDUNDANT_RELATIVE_COST_PARENTHETICAL.matcher(step.text()).replaceAll("$1");
-            if (!normalizedText.equals(step.text())) {
-                steps.add(new StepDraft(
-                        step.heading(), step.kind(), normalizedText, step.citationIds(), step.visualFocus()));
-                changed = true;
-            } else {
-                steps.add(step);
-            }
-        }
-        return changed
-                ? new SectionDraft(
-                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
-                : draft;
     }
 
     private SectionDraft alignVisualStepsWithPageEvidence(
@@ -768,8 +714,6 @@ public class GroundedTeachingAgent {
                 .collect(Collectors.toUnmodifiableMap(
                         RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
         validateVisualBlockEvidence(draft, modelRequest, allowedEvidence);
-        validateObjectiveAlternatives(planned, draft, evidence);
-        validateMissingInlineIconClaims(draft, allowedEvidence);
         List<UUID> visualCitationIds = validatedVisualCitationIds(draft, allowedEvidence);
         List<Claim> reviewClaims = reviewClaims(draft, visualCitationIds);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
@@ -1025,65 +969,6 @@ public class GroundedTeachingAgent {
         return List.copyOf(citationIds);
     }
 
-    private void validateMissingInlineIconClaims(
-            SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
-        Stream.concat(
-                        Stream.of(new EvidenceClaim(draft.visualCaption(), draft.visualCitationIds())),
-                        draft.steps().stream()
-                                .map(step -> new EvidenceClaim(step.heading() + "：" + step.text(), step.citationIds())))
-                .filter(claim -> SPECIFIC_MISSING_ICON_CLAIM.matcher(claim.text()).find())
-                .filter(claim -> claim.citationIds().stream()
-                        .map(allowedEvidence::get)
-                        .filter(java.util.Objects::nonNull)
-                        .map(RuleEvidence::excerpt)
-                        .anyMatch(excerpt -> MISSING_INLINE_ICON_EVIDENCE.matcher(excerpt).find()))
-                .findFirst()
-                .ifPresent(claim -> {
-                    throw new IllegalArgumentException(
-                            "A missing inline PDF icon cannot be assigned a specific reward. Replace that clause with exactly "
-                                    + "‘获得行星中央显示的奖励和若干分数。’ Keep any first-player data bonus in a separate sentence.");
-                });
-    }
-
-    private void validateObjectiveAlternatives(
-            TeachingPlan.PlannedSection planned, SectionDraft draft, List<RuleEvidence> evidence) {
-        if (!requiresMoonLanding(planned)) return;
-        List<UUID> directEvidenceIds = evidence.stream()
-                .filter(source -> DIRECT_MOON_LANDING_EVIDENCE.matcher(source.excerpt()).find())
-                .map(RuleEvidence::chunkId)
-                .toList();
-        if (directEvidenceIds.isEmpty()) return;
-        String playerFacingText = Stream.concat(
-                        Stream.of(draft.visualCaption()),
-                        draft.steps().stream().map(step -> step.heading() + "：" + step.text()))
-                .collect(Collectors.joining("\n"));
-        if (!POSITIVE_MOON_LANDING_RULE.matcher(playerFacingText).find()) {
-            throw new IllegalArgumentException(
-                    "Teach the evidenced moon-landing branch as a positive rule and cite direct evidence "
-                            + directEvidenceIds + ".");
-        }
-        List<UUID> relativeCostEvidenceIds = evidence.stream()
-                .filter(source -> DIRECT_MOON_LANDING_EVIDENCE.matcher(source.excerpt()).find())
-                .filter(source -> RELATIVE_MOON_LANDING_COST.matcher(source.excerpt()).find())
-                .map(RuleEvidence::chunkId)
-                .toList();
-        if (!relativeCostEvidenceIds.isEmpty()
-                && !RELATIVE_MOON_LANDING_COST.matcher(playerFacingText).find()) {
-            throw new IllegalArgumentException(
-                    "Preserve the relative moon-landing cost instead of replacing it with a numeric guess. Write "
-                            + "exactly "
-                            + "‘获得对应科技后，你可以登陆行星的卫星，费用与登陆该行星相同。’ and cite direct evidence "
-                            + relativeCostEvidenceIds + ".");
-        }
-    }
-
-    private boolean requiresMoonLanding(TeachingPlan.PlannedSection planned) {
-        String requiredRules = Stream.concat(
-                        Stream.of(planned.objective()), planned.retrievalQueries().stream())
-                .collect(Collectors.joining("\n"));
-        return MOON_LANDING_OBJECTIVE.matcher(requiredRules).find();
-    }
-
     private void validateVisualBlockEvidence(
             SectionDraft draft,
             TeachingLessonModel.SectionRequest request,
@@ -1232,13 +1117,6 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Remove internal short evidence references such as E1 from player-facing teaching text.");
         }
-        if (draft.steps().stream().anyMatch(step -> step != null
-                && step.kind() == TeachingMove.EXAMPLE
-                && step.text() != null
-                && INVENTED_HYPOTHETICAL_BASELINE.matcher(step.text()).find())) {
-            throw new IllegalArgumentException(
-                    "Remove the invented hypothetical starting resources and teach only evidenced costs or states.");
-        }
     }
 
     private String rejectionCategory(IllegalArgumentException rejection) {
@@ -1257,10 +1135,6 @@ public class GroundedTeachingAgent {
         if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
-        if (message.contains("missing inline PDF icon")) return "AMBIGUOUS_INLINE_ICON";
-        if (message.contains("moon-landing branch")) return "OBJECTIVE_ALTERNATIVE_MISSING";
-        if (message.contains("relative moon-landing cost")) return "MOON_RELATIVE_COST_REQUIRED";
-        if (message.contains("invented hypothetical starting resources")) return "INVENTED_EXAMPLE_BASELINE";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
         if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";

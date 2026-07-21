@@ -10,15 +10,15 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v13-system.txt"),
+                resource("teaching-agent-v14-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v4-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
-                resource("rule-answer-agent-v4-system.txt"),
+                resource("rule-answer-agent-v5-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
-                resource("content-critic-v6-system.txt"),
-                resource("atomic-content-critic-v2-system.txt"),
-                resource("objective-coverage-critic-v2-system.txt"),
+                resource("content-critic-v7-system.txt"),
+                resource("atomic-content-critic-v3-system.txt"),
+                resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -33,7 +33,7 @@ class VersionedAgentPromptsTest {
                         "icon-to-label",
                         "visualFocus",
                         "0-1000",
-                        "PDF extraction markers",
+                        "source terminology consistently",
                         "scope gate",
                         "solo rival",
                         "hypothetical label",
@@ -41,10 +41,10 @@ class VersionedAgentPromptsTest {
                         "describe it generically as the displayed reward",
                         "separate concepts",
                         "unused temporary points persist",
-                        "inclusive ownership",
+                        "ownership quantifiers",
                         "win condition",
-                        "planet landing does not also teach moon landing",
-                        "费用与登陆该行星相同",
+                        "X or Y",
+                        "Preserve relative rules as relative rules",
                         "maximum step count",
                         "never append a seventh step",
                         "strongest complete rule sentence",
@@ -99,8 +99,8 @@ class VersionedAgentPromptsTest {
                         "causal bridge",
                         "resource ledger",
                         "starting inventory",
-                        "costs one extra movement",
-                        "asteroid",
+                        "cost in one unit",
+                        "named object",
                         "negation",
                         "heading ownership",
                         "player turn (回合)",
@@ -109,7 +109,7 @@ class VersionedAgentPromptsTest {
                         "semantic rule meaning",
                         "combined evidence set",
                         "ATOMIC_CONFIRMATION",
-                        "credit/credits=信用点",
+                        "faithful contextual translation",
                         "at most 160 characters");
         assertThat(prompts.atomicCriticSystem())
                 .contains(
@@ -118,9 +118,9 @@ class VersionedAgentPromptsTest {
                         "types listed for that position",
                         "combined evidence set",
                         "semantic meaning",
-                        "asteroid space",
+                        "guessed symbol",
                         "missing glyph",
-                        "nearby sidebar value",
+                        "nearby sidebar",
                         "return an empty issues list");
         assertThat(prompts.objectiveCoverageCriticSystem())
                 .contains(
@@ -128,7 +128,7 @@ class VersionedAgentPromptsTest {
                         "complete generated board-game lesson",
                         "MISSING_CRITICAL_RULE",
                         "X or Y",
-                        "Planet landing does not teach",
+                        "generic parent heading",
                         "selected evidence");
         assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");

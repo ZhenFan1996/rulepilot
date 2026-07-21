@@ -60,7 +60,7 @@ class LessonQualityEvaluatorTest {
     }
 
     @Test
-    void evaluatesDynamicCoverageTagsWithoutRequiringFixedChapterNames() {
+    void usesTheDocumentGeneratedObjectiveWhenOnePlannedQueryMisses() {
         UUID versionId = UUID.randomUUID();
         var outline = new OutlineDraft("SETI", "Search for life.", List.of(
                 topic("table", "Build the solar system", List.of("setup"), "setup"),
@@ -82,7 +82,7 @@ class LessonQualityEvaluatorTest {
 
         var report = new LessonQualityEvaluator().evaluate(plan, lesson);
 
-        assertThat(report.status()).isEqualTo(OverallStatus.BLOCKED);
+        assertThat(report.status()).isEqualTo(OverallStatus.NEEDS_REVIEW);
         assertThat(report.checks())
                 .filteredOn(check -> check.type() == CheckType.CITATION_SUPPORT)
                 .extracting(check -> check.status())
