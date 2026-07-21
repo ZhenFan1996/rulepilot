@@ -181,6 +181,26 @@ make demo-data
 
 该命令使用 `.env` 中的本地管理员账户，经由真实 API 创建 `Lantern Relay` 游戏与版本、生成并上传一份项目自制的五页小型规则书，等待异步解析完成，再创建教学计划和 Teaching Agent 图文讲解。命令可重复执行；生成的 PDF、Cookie 和结果只保存在被 Git 忽略的 `.local/demo/`。完成后终端会输出可直接打开的讲解地址。规则样本原文位于 `examples/lantern-relay-rules.txt`，采用 CC0 许可，不包含商业桌游内容；需要连接其他本地实例时可设置 `DEMO_BASE_URL`、`DEMO_ADMIN_NAME` 和 `DEMO_ADMIN_PASSWORD`。
 
+### 普通玩家产品评测
+
+`make product-eval` 不调用外部模型。它用项目自制的 CC0 样本验证 Product Harness 本身，并生成一份不包含规则书正文或模型原文的报告：
+
+```sh
+make product-eval
+```
+
+评测同时核对规则书 SHA-256、lesson/run 身份、解析/Prompt/生成器版本、模型角色、首段与完整讲解耗时、调用和 token、引用覆盖，以及“完成设置、走完第一轮、结束、计分”四个外部任务。机器条件和人工走查分开记录：没有实际执行的玩家任务会显示 `NEEDS_REVIEW`，不会被标签或引用数量自动判定为产品通过。
+
+真实规则书使用被 Git 忽略的外部数据集和产物快照：
+
+```sh
+make product-eval \
+  PRODUCT_EVAL_DATASET=.local/product-evaluation/my-run/product-evaluation.json \
+  PRODUCT_EVAL_OUTPUT=.local/product-evaluation/my-run/report.json
+```
+
+数据契约的可运行示例位于 `examples/evaluation/lantern-relay/`。外部数据集只引用本地规则书、讲解和执行快照；报告只保存哈希、版本、指标、缺失概念 ID 和任务结果。任一自动门槛或已记录玩家任务失败时命令返回非零状态，并按 `INPUT`、`GENERATION`、`TEACHING`、`VISUAL`、`PLAYER` 或 `REPRODUCIBILITY` 定位问题阶段。
+
 打开 http://127.0.0.1:5173/register 创建普通用户账号；注册成功后会自动登录并进入个人页，账号安全哈希保存在 PostgreSQL，登录会话保存在 Redis。也可以在 http://127.0.0.1:5173/login 使用 `.env` 中预置的本地用户或管理员账号。
 
 登录后可以从任一入口开始：打开 http://127.0.0.1:5173/teach 直接上传规则书并开始讲解，不必先创建游戏；或者打开 http://127.0.0.1:5173/catalog 创建、从 BGG 导入游戏和版本。未选择版本时，系统会以规则书标题自动创建游戏和“规则书自动版本”；用户也可以在讲解前主动关联已有版本。

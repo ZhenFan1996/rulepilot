@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "rulepilot.product-execution/v1",
+  "runId": "33333333-3333-4333-8333-333333333333",
+  "teachingPlanId": "11111111-1111-4111-8111-111111111111",
+  "lessonId": "22222222-2222-4222-8222-222222222222",
+  "versions": {
+    "parser": "self-authored-page-fixture-v1",
+    "generator": "self-authored-product-eval-fixture-v1",
+    "prompts": {
+      "outline": "deterministic-fixture-v1",
+      "teaching": "deterministic-fixture-v1",
+      "visual": "not-applicable",
+      "critic": "deterministic-fixture-v1"
+    }
+  },
+  "models": {
+    "teaching": {
+      "mode": "DETERMINISTIC",
+      "provider": "fixture",
+      "model": "self-authored-lesson"
+    },
+    "visual": {
+      "mode": "NOT_CONFIGURED",
+      "provider": "none",
+      "model": "not-applicable"
+    },
+    "answer": {
+      "mode": "DETERMINISTIC",
+      "provider": "fixture",
+      "model": "self-authored-answer"
+    },
+    "critic": {
+      "mode": "DETERMINISTIC",
+      "provider": "fixture",
+      "model": "self-authored-review"
+    }
+  },
+  "budget": {
+    "maxToolCalls": 24,
+    "maxModelCalls": 12,
+    "maxTokens": 12000,
+    "timeoutMs": 300000
+  },
+  "timings": {
+    "startedAt": "2026-01-01T00:00:00Z",
+    "firstUsefulContentAt": "2026-01-01T00:00:05Z",
+    "baseLessonCompletedAt": "2026-01-01T00:00:42Z"
+  },
+  "counts": {
+    "modelCalls": 5,
+    "toolCalls": 10,
+    "estimatedTokens": 7800
+  },
+  "openableArtifact": {
+    "kind": "FILE_SNAPSHOT",
+    "reference": "examples/evaluation/lantern-relay/lesson.json"
+  }
+}

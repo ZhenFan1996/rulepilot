@@ -1,0 +1,142 @@
+{
+  "schemaVersion": "rulepilot.product-evaluation/v1",
+  "name": "lantern-relay-ordinary-player-v1",
+  "sourceSha256": "656845f03608e62036fffcd64e2366f1ec592f123cd8e858c58cfd2d7d3583b8",
+  "artifacts": {
+    "rulebook": "../../lantern-relay-rules.txt",
+    "lesson": "lesson.json",
+    "execution": "execution.json"
+  },
+  "thresholds": {
+    "maximumFirstUsefulContentMs": 15000,
+    "maximumCompleteBaseLessonMs": 300000,
+    "minimumCitationCoveragePercent": 95,
+    "maximumModelCalls": 12,
+    "maximumEstimatedTokens": 12000,
+    "forbidFakeRoles": true,
+    "requireExactVersions": true
+  },
+  "tasks": [
+    {
+      "id": "setup",
+      "label": "照着讲解完成开局设置",
+      "coverageTagsAny": ["setup"],
+      "minimumCitedSteps": 3,
+      "requiredMoveGroups": [["DO"], ["CHECK"]],
+      "concepts": [
+        {
+          "id": "central-board-and-round-one",
+          "termGroups": [["harbor board"], ["round one"]],
+          "requiredPages": [2]
+        },
+        {
+          "id": "starting-pieces-and-glass",
+          "termGroups": [["boat"], ["score marker"], ["two glass"]],
+          "requiredPages": [2]
+        },
+        {
+          "id": "starting-hand-and-beacon",
+          "termGroups": [["three lantern cards"], ["first-player beacon"]],
+          "requiredPages": [2]
+        }
+      ],
+      "playerAssessment": {
+        "result": "CAN_DO",
+        "method": "AUTHOR_WALKTHROUGH",
+        "note": "The self-authored fixture can be set up in order using only these cited steps."
+      }
+    },
+    {
+      "id": "first-round",
+      "label": "带新玩家走完第一轮",
+      "coverageTagsAny": ["first_round", "core_loop"],
+      "minimumCitedSteps": 4,
+      "requiredMoveGroups": [["FLOW"], ["DO"], ["EXAMPLE"], ["CHECK"]],
+      "concepts": [
+        {
+          "id": "three-phases",
+          "termGroups": [["dawn"], ["action phase"], ["harbor phase"]],
+          "requiredPages": [3]
+        },
+        {
+          "id": "exactly-one-action",
+          "termGroups": [["exactly one action"]],
+          "requiredPages": [3]
+        },
+        {
+          "id": "cost-before-effect",
+          "termGroups": [["cost"], ["before"], ["effect"]],
+          "requiredPages": [3]
+        },
+        {
+          "id": "worked-first-round",
+          "termGroups": [["mira"], ["tao"], ["beacon"], ["round marker"]],
+          "requiredPages": [5]
+        }
+      ],
+      "playerAssessment": {
+        "result": "CAN_DO",
+        "method": "AUTHOR_WALKTHROUGH",
+        "note": "The phase flow and worked example can be followed without reopening the source."
+      }
+    },
+    {
+      "id": "finish-game",
+      "label": "判断何时结束并完成最后一轮",
+      "coverageTagsAny": ["end"],
+      "minimumCitedSteps": 2,
+      "requiredMoveGroups": [["FLOW"], ["WATCH", "CHECK"]],
+      "concepts": [
+        {
+          "id": "two-end-triggers",
+          "termGroups": [["round five"], ["all six docks"]],
+          "requiredPages": [4]
+        },
+        {
+          "id": "finish-current-round",
+          "termGroups": [["finish the current round"]],
+          "requiredPages": [4]
+        }
+      ],
+      "playerAssessment": {
+        "result": "CAN_DO",
+        "method": "AUTHOR_WALKTHROUGH",
+        "note": "Both triggers and the finish-current-round condition are explicit."
+      }
+    },
+    {
+      "id": "score-game",
+      "label": "完成计分并处理平局",
+      "coverageTagsAny": ["scoring"],
+      "minimumCitedSteps": 3,
+      "requiredMoveGroups": [["LEDGER"], ["CHECK"]],
+      "concepts": [
+        {
+          "id": "positive-scoring",
+          "termGroups": [["three points"], ["one point"], ["printed value"]],
+          "requiredPages": [4]
+        },
+        {
+          "id": "unlit-dock-penalty",
+          "termGroups": [["lose two points"], ["unlit dock"]],
+          "requiredPages": [4]
+        },
+        {
+          "id": "ordered-tie-breakers",
+          "termGroups": [["more docks"], ["more glass"], ["share the victory"]],
+          "requiredPages": [4]
+        }
+      ],
+      "playerAssessment": {
+        "result": "CAN_DO",
+        "method": "AUTHOR_WALKTHROUGH",
+        "note": "The ledger lists every positive and negative item before both tie breakers."
+      }
+    }
+  ],
+  "visualEvaluation": {
+    "applicability": "NOT_APPLICABLE",
+    "reason": "The self-authored CC0 fixture contains text-only pages and no instructional diagram.",
+    "checks": []
+  }
+}

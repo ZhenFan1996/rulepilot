@@ -1,0 +1,241 @@
+{
+  "id": "22222222-2222-4222-8222-222222222222",
+  "teachingPlanId": "11111111-1111-4111-8111-111111111111",
+  "status": "COMPLETE",
+  "generatorVersion": "self-authored-product-eval-fixture-v1",
+  "createdAt": "2026-01-01T00:00:42Z",
+  "sections": [
+    {
+      "position": 1,
+      "topicKey": "goal-and-components",
+      "coverageTags": ["objective", "components"],
+      "title": "Know what you are trying to do",
+      "required": true,
+      "evidenceStatus": "SUPPORTED",
+      "visualKind": "REFERENCE_CARD",
+      "visualCaption": "Light docks and finish with the highest final score.",
+      "visualSourcePages": [1],
+      "visualSourceChunkIds": ["a0000000-0000-4000-8000-000000000001"],
+      "steps": [
+        {
+          "position": 1,
+          "heading": "Win with the highest final score",
+          "kind": "UNDERSTAND",
+          "text": "Lantern Relay is a race to light the harbor. After final scoring, the player with the most victory points wins.",
+          "sourcePages": [1],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000001"],
+          "visualFocus": null
+        },
+        {
+          "position": 2,
+          "heading": "Recognize what each piece does",
+          "kind": "DO",
+          "text": "Use the board for docks, glass tokens to pay costs, lantern cards to light docks, boats for position, score markers for points, and the beacon for the first player.",
+          "sourcePages": [1],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000002"],
+          "visualFocus": null
+        },
+        {
+          "position": 3,
+          "heading": "Check the table vocabulary",
+          "kind": "CHECK",
+          "text": "Point to a boat, a glass token, a lantern card, a score marker, and the first-player beacon before setup.",
+          "sourcePages": [1],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000002"],
+          "visualFocus": null
+        }
+      ]
+    },
+    {
+      "position": 2,
+      "topicKey": "setup",
+      "coverageTags": ["setup", "components"],
+      "title": "Set up the harbor",
+      "required": true,
+      "evidenceStatus": "SUPPORTED",
+      "visualKind": "TABLE_LAYOUT",
+      "visualCaption": "Follow the setup in order before drawing the first Dawn card.",
+      "visualSourcePages": [2],
+      "visualSourceChunkIds": ["a0000000-0000-4000-8000-000000000003"],
+      "steps": [
+        {
+          "position": 1,
+          "heading": "Prepare the shared table",
+          "kind": "DO",
+          "text": "Place the harbor board in the center, put the round marker on round one, and place the shuffled lantern deck beside the board.",
+          "sourcePages": [2],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000003"],
+          "visualFocus": null
+        },
+        {
+          "position": 2,
+          "heading": "Give each player starting pieces",
+          "kind": "DO",
+          "text": "Give each player one boat, one score marker, and two glass tokens. Put every score marker on zero and every boat at the harbor entrance.",
+          "sourcePages": [2],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000004"],
+          "visualFocus": null
+        },
+        {
+          "position": 3,
+          "heading": "Deal hands and choose the first player",
+          "kind": "DO",
+          "text": "Deal three lantern cards to each player. Give the first-player beacon to the player who most recently saw a lighthouse.",
+          "sourcePages": [2],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000005"],
+          "visualFocus": null
+        },
+        {
+          "position": 4,
+          "heading": "Setup check",
+          "kind": "CHECK",
+          "text": "Before play, verify round one, one boat and score marker per player, two glass each, three private cards each, and exactly one beacon holder.",
+          "sourcePages": [2],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000003", "a0000000-0000-4000-8000-000000000004", "a0000000-0000-4000-8000-000000000005"],
+          "visualFocus": null
+        }
+      ]
+    },
+    {
+      "position": 3,
+      "topicKey": "round-and-actions",
+      "coverageTags": ["first_round", "core_loop", "actions"],
+      "title": "Walk through one complete round",
+      "required": true,
+      "evidenceStatus": "SUPPORTED",
+      "visualKind": "FLOW_DIAGRAM",
+      "visualCaption": "Dawn, one action per player, then Harbor.",
+      "visualSourcePages": [3, 5],
+      "visualSourceChunkIds": ["a0000000-0000-4000-8000-000000000006", "a0000000-0000-4000-8000-000000000007"],
+      "steps": [
+        {
+          "position": 1,
+          "heading": "Use the three-phase loop",
+          "kind": "FLOW",
+          "text": "Every round goes through Dawn, the Action phase, and the Harbor phase in that order. Dawn adds a public lantern; Harbor scores completed docks, passes the beacon, and advances the round marker.",
+          "sourcePages": [3],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000006"],
+          "visualFocus": null
+        },
+        {
+          "position": 2,
+          "heading": "Take exactly one action",
+          "kind": "DO",
+          "text": "On your turn take exactly one action: Sail, Light, or Trade. Resolve every cost before applying the action's effect; never spend glass you do not have.",
+          "sourcePages": [3],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000006"],
+          "visualFocus": null
+        },
+        {
+          "position": 3,
+          "heading": "Walk the example",
+          "kind": "EXAMPLE",
+          "text": "Mira reveals a value-two lantern at Dawn and spends one glass to Sail two spaces. Tao uses Light at the next dock. At Harbor, Tao scores that dock, then the beacon and round marker advance.",
+          "sourcePages": [5],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000007"],
+          "visualFocus": null
+        },
+        {
+          "position": 4,
+          "heading": "Round check",
+          "kind": "CHECK",
+          "text": "Before advancing the marker, confirm that Dawn happened, every player took one legal action, completed docks were scored only at Harbor, and the beacon moved clockwise.",
+          "sourcePages": [3, 5],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000006", "a0000000-0000-4000-8000-000000000007"],
+          "visualFocus": null
+        }
+      ]
+    },
+    {
+      "position": 4,
+      "topicKey": "action-reference",
+      "coverageTags": ["core_loop", "actions", "exceptions"],
+      "title": "Choose a legal action",
+      "required": true,
+      "evidenceStatus": "SUPPORTED",
+      "visualKind": "REFERENCE_CARD",
+      "visualCaption": "Pay first, then resolve Sail, Light, or Trade.",
+      "visualSourcePages": [3],
+      "visualSourceChunkIds": ["a0000000-0000-4000-8000-000000000008"],
+      "steps": [
+        {
+          "position": 1,
+          "heading": "Sail",
+          "kind": "DO",
+          "text": "Pay one glass token, then move your boat up to two spaces without moving through an occupied dock.",
+          "sourcePages": [3],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000008"],
+          "visualFocus": null
+        },
+        {
+          "position": 2,
+          "heading": "Light or Trade",
+          "kind": "DO",
+          "text": "To Light, play a matching lantern card at your current dock. To Trade, discard two cards and then draw two cards.",
+          "sourcePages": [3],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000008"],
+          "visualFocus": null
+        },
+        {
+          "position": 3,
+          "heading": "Do not reverse cost and effect",
+          "kind": "WATCH",
+          "text": "You cannot move first and decide whether you can pay afterward. Resolve all costs before the effect.",
+          "sourcePages": [3],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000008"],
+          "visualFocus": null
+        }
+      ]
+    },
+    {
+      "position": 5,
+      "topicKey": "end-and-scoring",
+      "coverageTags": ["end", "scoring", "tie_breaker"],
+      "title": "Finish and score the game",
+      "required": true,
+      "evidenceStatus": "SUPPORTED",
+      "visualKind": "SCOREBOARD",
+      "visualCaption": "Finish the round, total every scoring line, then break ties in order.",
+      "visualSourcePages": [4],
+      "visualSourceChunkIds": ["a0000000-0000-4000-8000-000000000009", "a0000000-0000-4000-8000-000000000010"],
+      "steps": [
+        {
+          "position": 1,
+          "heading": "Recognize either end trigger",
+          "kind": "FLOW",
+          "text": "The end is triggered after the Harbor phase of round five or when all six docks are lit. In either case, finish the current round before final scoring.",
+          "sourcePages": [4],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000009"],
+          "visualFocus": null
+        },
+        {
+          "position": 2,
+          "heading": "Use one scoring ledger",
+          "kind": "LEDGER",
+          "text": "Add three points for each dock you lit, one point for each remaining glass token, and the printed value of each lantern card in hand. Then lose two points for each unlit dock adjacent to your boat.",
+          "sourcePages": [4],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000010"],
+          "visualFocus": null
+        },
+        {
+          "position": 3,
+          "heading": "Apply tie breakers in order",
+          "kind": "WATCH",
+          "text": "Among tied players, more docks wins; if still tied, more glass wins; if still tied, share the victory.",
+          "sourcePages": [4],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000010"],
+          "visualFocus": null
+        },
+        {
+          "position": 4,
+          "heading": "Final scoring check",
+          "kind": "CHECK",
+          "text": "Read the ledger aloud once: lit docks, remaining glass, card values, adjacent unlit-dock penalties, then both tie breakers.",
+          "sourcePages": [4],
+          "sourceChunkIds": ["a0000000-0000-4000-8000-000000000010"],
+          "visualFocus": null
+        }
+      ]
+    }
+  ]
+}
