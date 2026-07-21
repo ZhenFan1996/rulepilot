@@ -59,15 +59,15 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v8-fast-draft";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v19-complete-refined-crops";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private static final int EVIDENCE_PER_INTENT = 3;
     private static final int MAX_STEPS_PER_SECTION = 6;
-    private static final int MAX_VISUAL_STEPS_PER_SECTION = 4;
-    private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 1;
-    private static final int MAX_POST_PUBLICATION_REVIEWS_PER_RUN = 4;
+    private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
+    private static final int MAX_REVIEW_UNCITED_EVIDENCE_PER_SECTION = 2;
+    private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
@@ -75,6 +75,7 @@ public class GroundedTeachingAgent {
     private static final Pattern INTERNAL_EVIDENCE_MARKER = Pattern.compile(
             "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
                     + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
+    private static final Pattern INTERNAL_SHORT_EVIDENCE_REFERENCE = Pattern.compile("(?<![\\p{L}\\p{N}])E\\d{1,2}(?![\\p{L}\\p{N}])");
     private static final Pattern MISSING_INLINE_ICON_EVIDENCE = Pattern.compile(
             "(?is)\\binclude(?:s|ing)?\\b.{0,120}?\\ba\\s+(?:and|or)\\b");
     private static final Pattern SPECIFIC_MISSING_ICON_CLAIM = Pattern.compile(
@@ -88,9 +89,10 @@ public class GroundedTeachingAgent {
     private static final Pattern POSITIVE_MOON_LANDING_RULE = Pattern.compile(
             "(?is)(?:(?:can|may|可以|可|能够|允许).{0,50}(?:moon|卫星|月球)|"
                     + "(?:moon|卫星|月球).{0,50}(?:can|may|可以|可|能够|允许))");
-    private static final Pattern NUMERIC_MOON_LANDING_RULE = Pattern.compile(
-            "(?is)(?:(?:moon|卫星|月球)[^。.!！?？]{0,80}(?:\\d+|能量)|"
-                    + "(?:\\d+|能量)[^。.!！?？]{0,80}(?:moon|卫星|月球))");
+    private static final Pattern RELATIVE_MOON_LANDING_COST = Pattern.compile(
+            "(?is)(?:费用|cost)[^。.!！?？]{0,50}(?:相同|same)");
+    private static final Pattern REDUNDANT_RELATIVE_COST_PARENTHETICAL = Pattern.compile(
+            "(?is)((?:费用|cost)[^。.!！?？]{0,40}(?:相同|same))\\s*[（(][^）)]*(?:\\d+|能量|energy)[^）)]*[）)]");
     private static final Pattern INVENTED_HYPOTHETICAL_BASELINE = Pattern.compile(
             "(?i)假设.{0,60}(?:手上|拥有|现有|有)\\s*\\d+\\s*(?:能量|信用点|宣传度|数据|卡)|"
                     + "suppose.{0,60}(?:have|start with)\\s*\\d+\\s*(?:energy|credits?|publicity|data|cards?)");
@@ -98,7 +100,6 @@ public class GroundedTeachingAgent {
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
             "with", "you", "your");
-    private static final Set<String> HIGH_IMPACT_TAGS = Set.of("setup", "end", "scoring", "tie_breaker");
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
@@ -243,7 +244,7 @@ public class GroundedTeachingAgent {
                         assistantRunId,
                         planned,
                         ActivityOutcome.REJECTED,
-                        "DRAFT_WITHHELD_AFTER_ONE_STRUCTURAL_REPAIR");
+                        "DRAFT_WITHHELD_AFTER_REPAIR_BUDGET");
                 sections.add(insufficient(planned));
             }
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
@@ -251,52 +252,12 @@ public class GroundedTeachingAgent {
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
         if (draftReady.status() == LessonStatus.DRAFT_READY) {
-            List<DraftCandidate> prioritizedReviews = reviewCandidates.stream()
-                    .sorted(Comparator.comparingInt(this::postPublicationReviewPriority)
-                            .thenComparingInt(candidate -> candidate.planned().position()))
-                    .limit(MAX_POST_PUBLICATION_REVIEWS_PER_RUN)
-                    .toList();
-            for (DraftCandidate candidate : prioritizedReviews) {
-                try {
-                    LessonSection reviewed = reviewPublishedDraft(plan, candidate, assistantRunId);
-                    sections.set(candidate.sectionIndex(), reviewed);
-                    recordPublication(
-                            assistantRunId,
-                            candidate.planned(),
-                            ActivityOutcome.SUCCEEDED,
-                            reviewed.evidenceStatus() == EvidenceStatus.SUPPORTED
-                                    ? "POST_PUBLICATION_REVIEW_ACCEPTED"
-                                    : "POST_PUBLICATION_REVIEW_PENDING");
-                    progressPublisher.accept(lesson(lessonId, plan, sections, createdAt));
-                } catch (AgentExecutionStoppedException stopped) {
-                    recordPublication(
-                            assistantRunId,
-                            candidate.planned(),
-                            ActivityOutcome.REJECTED,
-                            "POST_PUBLICATION_REVIEW_DEFERRED_BY_BUDGET");
-                    break;
-                } catch (RuntimeException reviewFailure) {
-                    log.warn(
-                            "Post-publication review retained cited draft for topic {}: {}",
-                            candidate.planned().topicKey(),
-                            reviewFailure.getMessage());
-                    recordPublication(
-                            assistantRunId,
-                            candidate.planned(),
-                            ActivityOutcome.REJECTED,
-                            "POST_PUBLICATION_REVIEW_FAILED_SAFELY");
-                }
-            }
+            reviewPublishedLesson(
+                    plan, reviewCandidates, sections, assistantRunId,
+                    () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
         }
 
         return lesson(lessonId, plan, sections, createdAt);
-    }
-
-    private int postPublicationReviewPriority(DraftCandidate candidate) {
-        List<String> coverage = candidate.planned().coverageTags();
-        if (coverage.stream().anyMatch(HIGH_IMPACT_TAGS::contains)) return 0;
-        if (coverage.contains("core_loop") || coverage.contains("turn_structure")) return 1;
-        return 2;
     }
 
     private IllustratedLesson lesson(
@@ -388,7 +349,14 @@ public class GroundedTeachingAgent {
         if (topic.retrievalQueries().size() == 4) {
             queries = Stream.concat(objectiveQueries(topic.objective()).stream(), queries);
         }
+        queries = Stream.concat(criticalAlternativeQueries(topic).stream(), queries);
         return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
+    }
+
+    private List<String> criticalAlternativeQueries(TeachingPlan.PlannedSection topic) {
+        return requiresMoonLanding(topic)
+                ? List.of("land on a planet's moon cost is the same as landing on the planet")
+                : List.of();
     }
 
     private List<String> objectiveQueries(String objective) {
@@ -434,9 +402,6 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int sectionIndex) {
         List<TeachingLessonModel.PageImageInput> pageImages = selectedPageImages(planned, evidence);
-        int maxSteps = pageImages.isEmpty()
-                ? pacing.maxSteps()
-                : Math.min(pacing.maxSteps(), MAX_VISUAL_STEPS_PER_SECTION);
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
                 planned.title(),
@@ -446,10 +411,11 @@ public class GroundedTeachingAgent {
                 plan.beginnerCount(),
                 plan.durationMinutes(),
                 pacing.durationSeconds(),
-                maxSteps,
+                pacing.maxSteps(),
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
-                pageImages);
+                pageImages,
+                planned.retrievalQueries());
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -459,6 +425,26 @@ public class GroundedTeachingAgent {
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
         draft = normalizeDraft(draft, modelRequest);
+        if (!modelRequest.pageImages().isEmpty()) {
+            List<String> visualAudit = List.of(
+                    "Reinspect the complete attached pages and audit the VISUAL step only. Treat the current focus "
+                            + "coordinates and description as untrusted. Mentally crop from the full page using a "
+                            + "top-left 0-1000 origin. Every object and relationship named by the VISUAL text and "
+                            + "label must literally remain inside that crop. If not, move the rectangle or replace "
+                            + "the VISUAL step with a real worked diagram or rule callout on an attached page. "
+                            + "Preserve complete non-visual rule coverage and the maximum step count.");
+            SectionDraft draftToAudit = draft;
+            draft = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    operationName("refineTeachingVisual", planned.position()),
+                    estimateTokens(modelRequest.toString()) + estimateTokens(draftToAudit.toString())
+                            + estimateTokens(visualAudit.toString()),
+                    "Teaching visual focus reinspected against the complete page",
+                    () -> model.revise(modelRequest, draftToAudit, visualAudit),
+                    result -> estimateTokens(result.toString()));
+            draft = normalizeDraft(draft, modelRequest);
+        }
         for (int repair = 0; ; repair++) {
             try {
                 LessonSection accepted = validatedSection(
@@ -477,8 +463,19 @@ public class GroundedTeachingAgent {
                         repair,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) {
-                    throw rejectedDraft;
+                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS || isVisualLocalizationFailure(rejectedDraft)) {
+                    if (!modelRequest.pageImages().isEmpty()) {
+                        return fallbackToTextDraft(
+                                plan,
+                                planned,
+                                evidence,
+                                modelRequest,
+                                draft,
+                                assistantRunId,
+                                sectionIndex,
+                                repair + 1);
+                    }
+                    if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) throw rejectedDraft;
                 }
                 List<String> feedback = List.of(rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
@@ -504,12 +501,119 @@ public class GroundedTeachingAgent {
         }
     }
 
+    private DraftCandidate fallbackToTextDraft(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            TeachingLessonModel.SectionRequest visualRequest,
+            SectionDraft visualDraft,
+            UUID assistantRunId,
+            int sectionIndex,
+            int validationAttempt) {
+        TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
+        List<String> feedback = List.of(
+                "Visual localization could not be validated. Preserve complete grounded rule coverage, "
+                        + "but return a text-only section with no VISUAL step, page mention, or visualFocus.");
+        SectionDraft textOnlyDraft = invocations.invoke(
+                assistantRunId,
+                ActivityType.MODEL,
+                operationName("fallbackToTextTeachingSection", planned.position()),
+                estimateTokens(textOnlyRequest.toString()) + estimateTokens(visualDraft.toString())
+                        + estimateTokens(feedback.toString()),
+                "Visual teaching section fell back to complete grounded text",
+                () -> model.revise(textOnlyRequest, visualDraft, feedback),
+                result -> estimateTokens(result.toString()));
+        textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
+        for (int repair = 0; ; repair++) {
+            try {
+                LessonSection accepted = validatedSection(
+                        plan, planned, evidence, textOnlyRequest, textOnlyDraft, EvidenceStatus.CITED_DRAFT);
+                recordValidation(
+                        assistantRunId,
+                        planned,
+                        validationAttempt + repair,
+                        ActivityOutcome.SUCCEEDED,
+                        "TEXT_FALLBACK_ACCEPTED");
+                return new DraftCandidate(
+                        sectionIndex, planned, evidence, textOnlyRequest, textOnlyDraft, accepted);
+            } catch (IllegalArgumentException rejectedFallback) {
+                recordValidation(
+                        assistantRunId,
+                        planned,
+                        validationAttempt + repair,
+                        ActivityOutcome.REJECTED,
+                        "TEXT_FALLBACK_" + rejectionCategory(rejectedFallback));
+                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) throw rejectedFallback;
+                List<String> repairFeedback = List.of(
+                        "Keep this section text-only and preserve all grounded rule coverage. "
+                                + (rejectedFallback.getMessage() == null
+                                        ? "The previous fallback failed lesson validation."
+                                        : rejectedFallback.getMessage()));
+                SectionDraft draftToRevise = textOnlyDraft;
+                textOnlyDraft = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.MODEL,
+                        operationName("reviseTextTeachingSection", planned.position()),
+                        estimateTokens(textOnlyRequest.toString()) + estimateTokens(draftToRevise.toString())
+                                + estimateTokens(repairFeedback.toString()),
+                        "Text fallback revised from validation feedback",
+                        () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
+                        result -> estimateTokens(result.toString()));
+                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
+            }
+        }
+    }
+
+    private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
+        return rejectionCategory(rejection).startsWith("VISUAL_");
+    }
+
+    private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {
+        return new TeachingLessonModel.SectionRequest(
+                request.topicKey(),
+                request.title(),
+                request.objective(),
+                request.coverageTags(),
+                request.playerCount(),
+                request.beginnerCount(),
+                request.totalDurationMinutes(),
+                request.sectionDurationSeconds(),
+                request.maxSteps(),
+                request.priorSections(),
+                request.evidence(),
+                List.of(),
+                request.requiredRuleIntents());
+    }
+
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        SectionDraft normalized = normalizeVisualFocusPages(
-                normalizePresentationMetadata(draft, request.pageImages().isEmpty()), request.pageImages());
-        normalized = ensureVisualFallback(normalized, request);
+        SectionDraft normalized = normalizePresentationMetadata(draft, request.pageImages().isEmpty());
+        normalized = normalizeRelativeMoonCost(normalized);
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
         return alignVisualCaptionWithStep(normalized, request.pageImages().isEmpty());
+    }
+
+    private SectionDraft normalizeRelativeMoonCost(SectionDraft draft) {
+        if (draft == null || draft.steps() == null) return draft;
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.text() == null || !POSITIVE_MOON_LANDING_RULE.matcher(step.text()).find()) {
+                steps.add(step);
+                continue;
+            }
+            String normalizedText = REDUNDANT_RELATIVE_COST_PARENTHETICAL.matcher(step.text()).replaceAll("$1");
+            if (!normalizedText.equals(step.text())) {
+                steps.add(new StepDraft(
+                        step.heading(), step.kind(), normalizedText, step.citationIds(), step.visualFocus()));
+                changed = true;
+            } else {
+                steps.add(step);
+            }
+        }
+        return changed
+                ? new SectionDraft(
+                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
     }
 
     private SectionDraft alignVisualStepsWithPageEvidence(
@@ -570,82 +674,6 @@ public class GroundedTeachingAgent {
                 draft.title(), draft.visualKind(), caption, visualStep.citationIds(), draft.steps());
     }
 
-    private SectionDraft ensureVisualFallback(
-            SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        if (draft == null || draft.steps() == null || request.pageImages().isEmpty()
-                || draft.steps().stream().anyMatch(step -> step != null
-                        && step.kind() == TeachingMove.VISUAL && step.visualFocus() != null)) {
-            return draft;
-        }
-        Set<Integer> attachedPages = request.pageImages().stream()
-                .map(TeachingLessonModel.PageImageInput::pageNumber)
-                .collect(Collectors.toUnmodifiableSet());
-        Map<UUID, TeachingLessonModel.EvidenceInput> evidenceById = request.evidence().stream()
-                .collect(Collectors.toUnmodifiableMap(TeachingLessonModel.EvidenceInput::chunkId, Function.identity()));
-        for (int index = 0; index < draft.steps().size(); index++) {
-            StepDraft step = draft.steps().get(index);
-            if (step == null || step.citationIds() == null) continue;
-            Integer page = step.citationIds().stream()
-                    .map(evidenceById::get)
-                    .filter(java.util.Objects::nonNull)
-                    .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
-                    .filter(attachedPages::contains)
-                    .boxed()
-                    .findFirst()
-                    .orElse(null);
-            if (page == null) continue;
-            List<StepDraft> steps = new ArrayList<>(draft.steps());
-            steps.set(index, new StepDraft(
-                    step.heading(),
-                    TeachingMove.VISUAL,
-                    step.kind() == TeachingMove.VISUAL
-                            ? step.text()
-                            : "先看这一页的对应图示，再按图确认：" + step.text(),
-                    step.citationIds(),
-                    new VisualFocusDraft(page, step.heading(), 0, 0, 1_000, 1_000)));
-            return new SectionDraft(
-                    draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps);
-        }
-        return draft;
-    }
-
-    private SectionDraft normalizeVisualFocusPages(
-            SectionDraft draft, List<TeachingLessonModel.PageImageInput> pageImages) {
-        if (draft == null || draft.steps() == null || pageImages.isEmpty()) return draft;
-        Set<Integer> attachedPages = pageImages.stream()
-                .map(TeachingLessonModel.PageImageInput::pageNumber)
-                .collect(Collectors.toUnmodifiableSet());
-        boolean changed = false;
-        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
-        for (StepDraft step : draft.steps()) {
-            VisualFocusDraft focus = step == null ? null : step.visualFocus();
-            if (focus != null && step.kind() != TeachingMove.VISUAL) {
-                steps.add(new StepDraft(step.heading(), step.kind(), step.text(), step.citationIds(), null));
-                changed = true;
-                continue;
-            }
-            if (focus == null || attachedPages.contains(focus.pageNumber())) {
-                steps.add(step);
-                continue;
-            }
-            int nearestPage = attachedPages.stream()
-                    .min(Comparator.comparingInt(page -> Math.abs(page - focus.pageNumber())))
-                    .orElseThrow();
-            steps.add(new StepDraft(
-                    step.heading(),
-                    step.kind(),
-                    step.text(),
-                    step.citationIds(),
-                    new VisualFocusDraft(
-                            nearestPage, focus.label(), focus.x(), focus.y(), focus.width(), focus.height())));
-            changed = true;
-        }
-        return changed
-                ? new SectionDraft(
-                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
-                : draft;
-    }
-
     private SectionDraft normalizePresentationMetadata(SectionDraft draft, boolean textOnly) {
         if (draft == null || draft.steps() == null) return draft;
         StepDraft anchor = draft.steps().stream()
@@ -688,7 +716,7 @@ public class GroundedTeachingAgent {
                             && image.pageNumber() <= source.pageTo())
                     .forEach(image -> {
                         images.putIfAbsent(image.pageNumber(), image);
-                        scores.merge(image.pageNumber(), sourceScore, Integer::sum);
+                        scores.merge(image.pageNumber(), sourceScore, Integer::max);
                         firstEvidenceRank.putIfAbsent(image.pageNumber(), index);
                     });
         });
@@ -779,28 +807,161 @@ public class GroundedTeachingAgent {
                 steps);
     }
 
-    private LessonSection reviewPublishedDraft(
+    private void reviewPublishedLesson(
+            TeachingPlan plan,
+            List<DraftCandidate> candidates,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            Runnable progressPublisher) {
+        reviewPublishedBatch(plan, candidates, sections, assistantRunId, progressPublisher);
+    }
+
+    private boolean reviewPublishedBatch(
+            TeachingPlan plan,
+            List<DraftCandidate> candidates,
+            List<LessonSection> sections,
+            UUID assistantRunId,
+            Runnable progressPublisher) {
+        LessonReviewBatch batch = lessonReviewBatch(candidates, assistantRunId);
+        GeneratedContentCritic.Review review;
+        try {
+            review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT);
+        } catch (AgentExecutionStoppedException stopped) {
+            candidates.forEach(candidate -> recordPublication(
+                    assistantRunId,
+                    candidate.planned(),
+                    ActivityOutcome.REJECTED,
+                    "POST_PUBLICATION_REVIEW_DEFERRED_BY_BUDGET"));
+            return false;
+        } catch (RuntimeException reviewFailure) {
+            log.warn("Whole-lesson objective coverage review retained cited draft: {}", reviewFailure.getMessage());
+            candidates.forEach(candidate -> recordPublication(
+                    assistantRunId,
+                    candidate.planned(),
+                    ActivityOutcome.SUCCEEDED,
+                    "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT"));
+            return true;
+        }
+
+        Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
+                .collect(Collectors.groupingBy(issue -> batch.claimOwners()
+                        .get(issue.claimPosition()).sectionIndex()));
+        for (DraftCandidate candidate : candidates) {
+            List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
+                    candidate.sectionIndex(), List.of());
+            recordValidation(
+                    assistantRunId,
+                    candidate.planned(),
+                    0,
+                    issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
+                    issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(issues));
+            try {
+                LessonSection reviewed = issues.isEmpty()
+                        ? validatedSection(
+                                plan,
+                                candidate.planned(),
+                                candidate.evidence(),
+                                candidate.modelRequest(),
+                                candidate.draft(),
+                                EvidenceStatus.SUPPORTED)
+                        : correctedPublishedDraft(plan, candidate, issues, assistantRunId);
+                sections.set(candidate.sectionIndex(), reviewed);
+                recordPublication(
+                        assistantRunId,
+                        candidate.planned(),
+                        ActivityOutcome.SUCCEEDED,
+                        reviewed.evidenceStatus() == EvidenceStatus.SUPPORTED
+                                ? "POST_PUBLICATION_REVIEW_ACCEPTED"
+                                : "POST_PUBLICATION_REVIEW_PENDING");
+                progressPublisher.run();
+            } catch (AgentExecutionStoppedException stopped) {
+                recordPublication(
+                        assistantRunId,
+                        candidate.planned(),
+                        ActivityOutcome.REJECTED,
+                        "POST_PUBLICATION_REVIEW_DEFERRED_BY_BUDGET");
+                return false;
+            } catch (RuntimeException correctionFailure) {
+                log.warn(
+                        "Whole-lesson review retained cited draft for topic {}: {}",
+                        candidate.planned().topicKey(),
+                        correctionFailure.getMessage());
+                recordPublication(
+                        assistantRunId,
+                        candidate.planned(),
+                        ActivityOutcome.SUCCEEDED,
+                        "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT");
+            }
+        }
+        return true;
+    }
+
+    private LessonReviewBatch lessonReviewBatch(List<DraftCandidate> candidates, UUID assistantRunId) {
+        List<Claim> claims = new ArrayList<>();
+        Map<Integer, DraftCandidate> claimOwners = new LinkedHashMap<>();
+        Map<UUID, RuleEvidence> evidence = new LinkedHashMap<>();
+        for (DraftCandidate candidate : candidates) {
+            reviewEvidence(candidate).forEach(source -> evidence.putIfAbsent(source.chunkId(), source));
+            List<UUID> visualCitationIds = validatedVisualCitationIds(
+                    candidate.draft(),
+                    candidate.evidence().stream().collect(Collectors.toUnmodifiableMap(
+                            RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first)));
+            for (Claim claim : reviewClaims(candidate.draft(), visualCitationIds)) {
+                int position = claims.size() + 1;
+                claims.add(new Claim(
+                        position,
+                        "第" + candidate.planned().position() + "章「" + candidate.planned().title() + "」："
+                                + claim.text(),
+                        claim.citationIds()));
+                claimOwners.put(position, candidate);
+            }
+        }
+        String objective = candidates.stream()
+                .map(candidate -> "第" + candidate.planned().position() + "章「"
+                        + candidate.planned().title() + "」：" + candidate.planned().objective())
+                .collect(Collectors.joining("\n"));
+        String requiredCoverage = candidates.stream()
+                .map(candidate -> "第" + candidate.planned().position() + "章："
+                        + requiredCoverage(candidate.planned()))
+                .collect(Collectors.joining("\n"));
+        ReviewRequest request = new ReviewRequest(
+                assistantRunId,
+                ContentType.LESSON,
+                ReviewMode.OBJECTIVE_COVERAGE,
+                new TaskContext(objective, requiredCoverage),
+                claims,
+                evidence.values().stream()
+                        .map(source -> new GeneratedContentCritic.Evidence(source.chunkId(), source.excerpt()))
+                        .toList());
+        return new LessonReviewBatch(request, Map.copyOf(claimOwners));
+    }
+
+    private List<RuleEvidence> reviewEvidence(DraftCandidate candidate) {
+        Set<UUID> cited = Stream.concat(
+                        candidate.draft().visualCitationIds().stream(),
+                        candidate.draft().steps().stream().flatMap(step -> step.citationIds().stream()))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<UUID, RuleEvidence> byId = candidate.evidence().stream()
+                .collect(Collectors.toMap(
+                        RuleEvidence::chunkId,
+                        Function.identity(),
+                        (first, duplicate) -> first,
+                        LinkedHashMap::new));
+        List<RuleEvidence> selected = new ArrayList<>();
+        cited.stream().map(byId::get).filter(java.util.Objects::nonNull).forEach(selected::add);
+        candidate.evidence().stream()
+                .filter(source -> !cited.contains(source.chunkId()))
+                .limit(MAX_REVIEW_UNCITED_EVIDENCE_PER_SECTION)
+                .forEach(selected::add);
+        return List.copyOf(selected);
+    }
+
+    private LessonSection correctedPublishedDraft(
             TeachingPlan plan,
             DraftCandidate candidate,
+            List<GeneratedContentCritic.Issue> issues,
             UUID assistantRunId) {
-        var review = postPublicationReview(
-                candidate.planned(), candidate.evidence(), candidate.draft(), assistantRunId);
-        recordValidation(
-                assistantRunId,
-                candidate.planned(),
-                0,
-                review.accepted() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
-                review.accepted() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(review.issues()));
-        if (review.accepted()) {
-            return validatedSection(
-                    plan,
-                    candidate.planned(),
-                    candidate.evidence(),
-                    candidate.modelRequest(),
-                    candidate.draft(),
-                    EvidenceStatus.SUPPORTED);
-        }
-        List<String> feedback = List.of("Post-publication factual review found: " + review.issues().stream()
+        List<String> feedback = List.of("Whole-lesson objective coverage review found: " + issues.stream()
                 .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
                 .collect(Collectors.joining("; ")));
         SectionDraft corrected = invocations.invoke(
@@ -809,7 +970,7 @@ public class GroundedTeachingAgent {
                 operationName("correctTeachingSection", candidate.planned().position()),
                 estimateTokens(candidate.modelRequest().toString()) + estimateTokens(candidate.draft().toString())
                         + estimateTokens(feedback.toString()),
-                "Published teaching section corrected from factual review",
+                "Published teaching section corrected from whole-lesson review",
                 () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
                 result -> estimateTokens(result.toString()));
         corrected = normalizeDraft(corrected, candidate.modelRequest());
@@ -829,30 +990,9 @@ public class GroundedTeachingAgent {
         return correctedDraft;
     }
 
-    private GeneratedContentCritic.Review postPublicationReview(
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            SectionDraft draft,
-            UUID assistantRunId) {
-        List<UUID> visualCitationIds = validatedVisualCitationIds(
-                draft,
-                evidence.stream().collect(Collectors.toUnmodifiableMap(
-                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first)));
-        List<Claim> claims = reviewClaims(draft, visualCitationIds);
-        return critic.review(
-                new ReviewRequest(
-                        assistantRunId,
-                        ContentType.LESSON,
-                        ReviewMode.POST_PUBLICATION,
-                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
-                        claims,
-                        evidence.stream()
-                                .map(source -> new GeneratedContentCritic.Evidence(
-                                        source.chunkId(), source.excerpt()))
-                                .toList()),
-                planned.coverageTags().stream().anyMatch(HIGH_IMPACT_TAGS::contains)
-                        ? ReviewRisk.HIGH_IMPACT
-                        : ReviewRisk.LOW_CONFIDENCE);
+    private String requiredCoverage(TeachingPlan.PlannedSection planned) {
+        return "Coverage tags: " + String.join(", ", planned.coverageTags())
+                + "; required retrieval intents: " + String.join("; ", planned.retrievalQueries());
     }
 
     private List<Claim> reviewClaims(SectionDraft draft, List<UUID> visualCitationIds) {
@@ -907,7 +1047,7 @@ public class GroundedTeachingAgent {
 
     private void validateObjectiveAlternatives(
             TeachingPlan.PlannedSection planned, SectionDraft draft, List<RuleEvidence> evidence) {
-        if (!MOON_LANDING_OBJECTIVE.matcher(planned.objective()).find()) return;
+        if (!requiresMoonLanding(planned)) return;
         List<UUID> directEvidenceIds = evidence.stream()
                 .filter(source -> DIRECT_MOON_LANDING_EVIDENCE.matcher(source.excerpt()).find())
                 .map(RuleEvidence::chunkId)
@@ -922,12 +1062,26 @@ public class GroundedTeachingAgent {
                     "Teach the evidenced moon-landing branch as a positive rule and cite direct evidence "
                             + directEvidenceIds + ".");
         }
-        if (NUMERIC_MOON_LANDING_RULE.matcher(playerFacingText).find()) {
+        List<UUID> relativeCostEvidenceIds = evidence.stream()
+                .filter(source -> DIRECT_MOON_LANDING_EVIDENCE.matcher(source.excerpt()).find())
+                .filter(source -> RELATIVE_MOON_LANDING_COST.matcher(source.excerpt()).find())
+                .map(RuleEvidence::chunkId)
+                .toList();
+        if (!relativeCostEvidenceIds.isEmpty()
+                && !RELATIVE_MOON_LANDING_COST.matcher(playerFacingText).find()) {
             throw new IllegalArgumentException(
-                    "Do not repeat numeric energy costs in the moon-landing rule. Write exactly "
+                    "Preserve the relative moon-landing cost instead of replacing it with a numeric guess. Write "
+                            + "exactly "
                             + "‘获得对应科技后，你可以登陆行星的卫星，费用与登陆该行星相同。’ and cite direct evidence "
-                            + directEvidenceIds + ".");
+                            + relativeCostEvidenceIds + ".");
         }
+    }
+
+    private boolean requiresMoonLanding(TeachingPlan.PlannedSection planned) {
+        String requiredRules = Stream.concat(
+                        Stream.of(planned.objective()), planned.retrievalQueries().stream())
+                .collect(Collectors.joining("\n"));
+        return MOON_LANDING_OBJECTIVE.matcher(requiredRules).find();
     }
 
     private void validateVisualBlockEvidence(
@@ -1005,6 +1159,10 @@ public class GroundedTeachingAgent {
         int y = Math.max(0, Math.min(980, focus.y()));
         int width = Math.max(20, Math.min(focus.width(), 1_000 - x));
         int height = Math.max(20, Math.min(focus.height(), 1_000 - y));
+        if ((long) width * height > MAX_VISUAL_FOCUS_AREA) {
+            throw new IllegalArgumentException(
+                    "VISUAL teaching blocks require a tight focus region, not an almost complete rulebook page.");
+        }
         return new VisualFocus(
                 focus.pageNumber(), focus.label(), x, y, width, height);
     }
@@ -1066,6 +1224,14 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Remove internal evidence or retrieval language and teach the player-facing rule directly.");
         }
+        if (INTERNAL_SHORT_EVIDENCE_REFERENCE.matcher(draft.visualCaption()).find()
+                || draft.steps().stream().anyMatch(step -> step != null
+                        && ((step.heading() != null && INTERNAL_SHORT_EVIDENCE_REFERENCE.matcher(step.heading()).find())
+                                || (step.text() != null
+                                        && INTERNAL_SHORT_EVIDENCE_REFERENCE.matcher(step.text()).find())))) {
+            throw new IllegalArgumentException(
+                    "Remove internal short evidence references such as E1 from player-facing teaching text.");
+        }
         if (draft.steps().stream().anyMatch(step -> step != null
                 && step.kind() == TeachingMove.EXAMPLE
                 && step.text() != null
@@ -1090,9 +1256,10 @@ public class GroundedTeachingAgent {
         if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
         if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
+        if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("missing inline PDF icon")) return "AMBIGUOUS_INLINE_ICON";
         if (message.contains("moon-landing branch")) return "OBJECTIVE_ALTERNATIVE_MISSING";
-        if (message.contains("numeric energy costs in the moon-landing rule")) return "MOON_RELATIVE_COST_REQUIRED";
+        if (message.contains("relative moon-landing cost")) return "MOON_RELATIVE_COST_REQUIRED";
         if (message.contains("invented hypothetical starting resources")) return "INVENTED_EXAMPLE_BASELINE";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
@@ -1160,6 +1327,10 @@ public class GroundedTeachingAgent {
             TeachingLessonModel.SectionRequest modelRequest,
             SectionDraft draft,
             LessonSection section) {}
+
+    private record LessonReviewBatch(
+            ReviewRequest request,
+            Map<Integer, DraftCandidate> claimOwners) {}
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence) {
         return new EvidenceInput(

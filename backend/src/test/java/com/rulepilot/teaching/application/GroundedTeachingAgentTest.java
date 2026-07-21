@@ -207,7 +207,7 @@ class GroundedTeachingAgentTest {
 
         var resumed = agent.create(plan, UUID.randomUUID(), previous);
 
-        assertThat(compositions).hasValue(1);
+        assertThat(compositions).hasValue(2);
         assertThat(resumed.sections().getFirst().title()).isEqualTo("照图完成开局");
         assertThat(resumed.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
     }
@@ -234,6 +234,7 @@ class GroundedTeachingAgentTest {
             assertThat(request.sectionDurationSeconds()).isEqualTo(1_200);
             assertThat(request.maxSteps()).isEqualTo(6);
             assertThat(request.priorSections()).isEmpty();
+            assertThat(request.requiredRuleIntents()).containsExactly("SETUP", "More SETUP");
             return new TeachingLessonModel.SectionDraft(
                     "三步完成开局",
                     VisualKind.TABLE_LAYOUT,
@@ -249,14 +250,15 @@ class GroundedTeachingAgentTest {
         RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
             assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
             assertThat(request.taskContext().objective()).contains("SETUP");
             assertThat(request.taskContext().requiredCoverage()).contains("setup");
             assertThat(request.claims()).hasSize(2);
-            assertThat(request.claims().getFirst().text()).isEqualTo("桌面布置示意");
+            assertThat(request.claims().getFirst().text()).isEqualTo("第1章「SETUP」：桌面布置示意");
             assertThat(request.claims().getFirst().citationIds()).containsExactly(chunkId);
-            assertThat(request.claims().get(1).text()).isEqualTo("摆放主棋盘：将棋盘放在桌面中央。");
+            assertThat(request.claims().get(1).text())
+                    .isEqualTo("第1章「SETUP」：摆放主棋盘：将棋盘放在桌面中央。");
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent =
@@ -339,7 +341,7 @@ class GroundedTeachingAgentTest {
                 List.of(new StepDraft(
                         "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(cited.chunkId()))));
         GeneratedContentCritic critic = (request, risk) -> {
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
             assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
                     .containsExactly(cited.chunkId(), unrelated.chunkId());
             return new GeneratedContentCritic.Review(true, List.of());
@@ -403,13 +405,17 @@ class GroundedTeachingAgentTest {
             }
         };
         AtomicInteger reviewCalls = new AtomicInteger();
+        List<String> retrievalQueries = new ArrayList<>();
         GeneratedContentCritic critic = (request, risk) -> {
-            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
             reviewCalls.incrementAndGet();
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
-                request -> List.of(planet, moon),
+                request -> {
+                    retrievalQueries.add(request.query());
+                    return List.of(planet, moon);
+                },
                 model,
                 new PolicyEvidenceVerifier(),
                 critic,
@@ -421,6 +427,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(revisions).hasValue(1);
         assertThat(reviewCalls).hasValue(1);
+        assertThat(retrievalQueries).anyMatch(query -> query.contains("planet's moon"));
         assertThat(lesson.sections().getFirst().steps())
                 .extracting(LessonStep::text)
                 .anyMatch(text -> text.contains("卫星"));
@@ -452,7 +459,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
-        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v8-fast-draft");
+        assertThat(lesson.generatorVersion()).isEqualTo(GroundedTeachingAgent.GENERATOR_VERSION);
     }
 
     @Test
@@ -487,7 +494,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void normalizesAndPersistsVisualFocusFromAnAttachedCitedPage() {
+    void fallsBackToCompleteTextWhenVisualFocusCannotBeValidated() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -499,7 +506,7 @@ class GroundedTeachingAgentTest {
                 4,
                 4,
                 List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
-        AtomicInteger compositions = new AtomicInteger();
+        AtomicInteger textRevisions = new AtomicInteger();
         TeachingLessonModel model = new TeachingLessonModel() {
             @Override
             public boolean supportsVisualEvidence() {
@@ -521,6 +528,35 @@ class GroundedTeachingAgentTest {
                                 List.of(chunkId),
                                 new VisualFocusDraft(3, "拼接后的主棋盘", 900, 990, 300, 120))));
             }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                if (!request.pageImages().isEmpty()) return compose(request);
+                if (textRevisions.incrementAndGet() == 1) {
+                    assertThat(feedback).anyMatch(message -> message.contains("text-only"));
+                    return new SectionDraft(
+                            "仍带错误图片的回退",
+                            VisualKind.REFERENCE_CARD,
+                            "把主棋盘放到桌面中央。",
+                            List.of(chunkId),
+                            List.of(new StepDraft(
+                                    "错误视觉步骤",
+                                    TeachingMove.VISUAL,
+                                    "把主棋盘放到桌面中央。",
+                                    List.of(chunkId))));
+                }
+                assertThat(feedback).anyMatch(message -> message.contains("Keep this section text-only"));
+                return new SectionDraft(
+                        "照着文字完成开局",
+                        VisualKind.REFERENCE_CARD,
+                        "把主棋盘放到桌面中央。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "摆放主棋盘",
+                                TeachingMove.DO,
+                                "把主棋盘放到桌面中央。",
+                                List.of(chunkId))));
+            }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(visualEvidence),
@@ -533,8 +569,11 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new VisualFocus(4, "拼接后的主棋盘", 900, 980, 100, 20));
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.DO);
+            assertThat(step.visualFocus()).isNull();
+        });
+        assertThat(textRevisions).hasValue(2);
     }
 
     @Test
@@ -645,7 +684,7 @@ class GroundedTeachingAgentTest {
             @Override
             public SectionDraft compose(SectionRequest request) {
                 assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4, 2);
-                assertThat(request.maxSteps()).isEqualTo(4);
+                assertThat(request.maxSteps()).isEqualTo(6);
                 return new SectionDraft(
                         "完成开局",
                         VisualKind.TABLE_LAYOUT,
@@ -677,7 +716,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void fallsBackToAnEvidenceMatchedWholePageWhenTheModelIgnoresAttachedPages() {
+    void rejectsVisualOutputInsteadOfFabricatingAWholePageFocus() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -706,10 +745,10 @@ class GroundedTeachingAgentTest {
                         List.of(chunkId),
                         List.of(new StepDraft(
                                 "放置主棋盘",
-                                TeachingMove.DO,
+                                TeachingMove.VISUAL,
                                 "组装主棋盘并放到桌面中央。",
                                 List.of(chunkId),
-                                new VisualFocusDraft(3, "错误地挂在普通步骤上的坐标", 50, 50, 200, 200))));
+                                new VisualFocusDraft(4, "整页不是有效局部", 0, 0, 1_000, 1_000))));
             }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -722,11 +761,10 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(compositions).hasValue(1);
-        assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.VISUAL);
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new VisualFocus(4, "放置主棋盘", 0, 0, 1_000, 1_000));
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(compositions).hasValue(6);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -1022,7 +1060,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void rejectsRepeatedNumericCostsInMoonLandingRule() {
+    void rejectsReplacingRelativeMoonLandingCostWithNumericGuess() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence moon = new RuleEvidence(
                 UUID.randomUUID(),
@@ -1057,6 +1095,42 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void removesNumericRestatementAfterRelativeMoonLandingCost() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence moon = new RuleEvidence(
+                UUID.randomUUID(),
+                versionId,
+                "TECH",
+                "Moon landing technology",
+                "From now on you can land on a planet's moon instead of the planet itself. The cost is the same as landing on the planet.",
+                17,
+                17);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "卫星着陆",
+                VisualKind.REFERENCE_CARD,
+                "获得科技后可以着陆卫星。",
+                List.of(moon.chunkId()),
+                List.of(new StepDraft(
+                        "也可以选择登陆月球",
+                        TeachingMove.WATCH,
+                        "获得科技后可以登陆月球。费用与登陆该行星相同（即3能量，有轨道器则2能量）。",
+                        List.of(moon.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(moon),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(moonLandingPlan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("获得科技后可以登陆月球。费用与登陆该行星相同。");
+    }
+
+    @Test
     void rejectsInternalEvidenceLanguageFromPlayerFacingSteps() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
@@ -1082,6 +1156,35 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsInternalShortEvidenceReferencesFromPlayerFacingSteps() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "开局",
+                VisualKind.REFERENCE_CARD,
+                "桌面布置",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "摆放棋盘",
+                        TeachingMove.DO,
+                        "把主棋盘放到桌面中央 E1。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -1243,7 +1346,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void reviewsOnlyFourHighValueChaptersAfterPublishingTheCompleteDraft() {
+    void reviewsEveryChapterForObjectiveCoverageInOneBoundedLessonPass() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         TeachingPlan plan = new TeachingPlan(
@@ -1278,12 +1381,18 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan, UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections())
                 .filteredOn(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
-                .hasSize(4);
-        assertThat(reviewedObjectives).containsExactly(
-                "Explain SETUP", "Explain END_CONDITIONS", "Explain SCORING", "Explain ACTIONS");
+                .hasSize(6);
+        assertThat(reviewedObjectives).hasSize(1);
+        assertThat(String.join("\n", reviewedObjectives)).contains(
+                "第1章「COMPONENTS」：Explain COMPONENTS",
+                "第2章「ACTIONS」：Explain ACTIONS",
+                "第3章「SETUP」：Explain SETUP",
+                "第4章「END_CONDITIONS」：Explain END_CONDITIONS",
+                "第5章「SCORING」：Explain SCORING",
+                "第6章「OBJECTIVE」：Explain OBJECTIVE");
     }
 
     private record Diagnostic(String operation, ActivityOutcome outcome, String summary) {}

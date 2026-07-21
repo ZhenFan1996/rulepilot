@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -271,7 +271,6 @@ const editedVerdict = ref('')
 const editedExplanation = ref('')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
-const visualImageFailed = ref(false)
 const failedComprehensionImages = ref<number[]>([])
 const resumingLesson = ref(false)
 const teachingRun = ref<TeachingRunProgress | null>(null)
@@ -295,7 +294,7 @@ const chapterLeadStep = computed(() => {
 })
 const chapterPathSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
   step.position !== chapterLeadStep.value?.position
-  && ['UNDERSTAND', 'DO', 'FLOW'].includes(step.kind),
+  && ['UNDERSTAND', 'DO', 'FLOW', 'VISUAL'].includes(step.kind),
 ))
 const chapterSupportSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
   step.position !== chapterLeadStep.value?.position
@@ -345,13 +344,20 @@ function generationActivityText(activity: TeachingActivity) {
     : '正在整理并核对讲解'
 }
 
-const currentVisualPageUrl = computed(() => {
-  return pageImageUrl(currentVisualPageNumber.value)
-})
-
 function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
+}
+
+function focusedPageImageUrl(focus: NonNullable<LessonSection['steps'][number]['visualFocus']>) {
+  if (!plan.value) return ''
+  const query = new URLSearchParams({
+    x: String(focus.x),
+    y: String(focus.y),
+    width: String(focus.width),
+    height: String(focus.height),
+  })
+  return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${focus.pageNumber}/image/crop?${query}`
 }
 
 function visualFocusStyle(focus: NonNullable<LessonSection['steps'][number]['visualFocus']>) {
@@ -429,10 +435,6 @@ function lessonOutcome(section: LessonSection) {
 function moveMeta(kind: LessonSection['steps'][number]['kind'] | undefined) {
   return teachingMoveMeta[kind ?? 'DO']
 }
-
-watch(currentVisualPageUrl, () => {
-  visualImageFailed.value = false
-})
 
 function progressKey() {
   return lesson.value ? `rulepilot:lesson-progress:${lesson.value.id}` : ''
@@ -1480,8 +1482,22 @@ onUnmounted(() => {
                           <h4 class="font-display text-xl font-semibold leading-7">{{ step.heading || `要点 ${index + 1}` }}</h4>
                           <span class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</span>
                         </div>
-                        <p class="mt-2 text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
-                        <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ stepSourceLabel(step) }} ↗</a>
+                        <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-3 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_15rem]">
+                          <div>
+                            <p class="text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                            <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">查看第 {{ step.visualFocus.pageNumber }} 页上下文 ↗</a>
+                          </div>
+                          <figure class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
+                            <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开完整规则书页面">
+                              <img :src="focusedPageImageUrl(step.visualFocus)" :alt="`${step.visualFocus.label}，截自规则书第 ${step.visualFocus.pageNumber} 页`" class="block max-h-72 w-full object-contain" loading="lazy">
+                            </a>
+                            <figcaption class="border-t border-indigo/10 px-3 py-2 text-xs font-semibold text-copper">{{ step.visualFocus.label }} · 第 {{ step.visualFocus.pageNumber }} 页局部</figcaption>
+                          </figure>
+                        </div>
+                        <template v-else>
+                          <p class="mt-2 text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                          <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ stepSourceLabel(step) }} ↗</a>
+                        </template>
                       </div>
                     </li>
                   </ol>
@@ -1519,22 +1535,12 @@ onUnmounted(() => {
                   </div>
                   <span v-if="currentVisualPageNumber" class="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold text-ink/55">第 {{ currentVisualPageNumber }} 页</span>
                 </div>
-                <figure v-if="currentVisualPageUrl && !visualImageFailed" class="mt-4 overflow-hidden rounded-xl border border-indigo/15 bg-paper">
-                  <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
-                    <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentVisualPageNumber} 页，${currentSection.visualCaption}`" class="max-h-[28rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
-                    <span v-if="chapterVisualFocus" class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(chapterVisualFocus)" aria-hidden="true" />
-                  </a>
-                </figure>
-                <div v-else class="mt-4 rounded-xl border border-dashed border-indigo/20 bg-paper px-4 py-8 text-center text-sm text-ink/45">本节没有可显示的原文图片</div>
                 <p class="mt-3 text-sm leading-6 text-ink/65">{{ currentSection.visualCaption }}</p>
-                <p v-if="chapterVisualFocus" class="mt-2 text-xs font-semibold text-copper">重点看：{{ chapterVisualFocus.label }}</p>
-                <div v-if="chapterVisualSteps.length" class="mt-4 space-y-3 border-t border-indigo/10 pt-4">
-                  <article v-for="step in chapterVisualSteps" :key="step.position">
-                    <h4 class="text-sm font-semibold">{{ step.heading }}</h4>
-                    <p class="mt-1 text-xs leading-5 text-ink/60">{{ step.text }}</p>
-                  </article>
+                <p v-if="chapterVisualSteps.length" class="mt-3 rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">本节的局部截图已放在对应规则旁，阅读时不用来回对照整页。</p>
+                <p v-else class="mt-3 text-xs leading-5 text-ink/50">本节没有可靠的局部视觉焦点，因此不展示整页截图冒充讲解。</p>
+                <div v-if="currentSection.visualSourcePages.length" class="mt-4 flex flex-wrap gap-2">
+                  <a v-for="page in currentSection.visualSourcePages" :key="page" :href="pageImageUrl(page)" target="_blank" rel="noopener" class="rounded-full border border-indigo/15 bg-paper px-3 py-2 text-xs font-semibold text-indigo">查看原文第 {{ page }} 页</a>
                 </div>
-                <a v-if="currentVisualPageUrl" :href="currentVisualPageUrl" target="_blank" rel="noopener" class="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-indigo/15 bg-paper text-xs font-semibold text-indigo">打开原页核对</a>
               </aside>
             </div>
 

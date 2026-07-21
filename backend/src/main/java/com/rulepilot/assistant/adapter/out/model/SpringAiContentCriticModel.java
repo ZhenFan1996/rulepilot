@@ -63,6 +63,8 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
         if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)
                 && (request.reviewMode() == ReviewMode.DISCOVERY
+                        || request.reviewMode() == ReviewMode.OBJECTIVE_COVERAGE
+                        || request.reviewMode() == ReviewMode.POST_PUBLICATION
                         || request.contentType() == ContentType.ANSWER)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.temperature(0.0);

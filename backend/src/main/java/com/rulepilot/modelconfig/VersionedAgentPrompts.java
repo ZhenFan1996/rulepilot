@@ -22,15 +22,15 @@ public class VersionedAgentPrompts {
     private final String structuredOutputRepair;
 
     public VersionedAgentPrompts(
-            @Value("classpath:prompts/teaching-agent-v12-system.txt") Resource teachingSystem,
-            @Value("classpath:prompts/teaching-agent-v8-user.txt") Resource teachingUser,
+            @Value("classpath:prompts/teaching-agent-v13-system.txt") Resource teachingSystem,
+            @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v4-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v4-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/content-critic-v6-system.txt") Resource criticSystem,
             @Value("classpath:prompts/atomic-content-critic-v2-system.txt") Resource atomicCriticSystem,
-            @Value("classpath:prompts/objective-coverage-critic-v1-system.txt") Resource objectiveCoverageCriticSystem,
+            @Value("classpath:prompts/objective-coverage-critic-v2-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {

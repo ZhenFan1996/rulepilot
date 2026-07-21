@@ -33,7 +33,8 @@ public interface TeachingLessonModel {
             int maxSteps,
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
-            List<PageImageInput> pageImages) {
+            List<PageImageInput> pageImages,
+            List<String> requiredRuleIntents) {
 
         public SectionRequest(
                 String topicKey,
@@ -59,6 +60,36 @@ public interface TeachingLessonModel {
                     maxSteps,
                     priorSections,
                     evidence,
+                    List.of(),
+                    List.of());
+        }
+
+        public SectionRequest(
+                String topicKey,
+                String title,
+                String objective,
+                List<String> coverageTags,
+                int playerCount,
+                int beginnerCount,
+                int totalDurationMinutes,
+                int sectionDurationSeconds,
+                int maxSteps,
+                List<PriorSectionContext> priorSections,
+                List<EvidenceInput> evidence,
+                List<PageImageInput> pageImages) {
+            this(
+                    topicKey,
+                    title,
+                    objective,
+                    coverageTags,
+                    playerCount,
+                    beginnerCount,
+                    totalDurationMinutes,
+                    sectionDurationSeconds,
+                    maxSteps,
+                    priorSections,
+                    evidence,
+                    pageImages,
                     List.of());
         }
 
@@ -72,13 +103,17 @@ public interface TeachingLessonModel {
                     || maxSteps < 1 || maxSteps > 6
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
-                    || pageImages == null || pageImages.size() > 2) {
+                    || pageImages == null || pageImages.size() > 2
+                    || requiredRuleIntents == null || requiredRuleIntents.size() > 5
+                    || requiredRuleIntents.stream()
+                            .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
             coverageTags = List.copyOf(coverageTags);
             priorSections = List.copyOf(priorSections);
             evidence = List.copyOf(evidence);
             pageImages = List.copyOf(pageImages);
+            requiredRuleIntents = requiredRuleIntents.stream().map(String::strip).distinct().toList();
         }
     }
 

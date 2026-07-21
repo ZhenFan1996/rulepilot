@@ -67,12 +67,12 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         }
         String operation = switch (request.reviewMode()) {
             case OBJECTIVE_COVERAGE -> "reviewObjectiveCoverage";
-            case POST_PUBLICATION -> "reviewPublishedTeachingSection";
+            case POST_PUBLICATION -> "reviewPublishedTeachingLesson";
             default -> "reviewGeneratedContent";
         };
         String successSummary = switch (request.reviewMode()) {
             case OBJECTIVE_COVERAGE -> "Objective coverage critique completed";
-            case POST_PUBLICATION -> "Published teaching section review completed";
+            case POST_PUBLICATION -> "Published teaching lesson review completed";
             default -> "Generated content critique completed";
         };
         List<Issue> candidateIssues = critique(request, operation, successSummary);

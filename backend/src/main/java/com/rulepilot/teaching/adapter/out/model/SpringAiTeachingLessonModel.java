@@ -119,6 +119,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .param("section", request.title())
                             .param("objective", request.objective())
                             .param("coverage", request.coverageTags())
+                            .param("requiredRules", request.requiredRuleIntents())
                             .param("players", request.playerCount())
                             .param("beginners", request.beginnerCount())
                             .param("totalDuration", request.totalDurationMinutes())

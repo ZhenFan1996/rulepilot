@@ -93,6 +93,8 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('易错、例子与算账')
     expect(wrapper.text()).toContain('不用看答案，你能做到吗？')
     expect(wrapper.text()).not.toContain('对应原文页')
+    expect(wrapper.find('img[alt*="主棋盘区域"]').attributes('src'))
+      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
     expect(wrapper.text()).toContain('这节看懂了，等待下一节')
     expect(wrapper.text()).not.toContain('我学完了')
     expect(qualityReads).toBe(0)
@@ -207,11 +209,16 @@ function section(position: number, title: string) {
         sourcePages: [position], visualFocus: null,
       },
       {
-        position: 3, heading: '别放反', kind: 'WATCH', text: '确认组件方向',
+        position: 3, heading: '对照主棋盘', kind: 'VISUAL', text: '找到主棋盘的拼接区域',
+        sourcePages: [position],
+        visualFocus: { pageNumber: position, label: '主棋盘区域', x: 100, y: 200, width: 500, height: 400 },
+      },
+      {
+        position: 4, heading: '别放反', kind: 'WATCH', text: '确认组件方向',
         sourcePages: [position], visualFocus: null,
       },
       {
-        position: 4, heading: '自己检查', kind: 'CHECK', text: '不看规则书复述一次',
+        position: 5, heading: '自己检查', kind: 'CHECK', text: '不看规则书复述一次',
         sourcePages: [position], visualFocus: null,
       },
     ],

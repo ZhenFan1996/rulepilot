@@ -10,15 +10,15 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v12-system.txt"),
-                resource("teaching-agent-v8-user.txt"),
+                resource("teaching-agent-v13-system.txt"),
+                resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v4-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("content-critic-v6-system.txt"),
                 resource("atomic-content-critic-v2-system.txt"),
-                resource("objective-coverage-critic-v1-system.txt"),
+                resource("objective-coverage-critic-v2-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"));
 
@@ -48,13 +48,14 @@ class VersionedAgentPromptsTest {
                         "maximum step count",
                         "never append a seventh step",
                         "strongest complete rule sentence",
-                        "one or two indispensable visual relationships",
-                        "within four high-value steps",
+                        "indispensable visual relationships for the objective",
+                        "complete objective coverage",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
                 .contains(
                         "{objective}",
                         "{coverage}",
+                        "{requiredRules}",
                         "{totalDuration}",
                         "{sectionDuration}",
                         "{maxSteps}",
@@ -124,11 +125,11 @@ class VersionedAgentPromptsTest {
         assertThat(prompts.objectiveCoverageCriticSystem())
                 .contains(
                         "objective coverage",
+                        "complete generated board-game lesson",
                         "MISSING_CRITICAL_RULE",
-                        "all supplied evidence",
                         "X or Y",
-                        "landing on a planet or moon",
-                        "complete rule sentence");
+                        "Planet landing does not teach",
+                        "selected evidence");
         assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{coverage}", "{claims}", "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
     }
