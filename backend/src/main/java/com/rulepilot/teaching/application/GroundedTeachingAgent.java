@@ -41,6 +41,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -51,6 +54,7 @@ import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -86,6 +90,25 @@ public class GroundedTeachingAgent {
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final int maxToolCalls;
+    private final int baseSectionParallelism;
+
+    @Autowired
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
+            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
+            @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
+        this.tools = tools;
+        this.model = model;
+        this.evidenceVerifier = evidenceVerifier;
+        this.critic = critic;
+        this.invocations = invocations;
+        this.maxToolCalls = Math.max(1, maxToolCalls);
+        this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
+    }
 
     public GroundedTeachingAgent(
             AssistantReadTools tools,
@@ -93,13 +116,8 @@ public class GroundedTeachingAgent {
             EvidenceVerifier evidenceVerifier,
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
-            @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls) {
-        this.tools = tools;
-        this.model = model;
-        this.evidenceVerifier = evidenceVerifier;
-        this.critic = critic;
-        this.invocations = invocations;
-        this.maxToolCalls = Math.max(1, maxToolCalls);
+            int maxToolCalls) {
+        this(tools, model, evidenceVerifier, critic, invocations, maxToolCalls, 3);
     }
 
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
@@ -116,6 +134,141 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
+        return create(plan, assistantRunId, previousLesson, progressPublisher, true, true);
+    }
+
+    /**
+     * Publishes the complete text-first lesson without waiting for visual localization or
+     * whole-lesson correction. Those are enrichment work and must not block a player reading.
+     */
+    public IllustratedLesson createBase(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher) {
+        if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
+        UUID lessonId = UUID.randomUUID();
+        Instant createdAt = Instant.now();
+        Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
+        Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
+        int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
+        List<LessonSection> sections = new ArrayList<>();
+
+        TeachingPlan.PlannedSection first = plan.sections().getFirst();
+        sections.add(baseSection(plan, first, pacing.get(first.position()), List.of(), reusable, assistantRunId, queriesPerTopic));
+        publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+
+        List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
+        if (!remaining.isEmpty()) {
+            List<PriorSectionContext> sharedContext = continuityContext(sections);
+            Map<Integer, LessonSection> completed = new LinkedHashMap<>();
+            try (var executor = Executors.newFixedThreadPool(Math.min(baseSectionParallelism, remaining.size()))) {
+                List<Future<SectionOutcome>> futures = remaining.stream()
+                        .map(planned -> executor.submit(() -> new SectionOutcome(
+                                planned.position(),
+                                baseSection(
+                                        plan,
+                                        planned,
+                                        pacing.get(planned.position()),
+                                        sharedContext,
+                                        reusable,
+                                        assistantRunId,
+                                        queriesPerTopic))))
+                        .toList();
+                for (Future<SectionOutcome> future : futures) {
+                    SectionOutcome outcome = await(future);
+                    completed.put(outcome.position(), outcome.section());
+                    while (completed.containsKey(sections.size() + 1)) {
+                        sections.add(completed.remove(sections.size() + 1));
+                        publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+                    }
+                }
+            }
+        }
+        return lesson(lessonId, plan, sections, createdAt);
+    }
+
+    private LessonSection baseSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            TeachingPacingPolicy.SectionPacing pacing,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queriesPerTopic) {
+        LessonSection reusable = reusableSections.get(planned.topicKey());
+        if (reusable != null) {
+            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
+            return reusable;
+        }
+        Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
+        List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
+        boolean conflictingEvidence = false;
+        for (String query : retrievalQueries(planned, queriesPerTopic)) {
+            try {
+                List<RuleEvidence> retrieved = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        operationName("searchRuleEvidence", planned.position()),
+                        estimateTokens(query),
+                        "Version-scoped rule evidence retrieved",
+                        () -> retrieve(plan.documentVersionId(), planned.topicKey(), query),
+                        this::evidenceTokens);
+                evidenceByIntent.add(retrieved);
+                for (RuleEvidence source : retrieved) {
+                    RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
+                    if (existing != null && !sameEvidence(existing, source)) {
+                        conflictingEvidence = true;
+                        break;
+                    }
+                }
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException retrievalFailure) {
+                log.warn("Base teaching retrieval failed for topic {}: {}", planned.topicKey(), retrievalFailure.getMessage());
+            }
+            if (conflictingEvidence) break;
+        }
+        List<RuleEvidence> evidence = conflictingEvidence ? List.of() : balancedEvidence(evidenceByIntent);
+        if (evidence.isEmpty() || !evidenceVerifier.verify(new VerificationRequest(
+                        plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
+                .verified()) {
+            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_VALID_BASE_EVIDENCE");
+            return insufficient(planned);
+        }
+        try {
+            DraftCandidate composed = composeDraft(
+                    plan, planned, pacing, priorSections, evidence, assistantRunId, planned.position() - 1, false);
+            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_BASE_SECTION_PUBLISHED");
+            return composed.section();
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException invalidDraft) {
+            log.warn("Base teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
+            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "BASE_DRAFT_WITHHELD");
+            return insufficient(planned);
+        }
+    }
+
+    private SectionOutcome await(Future<SectionOutcome> future) {
+        try {
+            return future.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("base lesson generation was interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw new IllegalStateException("base lesson generation failed", failed.getCause());
+        }
+    }
+
+    private IllustratedLesson create(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher,
+            boolean includeVisualEvidence,
+            boolean reviewBeforeReturn) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
@@ -207,7 +360,8 @@ public class GroundedTeachingAgent {
                         continuityContext(sections),
                         evidence,
                         assistantRunId,
-                        sections.size());
+                        sections.size(),
+                        includeVisualEvidence);
                 sections.add(composed.section());
                 reviewCandidates.add(composed);
                 recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_DRAFT_PUBLISHED");
@@ -231,7 +385,7 @@ public class GroundedTeachingAgent {
         }
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
-        if (draftReady.status() == LessonStatus.DRAFT_READY) {
+        if (reviewBeforeReturn && draftReady.status() == LessonStatus.DRAFT_READY) {
             reviewPublishedLesson(
                     plan, reviewCandidates, sections, assistantRunId,
                     () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
@@ -371,8 +525,11 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
             UUID assistantRunId,
-            int sectionIndex) {
-        List<TeachingLessonModel.PageImageInput> pageImages = selectedPageImages(planned, evidence);
+            int sectionIndex,
+            boolean includeVisualEvidence) {
+        List<TeachingLessonModel.PageImageInput> pageImages = includeVisualEvidence
+                ? selectedPageImages(planned, evidence)
+                : List.of();
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
                 planned.title(),
@@ -1201,6 +1358,8 @@ public class GroundedTeachingAgent {
             TeachingLessonModel.SectionRequest modelRequest,
             SectionDraft draft,
             LessonSection section) {}
+
+    private record SectionOutcome(int position, LessonSection section) {}
 
     private record LessonReviewBatch(
             ReviewRequest request,

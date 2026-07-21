@@ -46,6 +46,92 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
+    void publishesTextFirstBaseLessonWithoutWaitingForVisualOrWholeLessonReview() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Place the board in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1}, 1_086, 1_511)));
+        AtomicInteger criticCalls = new AtomicInteger();
+        TeachingLessonModel model = request -> {
+            assertThat(request.pageImages()).isEmpty();
+            return new SectionDraft(
+                    "立即可读的开局",
+                    VisualKind.REFERENCE_CARD,
+                    "把主棋盘放在桌面中央。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "放置主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(chunkId))));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                (request, risk) -> {
+                    criticCalls.incrementAndGet();
+                    throw new AssertionError("base lesson must not block on whole-lesson review");
+                },
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(criticCalls).hasValue(0);
+    }
+
+    @Test
+    void generatesPostFirstBaseSectionsConcurrentlyAndPublishesOnlyContiguousReadingOrder() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger activeCompositions = new AtomicInteger();
+        AtomicInteger peakCompositions = new AtomicInteger();
+        TeachingLessonModel model = request -> {
+            int active = activeCompositions.incrementAndGet();
+            peakCompositions.accumulateAndGet(active, Math::max);
+            try {
+                if (!request.topicKey().equals(TeachingSectionType.OBJECTIVE.name())) Thread.sleep(60);
+                return new SectionDraft(
+                        request.title(),
+                        VisualKind.REFERENCE_CARD,
+                        "按引用完成这一节。",
+                        List.of(chunkId),
+                        List.of(new StepDraft("照着做", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(interrupted);
+            } finally {
+                activeCompositions.decrementAndGet();
+            }
+        };
+        List<IllustratedLesson> publications = new ArrayList<>();
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                (request, risk) -> { throw new AssertionError("base path must not invoke critic"); },
+                new ImmediateAuditedAgentInvocations(),
+                12,
+                2);
+
+        IllustratedLesson lesson = agent.createBase(continuityPlan(versionId), UUID.randomUUID(), null, publications::add);
+
+        assertThat(peakCompositions.get()).isGreaterThanOrEqualTo(2);
+        assertThat(lesson.sections()).extracting(LessonSection::position).containsExactly(1, 2, 3);
+        assertThat(publications).allSatisfy(snapshot -> assertThat(snapshot.sections())
+                .extracting(LessonSection::position)
+                .containsSequence(java.util.stream.IntStream.rangeClosed(1, snapshot.sections().size())
+                        .boxed().toArray(Integer[]::new)));
+    }
+
+    @Test
     void removesEnglishQuestionFillerWithoutDroppingRetrievalConditions() {
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(),

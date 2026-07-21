@@ -52,7 +52,6 @@ public class IllustratedLessonService {
         return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
     }
 
-    @Transactional
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
         return Observation.createNotStarted("rulepilot.teaching.workflow", observations)
                 .contextualName("teaching-workflow")
@@ -68,7 +67,7 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
             IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
-            IllustratedLesson lesson = agent.create(
+            IllustratedLesson lesson = agent.createBase(
                     plan, run.id(), previousLesson, progressPublisher::publish);
             run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
