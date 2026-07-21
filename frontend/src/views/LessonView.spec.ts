@@ -88,6 +88,11 @@ describe('LessonView progressive reading', () => {
 
     expect(wrapper.text()).toContain('正在确认后台生成状态')
     expect(wrapper.text()).toContain('先摆主板')
+    expect(wrapper.text()).toContain('先记住这一件事')
+    expect(wrapper.text()).toContain('上桌时按这个顺序')
+    expect(wrapper.text()).toContain('易错、例子与算账')
+    expect(wrapper.text()).toContain('不用看答案，你能做到吗？')
+    expect(wrapper.text()).not.toContain('对应原文页')
     expect(wrapper.text()).toContain('这节看懂了，等待下一节')
     expect(wrapper.text()).not.toContain('我学完了')
     expect(qualityReads).toBe(0)
@@ -192,10 +197,24 @@ function section(position: number, title: string) {
     visualCaption: '规则书原页',
     visualSourcePages: [position],
     visualSourceChunkIds: [`chunk-${position}`],
-    steps: [{
-      position: 1, heading: '照着做', kind: 'DO', text: title,
-      sourcePages: [position], visualFocus: null,
-    }],
+    steps: [
+      {
+        position: 1, heading: '先理解', kind: 'UNDERSTAND', text: `${title}的核心规则`,
+        sourcePages: [position], visualFocus: null,
+      },
+      {
+        position: 2, heading: '照着做', kind: 'DO', text: title,
+        sourcePages: [position], visualFocus: null,
+      },
+      {
+        position: 3, heading: '别放反', kind: 'WATCH', text: '确认组件方向',
+        sourcePages: [position], visualFocus: null,
+      },
+      {
+        position: 4, heading: '自己检查', kind: 'CHECK', text: '不看规则书复述一次',
+        sourcePages: [position], visualFocus: null,
+      },
+    ],
   }
 }
 

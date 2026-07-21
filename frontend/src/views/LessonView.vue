@@ -286,6 +286,35 @@ let lessonViewDisposed = false
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const chapterLeadStep = computed(() => {
+  const steps = currentSection.value?.steps ?? []
+  return steps.find((step) => step.kind === 'UNDERSTAND')
+    ?? steps.find((step) => ['DO', 'FLOW'].includes(step.kind))
+    ?? steps[0]
+    ?? null
+})
+const chapterPathSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
+  step.position !== chapterLeadStep.value?.position
+  && ['UNDERSTAND', 'DO', 'FLOW'].includes(step.kind),
+))
+const chapterSupportSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
+  step.position !== chapterLeadStep.value?.position
+  && ['WATCH', 'EXAMPLE', 'LEDGER'].includes(step.kind),
+))
+const chapterCheckSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
+  step.position !== chapterLeadStep.value?.position && step.kind === 'CHECK',
+))
+const chapterVisualSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
+  step.position !== chapterLeadStep.value?.position && step.kind === 'VISUAL',
+))
+const chapterVisualFocus = computed(() =>
+  chapterVisualSteps.value.find((step) => step.visualFocus)?.visualFocus
+  ?? chapterLeadStep.value?.visualFocus
+  ?? null,
+)
+const currentVisualPageNumber = computed(() =>
+  chapterVisualFocus.value?.pageNumber ?? currentSection.value?.visualSourcePages[0],
+)
 const generationActive = computed(
   () => generationStatusUnknown.value || teachingRunIsActive(teachingRun.value?.run.state),
 )
@@ -317,8 +346,7 @@ function generationActivityText(activity: TeachingActivity) {
 }
 
 const currentVisualPageUrl = computed(() => {
-  const page = currentSection.value?.visualSourcePages[0]
-  return pageImageUrl(page)
+  return pageImageUrl(currentVisualPageNumber.value)
 })
 
 function pageImageUrl(page: number | undefined) {
@@ -378,7 +406,14 @@ const teachingMoveMeta = {
   LEDGER: { label: '算清楚', marker: '账', tone: 'bg-emerald-100 text-emerald-800' },
 } as const
 
-const hasVisualBlock = computed(() => currentSection.value?.steps.some((step) => step.kind === 'VISUAL') ?? false)
+const chapterPathTitle = computed(() => {
+  if (chapterPathSteps.value.some((step) => ['DO', 'FLOW'].includes(step.kind))) return '上桌时按这个顺序'
+  return '再抓住这几个判断'
+})
+
+function stepSourceLabel(step: LessonSection['steps'][number]) {
+  return step.sourcePages.length ? `原文 ${step.sourcePages.join('、')} 页` : ''
+}
 
 function lessonOutcome(section: LessonSection) {
   const tags = new Set(section.coverageTags)
@@ -1253,7 +1288,7 @@ onUnmounted(() => {
 
       <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
         <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" aria-label="讲解章节">
-          <div class="flex items-end justify-between">
+          <div class="hidden items-end justify-between lg:flex">
             <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">{{ lessonStillGrowing ? '已完成章节' : draftReady ? '完整基础讲解' : '完整规则讲解' }}</h1></div>
             <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
           </div>
@@ -1307,7 +1342,7 @@ onUnmounted(() => {
               </li>
             </ul>
           </details>
-          <div v-if="!generationActive" class="mt-4 grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1" aria-label="讲解形式">
+          <div v-if="!generationActive" class="grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1 lg:mt-4" aria-label="讲解形式">
             <button
               v-for="mode in ([['TEXT', '图文'], ['AUDIO', '语音'], ['VIDEO', '视频']] as const)"
               :key="mode[0]"
@@ -1320,7 +1355,7 @@ onUnmounted(() => {
               {{ mode[1] }}
             </button>
           </div>
-          <ol class="mt-5 flex max-w-full gap-2 overflow-x-auto pb-2 lg:block lg:space-y-2 lg:overflow-visible">
+          <ol class="mt-3 flex max-w-full gap-2 overflow-x-auto pb-2 lg:mt-5 lg:block lg:space-y-2 lg:overflow-visible">
             <li v-for="(section, index) in lesson.sections" :key="section.topicKey" class="shrink-0 lg:shrink">
               <button
                 class="flex min-h-12 w-52 items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm transition lg:w-full"
@@ -1337,20 +1372,24 @@ onUnmounted(() => {
 
         <section v-if="currentSection" class="min-w-0" aria-live="polite">
           <div class="rounded-[2rem] border border-ink/10 bg-paper p-5 shadow-sm sm:p-8">
-            <div class="flex flex-wrap items-start justify-between gap-4">
-              <div><p class="text-xs font-semibold text-ink/45">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p><h2 class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ currentSection.title }}</h2></div>
-              <span v-if="currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900">原文内容不足</span>
-              <span v-else-if="currentSection.evidenceStatus === 'CITED_DRAFT'" class="rounded-md bg-indigo/10 px-3 py-1.5 text-xs font-semibold text-indigo">有原文引用 · 细节核对中</span>
-              <span v-else class="rounded-md bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">已通过核对</span>
+            <div class="flex flex-wrap items-start justify-between gap-4 border-b border-ink/8 pb-5">
+              <div class="max-w-3xl">
+                <p class="text-xs font-semibold text-copper">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p>
+                <h2 class="mt-2 font-display text-3xl font-semibold leading-tight sm:text-4xl">{{ currentSection.title }}</h2>
+                <p class="mt-3 hidden max-w-2xl text-sm leading-6 text-ink/55 sm:block">学完这一节，你应该能：{{ lessonOutcome(currentSection) }}</p>
+              </div>
+              <details class="relative hidden text-xs sm:block">
+                <summary class="cursor-pointer list-none rounded-full border border-ink/10 px-3 py-2 font-semibold text-ink/55">
+                  {{ currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE' ? '原文不足' : currentSection.evidenceStatus === 'CITED_DRAFT' ? '有原文引用 · 细节核对中' : '引用已核对' }}
+                </summary>
+                <div class="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-ink/10 bg-paper p-3 leading-5 text-ink/60 shadow-lg">
+                  {{ currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE' ? '这一节缺少足够原文，请把内容当作待补部分。' : currentSection.evidenceStatus === 'CITED_DRAFT' ? '每一步都可以回到对应原文，后台仍在核对细节。' : '本节引用与规则事实已经通过核对。' }}
+                </div>
+              </details>
             </div>
             <div v-if="lessonStillGrowing && readingCurrentLastChapter" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-indigo" role="status">
               <p class="font-semibold">这是当前最后一节，后续章节仍在生成。</p>
               <p class="mt-1 text-ink/55">你可以先读完并标记本节；下一节完成后，页面会自动继续。</p>
-            </div>
-
-            <div class="mt-6 rounded-2xl border border-copper/20 bg-copper/8 px-4 py-4 sm:px-5">
-              <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">这一节学完，你应该能</p>
-              <p class="mt-2 text-base font-semibold leading-7 text-ink/80">{{ lessonOutcome(currentSection) }}</p>
             </div>
 
             <audio
@@ -1408,65 +1447,96 @@ onUnmounted(() => {
               </nav>
             </section>
 
-            <div v-if="mediaMode !== 'VIDEO' && !hasVisualBlock" class="mt-7 rounded-3xl bg-indigo/8 p-4 sm:p-5">
-              <p class="text-xs font-semibold text-indigo">对应原文页 · {{ visualKindLabel(currentSection.visualKind) }}</p>
-              <figure v-if="currentVisualPageUrl && !visualImageFailed" class="my-5 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
-                <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开大图">
-                  <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentSection.visualSourcePages[0]} 页，${currentSection.visualCaption}`" class="max-h-[26rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
-                </a>
-                <figcaption class="flex items-center justify-between gap-3 border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">
-                  <span>配合第 {{ currentSection.visualSourcePages[0] }} 页来看</span>
-                  <a :href="currentVisualPageUrl" target="_blank" rel="noopener" class="font-semibold text-indigo">放大</a>
-                </figcaption>
-              </figure>
-              <div v-else class="my-6 flex items-center gap-2" aria-hidden="true">
-                <span v-for="step in Math.min(currentSection.steps.length, 5)" :key="step" class="grid size-11 place-items-center rounded-full border-2 border-indigo/25 bg-paper font-display font-semibold text-indigo">{{ step }}</span>
-                <span v-if="currentSection.steps.length > 1" class="h-0.5 flex-1 bg-indigo/20" />
-              </div>
-              <p class="text-sm leading-6 text-ink/65"><span class="font-semibold text-ink/80">本节规则关系：</span>{{ currentSection.visualCaption }}</p>
-              <p v-if="currentSection.visualSourcePages.length" class="mt-2 text-xs font-semibold text-indigo">
-                原文页：规则书第 {{ currentSection.visualSourcePages.join('、') }} 页
-              </p>
-            </div>
+            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_19rem]">
+              <div class="min-w-0">
+                <section v-if="chapterLeadStep" class="rounded-2xl bg-ink-panel p-4 text-panel-text sm:p-6" aria-labelledby="chapter-core-title">
+                  <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">先记住这一件事</p>
+                  <h3 id="chapter-core-title" class="mt-2 font-display text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">{{ chapterLeadStep.heading || currentSection.title }}</h3>
+                  <p class="mt-3 text-sm leading-6 text-panel-text/80 sm:text-base sm:leading-8">{{ chapterLeadStep.text }}</p>
+                  <a v-if="stepSourceLabel(chapterLeadStep)" :href="pageImageUrl(chapterLeadStep.sourcePages[0])" target="_blank" rel="noopener" class="mt-4 inline-flex text-xs font-semibold text-panel-text/60 hover:text-panel-text">
+                    {{ stepSourceLabel(chapterLeadStep) }} ↗
+                  </a>
+                </section>
 
-            <ol v-if="mediaMode !== 'VIDEO'" class="mt-7 space-y-4">
-              <li
-                v-for="step in currentSection.steps"
-                :key="step.position"
-                class="grid gap-3 rounded-2xl border p-4 sm:grid-cols-[3rem_1fr] sm:p-5"
-                :class="{
-                  'border-ink/20 bg-ink/[0.035]': step.kind === 'CHECK',
-                  'border-indigo/20 bg-indigo/[0.035]': step.kind === 'VISUAL',
-                  'border-sky-200 bg-sky-50/60': step.kind === 'FLOW',
-                  'border-emerald-200 bg-emerald-50/60': step.kind === 'LEDGER',
-                  'border-ink/8': !['CHECK', 'VISUAL', 'FLOW', 'LEDGER'].includes(step.kind),
-                }"
-              >
-                <div class="flex items-center gap-2 sm:block">
-                  <span class="grid size-10 place-items-center rounded-xl text-sm font-bold" :class="moveMeta(step.kind).tone">{{ moveMeta(step.kind).marker }}</span>
-                  <span class="text-xs font-semibold text-ink/45 sm:mt-2 sm:block sm:text-center">{{ step.position }}</span>
+                <nav v-if="chapterPathSteps.length || chapterSupportSteps.length || chapterCheckSteps.length" class="mt-5 flex flex-wrap gap-2 text-xs font-semibold" aria-label="本节内容导航">
+                  <a v-if="chapterPathSteps.length" href="#chapter-path" class="rounded-full bg-copper/10 px-3 py-2 text-copper">{{ chapterPathTitle }}</a>
+                  <a v-if="chapterSupportSteps.length" href="#chapter-support" class="rounded-full bg-amber-100 px-3 py-2 text-amber-900">易错与例子</a>
+                  <a v-if="chapterCheckSteps.length" href="#chapter-check" class="rounded-full bg-ink/8 px-3 py-2 text-ink/65">学会了吗</a>
+                </nav>
+
+                <section v-if="chapterPathSteps.length" id="chapter-path" class="mt-8 scroll-mt-28" aria-labelledby="chapter-path-title">
+                  <div class="flex items-end justify-between gap-4">
+                    <div>
+                      <p class="text-xs font-semibold text-copper">从理解到会玩</p>
+                      <h3 id="chapter-path-title" class="mt-1 font-display text-2xl font-semibold">{{ chapterPathTitle }}</h3>
+                    </div>
+                    <span class="text-xs font-semibold text-ink/40">{{ chapterPathSteps.length }} 个要点</span>
+                  </div>
+                  <ol class="relative mt-5 space-y-0 before:absolute before:bottom-5 before:left-[1.15rem] before:top-5 before:w-px before:bg-ink/15">
+                    <li v-for="(step, index) in chapterPathSteps" :key="step.position" class="relative grid grid-cols-[2.4rem_1fr] gap-3 py-4 first:pt-1">
+                      <span class="relative z-[1] grid size-9 place-items-center rounded-full border border-copper/30 bg-paper text-sm font-bold text-copper">{{ index + 1 }}</span>
+                      <div class="min-w-0 pb-1">
+                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <h4 class="font-display text-xl font-semibold leading-7">{{ step.heading || `要点 ${index + 1}` }}</h4>
+                          <span class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</span>
+                        </div>
+                        <p class="mt-2 text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                        <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ stepSourceLabel(step) }} ↗</a>
+                      </div>
+                    </li>
+                  </ol>
+                </section>
+
+                <section v-if="chapterSupportSteps.length" id="chapter-support" class="mt-8 scroll-mt-28" aria-labelledby="chapter-support-title">
+                  <p class="text-xs font-semibold text-amber-800">经验比原文多走一步</p>
+                  <h3 id="chapter-support-title" class="mt-1 font-display text-2xl font-semibold">易错、例子与算账</h3>
+                  <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                    <article v-for="step in chapterSupportSteps" :key="step.position" class="rounded-2xl border p-4" :class="step.kind === 'WATCH' ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-emerald-50/70'">
+                      <p class="text-xs font-bold" :class="step.kind === 'WATCH' ? 'text-amber-900' : 'text-emerald-800'">{{ moveMeta(step.kind).label }}</p>
+                      <h4 class="mt-1 font-display text-lg font-semibold leading-6">{{ step.heading }}</h4>
+                      <p class="mt-2 text-sm leading-6 text-ink/70">{{ step.text }}</p>
+                      <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo">{{ stepSourceLabel(step) }} ↗</a>
+                    </article>
+                  </div>
+                </section>
+
+                <section v-if="chapterCheckSteps.length" id="chapter-check" class="mt-8 scroll-mt-28 rounded-2xl border border-copper/25 bg-copper/[0.07] p-5" aria-labelledby="chapter-check-title">
+                  <p class="text-xs font-semibold text-copper">别急着翻页</p>
+                  <h3 id="chapter-check-title" class="mt-1 font-display text-2xl font-semibold">不用看答案，你能做到吗？</h3>
+                  <article v-for="step in chapterCheckSteps" :key="step.position" class="mt-4 border-t border-copper/15 pt-4 first:mt-3">
+                    <h4 class="font-semibold">{{ step.heading }}</h4>
+                    <p class="mt-2 text-sm leading-7 text-ink/70">{{ step.text }}</p>
+                    <a v-if="stepSourceLabel(step)" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo">不会时核对 {{ step.sourcePages.join('、') }} 页 ↗</a>
+                  </article>
+                </section>
+              </div>
+
+              <aside class="min-w-0 rounded-2xl border border-indigo/12 bg-indigo/[0.035] p-4 xl:sticky xl:top-28" aria-label="本节原文与桌面图">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <p class="text-xs font-semibold text-indigo">边看边对照</p>
+                    <h3 class="mt-1 font-display text-lg font-semibold">{{ visualKindLabel(currentSection.visualKind) }}</h3>
+                  </div>
+                  <span v-if="currentVisualPageNumber" class="shrink-0 rounded-full bg-paper px-2.5 py-1 text-xs font-semibold text-ink/55">第 {{ currentVisualPageNumber }} 页</span>
                 </div>
-                <div>
-                  <p class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</p>
-                  <h3 class="mt-1 font-display text-xl font-semibold leading-7">{{ step.heading || `第 ${step.position} 步` }}</h3>
-                  <figure v-if="step.kind === 'VISUAL' && step.visualFocus && pageImageUrl(step.visualFocus.pageNumber) && !visualImageFailed" class="mt-4 overflow-hidden rounded-2xl border border-indigo/15 bg-paper">
-                    <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
-                      <img :src="pageImageUrl(step.visualFocus.pageNumber)" :alt="`规则书第 ${step.visualFocus.pageNumber} 页，${step.text}`" class="block h-auto w-full" loading="lazy" @error="visualImageFailed = true">
-                      <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(step.visualFocus)" aria-hidden="true" />
-                    </a>
-                    <figcaption class="flex flex-wrap items-center justify-between gap-2 border-t border-indigo/10 px-4 py-3 text-xs text-ink/50">
-                      <span>框选位置：{{ step.visualFocus.label }}</span>
-                      <span>第 {{ step.visualFocus.pageNumber }} 页</span>
-                    </figcaption>
-                  </figure>
-                  <p class="mt-2 text-base leading-8 text-ink/75">{{ step.text }}</p>
-                  <details v-if="step.sourcePages.length" class="mt-3">
-                    <summary class="cursor-pointer text-sm font-semibold text-indigo">核对第 {{ step.sourcePages.join('、') }} 页</summary>
-                    <p class="mt-2 rounded-xl bg-indigo/8 px-3 py-2 text-sm text-indigo">来源：规则书第 {{ step.sourcePages.join('、') }} 页</p>
-                  </details>
+                <figure v-if="currentVisualPageUrl && !visualImageFailed" class="mt-4 overflow-hidden rounded-xl border border-indigo/15 bg-paper">
+                  <a :href="currentVisualPageUrl" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
+                    <img :src="currentVisualPageUrl" :alt="`规则书第 ${currentVisualPageNumber} 页，${currentSection.visualCaption}`" class="max-h-[28rem] w-full object-contain" loading="lazy" @error="visualImageFailed = true">
+                    <span v-if="chapterVisualFocus" class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(chapterVisualFocus)" aria-hidden="true" />
+                  </a>
+                </figure>
+                <div v-else class="mt-4 rounded-xl border border-dashed border-indigo/20 bg-paper px-4 py-8 text-center text-sm text-ink/45">本节没有可显示的原文图片</div>
+                <p class="mt-3 text-sm leading-6 text-ink/65">{{ currentSection.visualCaption }}</p>
+                <p v-if="chapterVisualFocus" class="mt-2 text-xs font-semibold text-copper">重点看：{{ chapterVisualFocus.label }}</p>
+                <div v-if="chapterVisualSteps.length" class="mt-4 space-y-3 border-t border-indigo/10 pt-4">
+                  <article v-for="step in chapterVisualSteps" :key="step.position">
+                    <h4 class="text-sm font-semibold">{{ step.heading }}</h4>
+                    <p class="mt-1 text-xs leading-5 text-ink/60">{{ step.text }}</p>
+                  </article>
                 </div>
-              </li>
-            </ol>
+                <a v-if="currentVisualPageUrl" :href="currentVisualPageUrl" target="_blank" rel="noopener" class="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-xl border border-indigo/15 bg-paper text-xs font-semibold text-indigo">打开原页核对</a>
+              </aside>
+            </div>
 
             <details v-if="currentNarration" v-show="mediaMode === 'AUDIO'" open class="mt-7 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 sm:p-5">
               <summary class="cursor-pointer list-none font-semibold text-indigo">
