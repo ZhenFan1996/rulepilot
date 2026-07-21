@@ -143,6 +143,8 @@ describe('LessonView progressive reading', () => {
     expect(qualityReads).toBe(1)
     expect(wrapper.text()).toContain('逐张看看这些规则书裁剪图')
     expect(wrapper.text()).toContain('焦点图有帮助 1 / 1')
+    expect(wrapper.find('img[alt*="行动区"]').attributes('src'))
+      .toContain('/pages/2/image/crop?x=100&y=200&width=500&height=400')
     const helpfulButtons = wrapper.findAll('button').filter((button) => button.text() === '有帮助')
     expect(helpfulButtons).toHaveLength(2)
     await helpfulButtons[1]!.trigger('click')

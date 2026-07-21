@@ -1681,9 +1681,8 @@ onUnmounted(() => {
                 <ol class="mt-4 grid gap-3 sm:grid-cols-2">
                   <li v-for="aid in comprehension.visualAids" :key="aid.key" class="rounded-2xl border border-indigo/15 bg-paper p-4">
                     <figure v-if="!failedComprehensionImages.includes(aid.visualFocus.pageNumber)" class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
-                      <a :href="pageImageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
-                        <img :src="pageImageUrl(aid.visualFocus.pageNumber)" :alt="`规则书第 ${aid.visualFocus.pageNumber} 页，框选 ${aid.label}`" class="block h-auto w-full" loading="lazy" @error="comprehensionImageFailed(aid.visualFocus.pageNumber)">
-                        <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(aid.visualFocus)" aria-hidden="true" />
+                      <a :href="pageImageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书原页" class="block">
+                        <img :src="focusedPageImageUrl(aid.visualFocus)" :alt="`规则书第 ${aid.visualFocus.pageNumber} 页的 ${aid.label}`" class="block h-auto w-full" loading="lazy" @error="comprehensionImageFailed(aid.visualFocus.pageNumber)">
                       </a>
                     </figure>
                     <p class="mt-3 text-sm font-semibold">{{ aid.label }}</p>
