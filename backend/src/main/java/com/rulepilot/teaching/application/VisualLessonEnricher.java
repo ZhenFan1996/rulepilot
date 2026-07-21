@@ -114,6 +114,7 @@ public class VisualLessonEnricher {
         List<Claim> claims = claims(section);
         var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
                         section.title(), claims, selected, pages, modelConfigurationOwner))
+                .filter(this::isCompactReaderCrop)
                 .filter(region -> intersectsCandidate(region, selected));
         if (located.isEmpty()) {
             log.info("No cited visual region accepted for section {}", section.title());
@@ -149,6 +150,10 @@ public class VisualLessonEnricher {
             VisualRegionLocator.LocatedRegion region, List<VisualRegionCandidateSelector.Candidate> candidates) {
         return candidates.stream().anyMatch(candidate -> candidate.pageNumber() == region.pageNumber()
                 && intersects(candidate.rectangle(), region.x(), region.y(), region.width(), region.height()));
+    }
+
+    private boolean isCompactReaderCrop(VisualRegionLocator.LocatedRegion region) {
+        return region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000;
     }
 
     private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {

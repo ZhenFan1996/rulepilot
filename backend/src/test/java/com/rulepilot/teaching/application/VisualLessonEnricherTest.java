@@ -80,6 +80,23 @@ class VisualLessonEnricherTest {
                         .isEqualTo(new IllustratedLesson.VisualFocus(2, "Orbit track", 640, 700, 180, 120)));
     }
 
+    @Test
+    void rejects_a_whole_page_response_even_when_the_page_is_the_search_boundary() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson source = lesson(chunk);
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "Entire page", 0, 0, 1_000, 1_000, List.of(chunk))))
+                .enrich(UUID.randomUUID(), source);
+
+        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+    }
+
     private RulebookUnderstanding understanding() {
         return new RulebookUnderstanding(
                 List.of(new RulebookUnderstanding.PageBlock(

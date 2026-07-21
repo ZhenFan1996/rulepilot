@@ -36,4 +36,13 @@ class SpringAiVisualRegionLocatorTest {
                         "{\"pageNumber\":1,\"label\":\"board\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}"))
                 .isPresent();
     }
+
+    @Test
+    void accepts_a_single_json_object_after_brief_model_prose() {
+        assertThat(SpringAiVisualRegionLocator.parseModelRegion("""
+                I found a matching rule reference.
+                {"pageNumber":1,"label":"board","x":100,"y":100,"width":200,"height":200,"supportedClaimRefs":["C1"]}
+                """))
+                .isPresent();
+    }
 }

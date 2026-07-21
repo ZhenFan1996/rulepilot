@@ -111,6 +111,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             json = json.substring(firstLineEnd + 1, closingFence).strip();
         }
         if (json.equals("null")) return Optional.empty();
+        int objectStart = json.indexOf('{');
+        int objectEnd = json.lastIndexOf('}');
+        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
+        json = json.substring(objectStart, objectEnd + 1);
         try {
             return Optional.ofNullable(JSON.readValue(json, ModelRegion.class));
         } catch (JsonProcessingException invalidJson) {
