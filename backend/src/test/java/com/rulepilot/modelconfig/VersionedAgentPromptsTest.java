@@ -10,9 +10,9 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v15-system.txt"),
+                resource("teaching-agent-v16-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
-                resource("teaching-outline-v4-system.txt"),
+                resource("teaching-outline-v5-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v5-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
@@ -45,6 +45,9 @@ class VersionedAgentPromptsTest {
                         "win condition",
                         "X or Y",
                         "Preserve relative rules as relative rules",
+                        "distinct Chinese names",
+                        "asymmetric game",
+                        "first-game walkthrough",
                         "maximum step count",
                         "never append a seventh step",
                         "strongest complete rule sentence",
@@ -74,7 +77,9 @@ class VersionedAgentPromptsTest {
                         "objective",
                         "visualEvidenceRecommended",
                         "page artwork",
-                        "page prose is sufficient");
+                        "page prose is sufficient",
+                        "asymmetric factions",
+                        "walkthrough");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",
