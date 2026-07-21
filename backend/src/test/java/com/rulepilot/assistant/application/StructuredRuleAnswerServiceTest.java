@@ -17,6 +17,8 @@ import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
+import com.rulepilot.retrieval.RuleEvidenceLookup;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
@@ -56,6 +58,141 @@ class StructuredRuleAnswerServiceTest {
             assertThat(citation.pageFrom()).isEqualTo(8);
         });
         assertThat(answer.official()).isFalse();
+    }
+
+    @Test
+    void answersImageOnlyRulesFromSearchedVisualPageFactsInsteadOfRandomPlaceholderPages() {
+        RuleEvidenceHit randomPlaceholder = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "GENERAL",
+                "Visual rulebook page 12",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
+                12,
+                12,
+                0.02);
+        UUID pageSixChunkId = UUID.randomUUID();
+        RuleEvidenceHit pageSixSource = new RuleEvidenceHit(
+                pageSixChunkId,
+                versionId,
+                "GENERAL",
+                "Visual rulebook page 6",
+                randomPlaceholder.excerpt(),
+                6,
+                6,
+                1.0);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                new VisualRulebookPageFactSearch.PageFactMatch(
+                        6,
+                        "Overpopulation, Wildlife Token, Nature Token",
+                        "4 个相同标记时自动清除且同一回合可重复触发；3 个相同标记时当前玩家可以选择清除，且每回合只能这样做一次。",
+                        List.of("Overpopulation", "Wildlife Token"),
+                        0.9));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(pageNumbers).containsExactly(6);
+                return List.of(pageSixSource);
+            }
+        };
+        AtomicReference<RuleAnswerModel.ModelRequest> captured = new AtomicReference<>();
+        RuleAnswerModel model = request -> {
+            captured.set(request);
+            return new ModelDraft(
+                    "三个相同标记时可以选择清除。",
+                    "当前玩家每回合只能执行一次这种三标记清除；四个相同标记则自动清除，并可能在同一回合再次触发。",
+                    List.of(pageSixChunkId),
+                    List.of(),
+                    "HIGH");
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(randomPlaceholder, 0.02, 1, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "Is clearing three matching wildlife tokens optional?",
+                new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(captured.get().evidence()).singleElement().satisfies(source -> {
+            assertThat(source.chunkId()).isEqualTo(pageSixChunkId);
+            assertThat(source.excerpt()).contains("每回合只能这样做一次");
+            assertThat(source.pageFrom()).isEqualTo(6);
+        });
+        assertThat(answer.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.chunkId()).isEqualTo(pageSixChunkId);
+            assertThat(citation.pageFrom()).isEqualTo(6);
+        });
+    }
+
+    @Test
+    void putsSpecificVisualInstructionsBeforeGenericVisualIntentAnchors() {
+        String placeholder =
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
+        RuleEvidenceHit components = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "COMPONENTS", "Visual rulebook page 3", placeholder, 3, 3, 0.02);
+        RuleEvidenceHit placement = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Visual rulebook page 7", placeholder, 7, 7, 0.02);
+        RuleEvidenceHit overview = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Visual rulebook page 8", placeholder, 8, 8, 0.02);
+        Map<Integer, RuleEvidenceHit> pages = Map.of(3, components, 7, placement, 8, overview);
+        AtomicInteger retrievalCalls = new AtomicInteger();
+        HybridRuleSearch hybridSearch = (documentVersionId, query, options) -> switch (retrievalCalls.getAndIncrement()) {
+            case 0 -> List.of(new HybridEvidenceHit(components, 0.04, 1, null, false));
+            case 1 -> List.of(new HybridEvidenceHit(overview, 0.04, 1, null, false));
+            default -> List.of(new HybridEvidenceHit(components, 0.03, 1, null, false));
+        };
+        AtomicInteger visualCalls = new AtomicInteger();
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) ->
+                switch (visualCalls.getAndIncrement()) {
+                    case 0 -> List.of(
+                            visualFact(3, "Wildlife Tokens", "The game contains wildlife tokens.", 20),
+                            visualFact(7, "Place the Tile and Token", "Place the token on a legal tile.", 60));
+                    case 1 -> List.of(
+                            visualFact(8, "Keystone Tile", "A matching token on a Keystone grants a Nature Token.", 50),
+                            visualFact(7, "Place the Tile and Token", "Place the token on a legal tile.", 60));
+                    default -> List.of(
+                            visualFact(3, "Wildlife Tokens", "The game contains wildlife tokens.", 20),
+                            visualFact(8, "Keystone Tile", "A matching token on a Keystone grants a Nature Token.", 50));
+                };
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return pageNumbers.stream().map(pages::get).toList();
+            }
+        };
+        RuleAnswerModel model = request -> {
+            assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::pageFrom)
+                    .startsWith(7)
+                    .contains(8);
+            return new ModelDraft(
+                    "放在显示对应动物图标的空板块上。",
+                    "可以放在新板块或环境中其他合法板块；放在关键石板块上获得一个自然标记。",
+                    List.of(placement.chunkId(), overview.chunkId()),
+                    List.of("每个板块最多放一个动物标记。"),
+                    "HIGH");
+        };
+        var service = answerService(hybridSearch, visualFacts, pageLookup, model);
+
+        var answer = service.answer(
+                "Where can I place a Wildlife Token, and what do I gain after placing one on a Keystone Tile?",
+                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(7, 8);
     }
 
     @Test
@@ -847,6 +984,29 @@ class StructuredRuleAnswerServiceTest {
                 new SimpleMeterRegistry());
     }
 
+    private StructuredRuleAnswerService answerService(
+            HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
+            RuleAnswerModel model) {
+        return new StructuredRuleAnswerService(
+                understanding,
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+    }
+
     private GeneratedContentCritic acceptedCritic() {
         return (request, risk) -> new GeneratedContentCritic.Review(false, List.of());
     }
@@ -858,6 +1018,12 @@ class StructuredRuleAnswerServiceTest {
     private RuleEvidenceHit evidence(String sectionType) {
         return new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, sectionType, "Scoring", "Each coin is worth one point.", 8, 8, 0.8);
+    }
+
+    private VisualRulebookPageFactSearch.PageFactMatch visualFact(
+            int page, String printedTerms, String summary, double score) {
+        return new VisualRulebookPageFactSearch.PageFactMatch(
+                page, printedTerms, summary, List.of(printedTerms), score);
     }
 
     private static final class InMemoryAnswerCache implements RuleAnswerCache {

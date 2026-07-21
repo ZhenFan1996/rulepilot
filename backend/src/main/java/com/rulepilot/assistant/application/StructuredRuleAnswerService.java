@@ -38,6 +38,9 @@ import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
+import com.rulepilot.retrieval.RuleEvidenceLookup;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
 import io.micrometer.core.instrument.Counter;
@@ -45,7 +48,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -56,6 +61,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -64,10 +70,14 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v7-cross-language-retrieval";
+    private static final String ANSWER_POLICY_VERSION = "answer-v8-visual-fact-retrieval";
+    private static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
+    private final VisualRulebookPageFactSearch visualFacts;
+    private final RuleEvidenceLookup evidenceLookup;
     private final RuleAnswerModel model;
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
@@ -84,9 +94,12 @@ public class StructuredRuleAnswerService {
     private final Counter cacheWriteErrors;
     private final Counter confirmedRulingHits;
 
+    @Autowired
     public StructuredRuleAnswerService(
             QuestionUnderstanding understanding,
             HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
             RuleAnswerModel model,
             RuleAnswerCache cache,
             RuleAnswerRateLimiter rateLimiter,
@@ -100,6 +113,8 @@ public class StructuredRuleAnswerService {
             MeterRegistry metrics) {
         this.understanding = understanding;
         this.retrieval = retrieval;
+        this.visualFacts = visualFacts;
+        this.evidenceLookup = evidenceLookup;
         this.model = model;
         this.cache = cache;
         this.rateLimiter = rateLimiter;
@@ -115,6 +130,38 @@ public class StructuredRuleAnswerService {
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
         this.cacheWriteErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "write");
         this.confirmedRulingHits = metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling");
+    }
+
+    public StructuredRuleAnswerService(
+            QuestionUnderstanding understanding,
+            HybridRuleSearch retrieval,
+            RuleAnswerModel model,
+            RuleAnswerCache cache,
+            RuleAnswerRateLimiter rateLimiter,
+            RuleDataVersion ruleDataVersion,
+            ConfirmedRulingLookup confirmedRulings,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AssistantRuns runs,
+            AuditedAgentInvocations invocations,
+            ObservationRegistry observations,
+            MeterRegistry metrics) {
+        this(
+                understanding,
+                retrieval,
+                VisualRulebookPageFactSearch.empty(),
+                emptyEvidenceLookup(),
+                model,
+                cache,
+                rateLimiter,
+                ruleDataVersion,
+                confirmedRulings,
+                evidenceVerifier,
+                critic,
+                runs,
+                invocations,
+                observations,
+                metrics);
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
@@ -423,6 +470,7 @@ public class StructuredRuleAnswerService {
             UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
+        Map<Integer, PageFactMatch> visualFactsByPage = new LinkedHashMap<>();
         boolean conflicting = false;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
@@ -458,6 +506,16 @@ public class StructuredRuleAnswerService {
                         evidenceById.put(hit.evidence().chunkId(), hit);
                     }
                 }
+                List<PageFactMatch> visualMatches = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "searchVisualRulebookPageFacts",
+                        estimateTokens(intent.query()),
+                        "Page-scoped visual rule facts retrieved",
+                        () -> visualFacts.search(context.documentVersionId(), intent.query(), 2),
+                        matches -> matches.size() * 80);
+                visualMatches.forEach(match -> visualFactsByPage.merge(
+                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException retrievalFailure) {
@@ -473,17 +531,88 @@ public class StructuredRuleAnswerService {
         if (conflicting) {
             return new RetrievalResult(List.of(), true);
         }
+        Set<UUID> visualEvidenceIds = mergeVisualPageEvidence(
+                assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage);
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
-        intentAnchors.values().forEach(hit -> selected.putIfAbsent(
-                hit.evidence().chunkId(), evidenceById.get(hit.evidence().chunkId())));
+        visualEvidenceIds.stream()
+                .map(evidenceById::get)
+                .filter(java.util.Objects::nonNull)
+                .sorted(Comparator.comparingDouble(HybridEvidenceHit::score)
+                        .reversed()
+                        .thenComparing(hit -> hit.evidence().chunkId()))
+                .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+        intentAnchors.values().stream()
+                .map(hit -> evidenceById.get(hit.evidence().chunkId()))
+                .filter(java.util.Objects::nonNull)
+                .filter(hit -> visualEvidenceIds.isEmpty() || !isVisualPlaceholder(hit))
+                .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         if (selected.size() < 3) {
             evidenceById.values().stream()
-                    .sorted(java.util.Comparator.comparingDouble(HybridEvidenceHit::score)
+                    .filter(hit -> visualEvidenceIds.isEmpty() || !isVisualPlaceholder(hit))
+                    .sorted(Comparator.comparingDouble(HybridEvidenceHit::score)
                             .reversed()
                             .thenComparing(hit -> hit.evidence().chunkId()))
                     .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         }
         return new RetrievalResult(selected.values().stream().limit(5).toList(), false);
+    }
+
+    private Set<UUID> mergeVisualPageEvidence(
+            UUID assistantRunId,
+            UUID documentVersionId,
+            Map<UUID, HybridEvidenceHit> evidenceById,
+            Map<Integer, PageFactMatch> factsByPage) {
+        if (factsByPage.isEmpty()) return Set.of();
+        Set<Integer> pages = factsByPage.values().stream()
+                .sorted(Comparator.comparingDouble(PageFactMatch::score).reversed()
+                        .thenComparingInt(PageFactMatch::pageNumber))
+                .limit(4)
+                .map(PageFactMatch::pageNumber)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> pageSources = invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "readVisualRulebookFactPages",
+                pages.size(),
+                "Original rulebook pages for visual facts retrieved",
+                () -> evidenceLookup.findByPageNumbers(documentVersionId, pages),
+                sources -> sources.size() * 80);
+        Set<UUID> enriched = new LinkedHashSet<>();
+        Map<Integer, Integer> rankByPage = new LinkedHashMap<>();
+        int rank = 1;
+        for (Integer page : pages) rankByPage.put(page, rank++);
+        for (var source : pageSources) {
+            if (source.pageFrom() != source.pageTo()) continue;
+            PageFactMatch fact = factsByPage.get(source.pageFrom());
+            if (fact == null) continue;
+            HybridEvidenceHit existing = evidenceById.get(source.chunkId());
+            if (existing != null && !isVisualPlaceholder(existing)) continue;
+            var visualSource = new com.rulepilot.retrieval.evidence.RuleEvidenceHit(
+                    source.chunkId(),
+                    source.documentVersionId(),
+                    source.sectionType(),
+                    source.heading(),
+                    fact.evidenceText(),
+                    source.pageFrom(),
+                    source.pageTo(),
+                    Math.max(0.01, fact.score()));
+            evidenceById.put(source.chunkId(), new HybridEvidenceHit(
+                    visualSource,
+                    Math.max(0.01, fact.score()),
+                    rankByPage.get(source.pageFrom()),
+                    null,
+                    false));
+            enriched.add(source.chunkId());
+        }
+        return Set.copyOf(enriched);
+    }
+
+    private boolean isVisualPlaceholder(HybridEvidenceHit hit) {
+        return VISUAL_PAGE_PLACEHOLDER.equals(hit.evidence().excerpt());
+    }
+
+    private static RuleEvidenceLookup emptyEvidenceLookup() {
+        return (documentVersionId, chunkIds) -> List.of();
     }
 
     private List<String> rewriteCrossLanguageQueries(
@@ -622,7 +751,8 @@ public class StructuredRuleAnswerService {
                                 + contextValue(context.gamePhase()) + ", and player count "
                                 + contextValue(context.playerCount())
                                 + ", and learning intent " + contextValue(context.learningIntent())
-                                + ". For an 'again' follow-up, reject any repeatability claim not explicitly supported by evidence."),
+                                + ". Preserve every named eligibility and identity condition. Reject any claim that a condition is irrelevant, optional, or broader than stated unless evidence explicitly says so."
+                                + " For an 'again' follow-up, reject any repeatability claim not explicitly supported by evidence."),
                 claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)

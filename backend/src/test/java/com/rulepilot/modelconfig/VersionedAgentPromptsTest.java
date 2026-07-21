@@ -14,7 +14,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v5-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
-                resource("rule-answer-agent-v5-system.txt"),
+                resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -94,7 +94,10 @@ class VersionedAgentPromptsTest {
                         "main column",
                         "player turn",
                         "Pass/跳过",
-                        "empty exceptions list");
+                        "empty exceptions list",
+                        "Every explanatory sentence",
+                        "matching",
+                        "same type");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");

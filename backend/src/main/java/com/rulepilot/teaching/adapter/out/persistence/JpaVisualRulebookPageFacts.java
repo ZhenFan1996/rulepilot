@@ -2,6 +2,8 @@ package com.rulepilot.teaching.adapter.out.persistence;
 
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
@@ -9,15 +11,29 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 @Profile("!test")
-public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts {
+public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, VisualRulebookPageFactSearch {
+
+    private static final Set<String> SEARCH_FILLER = Set.of(
+            "and", "are", "can", "does", "for", "from", "how", "into", "must", "not", "the", "this", "what",
+            "when", "where", "with", "you", "your");
+    private static final Set<String> GENERIC_RULE_TERMS = Set.of(
+            "action", "game", "habitat", "page", "player", "rule", "tile", "token", "wildlife");
+    private static final Set<String> CJK_QUESTION_FILLER = Set.of(
+            "哪些", "什么", "如何", "怎么", "是否", "为何", "为什么");
+    private static final Pattern CJK_RUN = Pattern.compile("\\p{IsHan}+");
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -49,6 +65,121 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts {
                 .stream()
                 .map(VisualRulebookPageFactEntity::toDomain)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public List<PageFactMatch> search(UUID documentVersionId, String query, int limit) {
+        if (documentVersionId == null || query == null || query.isBlank() || query.length() > 600
+                || limit < 1 || limit > 5) {
+            throw new IllegalArgumentException("visual page fact search is invalid");
+        }
+        List<String> lexemes = searchLexemes(query);
+        List<String> cjkFragments = cjkFragments(query);
+        if (lexemes.isEmpty() && cjkFragments.isEmpty()) return List.of();
+        String documentVector = "to_tsvector('simple', printed_terms || ' ' || factual_summary || ' ' || keywords)";
+        String documentText = "lower(printed_terms || ' ' || factual_summary || ' ' || keywords)";
+        Stream<String> lexicalCoverage = IntStream.range(0, lexemes.size())
+                .mapToObj(index -> "CASE WHEN " + documentVector
+                        + " @@ to_tsquery('simple', :term" + index + ") THEN "
+                        + termWeight(lexemes.get(index)) + " ELSE 0 END");
+        Stream<String> cjkCoverage = IntStream.range(0, cjkFragments.size())
+                .mapToObj(index -> "CASE WHEN position(:cjk" + index + " in " + documentText
+                        + ") > 0 THEN 1 ELSE 0 END");
+        String coverage = Stream.concat(lexicalCoverage, cjkCoverage)
+                .collect(java.util.stream.Collectors.joining(" + "));
+        String requested = lexemes.isEmpty()
+                ? ""
+                : "WITH requested AS (SELECT to_tsquery('simple', :query) AS terms)";
+        String source = lexemes.isEmpty()
+                ? "visual_rulebook_page_fact"
+                : "visual_rulebook_page_fact, requested";
+        String relevance = lexemes.isEmpty()
+                ? "0.0"
+                : "ts_rank_cd(" + documentVector + ", requested.terms)";
+        String sql = """
+                %s
+                SELECT page_number, printed_terms, factual_summary, keywords,
+                       (%s) AS matched_terms,
+                       %s AS relevance
+                FROM %s
+                WHERE document_version_id = :versionId
+                  AND (%s) > 0
+                ORDER BY matched_terms DESC, relevance DESC, page_number
+                LIMIT :limit
+                """.formatted(requested, coverage, relevance, source, coverage);
+        var databaseQuery = entityManager.createNativeQuery(sql)
+                .setParameter("versionId", documentVersionId)
+                .setParameter("limit", limit);
+        if (!lexemes.isEmpty()) {
+            databaseQuery.setParameter("query", searchTerms(query));
+        }
+        IntStream.range(0, lexemes.size())
+                .forEach(index -> databaseQuery.setParameter("term" + index, lexemes.get(index) + ":*"));
+        IntStream.range(0, cjkFragments.size())
+                .forEach(index -> databaseQuery.setParameter("cjk" + index, cjkFragments.get(index)));
+        List<Object[]> rows = databaseQuery.getResultList();
+        return rows.stream()
+                .map(row -> new PageFactMatch(
+                        ((Number) row[0]).intValue(),
+                        (String) row[1],
+                        (String) row[2],
+                        ((String) row[3]).lines().filter(value -> !value.isBlank()).toList(),
+                        ((Number) row[4]).doubleValue() * 10 + ((Number) row[5]).doubleValue()))
+                .toList();
+    }
+
+    static String searchTerms(String query) {
+        return searchLexemes(query).stream()
+                .map(term -> term + ":*")
+                .collect(java.util.stream.Collectors.joining(" | "));
+    }
+
+    private static List<String> searchLexemes(String query) {
+        return Stream.of(query.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+                .filter(JpaVisualRulebookPageFacts::isLatin)
+                .filter(term -> term.length() >= 3)
+                .filter(term -> !SEARCH_FILLER.contains(term))
+                .map(JpaVisualRulebookPageFacts::normalizeEnglishTerm)
+                .distinct()
+                .limit(12)
+                .toList();
+    }
+
+    static List<String> cjkFragments(String query) {
+        java.util.LinkedHashSet<String> fragments = new java.util.LinkedHashSet<>();
+        Matcher matcher = CJK_RUN.matcher(query);
+        while (matcher.find() && fragments.size() < 16) {
+            String run = matcher.group();
+            if (run.length() == 1) {
+                fragments.add(run);
+                continue;
+            }
+            for (int index = 0; index < run.length() - 1 && fragments.size() < 16; index++) {
+                String fragment = run.substring(index, index + 2);
+                if (!CJK_QUESTION_FILLER.contains(fragment)) fragments.add(fragment);
+            }
+        }
+        return List.copyOf(fragments);
+    }
+
+    private static boolean isLatin(String value) {
+        return value.codePoints().allMatch(codePoint ->
+                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.LATIN
+                        || Character.isDigit(codePoint));
+    }
+
+    private static String normalizeEnglishTerm(String term) {
+        if (term.equals("placing") || term.equals("placed")) return "place";
+        if (term.length() > 4 && term.endsWith("s") && !term.endsWith("ss")) {
+            return term.substring(0, term.length() - 1);
+        }
+        return term;
+    }
+
+    private static int termWeight(String term) {
+        return GENERIC_RULE_TERMS.contains(term) ? 1 : 3;
     }
 }
 
