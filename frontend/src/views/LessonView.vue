@@ -49,7 +49,7 @@ interface TeachingPlan {
 
 interface IllustratedLesson {
   id: string
-  status: 'COMPLETE' | 'INCOMPLETE'
+  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
   sections: LessonSection[]
 }
 
@@ -59,7 +59,7 @@ interface LessonSection {
   coverageTags: string[]
   title: string
   required: boolean
-  evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
+  evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE'
   visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
   visualCaption: string
   visualSourcePages: number[]
@@ -289,6 +289,8 @@ const currentSection = computed(() => lesson.value?.sections[progress.value.curr
 const generationActive = computed(
   () => generationStatusUnknown.value || teachingRunIsActive(teachingRun.value?.run.state),
 )
+const draftReady = computed(() => lesson.value?.status === 'DRAFT_READY')
+const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
 const readingCurrentLastChapter = computed(
   () => Boolean(lesson.value?.sections.length) && progress.value.currentIndex === lesson.value!.sections.length - 1,
 )
@@ -961,7 +963,7 @@ function previousSection() {
 
 function finish(outcome: 'completed' | 'skipped') {
   if (!lesson.value || progress.value.paused) return
-  const waitForNext = generationActive.value && readingCurrentLastChapter.value
+  const waitForNext = lessonStillGrowing.value && readingCurrentLastChapter.value
   progress.value = finishSection(progress.value, lesson.value.sections.length, outcome)
   waitingForNextChapter.value = waitForNext
   saveProgress()
@@ -1146,7 +1148,7 @@ onUnmounted(() => {
         <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← 我的讲解</RouterLink>
           <div class="flex items-center gap-4">
-            <RouterLink v-if="plan && !generationActive" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
+            <RouterLink v-if="plan && (!generationActive || draftReady)" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
             <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
               <p class="font-semibold text-ink/75">这次讲解</p>
               <p>{{ plan.playerCount }} 人 · {{ plan.beginnerCount }} 位新手 · {{ plan.durationMinutes }} 分钟</p>
@@ -1165,7 +1167,7 @@ onUnmounted(() => {
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-sm font-semibold text-indigo" role="status" aria-live="polite" aria-atomic="true">{{ generationStatusUnknown ? '正在确认后台生成状态' : currentGenerationText }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/55">整本仍在后台生成 · 当前已有 {{ lesson?.sections.length ?? 0 }} 节可以阅读。停在这里不会丢失进度。</p>
+              <p class="mt-1 text-xs leading-5 text-ink/55">{{ draftReady ? `完整基础讲解已经可用，共 ${lesson?.sections.length ?? 0} 节；后台只是在核对和修正细节。` : `整本仍在后台生成 · 当前已有 ${lesson?.sections.length ?? 0} 节可以阅读。停在这里不会丢失进度。` }}</p>
             </div>
             <span v-if="!generationStatusUnknown" class="shrink-0 font-mono text-sm font-semibold text-indigo" aria-label="已用时">{{ generationElapsed }}</span>
           </div>
@@ -1177,7 +1179,7 @@ onUnmounted(() => {
               <span>后台已处理 {{ processedGenerationChapters }}/{{ plan.sections.length }} 节，其中 {{ supportedGenerationChapters }} 节通过核对</span>
               <span>{{ teachingRun?.budget.usedModelCalls ?? 0 }} 次模型调用</span>
             </div>
-            <p class="mt-2 text-xs leading-5 text-ink/50">{{ generationRemainingTime }} 新章节完成后会自动出现在目录里。</p>
+            <p class="mt-2 text-xs leading-5 text-ink/50">{{ generationRemainingTime }} {{ draftReady ? '你现在就可以从第一节开始。' : '新章节完成后会自动出现在目录里。' }}</p>
             <ol v-if="recentGenerationActivities.length" class="mt-3 grid gap-1.5 border-t border-indigo/10 pt-3 sm:grid-cols-3" aria-label="最近生成进度">
               <li v-for="activity in recentGenerationActivities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
                 <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
@@ -1252,7 +1254,7 @@ onUnmounted(() => {
       <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
         <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" aria-label="讲解章节">
           <div class="flex items-end justify-between">
-            <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">{{ generationActive ? '已完成章节' : '完整规则讲解' }}</h1></div>
+            <div><p class="text-xs font-medium text-copper">讲解目录</p><h1 class="mt-2 font-display text-2xl font-semibold">{{ lessonStillGrowing ? '已完成章节' : draftReady ? '完整基础讲解' : '完整规则讲解' }}</h1></div>
             <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
           </div>
           <details v-if="quality && !generationActive" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
@@ -1269,6 +1271,17 @@ onUnmounted(() => {
               </li>
             </ul>
           </details>
+          <div v-if="lesson.status === 'DRAFT_READY' && !generationActive" class="mt-3 hidden rounded-2xl border border-indigo/20 bg-indigo/5 p-3 text-sm text-indigo lg:block">
+            <p class="font-semibold">完整基础讲解可以使用</p>
+            <p class="mt-1 text-xs leading-5 text-ink/60">全部章节已有原文引用，{{ supportedSectionCount }} / {{ lesson.sections.length }} 节完成细节核对。你可以先开桌，也可以继续后台核对。</p>
+            <button
+              class="mt-3 min-h-10 rounded-xl bg-indigo px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              :disabled="resumingLesson || !online"
+              @click="resumeLesson"
+            >
+              {{ resumingLesson ? '正在继续…' : '继续核对细节' }}
+            </button>
+          </div>
           <div v-if="lesson.status === 'INCOMPLETE' && !generationActive" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
             <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ lesson.sections.length }} 节</p>
             <p class="mt-1 text-xs leading-5 text-amber-900/75">继续时会保留已经通过引用与事实检查的章节，只补尚未通过的部分。</p>
@@ -1327,9 +1340,10 @@ onUnmounted(() => {
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div><p class="text-xs font-semibold text-ink/45">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p><h2 class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ currentSection.title }}</h2></div>
               <span v-if="currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE'" class="rounded-md bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-900">原文内容不足</span>
-              <span v-else class="rounded-md bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">可查看原文</span>
+              <span v-else-if="currentSection.evidenceStatus === 'CITED_DRAFT'" class="rounded-md bg-indigo/10 px-3 py-1.5 text-xs font-semibold text-indigo">有原文引用 · 细节核对中</span>
+              <span v-else class="rounded-md bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-900">已通过核对</span>
             </div>
-            <div v-if="generationActive && readingCurrentLastChapter" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-indigo" role="status">
+            <div v-if="lessonStillGrowing && readingCurrentLastChapter" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-indigo" role="status">
               <p class="font-semibold">这是当前最后一节，后续章节仍在生成。</p>
               <p class="mt-1 text-ink/55">你可以先读完并标记本节；下一节完成后，页面会自动继续。</p>
             </div>
@@ -1759,7 +1773,7 @@ onUnmounted(() => {
         <div class="mx-auto grid max-w-3xl grid-cols-[0.8fr_1fr_1.5fr] gap-2">
           <button :disabled="progress.currentIndex === 0" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="previousSection">上一节</button>
           <button class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="finish('skipped')">稍后再看</button>
-          <button :disabled="waitingForNextChapter" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60" @click="finish('completed')">{{ generationActive && readingCurrentLastChapter ? (waitingForNextChapter ? '等待下一节…' : '这节看懂了，等待下一节') : progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
+          <button :disabled="waitingForNextChapter" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60" @click="finish('completed')">{{ lessonStillGrowing && readingCurrentLastChapter ? (waitingForNextChapter ? '等待下一节…' : '这节看懂了，等待下一节') : progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
         </div>
       </nav>
 

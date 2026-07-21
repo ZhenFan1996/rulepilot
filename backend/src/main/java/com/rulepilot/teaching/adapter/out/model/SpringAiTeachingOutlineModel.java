@@ -4,6 +4,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.application.SourceLanguageRetrievalPolicy;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -38,7 +39,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
             log.warn("First teaching-outline model response failed: {}", failure.getMessage());
         }
         try {
-            return organizeOnce(request, prompts.structuredOutputRepair());
+            String correction = "The previous outline failed schema or retrieval-language validation. "
+                    + "Rebuild the complete outline. Retrieval queries must copy exact terms from the rulebook's "
+                    + "source language; player-facing fields remain Simplified Chinese.\n"
+                    + prompts.structuredOutputRepair();
+            return organizeOnce(request, correction);
         } catch (RuntimeException failure) {
             log.warn("Repaired teaching-outline model response failed: {}", failure.getMessage());
             failure.addSuppressed(firstFailure);
@@ -47,7 +52,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private OutlineDraft organizeOnce(OutlineRequest request, String repair) {
-        return ChatClient.create(models.modelFor(Role.TEACHING)).prompt()
+        OutlineDraft outline = ChatClient.create(models.modelFor(Role.TEACHING)).prompt()
                 .system(prompts.teachingOutlineSystem())
                 .user(user -> user.text(prompts.teachingOutlineUser())
                         .param("players", request.playerCount())
@@ -57,5 +62,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                         .param("repair", repair))
                 .call()
                 .entity(OutlineDraft.class);
+        if (outline == null) throw new IllegalArgumentException("teaching outline model returned no draft");
+        SourceLanguageRetrievalPolicy.validate(request, outline);
+        return outline;
     }
+
 }

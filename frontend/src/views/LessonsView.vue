@@ -29,8 +29,8 @@ interface TeachingPlan {
 
 interface LessonSummary {
   id: string
-  status: 'COMPLETE' | 'INCOMPLETE'
-  sections: Array<{ evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE' }>
+  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
+  sections: Array<{ evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' }>
 }
 
 interface PlanProgress {
@@ -62,15 +62,20 @@ function stateOf(planId: string) {
   const item = progress.value[planId]
   if (item?.run && !terminalStates.has(item.run.run.state)) return 'GENERATING'
   if (item?.lesson?.status === 'COMPLETE') return 'COMPLETE'
+  if (item?.lesson?.status === 'DRAFT_READY') return 'DRAFT_READY'
   if (item?.lesson?.status === 'INCOMPLETE') return 'INCOMPLETE'
   if (item?.run?.run.state === 'FAILED') return 'FAILED'
   return 'PLANNED'
 }
 
 function stateLabel(planId: string) {
+  if (stateOf(planId) === 'GENERATING' && progress.value[planId]?.lesson?.status === 'DRAFT_READY') {
+    return '可读，核对中'
+  }
   return ({
     GENERATING: '正在生成',
     COMPLETE: '可以阅读',
+    DRAFT_READY: '基础讲解可读',
     INCOMPLETE: '部分完成',
     FAILED: '生成失败',
     PLANNED: '等待开始',
@@ -79,7 +84,10 @@ function stateLabel(planId: string) {
 
 function stateClass(planId: string) {
   const state = stateOf(planId)
-  if (state === 'COMPLETE') return 'bg-emerald-50 text-emerald-800'
+  if (state === 'COMPLETE' || state === 'DRAFT_READY'
+    || state === 'GENERATING' && progress.value[planId]?.lesson?.status === 'DRAFT_READY') {
+    return 'bg-emerald-50 text-emerald-800'
+  }
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
   if (state === 'FAILED') return 'bg-red-50 text-red-800'
   return 'bg-amber-50 text-amber-800'
@@ -122,8 +130,12 @@ function progressText(plan: TeachingPlan) {
   const item = progress.value[plan.id]
   const state = stateOf(plan.id)
   if (state === 'GENERATING') {
+    if (item?.lesson?.status === 'DRAFT_READY') {
+      return `完整基础讲解已经可以阅读；后台正在核对细节，已用时 ${elapsedLabel(plan)}。`
+    }
     return `${activityText(plan, item!.run!.activities.at(-1))} · 已用时 ${elapsedLabel(plan)}。可以关闭或离开此页。`
   }
+  if (state === 'DRAFT_READY') return '完整基础讲解已经可以使用；部分细节尚未完成二次核对。'
   if (state === 'INCOMPLETE') {
     const supported = item?.lesson?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0
     return `已有 ${supported} 节通过规则核对，可以先阅读，也可以继续补全。`
@@ -295,7 +307,7 @@ onBeforeUnmount(() => {
             <div class="flex items-start justify-between gap-4">
               <div>
                 <p class="text-sm font-semibold text-indigo">{{ activityText(plan, currentActivity(plan)) }}</p>
-                <p class="mt-1 text-xs leading-5 text-ink/50">模型返回前，这一行也会保留当前正在做的事。</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? '不用继续等待，核对结果会逐节更新。' : '模型返回前，这一行也会保留当前正在做的事。' }}</p>
               </div>
               <span class="shrink-0 font-mono text-sm font-semibold text-indigo">{{ elapsedLabel(plan) }}</span>
             </div>
@@ -306,7 +318,7 @@ onBeforeUnmount(() => {
               <span>已处理 {{ processedChapterCount(plan) }}/{{ plan.sections.length }} 节，其中 {{ supportedChapterCount(plan) }} 节已通过核对</span>
               <span>{{ progress[plan.id]?.run?.budget.usedModelCalls ?? 0 }} 次模型调用</span>
             </div>
-            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} 生成会在后台继续，可以关闭或离开此页。</p>
+            <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? '现在就可以打开阅读。' : '生成会在后台继续，可以关闭或离开此页。' }}</p>
             <ol v-if="recentActivities(plan).length" class="mt-4 space-y-2 border-t border-indigo/10 pt-3" aria-label="最近进度">
               <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
                 <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
@@ -323,7 +335,7 @@ onBeforeUnmount(() => {
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">上次打开</span>
             <span v-else class="text-xs text-ink/35">{{ plan.sections.length }} 个章节</span>
-            <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ stateOf(plan.id) === 'GENERATING' ? '阅读已完成章节' : stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
+            <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? '立即阅读完整讲解' : stateOf(plan.id) === 'GENERATING' ? '阅读已完成章节' : stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
             <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? '正在启动…' : stateOf(plan.id) === 'FAILED' ? '重新生成' : '开始生成' }}</button>
             <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />后台处理中</span>
           </div>

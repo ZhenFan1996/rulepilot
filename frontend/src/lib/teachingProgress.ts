@@ -65,15 +65,18 @@ export function teachingActivityText(
       ? `正在阅读规则书图片并编写${target}`
       : `正在编写${target}`
   }
+  if (activity.operation.startsWith('correctTeachingSection')) return `正在根据勘误修正${target}`
   if (activity.operation.startsWith('reviseTeachingSection')) return `正在根据核对结果修正${target}`
   if (activity.operation.startsWith('confirmGeneratedClaims')) return `正在逐条复核${target}的规则陈述`
   if (activity.operation.startsWith('reviewGeneratedContent')) return `正在核对${target}的规则和出处`
+  if (activity.operation.startsWith('reviewPublishedTeachingSection')) return `基础讲解已可用，正在核对${target}的细节`
   if (activity.operation.startsWith('reviewObjectiveCoverage')) return `正在检查${target}有没有漏讲关键步骤`
   if (activity.operation.startsWith('validateTeachingSection')) {
     return activity.outcome === 'SUCCEEDED' ? `${target}已通过结构检查` : `${target}需要继续修正`
   }
   if (activity.operation.startsWith('publishTeachingSection')) {
-    return activity.outcome === 'SUCCEEDED' ? `${target}已经完成` : `${target}暂未通过，继续处理下一节`
+    if (activity.summary.includes('CITED_DRAFT_PUBLISHED')) return `${target}的基础内容已经可读`
+    return activity.outcome === 'SUCCEEDED' ? `${target}已经完成核对` : `${target}保留基础内容，稍后继续核对`
   }
   return '正在整理并核对讲解'
 }
@@ -83,9 +86,12 @@ export function processedTeachingChapterCount(run: TeachingRunProgress | null) {
 }
 
 export function supportedTeachingChapterCount(run: TeachingRunProgress | null) {
-  return publishedPositions(
-    (run?.activities ?? []).filter((activity) => activity.outcome === 'SUCCEEDED'),
-  ).size
+  return publishedPositions((run?.activities ?? []).filter((activity) =>
+    activity.outcome === 'SUCCEEDED'
+      && (activity.summary.includes('POST_PUBLICATION_REVIEW_ACCEPTED')
+        || activity.summary.includes('REUSED_VERIFIED_SECTION')
+        || activity.summary.includes('DRAFT_ACCEPTED')),
+  )).size
 }
 
 export function teachingElapsedLabel(run: TeachingRunProgress | null, now: number) {
@@ -102,7 +108,7 @@ export function teachingRemainingTimeText(
   const completed = processedTeachingChapterCount(run)
   const total = plan.sections.length
   if (completed === 0) return '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
-  if (completed >= total) return '所有章节已经处理，正在保存最终结果。'
+  if (completed >= total) return '完整基础讲解已经可读，后台正在核对细节。'
   const startedAt = run?.run.createdAt
   if (!startedAt) return '已有章节完成，正在继续处理后续内容。'
   const elapsedMinutes = Math.max(0.1, (now - new Date(startedAt).getTime()) / 60_000)

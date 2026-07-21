@@ -31,11 +31,13 @@ public record IllustratedLesson(
 
     public enum LessonStatus {
         COMPLETE,
+        DRAFT_READY,
         INCOMPLETE
     }
 
     public enum EvidenceStatus {
         SUPPORTED,
+        CITED_DRAFT,
         INSUFFICIENT_EVIDENCE
     }
 

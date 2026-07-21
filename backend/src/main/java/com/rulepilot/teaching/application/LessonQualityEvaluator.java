@@ -46,20 +46,31 @@ public class LessonQualityEvaluator {
 
     private QualityCheck requiredCoverage(TeachingPlan plan, IllustratedLesson lesson) {
         long required = plan.sections().stream().filter(TeachingPlan.PlannedSection::required).count();
-        long supported = lesson.sections().stream()
+        long available = lesson.sections().stream()
+                .filter(LessonSection::required)
+                .filter(this::hasCitedEvidence)
+                .count();
+        long reviewed = lesson.sections().stream()
                 .filter(LessonSection::required)
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .count();
+        CheckStatus status = available < required
+                ? CheckStatus.FAIL
+                : reviewed < required ? CheckStatus.NOT_EVALUATED : CheckStatus.PASS;
         return new QualityCheck(
                 CheckType.REQUIRED_SECTION_COVERAGE,
-                supported == required ? CheckStatus.PASS : CheckStatus.FAIL,
-                "必需章节 " + supported + " / " + required,
-                supported == required ? "所有必需章节都有规则证据。" : "缺失章节必须补充证据后才能交付完整讲解。");
+                status,
+                "必需章节 " + available + " / " + required,
+                available < required
+                        ? "仍有必需章节缺少可引用的规则证据。"
+                        : reviewed < required
+                                ? "完整基础讲解已经可读，其中 " + reviewed + " 章已完成二次核对。"
+                                : "所有必需章节都有规则证据并已完成核对。");
     }
 
     private QualityCheck citationSupport(IllustratedLesson lesson) {
         var supportedSteps = lesson.sections().stream()
-                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                .filter(this::hasCitedEvidence)
                 .flatMap(section -> section.steps().stream())
                 .toList();
         long cited = supportedSteps.stream().filter(step -> !step.sourcePages().isEmpty()).count();
@@ -76,14 +87,19 @@ public class LessonQualityEvaluator {
     private QualityCheck setupExecutability(IllustratedLesson lesson) {
         var setup = section(lesson, "setup");
         boolean executable = setup != null
-                && setup.evidenceStatus() == EvidenceStatus.SUPPORTED
+                && hasCitedEvidence(setup)
                 && !setup.steps().isEmpty()
                 && setup.steps().stream().allMatch(step -> !step.sourcePages().isEmpty());
+        boolean reviewed = executable && setup.evidenceStatus() == EvidenceStatus.SUPPORTED;
         return new QualityCheck(
                 CheckType.SETUP_EXECUTABILITY,
-                executable ? CheckStatus.PASS : CheckStatus.FAIL,
+                !executable ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
                 executable ? "Setup 具备可执行步骤" : "Setup 尚不可执行",
-                executable ? "Setup 至少包含一个有页码依据的步骤。" : "需要补充并引用按顺序可执行的开局布置步骤。");
+                !executable
+                        ? "需要补充并引用按顺序可执行的开局布置步骤。"
+                        : reviewed
+                                ? "Setup 包含有页码依据且已核对的执行步骤。"
+                                : "Setup 已有带页码的执行步骤，可以使用，细节仍在二次核对。");
     }
 
     private QualityCheck endAndScoring(IllustratedLesson lesson) {
@@ -91,16 +107,25 @@ public class LessonQualityEvaluator {
         List<String> missing = required.stream()
                 .filter(tag -> {
                     var section = section(lesson, tag);
-                    return section == null || section.evidenceStatus() != EvidenceStatus.SUPPORTED;
+                    return section == null || !hasCitedEvidence(section);
                 })
                 .toList();
+        boolean reviewed = missing.isEmpty() && required.stream()
+                .map(tag -> section(lesson, tag))
+                .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
         return new QualityCheck(
                 CheckType.END_AND_SCORING_COMPLETENESS,
-                missing.isEmpty() ? CheckStatus.PASS : CheckStatus.FAIL,
+                !missing.isEmpty() ? CheckStatus.FAIL : reviewed ? CheckStatus.PASS : CheckStatus.NOT_EVALUATED,
                 missing.isEmpty() ? "结束与计分完整" : "结束与计分仍有缺口",
                 missing.isEmpty()
-                        ? "结束条件、最终计分和同分处理均有证据。"
+                        ? reviewed
+                                ? "结束条件、最终计分和同分处理均有证据并已核对。"
+                                : "结束条件与最终计分已有引用，可以使用，细节仍在二次核对。"
                         : "缺少：" + missing.stream().map(this::label).collect(java.util.stream.Collectors.joining("、")));
+    }
+
+    private boolean hasCitedEvidence(LessonSection section) {
+        return section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE;
     }
 
     private LessonSection section(IllustratedLesson lesson, String coverageTag) {

@@ -93,7 +93,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
 
     private String systemPrompt(ReviewMode mode) {
         return switch (mode) {
-            case DISCOVERY -> prompts.criticSystem();
+            case DISCOVERY, POST_PUBLICATION -> prompts.criticSystem();
             case ATOMIC_CONFIRMATION -> prompts.atomicCriticSystem();
             case OBJECTIVE_COVERAGE -> prompts.objectiveCoverageCriticSystem();
         };

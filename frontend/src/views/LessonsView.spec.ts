@@ -10,7 +10,7 @@ describe('LessonsView', () => {
     vi.useRealTimers()
   })
 
-  it('shows a persisted active run as safe background work instead of a finished lesson', async () => {
+  it('opens a complete cited draft immediately while detail review continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
@@ -25,17 +25,24 @@ describe('LessonsView', () => {
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
           run: { id: 'run-1', state: 'RETRIEVING', createdAt: '2026-07-20T10:00:00Z', updatedAt: '2026-07-20T10:02:00Z', completedAt: null, lastErrorCode: null },
-          budget: { usedModelCalls: 1, maxModelCalls: 144 },
-          activities: [{
-            sequence: 1, type: 'MODEL', operation: 'composeTeachingSection|1', summary: 'Work started',
-            outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-20T10:02:00Z',
-          }],
+          budget: { usedModelCalls: 2, maxModelCalls: 144 },
+          activities: [
+            {
+              sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
+              summary: 'Teaching section published: CITED_DRAFT_PUBLISHED',
+              outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-20T10:01:50Z',
+            },
+            {
+              sequence: 2, type: 'CRITIC', operation: 'reviewPublishedTeachingSection', summary: 'Work started',
+              outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-20T10:02:00Z',
+            },
+          ],
         })
       }
       if (path.includes('/illustrated-lessons/latest')) {
         return Response.json({
-          id: 'lesson-1', status: 'INCOMPLETE',
-          sections: [{ evidenceStatus: 'SUPPORTED' }],
+          id: 'lesson-1', status: 'DRAFT_READY',
+          sections: [{ evidenceStatus: 'CITED_DRAFT' }],
         })
       }
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
@@ -62,21 +69,20 @@ describe('LessonsView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('任务已经交给后台')
-    expect(wrapper.text()).toContain('正在生成')
-    expect(wrapper.text()).toContain('正在阅读规则书图片并编写“完成开局设置”')
-    expect(wrapper.text()).toContain('已处理 0/1 节')
-    expect(wrapper.text()).toContain('1 次模型调用')
-    expect(wrapper.text()).toContain('第一节完成后')
-    expect(wrapper.text()).toContain('可以关闭或离开此页')
-    expect(wrapper.text()).toContain('阅读已完成章节')
+    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('基础讲解已可用，正在核对“完成开局设置”的细节')
+    expect(wrapper.text()).toContain('已处理 1/1 节')
+    expect(wrapper.text()).toContain('2 次模型调用')
+    expect(wrapper.text()).toContain('完整基础讲解已经可读')
+    expect(wrapper.text()).toContain('立即阅读完整讲解')
     expect(wrapper.text()).not.toContain('目录已生成')
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
       .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
-    expect(progressPaths[1]).toContain('activityRunId=run-1&afterActivitySequence=1')
-    expect(wrapper.findAll('[aria-label="最近进度"] li')).toHaveLength(1)
+    expect(progressPaths[1]).toContain('activityRunId=run-1&afterActivitySequence=2')
+    expect(wrapper.findAll('[aria-label="最近进度"] li')).toHaveLength(2)
     wrapper.unmount()
   })
 

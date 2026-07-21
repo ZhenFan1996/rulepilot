@@ -7,6 +7,8 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
+import com.rulepilot.assistant.AgentExecutionStoppedException.StopReason;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
@@ -19,6 +21,7 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -102,7 +105,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void publishesTheSameIncompleteLessonAfterEachChapterBeforeFinalCompletion() {
+    void publishesTheStableLessonImmediatelyWhenAReusableChapterCompletesIt() {
         UUID versionId = UUID.randomUUID();
         TeachingPlan plan = plan(versionId);
         LessonSection verified = new LessonSection(
@@ -131,10 +134,10 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson completed = agent.create(plan, UUID.randomUUID(), previous, publications::add);
 
-        assertThat(publications).hasSize(2);
-        assertThat(publications.getFirst().status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(publications).hasSize(1);
+        assertThat(publications.getFirst().status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(publications.getFirst().sections()).containsExactly(verified);
-        assertThat(publications.getLast()).isEqualTo(completed);
+        assertThat(publications.getFirst()).isEqualTo(completed);
         assertThat(publications).extracting(IllustratedLesson::id).containsOnly(completed.id());
     }
 
@@ -246,12 +249,8 @@ class GroundedTeachingAgentTest {
         RecordingInvocations invocations = new RecordingInvocations();
         GeneratedContentCritic critic = (request, risk) -> {
             criticCalls.incrementAndGet();
-            if (request.reviewMode() == GeneratedContentCritic.ReviewMode.DISCOVERY) {
-                assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-            } else {
-                assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
-                assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.LOW_CONFIDENCE);
-            }
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
             assertThat(request.taskContext().objective()).contains("SETUP");
             assertThat(request.taskContext().requiredCoverage()).contains("setup");
             assertThat(request.claims()).hasSize(2);
@@ -276,12 +275,54 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().heading()).isEqualTo("摆放主棋盘");
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.DO);
         assertThat(retrievalCalls).hasValue(2);
-        assertThat(criticCalls).hasValue(2);
+        assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).containsExactly(
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
-                        "Teaching draft accepted: DRAFT_ACCEPTED"),
+                        "Teaching draft accepted: CITED_DRAFT_ACCEPTED"),
                 new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching section published: DRAFT_ACCEPTED"));
+                        "Teaching section published: CITED_DRAFT_PUBLISHED"),
+                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
+                        "Teaching draft accepted: POST_PUBLICATION_REVIEW_ACCEPTED"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED"));
+    }
+
+    @Test
+    void keepsACompleteCitedDraftReadableWhenPostPublicationReviewCannotContinue() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        List<IllustratedLesson> publications = new ArrayList<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        TeachingLessonModel model = request -> {
+            modelCalls.incrementAndGet();
+            return new SectionDraft(
+                    "先完成可玩的开局",
+                    VisualKind.REFERENCE_CARD,
+                    "把主棋盘放在桌面中央。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(chunkId))));
+        };
+        GeneratedContentCritic unavailableReview = (request, risk) -> {
+            assertThat(publications).isNotEmpty();
+            assertThat(publications.getLast().status()).isEqualTo(LessonStatus.DRAFT_READY);
+            assertThat(publications.getLast().sections().getFirst().evidenceStatus())
+                    .isEqualTo(EvidenceStatus.CITED_DRAFT);
+            throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                unavailableReview,
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID(), null, publications::add);
+
+        assertThat(modelCalls).hasValue(1);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.sections().getFirst().steps()).hasSize(1);
     }
 
     @Test
@@ -298,14 +339,9 @@ class GroundedTeachingAgentTest {
                 List.of(new StepDraft(
                         "摆放主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(cited.chunkId()))));
         GeneratedContentCritic critic = (request, risk) -> {
-            if (request.reviewMode() == GeneratedContentCritic.ReviewMode.DISCOVERY) {
-                assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
-                        .containsExactly(cited.chunkId());
-            } else {
-                assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE);
-                assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
-                        .containsExactly(cited.chunkId(), unrelated.chunkId());
-            }
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(request.evidence()).extracting(GeneratedContentCritic.Evidence::chunkId)
+                    .containsExactly(cited.chunkId(), unrelated.chunkId());
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -366,12 +402,10 @@ class GroundedTeachingAgentTest {
                                         List.of(moon.chunkId()))));
             }
         };
-        AtomicInteger coverageCalls = new AtomicInteger();
+        AtomicInteger reviewCalls = new AtomicInteger();
         GeneratedContentCritic critic = (request, risk) -> {
-            if (request.reviewMode() != GeneratedContentCritic.ReviewMode.OBJECTIVE_COVERAGE) {
-                return new GeneratedContentCritic.Review(true, List.of());
-            }
-            coverageCalls.incrementAndGet();
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            reviewCalls.incrementAndGet();
             return new GeneratedContentCritic.Review(true, List.of());
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -386,7 +420,7 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(revisions).hasValue(1);
-        assertThat(coverageCalls).hasValue(1);
+        assertThat(reviewCalls).hasValue(1);
         assertThat(lesson.sections().getFirst().steps())
                 .extracting(LessonStep::text)
                 .anyMatch(text -> text.contains("卫星"));
@@ -418,7 +452,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().kind()).isEqualTo(TeachingMove.FLOW);
-        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v6");
+        assertThat(lesson.generatorVersion()).isEqualTo("adaptive-teaching-v8-fast-draft");
     }
 
     @Test
@@ -639,7 +673,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(reviewedClaimCounts).containsExactly(1, 1);
+        assertThat(reviewedClaimCounts).containsExactly(1);
     }
 
     @Test
@@ -786,9 +820,12 @@ class GroundedTeachingAgentTest {
                 3,
                 3);
         AtomicInteger retrievalCalls = new AtomicInteger();
-        AssistantReadTools tools = request -> retrievalCalls.getAndIncrement() == 0
-                ? List.of(primary)
-                : List.of(primary, supplementary);
+        AssistantReadTools tools = request -> {
+            assertThat(request.limit()).isEqualTo(3);
+            return retrievalCalls.getAndIncrement() == 0
+                    ? List.of(primary)
+                    : List.of(primary, supplementary);
+        };
         TeachingLessonModel model = request -> {
             assertThat(request.evidence()).extracting(TeachingLessonModel.EvidenceInput::chunkId)
                     .containsExactly(primary.chunkId(), supplementary.chunkId());
@@ -1186,19 +1223,67 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
-        assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("任意放置");
+                .isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("任意放置");
         assertThat(modelCalls).hasValue(2);
-        assertThat(criticCalls).hasValue(2);
+        assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).containsExactly(
+                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
+                        "Teaching draft accepted: CITED_DRAFT_ACCEPTED"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching section published: CITED_DRAFT_PUBLISHED"),
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
                         "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
-                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.REJECTED,
-                        "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
-                new Diagnostic("publishTeachingSection|1", ActivityOutcome.REJECTED,
-                        "Teaching section withheld: DRAFT_WITHHELD_AFTER_BOUNDED_REVISIONS"));
+                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
+                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
+                        "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"));
+    }
+
+    @Test
+    void reviewsOnlyFourHighValueChaptersAfterPublishingTheCompleteDraft() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                25,
+                "Game",
+                "Premise",
+                List.of(
+                        topic(1, TeachingSectionType.COMPONENTS),
+                        topic(2, TeachingSectionType.ACTIONS),
+                        topic(3, TeachingSectionType.SETUP),
+                        topic(4, TeachingSectionType.END_CONDITIONS),
+                        topic(5, TeachingSectionType.SCORING),
+                        topic(6, TeachingSectionType.OBJECTIVE)),
+                "player",
+                Instant.now());
+        List<String> reviewedObjectives = new java.util.ArrayList<>();
+        GeneratedContentCritic recordingCritic = (request, risk) -> {
+            reviewedObjectives.add(request.taskContext().objective());
+            return new GeneratedContentCritic.Review(true, List.of());
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                new FakeTeachingLessonModel(),
+                new PolicyEvidenceVerifier(),
+                recordingCritic,
+                new ImmediateAuditedAgentInvocations(),
+                24);
+
+        var lesson = agent.create(plan, UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.sections())
+                .filteredOn(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                .hasSize(4);
+        assertThat(reviewedObjectives).containsExactly(
+                "Explain SETUP", "Explain END_CONDITIONS", "Explain SCORING", "Explain ACTIONS");
     }
 
     private record Diagnostic(String operation, ActivityOutcome outcome, String summary) {}

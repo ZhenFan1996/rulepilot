@@ -59,15 +59,15 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v6";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v8-fast-draft";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
-    private static final int MAX_EVIDENCE_PER_SECTION = 12;
-    private static final int EVIDENCE_PER_INTENT = 4;
+    private static final int MAX_EVIDENCE_PER_SECTION = 10;
+    private static final int EVIDENCE_PER_INTENT = 3;
     private static final int MAX_STEPS_PER_SECTION = 6;
     private static final int MAX_VISUAL_STEPS_PER_SECTION = 4;
-    private static final int MAX_REVISION_ATTEMPTS = 4;
-    private static final int MAX_VISUAL_REVISION_ATTEMPTS = 2;
+    private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 1;
+    private static final int MAX_POST_PUBLICATION_REVIEWS_PER_RUN = 4;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
@@ -139,6 +139,7 @@ public class GroundedTeachingAgent {
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         List<LessonSection> sections = new ArrayList<>();
+        List<DraftCandidate> reviewCandidates = new ArrayList<>();
         Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int toolCalls = 0;
@@ -149,14 +150,14 @@ public class GroundedTeachingAgent {
                 log.info("Teaching topic {} reuses a previously verified section", planned.topicKey());
                 sections.add(reusable);
                 recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
+                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
             if (toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 sections.add(insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
+                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
 
@@ -205,7 +206,7 @@ public class GroundedTeachingAgent {
             if (evidence.isEmpty()) {
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_RETRIEVED_EVIDENCE");
                 sections.add(insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
+                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
             if (!evidenceVerifier.verify(new VerificationRequest(
@@ -213,20 +214,22 @@ public class GroundedTeachingAgent {
                     .verified()) {
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "RETRIEVED_EVIDENCE_INVALID");
                 sections.add(insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
+                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
 
             try {
-                LessonSection composed = compose(
+                DraftCandidate composed = composeDraft(
                         plan,
                         planned,
                         pacing.get(planned.position()),
                         continuityContext(sections),
                         evidence,
-                        assistantRunId);
-                sections.add(composed);
-                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "DRAFT_ACCEPTED");
+                        assistantRunId,
+                        sections.size());
+                sections.add(composed.section());
+                reviewCandidates.add(composed);
+                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_DRAFT_PUBLISHED");
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException invalidOrFailedModelOutput) {
@@ -240,36 +243,98 @@ public class GroundedTeachingAgent {
                         assistantRunId,
                         planned,
                         ActivityOutcome.REJECTED,
-                        "DRAFT_WITHHELD_AFTER_BOUNDED_REVISIONS");
+                        "DRAFT_WITHHELD_AFTER_ONE_STRUCTURAL_REPAIR");
                 sections.add(insufficient(planned));
             }
-            publishProgress(progressPublisher, lessonId, plan.id(), sections, createdAt);
+            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
         }
 
-        boolean complete = sections.stream()
-                .filter(LessonSection::required)
-                .allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED);
+        IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
+        if (draftReady.status() == LessonStatus.DRAFT_READY) {
+            List<DraftCandidate> prioritizedReviews = reviewCandidates.stream()
+                    .sorted(Comparator.comparingInt(this::postPublicationReviewPriority)
+                            .thenComparingInt(candidate -> candidate.planned().position()))
+                    .limit(MAX_POST_PUBLICATION_REVIEWS_PER_RUN)
+                    .toList();
+            for (DraftCandidate candidate : prioritizedReviews) {
+                try {
+                    LessonSection reviewed = reviewPublishedDraft(plan, candidate, assistantRunId);
+                    sections.set(candidate.sectionIndex(), reviewed);
+                    recordPublication(
+                            assistantRunId,
+                            candidate.planned(),
+                            ActivityOutcome.SUCCEEDED,
+                            reviewed.evidenceStatus() == EvidenceStatus.SUPPORTED
+                                    ? "POST_PUBLICATION_REVIEW_ACCEPTED"
+                                    : "POST_PUBLICATION_REVIEW_PENDING");
+                    progressPublisher.accept(lesson(lessonId, plan, sections, createdAt));
+                } catch (AgentExecutionStoppedException stopped) {
+                    recordPublication(
+                            assistantRunId,
+                            candidate.planned(),
+                            ActivityOutcome.REJECTED,
+                            "POST_PUBLICATION_REVIEW_DEFERRED_BY_BUDGET");
+                    break;
+                } catch (RuntimeException reviewFailure) {
+                    log.warn(
+                            "Post-publication review retained cited draft for topic {}: {}",
+                            candidate.planned().topicKey(),
+                            reviewFailure.getMessage());
+                    recordPublication(
+                            assistantRunId,
+                            candidate.planned(),
+                            ActivityOutcome.REJECTED,
+                            "POST_PUBLICATION_REVIEW_FAILED_SAFELY");
+                }
+            }
+        }
+
+        return lesson(lessonId, plan, sections, createdAt);
+    }
+
+    private int postPublicationReviewPriority(DraftCandidate candidate) {
+        List<String> coverage = candidate.planned().coverageTags();
+        if (coverage.stream().anyMatch(HIGH_IMPACT_TAGS::contains)) return 0;
+        if (coverage.contains("core_loop") || coverage.contains("turn_structure")) return 1;
+        return 2;
+    }
+
+    private IllustratedLesson lesson(
+            UUID lessonId,
+            TeachingPlan plan,
+            List<LessonSection> sections,
+            Instant createdAt) {
         IllustratedLesson lesson = new IllustratedLesson(
                 lessonId,
                 plan.id(),
-                complete ? LessonStatus.COMPLETE : LessonStatus.INCOMPLETE,
+                lessonStatus(plan, sections),
                 sections,
                 GENERATOR_VERSION,
                 createdAt);
-        progressPublisher.accept(lesson);
         return lesson;
+    }
+
+    private LessonStatus lessonStatus(TeachingPlan plan, List<LessonSection> sections) {
+        if (sections.size() < plan.sections().size()) return LessonStatus.INCOMPLETE;
+        List<LessonSection> required = sections.stream().filter(LessonSection::required).toList();
+        if (required.stream().anyMatch(section -> section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE)) {
+            return LessonStatus.INCOMPLETE;
+        }
+        return required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                ? LessonStatus.COMPLETE
+                : LessonStatus.DRAFT_READY;
     }
 
     private void publishProgress(
             Consumer<IllustratedLesson> progressPublisher,
             UUID lessonId,
-            UUID teachingPlanId,
+            TeachingPlan plan,
             List<LessonSection> sections,
             Instant createdAt) {
         progressPublisher.accept(new IllustratedLesson(
                 lessonId,
-                teachingPlanId,
-                LessonStatus.INCOMPLETE,
+                plan.id(),
+                lessonStatus(plan, sections),
                 sections,
                 GENERATOR_VERSION,
                 createdAt));
@@ -360,13 +425,14 @@ public class GroundedTeachingAgent {
         return List.copyOf(merged.values());
     }
 
-    private LessonSection compose(
+    private DraftCandidate composeDraft(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             TeachingPacingPolicy.SectionPacing pacing,
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            int sectionIndex) {
         List<TeachingLessonModel.PageImageInput> pageImages = selectedPageImages(planned, evidence);
         int maxSteps = pageImages.isEmpty()
                 ? pacing.maxSteps()
@@ -393,41 +459,35 @@ public class GroundedTeachingAgent {
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
         draft = normalizeDraft(draft, modelRequest);
-        String previousRejection = null;
-        int maxRevisionAttempts = modelRequest.pageImages().isEmpty()
-                ? MAX_REVISION_ATTEMPTS
-                : MAX_VISUAL_REVISION_ATTEMPTS;
-        for (int revision = 0; ; revision++) {
+        for (int repair = 0; ; repair++) {
             try {
-                LessonSection accepted = acceptDraft(plan, planned, evidence, assistantRunId, modelRequest, draft);
+                LessonSection accepted = validatedSection(
+                        plan, planned, evidence, modelRequest, draft, EvidenceStatus.CITED_DRAFT);
                 recordValidation(
                         assistantRunId,
                         planned,
-                        revision,
+                        repair,
                         ActivityOutcome.SUCCEEDED,
-                        "DRAFT_ACCEPTED");
-                return accepted;
+                        "CITED_DRAFT_ACCEPTED");
+                return new DraftCandidate(sectionIndex, planned, evidence, modelRequest, draft, accepted);
             } catch (IllegalArgumentException rejectedDraft) {
-                String rejection = rejectionFingerprint(rejectedDraft);
                 recordValidation(
                         assistantRunId,
                         planned,
-                        revision,
+                        repair,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (revision == maxRevisionAttempts
-                        || rejection.equals(previousRejection) && !retriableVisualStructure(rejectedDraft)) {
+                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) {
                     throw rejectedDraft;
                 }
-                previousRejection = rejection;
                 List<String> feedback = List.of(rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
                         : rejectedDraft.getMessage());
                 log.info(
-                        "Teaching topic {} revision {}/{}: {}",
+                        "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
-                        revision + 1,
-                        maxRevisionAttempts,
+                        repair + 1,
+                        MAX_DRAFT_REPAIR_ATTEMPTS,
                         feedback.getFirst());
                 SectionDraft draftToRevise = draft;
                 draft = invocations.invoke(
@@ -442,12 +502,6 @@ public class GroundedTeachingAgent {
                 draft = normalizeDraft(draft, modelRequest);
             }
         }
-    }
-
-    private boolean retriableVisualStructure(IllegalArgumentException rejection) {
-        String message = rejection.getMessage();
-        return message != null
-                && message.startsWith("Attached rulebook pages were selected because this topic needs visual teaching.");
     }
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
@@ -673,13 +727,13 @@ public class GroundedTeachingAgent {
         return (int) topicTerms.stream().filter(sourceIdentity::contains).limit(5).count() * 20;
     }
 
-    private LessonSection acceptDraft(
+    private LessonSection validatedSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> evidence,
-            UUID assistantRunId,
             TeachingLessonModel.SectionRequest modelRequest,
-            SectionDraft draft) {
+            SectionDraft draft,
+            EvidenceStatus evidenceStatus) {
         validateDraft(draft, modelRequest);
 
         Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
@@ -701,67 +755,6 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
         }
-        Set<UUID> citedEvidenceIds = generatedClaims.stream()
-                .flatMap(claim -> claim.citationIds().stream())
-                .collect(Collectors.toUnmodifiableSet());
-        var review = critic.review(
-                new ReviewRequest(
-                        assistantRunId,
-                        ContentType.LESSON,
-                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
-                        reviewClaims,
-                        evidence.stream()
-                                .filter(source -> citedEvidenceIds.contains(source.chunkId()))
-                                .map(source -> new GeneratedContentCritic.Evidence(
-                                        source.chunkId(), source.excerpt()))
-                                .toList()),
-                planned.coverageTags().stream().anyMatch(HIGH_IMPACT_TAGS::contains)
-                        ? ReviewRisk.HIGH_IMPACT
-                        : ReviewRisk.LOW_CONFIDENCE);
-        if (!review.accepted()) {
-            String fingerprint = review.issues().stream()
-                    .map(issue -> issue.type() + ":" + issue.claimPosition() + ":" + issue.evidenceIds().stream()
-                            .map(UUID::toString)
-                            .sorted()
-                            .collect(Collectors.joining(",")))
-                    .sorted()
-                    .collect(Collectors.joining(";"));
-            throw new RejectedTeachingDraftException(
-                    fingerprint,
-                    criticDiagnostic(review.issues()),
-                    "Factual review rejected the draft: " + review.issues().stream()
-                    .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
-                    .collect(Collectors.joining("; ")));
-        }
-
-        var coverageReview = critic.review(
-                new ReviewRequest(
-                        assistantRunId,
-                        ContentType.LESSON,
-                        ReviewMode.OBJECTIVE_COVERAGE,
-                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
-                        reviewClaims,
-                        evidence.stream()
-                                .map(source -> new GeneratedContentCritic.Evidence(
-                                        source.chunkId(), source.excerpt()))
-                                .toList()),
-                ReviewRisk.LOW_CONFIDENCE);
-        if (!coverageReview.accepted()) {
-            String fingerprint = coverageReview.issues().stream()
-                    .map(issue -> issue.type() + ":" + issue.claimPosition() + ":" + issue.evidenceIds().stream()
-                            .map(UUID::toString)
-                            .sorted()
-                            .collect(Collectors.joining(",")))
-                    .sorted()
-                    .collect(Collectors.joining(";"));
-            throw new RejectedTeachingDraftException(
-                    fingerprint,
-                    criticDiagnostic(coverageReview.issues()),
-                    "Objective coverage review rejected the draft: " + coverageReview.issues().stream()
-                            .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
-                            .collect(Collectors.joining("; ")));
-        }
-
         List<LessonStep> steps = IntStream.range(0, draft.steps().size())
                 .mapToObj(index -> validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
                 .toList();
@@ -778,12 +771,88 @@ public class GroundedTeachingAgent {
                 planned.coverageTags(),
                 draft.title().strip(),
                 planned.required(),
-                EvidenceStatus.SUPPORTED,
+                evidenceStatus,
                 draft.visualKind(),
                 draft.visualCaption().strip(),
                 visualSourcePages,
                 visualCitationIds,
                 steps);
+    }
+
+    private LessonSection reviewPublishedDraft(
+            TeachingPlan plan,
+            DraftCandidate candidate,
+            UUID assistantRunId) {
+        var review = postPublicationReview(
+                candidate.planned(), candidate.evidence(), candidate.draft(), assistantRunId);
+        recordValidation(
+                assistantRunId,
+                candidate.planned(),
+                0,
+                review.accepted() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
+                review.accepted() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(review.issues()));
+        if (review.accepted()) {
+            return validatedSection(
+                    plan,
+                    candidate.planned(),
+                    candidate.evidence(),
+                    candidate.modelRequest(),
+                    candidate.draft(),
+                    EvidenceStatus.SUPPORTED);
+        }
+        List<String> feedback = List.of("Post-publication factual review found: " + review.issues().stream()
+                .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
+                .collect(Collectors.joining("; ")));
+        SectionDraft corrected = invocations.invoke(
+                assistantRunId,
+                ActivityType.MODEL,
+                operationName("correctTeachingSection", candidate.planned().position()),
+                estimateTokens(candidate.modelRequest().toString()) + estimateTokens(candidate.draft().toString())
+                        + estimateTokens(feedback.toString()),
+                "Published teaching section corrected from factual review",
+                () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
+                result -> estimateTokens(result.toString()));
+        corrected = normalizeDraft(corrected, candidate.modelRequest());
+        LessonSection correctedDraft = validatedSection(
+                plan,
+                candidate.planned(),
+                candidate.evidence(),
+                candidate.modelRequest(),
+                corrected,
+                EvidenceStatus.CITED_DRAFT);
+        recordValidation(
+                assistantRunId,
+                candidate.planned(),
+                1,
+                ActivityOutcome.SUCCEEDED,
+                "POST_PUBLICATION_CORRECTION_APPLIED");
+        return correctedDraft;
+    }
+
+    private GeneratedContentCritic.Review postPublicationReview(
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            SectionDraft draft,
+            UUID assistantRunId) {
+        List<UUID> visualCitationIds = validatedVisualCitationIds(
+                draft,
+                evidence.stream().collect(Collectors.toUnmodifiableMap(
+                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first)));
+        List<Claim> claims = reviewClaims(draft, visualCitationIds);
+        return critic.review(
+                new ReviewRequest(
+                        assistantRunId,
+                        ContentType.LESSON,
+                        ReviewMode.POST_PUBLICATION,
+                        new TaskContext(planned.objective(), String.join(", ", planned.coverageTags())),
+                        claims,
+                        evidence.stream()
+                                .map(source -> new GeneratedContentCritic.Evidence(
+                                        source.chunkId(), source.excerpt()))
+                                .toList()),
+                planned.coverageTags().stream().anyMatch(HIGH_IMPACT_TAGS::contains)
+                        ? ReviewRisk.HIGH_IMPACT
+                        : ReviewRisk.LOW_CONFIDENCE);
     }
 
     private List<Claim> reviewClaims(SectionDraft draft, List<UUID> visualCitationIds) {
@@ -1006,17 +1075,7 @@ public class GroundedTeachingAgent {
         }
     }
 
-    private String rejectionFingerprint(IllegalArgumentException rejection) {
-        if (rejection instanceof RejectedTeachingDraftException criticRejection) {
-            return "critic:" + criticRejection.fingerprint();
-        }
-        return "validation:" + (rejection.getMessage() == null ? rejection.getClass().getName() : rejection.getMessage());
-    }
-
     private String rejectionCategory(IllegalArgumentException rejection) {
-        if (rejection instanceof RejectedTeachingDraftException criticRejection) {
-            return criticRejection.diagnostic();
-        }
         String message = rejection.getMessage() == null ? "" : rejection.getMessage();
         if (message.startsWith("Evidence validation failed:")) {
             return "EVIDENCE_POLICY_" + message.substring(message.indexOf(':') + 1)
@@ -1094,24 +1153,13 @@ public class GroundedTeachingAgent {
                 "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
     }
 
-    private static final class RejectedTeachingDraftException extends IllegalArgumentException {
-        private final String fingerprint;
-        private final String diagnostic;
-
-        private RejectedTeachingDraftException(String fingerprint, String diagnostic, String message) {
-            super(message);
-            this.fingerprint = fingerprint;
-            this.diagnostic = diagnostic;
-        }
-
-        private String fingerprint() {
-            return fingerprint;
-        }
-
-        private String diagnostic() {
-            return diagnostic;
-        }
-    }
+    private record DraftCandidate(
+            int sectionIndex,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            TeachingLessonModel.SectionRequest modelRequest,
+            SectionDraft draft,
+            LessonSection section) {}
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence) {
         return new EvidenceInput(
@@ -1134,7 +1182,7 @@ public class GroundedTeachingAgent {
 
     private List<PriorSectionContext> continuityContext(List<LessonSection> sections) {
         List<LessonSection> supported = sections.stream()
-                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
+                .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
                 .toList();
         int fromIndex = Math.max(0, supported.size() - 2);
         return supported.subList(fromIndex, supported.size()).stream()

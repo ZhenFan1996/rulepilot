@@ -10,9 +10,9 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v11-system.txt"),
+                resource("teaching-agent-v12-system.txt"),
                 resource("teaching-agent-v8-user.txt"),
-                resource("teaching-outline-v3-system.txt"),
+                resource("teaching-outline-v4-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v4-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
@@ -40,6 +40,7 @@ class VersionedAgentPromptsTest {
                         "Never substitute an emoji",
                         "describe it generically as the displayed reward",
                         "separate concepts",
+                        "unused temporary points persist",
                         "inclusive ownership",
                         "win condition",
                         "planet landing does not also teach moon landing",
@@ -67,6 +68,8 @@ class VersionedAgentPromptsTest {
                         "game-specific lesson",
                         "core_loop",
                         "retrieval query",
+                        "rulebook's source language",
+                        "exact printed headings",
                         "objective",
                         "visualEvidenceRecommended",
                         "page artwork",

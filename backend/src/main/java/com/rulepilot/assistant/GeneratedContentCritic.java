@@ -21,7 +21,8 @@ public interface GeneratedContentCritic {
     enum ReviewMode {
         DISCOVERY,
         ATOMIC_CONFIRMATION,
-        OBJECTIVE_COVERAGE
+        OBJECTIVE_COVERAGE,
+        POST_PUBLICATION
     }
 
     enum IssueType {

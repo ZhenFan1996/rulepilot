@@ -33,8 +33,10 @@ describe('teaching progress', () => {
   it('uses safe player language and derives chapter outcomes from publication activities', () => {
     const activities = [
       activity(1, 'composeTeachingSection|1', 'RUNNING'),
-      activity(2, 'publishTeachingSection|1', 'SUCCEEDED'),
-      activity(3, 'publishTeachingSection|2', 'REJECTED'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_DRAFT_PUBLISHED'),
+      activity(3, 'reviewPublishedTeachingSection', 'RUNNING'),
+      activity(4, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED'),
+      activity(5, 'publishTeachingSection|2', 'REJECTED'),
     ]
     const snapshot = run('run-1', activities)
 
@@ -61,9 +63,10 @@ function activity(
   sequence: number,
   operation: string,
   outcome: TeachingActivity['outcome'],
+  summary = 'internal summary',
 ): TeachingActivity {
   return {
-    sequence, type: 'MODEL', operation, summary: 'internal summary', outcome, latencyMs: 0,
+    sequence, type: 'MODEL', operation, summary, outcome, latencyMs: 0,
     occurredAt: '2026-07-21T00:01:00Z',
   }
 }

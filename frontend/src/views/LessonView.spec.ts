@@ -121,6 +121,63 @@ describe('LessonView progressive reading', () => {
     expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
     wrapper.unmount()
   })
+
+  it('lets the player use a complete cited draft while factual review remains active', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4,
+          beginnerCount: 3, durationMinutes: 25, gameTitle: 'SETI', premise: '寻找生命',
+          sections: [{ position: 1, title: '先摆主板', visualEvidenceRecommended: true }],
+        })
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) {
+        return Response.json({
+          run: {
+            id: 'run-1', state: 'VERIFYING_EVIDENCE', createdAt: '2026-07-21T00:00:00Z',
+            updatedAt: '2026-07-21T00:01:00Z', completedAt: null, lastErrorCode: null,
+          },
+          budget: { usedModelCalls: 2, maxModelCalls: 48 },
+          activities: [{
+            sequence: 2, type: 'CRITIC', operation: 'reviewPublishedTeachingSection', summary: 'Work started',
+            outcome: 'RUNNING', latencyMs: 0, occurredAt: '2026-07-21T00:01:00Z',
+          }],
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({
+          id: 'lesson-1', status: 'DRAFT_READY',
+          sections: [{ ...section(1, '先摆主板'), evidenceStatus: 'CITED_DRAFT' }],
+        })
+      }
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          AppShell: { template: '<div><slot /></div>' },
+          CardOcrCapture: true,
+          VoiceQuestionCapture: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('完整基础讲解已经可用')
+    expect(wrapper.text()).toContain('后台只是在核对和修正细节')
+    expect(wrapper.text()).toContain('完整基础讲解')
+    expect(wrapper.text()).toContain('有原文引用 · 细节核对中')
+    expect(wrapper.text()).toContain('开始对局')
+    expect(wrapper.text()).toContain('我学完了')
+    expect(wrapper.text()).not.toContain('等待下一节')
+    wrapper.unmount()
+  })
 })
 
 function section(position: number, title: string) {

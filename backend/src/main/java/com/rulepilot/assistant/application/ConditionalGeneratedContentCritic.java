@@ -65,12 +65,16 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         if (!evaluationMode && risk != ReviewRisk.LOW_CONFIDENCE && risk != ReviewRisk.HIGH_IMPACT) {
             return new Review(false, List.of());
         }
-        String operation = request.reviewMode() == ReviewMode.OBJECTIVE_COVERAGE
-                ? "reviewObjectiveCoverage"
-                : "reviewGeneratedContent";
-        String successSummary = request.reviewMode() == ReviewMode.OBJECTIVE_COVERAGE
-                ? "Objective coverage critique completed"
-                : "Generated content critique completed";
+        String operation = switch (request.reviewMode()) {
+            case OBJECTIVE_COVERAGE -> "reviewObjectiveCoverage";
+            case POST_PUBLICATION -> "reviewPublishedTeachingSection";
+            default -> "reviewGeneratedContent";
+        };
+        String successSummary = switch (request.reviewMode()) {
+            case OBJECTIVE_COVERAGE -> "Objective coverage critique completed";
+            case POST_PUBLICATION -> "Published teaching section review completed";
+            default -> "Generated content critique completed";
+        };
         List<Issue> candidateIssues = critique(request, operation, successSummary);
         if (candidateIssues.isEmpty() || request.reviewMode() != ReviewMode.DISCOVERY) {
             return new Review(true, candidateIssues);
