@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 const MINIMUM_BYTES = 100_000
 
 function usage() {
-  console.log('Usage: node scripts/preflight-public-rulebook.mjs --pdf <local.pdf> --source <publisher-url> --cover <publisher-image-url>')
+  console.log('Usage: node scripts/preflight-public-rulebook.mjs --pdf <local.pdf> --source <publisher-url> (--cover <publisher-image-url> | --bgg-id <game-id>)')
   console.log('Checks that a local publisher-provided rulebook is a complete PDF before any model generation.')
 }
 
@@ -18,9 +18,18 @@ function parseArguments(argv) {
     else if (argument === '--pdf') options.pdf = argv[++index]
     else if (argument === '--source') options.source = argv[++index]
     else if (argument === '--cover') options.cover = argv[++index]
+    else if (argument === '--bgg-id') options.bggId = argv[++index]
     else throw new Error(`Unknown argument: ${argument}`)
   }
   return options
+}
+
+function bggGameId(value) {
+  if (value === undefined || value === null || value === '') return null
+  if (!/^[1-9][0-9]{0,9}$/.test(String(value))) {
+    throw new Error('--bgg-id must be a positive BoardGameGeek game ID')
+  }
+  return Number(value)
 }
 
 function publisherUrl(value, label) {
@@ -41,9 +50,13 @@ function pageObjects(pdf) {
   return [...pdf.matchAll(/\/Type\s*\/Page(?:\s|\/|>>)/g)].length
 }
 
-export async function preflightPublicRulebook({ pdfPath, sourceUrl, coverUrl }) {
+export async function preflightPublicRulebook({ pdfPath, sourceUrl, coverUrl, bggId }) {
   const source = publisherUrl(sourceUrl, '--source')
-  const cover = publisherUrl(coverUrl, '--cover')
+  const cover = coverUrl ? publisherUrl(coverUrl, '--cover') : null
+  const boardGameGeekId = bggGameId(bggId)
+  if (!cover && !boardGameGeekId) {
+    throw new Error('A publisher cover URL or --bgg-id is required')
+  }
   if (!pdfPath) throw new Error('--pdf is required')
 
   const absolutePath = resolve(pdfPath)
@@ -66,6 +79,7 @@ export async function preflightPublicRulebook({ pdfPath, sourceUrl, coverUrl }) 
     detectedPageObjects: pages,
     officialSourceUrl: source,
     officialCoverUrl: cover,
+    bggGameId: boardGameGeekId,
   }
 }
 
@@ -76,6 +90,7 @@ async function main() {
     pdfPath: options.pdf,
     sourceUrl: options.source,
     coverUrl: options.cover,
+    bggId: options.bggId,
   })
   console.log(JSON.stringify(report, null, 2))
 }

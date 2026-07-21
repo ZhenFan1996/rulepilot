@@ -29,7 +29,38 @@ test('accepts a complete publisher PDF and reports a stable digest', async () =>
   assert.equal(report.detectedPageObjects, 1)
   assert.equal(report.officialSourceUrl, publisher.sourceUrl)
   assert.equal(report.officialCoverUrl, publisher.coverUrl)
+  assert.equal(report.bggGameId, null)
   assert.match(report.sha256, /^[a-f0-9]{64}$/)
+})
+
+test('accepts a BoardGameGeek ID when a publisher does not expose a reusable cover image', async () => {
+  const path = await fixture(Buffer.concat([
+    Buffer.from('%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n'),
+    Buffer.alloc(100_000, 1),
+    Buffer.from('\n%%EOF\n'),
+  ]))
+
+  const report = await preflightPublicRulebook({
+    pdfPath: path,
+    sourceUrl: publisher.sourceUrl,
+    bggId: '178900',
+  })
+
+  assert.equal(report.officialCoverUrl, null)
+  assert.equal(report.bggGameId, 178900)
+})
+
+test('requires a publisher cover URL or a BoardGameGeek ID', async () => {
+  const path = await fixture(Buffer.concat([
+    Buffer.from('%PDF-1.7\n1 0 obj << /Type /Page >> endobj\n'),
+    Buffer.alloc(100_000, 1),
+    Buffer.from('\n%%EOF\n'),
+  ]))
+
+  await assert.rejects(
+    () => preflightPublicRulebook({ pdfPath: path, sourceUrl: publisher.sourceUrl }),
+    /cover URL or --bgg-id is required/,
+  )
 })
 
 test('rejects a partial PDF even when its header and page object exist', async () => {

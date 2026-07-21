@@ -26,11 +26,11 @@ demo-data: ## Load the self-authored demo rulebook into a running local backend
 product-eval: ## Evaluate a lesson against an external ordinary-player product dataset
 	@node scripts/evaluate-product.mjs --dataset "$(PRODUCT_EVAL_DATASET)" --output "$(PRODUCT_EVAL_OUTPUT)"
 
-corpus-preflight: ## Validate one local publisher rulebook before public-corpus generation (PDF= SOURCE= COVER=)
+corpus-preflight: ## Validate one local publisher rulebook before public-corpus generation (PDF= SOURCE= COVER= or BGG_ID=)
 	@test -n "$(PDF)" || (echo "PDF is required"; exit 2)
 	@test -n "$(SOURCE)" || (echo "SOURCE is required"; exit 2)
-	@test -n "$(COVER)" || (echo "COVER is required"; exit 2)
-	@node scripts/preflight-public-rulebook.mjs --pdf "$(PDF)" --source "$(SOURCE)" --cover "$(COVER)"
+	@test -n "$(COVER)$(BGG_ID)" || (echo "COVER or BGG_ID is required"; exit 2)
+	@node scripts/preflight-public-rulebook.mjs --pdf "$(PDF)" --source "$(SOURCE)" $(if $(COVER),--cover "$(COVER)") $(if $(BGG_ID),--bgg-id "$(BGG_ID)")
 
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
