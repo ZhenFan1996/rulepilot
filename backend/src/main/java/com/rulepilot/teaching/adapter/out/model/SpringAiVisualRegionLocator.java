@@ -1,5 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -13,6 +15,7 @@ import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
@@ -21,6 +24,7 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
@@ -41,7 +45,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     public Optional<LocatedRegion> locate(VisualLocationRequest request) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) return Optional.empty();
-        ModelRegion response = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt()
+        var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(OpenAiChatOptions.builder().extraBody(Map.of("enable_thinking", false)));
+        }
+        String content = prompt
                 .system(SYSTEM)
                 .user(user -> {
                     user.text("""
@@ -59,8 +67,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
                 .call()
-                .entity(ModelRegion.class);
-        if (response == null) return Optional.empty();
+                .content();
+        Optional<ModelRegion> parsed = parseModelRegion(content);
+        if (parsed.isEmpty()) return Optional.empty();
+        ModelRegion response = parsed.get();
         List<UUID> supported = response.supportedClaimRefs().stream()
                 .map(ref -> claimId(ref, request))
                 .filter(java.util.Objects::nonNull)
@@ -84,9 +94,27 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return index >= 0 && index < request.claims().size() ? request.claims().get(index).evidenceId() : null;
     }
 
-    private record ModelRegion(
+    static Optional<ModelRegion> parseModelRegion(String content) {
+        if (content == null || content.isBlank()) return Optional.empty();
+        String json = content.strip();
+        if (json.startsWith("```")) {
+            int firstLineEnd = json.indexOf('\n');
+            int closingFence = json.lastIndexOf("```");
+            if (firstLineEnd < 0 || closingFence <= firstLineEnd) return Optional.empty();
+            json = json.substring(firstLineEnd + 1, closingFence).strip();
+        }
+        if (json.equals("null")) return Optional.empty();
+        try {
+            return Optional.ofNullable(JSON.readValue(json, ModelRegion.class));
+        } catch (JsonProcessingException invalidJson) {
+            log.debug("Rejected non-JSON visual locator output");
+            return Optional.empty();
+        }
+    }
+
+    record ModelRegion(
             int pageNumber, String label, int x, int y, int width, int height, List<String> supportedClaimRefs) {
-        private ModelRegion {
+        ModelRegion {
             supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
         }
     }

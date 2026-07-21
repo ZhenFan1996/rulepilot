@@ -103,6 +103,10 @@ public class RuntimeModelConfiguration {
         return currentState().assignments().forRole(role);
     }
 
+    public String providerFor(Role role, String username) {
+        return stateForOrStartup(username).assignments().forRole(role);
+    }
+
     public boolean supportsVision(Role role) {
         State current = currentState();
         ConfiguredProvider configured = current.providers().get(current.assignments().forRole(role));
