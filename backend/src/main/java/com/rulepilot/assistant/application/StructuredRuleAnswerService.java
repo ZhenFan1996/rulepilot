@@ -26,6 +26,7 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.AnswerRetrievalPlanner.RetrievalIntent;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
@@ -63,7 +64,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v6-document-driven";
+    private static final String ANSWER_POLICY_VERSION = "answer-v7-cross-language-retrieval";
 
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
@@ -221,7 +222,7 @@ public class StructuredRuleAnswerService {
             }
             cacheMisses.increment();
         }
-        RetrievalResult retrievalResult = retrieveEvidence(assistantRunId, understood, context);
+        RetrievalResult retrievalResult = retrieveEvidence(assistantRunId, understood, context, username);
         List<HybridEvidenceHit> evidence = retrievalResult.evidence();
         if (retrievalResult.conflicting()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突，无法可靠回答。");
@@ -261,7 +262,7 @@ public class StructuredRuleAnswerService {
         if (draft == null) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
-        if (!draft.answerable() && gameSessionId != null) {
+        if (!draft.answerable()) {
             draft = reviseEvidenceBackedAbstention(
                     assistantRunId, username, gameSessionId, modelRequest, draft);
         }
@@ -419,11 +420,12 @@ public class StructuredRuleAnswerService {
     }
 
     private RetrievalResult retrieveEvidence(
-            UUID assistantRunId, UnderstoodQuestion question, QuestionContext context) {
+            UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         boolean conflicting = false;
-        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context);
+        List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
+        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
             RetrievalIntent intent = intents.get(intentIndex);
             try {
@@ -482,6 +484,43 @@ public class StructuredRuleAnswerService {
                     .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         }
         return new RetrievalResult(selected.values().stream().limit(5).toList(), false);
+    }
+
+    private List<String> rewriteCrossLanguageQueries(
+            UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
+        if (!requiresCrossLanguageExpansion(question.normalizedQuestion())) {
+            return List.of();
+        }
+        RuleAnswerRateLimiter.Permit permit = rateLimiter.acquireModel(username, null, model.providerId());
+        try {
+            return invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "rewriteAnswerRetrievalQueries",
+                    estimateTokens(question.normalizedQuestion()),
+                    "Cross-language retrieval phrases prepared",
+                    () -> model.rewriteRetrievalQueries(new RetrievalQueryRequest(
+                            question.normalizedQuestion(), context.previousQuestion(), context.currentLessonSection())),
+                    result -> estimateTokens(result.toString()));
+        } catch (RuleAnswerModelTimeoutException exception) {
+            LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
+            return List.of();
+        } catch (RuntimeException exception) {
+            LOGGER.info("Cross-language retrieval rewrite unavailable; continuing with the original question");
+            return List.of();
+        } finally {
+            permit.close();
+        }
+    }
+
+    private boolean requiresCrossLanguageExpansion(String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        long cjkCharacters = question.codePoints()
+                .filter(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
+                .count();
+        return cjkCharacters >= 2;
     }
 
     private boolean sameEvidenceSnapshot(HybridEvidenceHit first, HybridEvidenceHit second) {

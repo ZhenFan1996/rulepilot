@@ -8,8 +8,11 @@ import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -91,11 +94,63 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         }
     }
 
+    @Override
+    public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
+        if (models.usesFake(Role.ANSWER)) {
+            return List.of();
+        }
+        try {
+            ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
+            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
+                OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+                if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+                    options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+                } else {
+                    options.extraBody(Map.of("enable_thinking", false));
+                }
+                if (usesQwen()) {
+                    options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+                }
+                prompt = prompt.options(options);
+            }
+            RetrievalQueryDraft draft = prompt
+                    .system(prompts.answerRetrievalRewriteSystem())
+                    .user(user -> user.text(prompts.answerRetrievalRewriteUser())
+                            .param("question", request.question())
+                            .param("previousQuestion", request.previousQuestion())
+                            .param("lessonSection", request.currentLessonSection()))
+                    .call()
+                    .entity(RetrievalQueryDraft.class);
+            if (draft == null || draft.queries() == null) {
+                return List.of();
+            }
+            return draft.queries().stream()
+                    .filter(query -> query != null && !query.isBlank())
+                    .map(String::strip)
+                    .filter(query -> query.length() <= 500)
+                    .distinct()
+                    .limit(2)
+                    .collect(Collectors.toUnmodifiableList());
+        } catch (RuntimeException exception) {
+            if (isTimeout(exception)) {
+                throw new RuleAnswerModelTimeoutException("answer retrieval rewrite timed out", exception);
+            }
+            return List.of();
+        }
+    }
+
     private ModelDraft composeOnce(ModelRequest request, String repairInstruction) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+        if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+                options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            } else {
+                options.extraBody(Map.of("enable_thinking", false));
+            }
+            if (usesQwen()) {
+                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            }
             prompt = prompt.options(options);
         }
         return prompt
@@ -114,6 +169,12 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 .call()
                 .entity(ModelDraft.class);
     }
+
+    private boolean usesQwen() {
+        return "qwen".equals(models.providerFor(Role.ANSWER));
+    }
+
+    private record RetrievalQueryDraft(List<String> queries) {}
 
     private boolean isTimeout(Throwable failure) {
         Throwable current = failure;

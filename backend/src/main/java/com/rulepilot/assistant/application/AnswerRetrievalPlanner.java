@@ -33,11 +33,24 @@ public final class AnswerRetrievalPlanner {
     private AnswerRetrievalPlanner() {}
 
     public static List<RetrievalIntent> plan(UnderstoodQuestion question, QuestionContext context) {
+        return plan(question, context, List.of());
+    }
+
+    public static List<RetrievalIntent> plan(
+            UnderstoodQuestion question, QuestionContext context, List<String> rewrittenQueries) {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
         String currentSection = knownSection(context.currentLessonSection());
         List<RetrievalIntent> intents = new ArrayList<>();
+        if (rewrittenQueries != null) {
+            rewrittenQueries.stream()
+                    .map(AnswerRetrievalPlanner::bounded)
+                    .filter(query -> !query.isBlank())
+                    .distinct()
+                    .limit(2)
+                    .forEach(query -> intents.add(new RetrievalIntent(query, Set.of(), null)));
+        }
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null

@@ -775,6 +775,13 @@ function currentLessonContext() {
   return [section.topicKey, section.title, ...section.coverageTags].join(' ')
 }
 
+function focusQuestionPanel() {
+  const input = document.getElementById('lesson-question') as HTMLTextAreaElement | null
+  if (!input) return
+  input.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => input.focus(), 250)
+}
+
 async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
   if (!text || !plan.value || !currentSection.value || answerLoading.value || !online.value) return
   answerLoading.value = true
@@ -1401,6 +1408,13 @@ onUnmounted(() => {
                 <p class="text-xs font-semibold text-copper">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p>
                 <h2 class="mt-2 font-display text-3xl font-semibold leading-tight sm:text-4xl">{{ currentSection.title }}</h2>
                 <p class="mt-3 hidden max-w-2xl text-sm leading-6 text-ink/55 sm:block">学完这一节，你应该能：{{ lessonOutcome(currentSection) }}</p>
+                <button
+                  type="button"
+                  class="mt-4 inline-flex min-h-11 items-center rounded-xl bg-indigo px-4 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-indigo/90"
+                  @click="focusQuestionPanel"
+                >
+                  问这一节的规则
+                </button>
               </div>
               <details class="relative hidden text-xs sm:block">
                 <summary class="cursor-pointer list-none rounded-full border border-ink/10 px-3 py-2 font-semibold text-ink/55">
@@ -1717,14 +1731,13 @@ onUnmounted(() => {
               </div>
             </section>
 
-            <details class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
-              <summary class="cursor-pointer list-none rounded-2xl border border-ink/10 px-4 py-4 font-semibold hover:bg-canvas">还有没明白的？展开问这一节</summary>
-              <div class="mt-6">
-                <p class="text-xs font-semibold text-copper">问问这一节</p>
+            <section id="lesson-question-panel" class="mt-8 scroll-mt-6 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
+              <div class="rounded-3xl border border-indigo/20 bg-indigo/[0.035] p-4 sm:p-6">
                 <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
                   <div>
-                    <h3 id="lesson-question-title" class="font-display text-2xl font-semibold">关于本节继续追问</h3>
-                    <p class="mt-2 text-sm leading-6 text-ink/55">问题会自动沿用“{{ currentSection.title }}”及当前规则版本。</p>
+                    <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">规则答疑</p>
+                    <h3 id="lesson-question-title" class="mt-1 font-display text-2xl font-semibold">这一步哪里不清楚？</h3>
+                    <p class="mt-2 text-sm leading-6 text-ink/55">直接问；回答会重新查找“{{ currentSection.title }}”对应的规则原文和页码。</p>
                   </div>
                   <span class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">第 {{ currentSection.position }} 节上下文</span>
                 </div>
@@ -1784,8 +1797,16 @@ onUnmounted(() => {
 
                 <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
                 <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
-                  <p class="text-sm font-semibold">正在{{ activeLearningIntent ? learningIntentLabel(activeLearningIntent) : '理解这次追问' }}并重新核对规则书…</p>
-                  <p class="text-xs leading-5 text-ink/50">上一问只帮助理解“它、这样、再一次”指什么；结论仍会重新查找并验证规则依据。</p>
+                  <div class="flex items-center gap-3">
+                    <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
+                    <p class="text-sm font-semibold">正在{{ activeLearningIntent ? learningIntentLabel(activeLearningIntent) : '理解这次追问' }}并重新核对规则书…</p>
+                  </div>
+                  <ol class="grid gap-2 text-xs leading-5 text-ink/55 sm:grid-cols-3">
+                    <li><span class="font-semibold text-indigo">1.</span> 对齐问题与本节术语</li>
+                    <li><span class="font-semibold text-indigo">2.</span> 查找规则书原文</li>
+                    <li><span class="font-semibold text-indigo">3.</span> 核对引用后组织答案</li>
+                  </ol>
+                  <p class="text-xs leading-5 text-ink/50">如果规则书是外语，会先补充检索短语；这不是直接使用模型记忆作答。</p>
                   <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
                   <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
                 </div>
@@ -1802,13 +1823,13 @@ onUnmounted(() => {
                     <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
                     <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
 
-                    <details v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
-                      <summary class="cursor-pointer font-semibold text-indigo">查看详细解释与例外</summary>
+                    <div v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
+                      <p class="text-sm font-semibold text-indigo">详细解释</p>
                       <p class="mt-3 leading-7 text-ink/70">{{ answer.explanation }}</p>
                       <ul v-if="answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
                         <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
                       </ul>
-                    </details>
+                    </div>
 
                     <div v-if="answer.status === 'ANSWERED'" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" aria-label="继续追问">
                       <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="requestLearningHelp('WHY')">前后怎么接</button>
@@ -1865,7 +1886,7 @@ onUnmounted(() => {
                   </div>
                 </article>
               </div>
-            </details>
+            </section>
           </div>
         </section>
       </div>

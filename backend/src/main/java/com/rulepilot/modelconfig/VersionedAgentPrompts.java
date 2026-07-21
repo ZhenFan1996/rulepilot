@@ -15,6 +15,8 @@ public class VersionedAgentPrompts {
     private final String teachingOutlineUser;
     private final String answerSystem;
     private final String answerUser;
+    private final String answerRetrievalRewriteSystem;
+    private final String answerRetrievalRewriteUser;
     private final String criticSystem;
     private final String atomicCriticSystem;
     private final String objectiveCoverageCriticSystem;
@@ -28,6 +30,8 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v5-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
+            @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
+            @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
@@ -40,6 +44,8 @@ public class VersionedAgentPrompts {
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = read(answerSystem);
         this.answerUser = read(answerUser);
+        this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
+        this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
         this.criticSystem = read(criticSystem);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
@@ -69,6 +75,14 @@ public class VersionedAgentPrompts {
 
     public String answerUser() {
         return answerUser;
+    }
+
+    public String answerRetrievalRewriteSystem() {
+        return answerRetrievalRewriteSystem;
+    }
+
+    public String answerRetrievalRewriteUser() {
+        return answerRetrievalRewriteUser;
     }
 
     public String criticSystem() {

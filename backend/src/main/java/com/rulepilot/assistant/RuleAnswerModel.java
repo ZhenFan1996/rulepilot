@@ -17,6 +17,14 @@ public interface RuleAnswerModel {
         return compose(request);
     }
 
+    /**
+     * Produces bounded search phrases only. The phrases are untrusted retrieval input, never rule evidence or an
+     * answer, and may be ignored when the configured model cannot safely provide them.
+     */
+    default List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
+        return List.of();
+    }
+
     record ModelRequest(String question, QuestionType questionType, AnswerContext context, List<EvidenceInput> evidence) {
         public ModelRequest {
             if (question == null || question.isBlank() || questionType == null || context == null
@@ -24,6 +32,21 @@ public interface RuleAnswerModel {
                 throw new IllegalArgumentException("answer model request is invalid");
             }
             evidence = List.copyOf(evidence);
+        }
+    }
+
+    record RetrievalQueryRequest(String question, String previousQuestion, String currentLessonSection) {
+        public RetrievalQueryRequest {
+            if (question == null || question.isBlank() || question.length() > 800) {
+                throw new IllegalArgumentException("retrieval query request is invalid");
+            }
+            question = question.strip();
+            previousQuestion = optional(previousQuestion);
+            currentLessonSection = optional(currentLessonSection);
+        }
+
+        private static String optional(String value) {
+            return value == null || value.isBlank() ? "not provided" : value.strip();
         }
     }
 

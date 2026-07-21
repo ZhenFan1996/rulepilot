@@ -14,6 +14,28 @@ import org.junit.jupiter.api.Test;
 class AnswerRetrievalPlannerTest {
 
     @Test
+    void putsBoundedModelProvidedQueriesFirstWithoutAddingSectionFilters() {
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                UUID.randomUUID(),
+                "万能牌能匹配行动花色吗？",
+                "万能牌能匹配行动花色吗？",
+                QuestionType.RULE_QUERY,
+                List.of("万能牌", "花色"),
+                Set.of(),
+                "ACTIONS");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(UUID.randomUUID(), "cards-and-suits", null, 4, Set.of()),
+                List.of("wild card matching action suit", "wild card matching action suit", "ignored"));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .startsWith("wild card matching action suit", "ignored");
+        assertThat(intents.getFirst().sectionTypes()).isEmpty();
+        assertThat(intents.getFirst().currentSectionType()).isNull();
+    }
+
+    @Test
     void buildsPrimaryAndContextualSupplementaryIntents() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(

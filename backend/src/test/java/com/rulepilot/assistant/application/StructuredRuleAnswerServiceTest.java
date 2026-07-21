@@ -108,6 +108,80 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void retriesAnOrdinaryQuestionWhenRetrievedEvidenceDirectlyResolvesAnInitialAbstention() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Tidal gate",
+                "After raising its sail, a ship may cross the tidal gate. The cost is the same as entering the current channel.",
+                12, 12, 0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(false, "uncertain", null, null, List.of(), List.of(), "LOW");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return new ModelDraft(
+                        "先升起船帆；之后才能通过。",
+                        "通过费用与进入当前航道的费用相同。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.04, 1, 1, true)), model);
+
+        var answer = service.answer(
+                "Can a ship cross the tidal gate?", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(revisions).hasValue(1);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
+    }
+
+    @Test
+    void putsModelProvidedCrossLanguageSearchPhrasesAheadOfSurfaceLanguageQueries() {
+        RuleEvidenceHit directSource = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Wild suits",
+                "A wild card may be treated as any required suit when matching an action.",
+                6, 6, 0.9);
+        RuleEvidenceHit unrelatedSource = evidence("ACTIONS");
+        AtomicReference<String> firstQuery = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
+                assertThat(request.question()).isEqualTo("万能牌能匹配行动花色吗？");
+                return List.of("wild card matching action suit");
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId)
+                        .contains(directSource.chunkId());
+                return new ModelDraft(
+                        "可以按规则作为所需花色。",
+                        "匹配行动时，万能牌可以视为任何所需花色。",
+                        List.of(directSource.chunkId()), List.of(), "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> {
+                    firstQuery.compareAndSet(null, query);
+                    return query.equals("wild card matching action suit")
+                            ? List.of(new HybridEvidenceHit(directSource, 0.09, 1, 1, true))
+                            : List.of(new HybridEvidenceHit(unrelatedSource, 0.03, 1, null, false));
+                }, model);
+
+        var answer = service.answer(
+                "万能牌能匹配行动花色吗？", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(firstQuery).hasValue("wild card matching action suit");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(6);
+    }
+
+    @Test
     void rejectsCitationThatWasNotRetrieved() {
         RuleEvidenceHit source = evidence("SCORING");
         var service = answerService(
