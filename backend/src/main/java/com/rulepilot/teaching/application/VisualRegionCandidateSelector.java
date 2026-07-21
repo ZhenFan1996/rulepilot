@@ -1,0 +1,71 @@
+package com.rulepilot.teaching.application;
+
+import com.rulepilot.ingestion.domain.RulebookUnderstanding;
+import com.rulepilot.ingestion.domain.RulebookUnderstanding.PageBlock;
+import com.rulepilot.ingestion.domain.RulebookUnderstanding.Rectangle;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Stream;
+
+/** Chooses compact, document-derived regions before a vision model is asked to locate a final crop. */
+public final class VisualRegionCandidateSelector {
+
+    private static final int MAX_CANDIDATES = 4;
+
+    public List<Candidate> select(
+            RulebookUnderstanding understanding,
+            Set<Integer> citedPages,
+            List<String> sectionTerms) {
+        if (understanding == null || citedPages == null || sectionTerms == null) {
+            throw new IllegalArgumentException("visual region selection input is required");
+        }
+        Set<String> terms = normalizedTerms(sectionTerms);
+        if (citedPages.isEmpty() || terms.isEmpty()) return List.of();
+        return understanding.pageBlocks().stream()
+                .filter(block -> block.role() != RulebookUnderstanding.BlockRole.FOOTER)
+                .filter(block -> citedPages.contains(block.pageNumber()))
+                .map(block -> new ScoredBlock(block, score(block, terms)))
+                .filter(candidate -> candidate.score() > 0)
+                .sorted(Comparator.comparingInt(ScoredBlock::score).reversed()
+                        .thenComparing(candidate -> candidate.block().pageNumber())
+                        .thenComparing(candidate -> candidate.block().readingOrder()))
+                .limit(MAX_CANDIDATES)
+                .map(candidate -> Candidate.from(candidate.block()))
+                .toList();
+    }
+
+    private int score(PageBlock block, Set<String> terms) {
+        Set<String> words = normalizedTerms(List.of(block.text()));
+        int overlap = (int) terms.stream().filter(words::contains).count();
+        if (overlap == 0) return 0;
+        int headingBonus = block.role() == RulebookUnderstanding.BlockRole.HEADING ? 3 : 0;
+        int compactBonus = block.rectangle().width() * block.rectangle().height() <= 350_000 ? 1 : 0;
+        return overlap * 10 + headingBonus + compactBonus;
+    }
+
+    private Set<String> normalizedTerms(List<String> values) {
+        return values.stream()
+                .filter(value -> value != null)
+                .flatMap(value -> Stream.of(value.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
+                .filter(term -> term.length() >= 2)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    public record Candidate(int pageNumber, Rectangle rectangle, String sourceText) {
+        public Candidate {
+            if (pageNumber < 1 || rectangle == null || sourceText == null || sourceText.isBlank()) {
+                throw new IllegalArgumentException("visual region candidate is invalid");
+            }
+            sourceText = sourceText.strip();
+        }
+
+        private static Candidate from(PageBlock block) {
+            return new Candidate(block.pageNumber(), block.rectangle(), block.text());
+        }
+    }
+
+    private record ScoredBlock(PageBlock block, int score) {}
+}
