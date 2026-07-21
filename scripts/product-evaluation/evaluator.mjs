@@ -108,12 +108,44 @@ function evaluateVisualCheck(visualCheck, lesson) {
     label,
     machineStatus: matched ? 'PASS' : 'FAIL',
     matchedPage: matched?.visualFocus?.pageNumber ?? null,
+    cropIdentity: matched ? cropIdentity(matched.visualFocus) : null,
     playerAssessment: assessmentOf(
       visualCheck.playerAssessment,
       `visualCheck ${id}.playerAssessment`,
       VISUAL_RESULTS,
     ),
   }
+}
+
+function cropIdentity(focus) {
+  return [focus.pageNumber, focus.x, focus.y, focus.width, focus.height].join(':')
+}
+
+function visualBenchmark(visualEvaluation, applicability) {
+  const minimumRatedCrops = visualEvaluation.minimumRatedCrops
+  const minimumHelpfulPercent = visualEvaluation.minimumHelpfulPercent
+  if (minimumRatedCrops === undefined && minimumHelpfulPercent === undefined) return null
+  if (applicability !== 'REQUIRED' || minimumRatedCrops === undefined || minimumHelpfulPercent === undefined) {
+    inputError('visual benchmark requires REQUIRED applicability, minimumRatedCrops, and minimumHelpfulPercent')
+  }
+  const rated = number(minimumRatedCrops, 'visualEvaluation.minimumRatedCrops', 1)
+  const helpful = number(minimumHelpfulPercent, 'visualEvaluation.minimumHelpfulPercent')
+  if (!Number.isInteger(rated)) inputError('visualEvaluation.minimumRatedCrops must be an integer')
+  if (helpful > 100) inputError('visualEvaluation.minimumHelpfulPercent must be <= 100')
+  return { minimumRatedCrops: rated, minimumHelpfulPercent: helpful }
+}
+
+function ratedVisualCrops(visualResults) {
+  const crops = new Map()
+  visualResults.forEach((result) => {
+    if (result.cropIdentity === null || result.playerAssessment.result === 'NOT_RUN') return
+    const previous = crops.get(result.cropIdentity)
+    if (previous && previous !== result.playerAssessment.result) {
+      inputError(`visual crop ${result.cropIdentity} has conflicting player assessments`)
+    }
+    crops.set(result.cropIdentity, result.playerAssessment.result)
+  })
+  return [...crops.values()]
 }
 
 function validateRoles(roles) {
@@ -141,14 +173,24 @@ function taskChecks(taskResults) {
   ]
 }
 
-function visualChecks(visualResults) {
-  return [
+function visualChecks(visualResults, benchmark, ratedCrops) {
+  const checks = [
     ...visualResults.map((item) => check(`visual-${item.id}`, 'VISUAL', item.machineStatus,
       item.matchedPage, 'a cited matching crop on an expected page', item.label)),
     ...visualResults.map((item) => check(`visual-player-${item.id}`, 'PLAYER',
       item.playerAssessment.result === 'HELPFUL' ? 'PASS' : item.playerAssessment.result === 'NOT_RUN' ? 'NOT_EVALUATED' : 'FAIL',
       item.playerAssessment.result, 'HELPFUL', item.label)),
   ]
+  if (benchmark === null) return checks
+  const helpfulPercent = ratedCrops.length === 0 ? 0 : ratedCrops.filter((result) => result === 'HELPFUL').length * 100 / ratedCrops.length
+  const enoughSamples = ratedCrops.length >= benchmark.minimumRatedCrops
+  checks.push(check('visual-rated-sample', 'VISUAL', enoughSamples ? 'PASS' : 'NOT_EVALUATED',
+    ratedCrops.length, benchmark.minimumRatedCrops, 'Only unique, manually rated visual crops count toward the benchmark.'))
+  checks.push(check('visual-helpfulness-rate', 'VISUAL', !enoughSamples ? 'NOT_EVALUATED'
+    : helpfulPercent >= benchmark.minimumHelpfulPercent ? 'PASS' : 'FAIL',
+  Math.round(helpfulPercent * 100) / 100, benchmark.minimumHelpfulPercent,
+  'The useful-crop rate is computed from unique manually rated crops.'))
+  return checks
 }
 
 export function evaluateProduct(bundle) {
@@ -204,6 +246,8 @@ export function evaluateProduct(bundle) {
   const visualReason = visualApplicability === 'NOT_APPLICABLE'
     ? string(visualEvaluation.reason, 'visualEvaluation.reason') : null
   const visualResults = configuredVisualChecks.map((item) => evaluateVisualCheck(object(item, 'visual check'), lesson))
+  const benchmark = visualBenchmark(visualEvaluation, visualApplicability)
+  const ratedCrops = ratedVisualCrops(visualResults)
 
   const checks = [
     check('source-hash', 'INPUT', digests.rulebook === sha256(dataset.sourceSha256, 'dataset.sourceSha256') ? 'PASS' : 'FAIL',
@@ -228,7 +272,7 @@ export function evaluateProduct(bundle) {
       Math.round(citationCoveragePercent * 100) / 100, limits.citation,
       `${citedSteps.length}/${allSteps.length} steps contain both source pages and chunk IDs.`),
     ...taskChecks(taskResults),
-    ...visualChecks(visualResults),
+    ...visualChecks(visualResults, benchmark, ratedCrops),
   ]
   appendOptionalChecks(checks, thresholds, versions, normalizedPromptVersions, roles)
   const failureStages = [...new Set(checks.filter((item) => item.status === 'FAIL').map((item) => item.stage))]
@@ -257,11 +301,15 @@ export function evaluateProduct(bundle) {
       playerCanDo: taskResults.filter((task) => task.playerAssessment.result === 'CAN_DO').length,
       total: taskResults.length, results: taskResults },
     visuals: visualApplicability === 'NOT_APPLICABLE'
-      ? { applicability: visualApplicability, reason: visualReason, passed: 0, total: 0, playerHelpful: 0 }
+      ? { applicability: visualApplicability, reason: visualReason, passed: 0, total: 0, rated: 0, playerHelpful: 0,
+          helpfulPercent: null, benchmark: null }
       : { applicability: visualApplicability, reason: null,
           passed: visualResults.filter((item) => item.machineStatus === 'PASS').length,
           total: visualResults.length,
-          playerHelpful: visualResults.filter((item) => item.playerAssessment.result === 'HELPFUL').length },
+          rated: ratedCrops.length,
+          playerHelpful: ratedCrops.filter((result) => result === 'HELPFUL').length,
+          helpfulPercent: ratedCrops.length === 0 ? null : Math.round(ratedCrops.filter((result) => result === 'HELPFUL').length * 10_000 / ratedCrops.length) / 100,
+          benchmark },
     checks,
   }
 }
