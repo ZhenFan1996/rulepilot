@@ -65,7 +65,7 @@ class VisualLessonEnricherTest {
         VisualRegionLocator locator = request -> {
             assertThat(request.candidates()).singleElement().satisfies(candidate -> {
                 assertThat(candidate.rectangle()).isEqualTo(new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000));
-                assertThat(candidate.sourceText()).isEqualTo("Cited page 2");
+                assertThat(candidate.sourceText()).isEqualTo("Cited page 2 visual context");
             });
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
                     2, "Orbit track", 640, 700, 180, 120, List.of(chunk)));
@@ -112,7 +112,8 @@ class VisualLessonEnricherTest {
         VisualRegionLocator locator = request -> {
             assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
             assertThat(request.candidates()).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
-                    .containsExactly(3, 2);
+                    .containsExactly(3, 2, 3);
+            assertThat(request.candidates().getLast().sourceText()).isEqualTo("Cited page 3 visual context");
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
                     3, "Launch", 100, 200, 300, 160, List.of(chunk)));
         };

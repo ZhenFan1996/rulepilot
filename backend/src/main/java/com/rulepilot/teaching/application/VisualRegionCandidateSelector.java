@@ -40,10 +40,18 @@ public final class VisualRegionCandidateSelector {
         if (lexicalMatches.isEmpty()) {
             return citedPageCandidates(citedPages);
         }
-        return lexicalMatches.stream()
-                .limit(MAX_CANDIDATES)
+        List<Candidate> selected = lexicalMatches.stream()
+                // Keep one slot for visual context. A text block can name a rule that a nearby diagram shows,
+                // so making the block the only allowed boundary would hide the diagram from the locator.
+                .limit(MAX_CANDIDATES - 1)
                 .map(candidate -> Candidate.from(candidate.block()))
-                .toList();
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        selected.stream()
+                .map(Candidate::pageNumber)
+                .distinct()
+                .findFirst()
+                .ifPresent(pageNumber -> selected.add(citedPageCandidate(pageNumber)));
+        return List.copyOf(selected);
     }
 
     private List<Candidate> citedPageCandidates(Set<Integer> citedPages) {
@@ -52,13 +60,17 @@ public final class VisualRegionCandidateSelector {
                 ? pages
                 : List.of(pages.getFirst(), pages.getLast());
         return coveredPages.stream()
-                // A translated lesson has no reliable text-level anchor in an English (or other-language)
-                // source. Keep the page citation boundary, but let vision locate the visible teaching aid.
-                .map(pageNumber -> new Candidate(
-                        pageNumber,
-                        new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000),
-                        "Cited page " + pageNumber))
+                .map(this::citedPageCandidate)
                 .toList();
+    }
+
+    private Candidate citedPageCandidate(int pageNumber) {
+        // A translated lesson has no reliable text-level anchor in an English (or other-language)
+        // source. Keep the page citation boundary, but let vision locate the visible teaching aid.
+        return new Candidate(
+                pageNumber,
+                new RulebookUnderstanding.Rectangle(0, 0, 1_000, 1_000),
+                "Cited page " + pageNumber + " visual context");
     }
 
     private int score(PageBlock block, Set<String> terms) {

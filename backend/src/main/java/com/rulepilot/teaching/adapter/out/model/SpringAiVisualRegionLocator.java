@@ -31,6 +31,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
             Return one compact region only when it visibly supports one or more supplied claims. Do not explain rules,
             paraphrase text, add facts, or alter claims. If no candidate is useful, return null.
+            Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
+            visual context" lets you select a diagram, board layout, table, or worked example anywhere on that cited
+            page. When such a visual directly supports the claim, prefer it over a crop containing only a paragraph.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. supportedClaimRefs must contain only C1, C2, etc.

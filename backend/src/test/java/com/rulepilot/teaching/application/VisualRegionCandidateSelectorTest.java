@@ -24,7 +24,9 @@ class VisualRegionCandidateSelectorTest {
         var selected = new VisualRegionCandidateSelector().select(
                 understanding, Set.of(8), List.of("进入行星轨道的费用与操作"));
 
-        assertThat(selected).singleElement().extracting(VisualRegionCandidateSelector.Candidate::pageNumber).isEqualTo(8);
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::pageNumber).containsOnly(8);
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::sourceText)
+                .contains("Cited page 8 visual context");
     }
 
     @Test
@@ -43,7 +45,7 @@ class VisualRegionCandidateSelectorTest {
                 understanding, Set.of(2), List.of("move the probe on its orbit"));
 
         assertThat(candidates).extracting(VisualRegionCandidateSelector.Candidate::sourceText)
-                .containsExactly("Place the probe on its orbit track", "Probe movement");
+                .containsExactly("Place the probe on its orbit track", "Probe movement", "Cited page 2 visual context");
         assertThat(candidates).allSatisfy(candidate -> assertThat(candidate.pageNumber()).isEqualTo(2));
     }
 
@@ -63,7 +65,7 @@ class VisualRegionCandidateSelectorTest {
                 .satisfies(candidate -> {
                     assertThat(candidate.pageNumber()).isEqualTo(2);
                     assertThat(candidate.rectangle()).isEqualTo(new Rectangle(0, 0, 1_000, 1_000));
-                    assertThat(candidate.sourceText()).isEqualTo("Cited page 2");
+                    assertThat(candidate.sourceText()).isEqualTo("Cited page 2 visual context");
                 });
     }
 

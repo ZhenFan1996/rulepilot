@@ -105,6 +105,7 @@ else
 		--data '{"playerCount":3,"beginnerCount":2,"durationMinutes":35}' \
 		"$BASE_URL/api/v1/document-versions/$document_version_id/teaching-plans")
 	plan_id=$(printf '%s' "$plan" | jq -er .id)
+	printf '%s\n' "$plan" > "$latest_plan"
 fi
 
 latest_lesson="$DEMO_DIR/latest-lesson.json"
