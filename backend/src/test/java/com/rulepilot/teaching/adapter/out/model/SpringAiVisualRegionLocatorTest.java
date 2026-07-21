@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.junit.jupiter.api.Test;
 
 class SpringAiVisualRegionLocatorTest {
@@ -44,5 +45,13 @@ class SpringAiVisualRegionLocatorTest {
                 {"pageNumber":1,"label":"board","x":100,"y":100,"width":200,"height":200,"supportedClaimRefs":["C1"]}
                 """))
                 .isPresent();
+    }
+
+    @Test
+    void requests_qwen_json_mode_without_enabling_thinking() {
+        var options = SpringAiVisualRegionLocator.qwenJsonOptions().build();
+
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
     }
 }

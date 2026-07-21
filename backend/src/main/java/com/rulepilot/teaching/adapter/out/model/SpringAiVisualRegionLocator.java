@@ -15,6 +15,7 @@ import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.stereotype.Component;
@@ -50,7 +51,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(OpenAiChatOptions.builder().extraBody(Map.of("enable_thinking", false)));
+            prompt = prompt.options(qwenJsonOptions());
         }
         String content = prompt
                 .system(SYSTEM)
@@ -99,6 +100,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (reference == null || !reference.matches("C[1-9][0-9]*")) return null;
         int index = Integer.parseInt(reference.substring(1)) - 1;
         return index >= 0 && index < request.claims().size() ? request.claims().get(index).evidenceId() : null;
+    }
+
+    static OpenAiChatOptions.Builder qwenJsonOptions() {
+        return OpenAiChatOptions.builder()
+                .extraBody(Map.of("enable_thinking", false))
+                .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
 
     static Optional<ModelRegion> parseModelRegion(String content) {
