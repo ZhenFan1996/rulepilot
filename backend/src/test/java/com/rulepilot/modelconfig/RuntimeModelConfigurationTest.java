@@ -52,6 +52,8 @@ class RuntimeModelConfigurationTest {
         assertThat(configured.toString()).doesNotContain("secret-value");
         assertThat(assigned.assignments().teaching()).isEqualTo("deepseek");
         assertThat(assigned.assignments().visual()).isEqualTo("gemini");
+        assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.VISUAL, "player")).isTrue();
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.VISUAL, "player")).isSameAs(visualModel);
         assertThat(configuration.snapshot("someone-else").assignments().teaching()).isEqualTo("fake");
         try {
             SecurityContextHolder.getContext()

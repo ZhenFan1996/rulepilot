@@ -14,7 +14,8 @@ public interface VisualRegionLocator {
             String sectionTitle,
             List<Claim> claims,
             List<Candidate> candidates,
-            List<PageImage> pages) {
+            List<PageImage> pages,
+            String modelConfigurationOwner) {
         public VisualLocationRequest {
             if (sectionTitle == null || sectionTitle.isBlank() || claims == null || claims.isEmpty()
                     || candidates == null || candidates.isEmpty() || candidates.size() > 4
@@ -24,6 +25,14 @@ public interface VisualRegionLocator {
             claims = List.copyOf(claims);
             candidates = List.copyOf(candidates);
             pages = List.copyOf(pages);
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null
+                    : modelConfigurationOwner.strip();
+        }
+
+        public VisualLocationRequest(
+                String sectionTitle, List<Claim> claims, List<Candidate> candidates, List<PageImage> pages) {
+            this(sectionTitle, claims, candidates, pages, null);
         }
     }
 

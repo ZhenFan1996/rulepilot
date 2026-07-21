@@ -38,23 +38,23 @@ public class VisualLessonEnrichmentService {
                     .orElseThrow(() -> new IllegalArgumentException("teaching plan does not exist"));
             var lesson = lessons.findLatestByPlan(teachingPlanId).orElse(null);
             if (lesson == null) return;
-            publisher.publish(enrich(plan.documentVersionId(), lesson));
+            publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
         } catch (RuntimeException failure) {
             log.warn("Visual lesson enrichment failed for plan {}: {}", teachingPlanId, failure.getMessage());
         }
     }
 
     private com.rulepilot.teaching.domain.IllustratedLesson enrich(
-            UUID documentVersionId, com.rulepilot.teaching.domain.IllustratedLesson lesson) {
+            UUID documentVersionId, com.rulepilot.teaching.domain.IllustratedLesson lesson, String modelConfigurationOwner) {
         try {
-            return enricher.enrich(documentVersionId, lesson);
+            return enricher.enrich(documentVersionId, lesson, modelConfigurationOwner);
         } catch (IllegalArgumentException missingUnderstanding) {
             if (!"rulebook understanding does not exist".equals(missingUnderstanding.getMessage())) {
                 throw missingUnderstanding;
             }
             log.info("Rebuilding layout evidence for legacy document {} before visual enrichment", documentVersionId);
             understandingRebuilder.rebuild(documentVersionId);
-            return enricher.enrich(documentVersionId, lesson);
+            return enricher.enrich(documentVersionId, lesson, modelConfigurationOwner);
         }
     }
 }

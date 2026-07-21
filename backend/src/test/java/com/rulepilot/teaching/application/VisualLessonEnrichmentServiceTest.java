@@ -27,7 +27,7 @@ class VisualLessonEnrichmentServiceTest {
         IllustratedLesson lesson = lesson(planId);
         when(plans.findById(planId)).thenReturn(Optional.of(plan(planId, documentVersionId)));
         when(lessons.findLatestByPlan(planId)).thenReturn(Optional.of(lesson));
-        when(enricher.enrich(documentVersionId, lesson))
+        when(enricher.enrich(documentVersionId, lesson, "owner"))
                 .thenThrow(new IllegalArgumentException("rulebook understanding does not exist"))
                 .thenReturn(lesson);
 

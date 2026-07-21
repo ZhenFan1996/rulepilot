@@ -39,8 +39,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public Optional<LocatedRegion> locate(VisualLocationRequest request) {
-        if (models.usesFake(Role.VISUAL) || !models.supportsVision(Role.VISUAL)) return Optional.empty();
-        ModelRegion response = ChatClient.create(models.modelFor(Role.VISUAL)).prompt()
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) return Optional.empty();
+        ModelRegion response = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt()
                 .system(SYSTEM)
                 .user(user -> {
                     user.text("""

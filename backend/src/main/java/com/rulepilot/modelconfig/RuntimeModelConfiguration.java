@@ -69,6 +69,14 @@ public class RuntimeModelConfiguration {
 
     public ChatModel modelFor(Role role) {
         State current = currentState();
+        return modelFor(role, current);
+    }
+
+    public ChatModel modelFor(Role role, String username) {
+        return modelFor(role, stateForOrStartup(username));
+    }
+
+    private ChatModel modelFor(Role role, State current) {
         String provider = current.assignments().forRole(role);
         ConfiguredProvider configured = current.providers().get(provider);
         if (configured == null) {
@@ -79,6 +87,10 @@ public class RuntimeModelConfiguration {
 
     public boolean usesFake(Role role) {
         return "fake".equals(providerFor(role));
+    }
+
+    public boolean usesFake(Role role, String username) {
+        return "fake".equals(stateForOrStartup(username).assignments().forRole(role));
     }
 
     public boolean usesDeepSeekNonThinkingGeneration(Role role) {
@@ -93,6 +105,12 @@ public class RuntimeModelConfiguration {
 
     public boolean supportsVision(Role role) {
         State current = currentState();
+        ConfiguredProvider configured = current.providers().get(current.assignments().forRole(role));
+        return configured != null && configured.visionCapable();
+    }
+
+    public boolean supportsVision(Role role, String username) {
+        State current = stateForOrStartup(username);
         ConfiguredProvider configured = current.providers().get(current.assignments().forRole(role));
         return configured != null && configured.visionCapable();
     }
@@ -170,6 +188,10 @@ public class RuntimeModelConfiguration {
     private State stateFor(String username) {
         AtomicReference<State> personal = userStates.get(required(username, "username", 160));
         return personal == null ? startupState : personal.get();
+    }
+
+    private State stateForOrStartup(String username) {
+        return username == null || username.isBlank() ? startupState : stateFor(username);
     }
 
     private AtomicReference<State> userState(String username) {

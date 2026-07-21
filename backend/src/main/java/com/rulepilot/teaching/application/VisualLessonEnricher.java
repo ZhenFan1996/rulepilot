@@ -65,11 +65,15 @@ public class VisualLessonEnricher {
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
+        return enrich(documentVersionId, lesson, null);
+    }
+
+    public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
         var map = understanding.understanding(documentVersionId);
         Set<Integer> selectedPositions = prioritizer.positions(lesson.sections(), maxSections);
         List<LessonSection> sections = lesson.sections().stream()
                 .map(section -> selectedPositions.contains(section.position())
-                        ? enrichSection(map, documentVersionId, section)
+                        ? enrichSection(map, documentVersionId, section, modelConfigurationOwner)
                         : section)
                 .toList();
         return new IllustratedLesson(
@@ -79,7 +83,8 @@ public class VisualLessonEnricher {
     private LessonSection enrichSection(
             com.rulepilot.ingestion.domain.RulebookUnderstanding understanding,
             UUID documentVersionId,
-            LessonSection section) {
+            LessonSection section,
+            String modelConfigurationOwner) {
         if (section.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) return section;
         Set<Integer> citedPages = section.steps().stream()
                 .flatMap(step -> step.sourcePages().stream())
@@ -96,7 +101,8 @@ public class VisualLessonEnricher {
                 .toList();
         if (pages.isEmpty()) return section;
         List<Claim> claims = claims(section);
-        return locator.locate(new VisualRegionLocator.VisualLocationRequest(section.title(), claims, selected, pages))
+        return locator.locate(new VisualRegionLocator.VisualLocationRequest(
+                        section.title(), claims, selected, pages, modelConfigurationOwner))
                 .filter(region -> intersectsCandidate(region, selected))
                 .filter(region -> claims.stream().map(Claim::evidenceId).collect(Collectors.toSet())
                         .containsAll(region.supportedEvidenceIds()))
