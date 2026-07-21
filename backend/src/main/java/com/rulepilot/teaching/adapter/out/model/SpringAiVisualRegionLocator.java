@@ -29,14 +29,19 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
-            Return one compact region only when it visibly supports one or more supplied claims. Do not explain rules,
-            paraphrase text, add facts, or alter claims. If no candidate is useful, return null.
+            Return one compact region only when it visibly supports one or more supplied claims. Alongside it, provide a
+            short Chinese visibleDescription of only what a player can literally see inside that crop: components,
+            printed labels, icons, arrows, quantities, or their spatial relationship. This is an image observation, not
+            a rule explanation: do not infer an icon's game effect, paraphrase a rule, add facts, or alter claims. If
+            no candidate is useful, return null.
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
-            visual context" lets you select a diagram, board layout, table, or worked example anywhere on that cited
-            page. When such a visual directly supports the claim, prefer it over a crop containing only a paragraph.
+            visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
+            anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
+            aid: return null rather than selecting one. When several crops support the claim, prefer a compact icon,
+            component, flow, or worked state that a new player can identify at the table.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
-            characters. supportedClaimRefs must contain only C1, C2, etc.
+            characters. visibleDescription is at most 240 characters. supportedClaimRefs must contain only C1, C2, etc.
             """;
 
     private final RuntimeModelConfiguration models;
@@ -71,7 +76,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Claims: {claims}
                                     Candidate rectangles: {candidates}
                                     {correction}
-                                    Return JSON with pageNumber, label, x, y, width, height and supportedClaimRefs; or null.
+                                    Return JSON with pageNumber, label, visibleDescription, x, y, width, height and
+                                    supportedClaimRefs; or null.
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())
@@ -101,7 +107,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         try {
             return new LocateAttempt(Optional.of(new LocatedRegion(
-                    response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported)), false,
+                    response.pageNumber(), response.label(), response.visibleDescription(), response.x(), response.y(),
+                    response.width(), response.height(), supported)), false,
                     Rejection.NONE);
         } catch (IllegalArgumentException invalidModelOutput) {
             log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
@@ -157,8 +164,16 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     record ModelRegion(
-            int pageNumber, String label, int x, int y, int width, int height, List<String> supportedClaimRefs) {
+            int pageNumber,
+            String label,
+            String visibleDescription,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<String> supportedClaimRefs) {
         ModelRegion {
+            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
             supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
         }
     }

@@ -127,6 +127,7 @@ public class VisualLessonEnricher {
         var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
                         section.title(), claims, attachedCandidates, pages, modelConfigurationOwner))
                 .filter(this::isCompactReaderCrop)
+                .filter(this::isUsefulPlayerVisual)
                 .filter(region -> intersectsCandidate(region, attachedCandidates));
         if (located.isEmpty()) {
             log.info("No cited visual region accepted for section {}", section.title());
@@ -168,6 +169,22 @@ public class VisualLessonEnricher {
         return region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000;
     }
 
+    private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
+        String description = region.visibleDescription().toLowerCase(java.util.Locale.ROOT);
+        String label = region.label().toLowerCase(java.util.Locale.ROOT);
+        if (description.isBlank()) return true;
+        return !description.contains("section header")
+                && !description.contains("page title")
+                && !description.contains("introduction paragraph")
+                && !description.contains("text for")
+                && !description.contains("list of")
+                && !description.contains("介绍性段落")
+                && !description.contains("章节标题")
+                && !description.contains("页面标题")
+                && !label.contains("section header")
+                && !label.matches(".*\\b(text|header|paragraph)\\b.*");
+    }
+
     private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {
         return candidate.x() < x + width && x < candidate.x() + candidate.width()
                 && candidate.y() < y + height && y < candidate.y() + candidate.height();
@@ -175,11 +192,15 @@ public class VisualLessonEnricher {
 
     private LessonSection appendVisual(LessonSection section, VisualRegionLocator.LocatedRegion region) {
         List<LessonStep> steps = new ArrayList<>(section.steps());
+        String observation = stripTrailingPunctuation(region.visibleDescription());
+        String visualText = observation.isBlank()
+                ? "查看图中的“" + region.label() + "”。"
+                : "看图：" + observation + "。这就是本节要定位的“" + region.label() + "”。";
         steps.add(new LessonStep(
                 steps.size() + 1,
                 "看图定位",
                 TeachingMove.VISUAL,
-                "查看图中的“" + region.label() + "”。",
+                visualText,
                 List.of(region.pageNumber()),
                 region.supportedEvidenceIds(),
                 new VisualFocus(region.pageNumber(), region.label(), region.x(), region.y(), region.width(), region.height())));
@@ -200,5 +221,9 @@ public class VisualLessonEnricher {
         LinkedHashSet<T> values = new LinkedHashSet<>(existing);
         values.addAll(additions);
         return List.copyOf(values);
+    }
+
+    private String stripTrailingPunctuation(String text) {
+        return text == null ? "" : text.strip().replaceFirst("[。.!！?？]+$", "");
     }
 }

@@ -34,8 +34,17 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void accepts_plain_json_without_a_code_fence() {
         assertThat(SpringAiVisualRegionLocator.parseModelRegion(
-                        "{\"pageNumber\":1,\"label\":\"board\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}"))
+                        "{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"中央有一块地图和相邻的标记区。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}"))
                 .isPresent();
+    }
+
+    @Test
+    void retains_a_literal_visual_observation_with_the_crop() {
+        var parsed = SpringAiVisualRegionLocator.parseModelRegion(
+                "{\"pageNumber\":2,\"label\":\"matching icons\",\"visibleDescription\":\"两张卡牌之间以箭头连接，花色图标相同。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}");
+
+        assertThat(parsed).isPresent();
+        assertThat(parsed.orElseThrow().visibleDescription()).isEqualTo("两张卡牌之间以箭头连接，花色图标相同。");
     }
 
     @Test

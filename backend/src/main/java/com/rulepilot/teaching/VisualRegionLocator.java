@@ -56,16 +56,41 @@ public interface VisualRegionLocator {
         @Override public byte[] content() { return content.clone(); }
     }
 
-    record LocatedRegion(int pageNumber, String label, int x, int y, int width, int height, List<UUID> supportedEvidenceIds) {
+    /**
+     * A bounded, literal observation of a page region. It is deliberately not a rule interpretation:
+     * the associated text evidence remains the source for game-rule claims.
+     */
+    record LocatedRegion(
+            int pageNumber,
+            String label,
+            String visibleDescription,
+            int x,
+            int y,
+            int width,
+            int height,
+            List<UUID> supportedEvidenceIds) {
         public LocatedRegion {
             if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
+                    || (visibleDescription != null && visibleDescription.length() > 240)
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
                     || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
                 throw new IllegalArgumentException("located visual region is invalid");
             }
             label = label.strip();
+            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
+        }
+
+        public LocatedRegion(
+                int pageNumber,
+                String label,
+                int x,
+                int y,
+                int width,
+                int height,
+                List<UUID> supportedEvidenceIds) {
+            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds);
         }
     }
 }

@@ -63,7 +63,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v20-document-driven";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v21-vision-observations";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -155,8 +155,6 @@ public class GroundedTeachingAgent {
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         List<LessonSection> sections = new ArrayList<>();
-        boolean visionEnabled = model.supportsVisualEvidence(plan.createdBy());
-
         TeachingPlan.PlannedSection first = plan.sections().getFirst();
         sections.add(baseSection(
                 plan,
@@ -166,7 +164,7 @@ public class GroundedTeachingAgent {
                 reusable,
                 assistantRunId,
                 queriesPerTopic,
-                visionEnabled && first.visualEvidenceRecommended()));
+                false));
         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
 
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
@@ -184,7 +182,7 @@ public class GroundedTeachingAgent {
                                     reusable,
                                     assistantRunId,
                                     queriesPerTopic,
-                                    visionEnabled && planned.visualEvidenceRecommended());
+                                    false);
                             return new SectionOutcome(planned.position(), section);
                         }))
                         .toList();

@@ -39,6 +39,74 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void turns_a_vision_observation_into_a_player_facing_crop_explanation() {
+        UUID version = UUID.randomUUID();
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "轨道",
+                                "圆形标记位于一条弧形刻度旁，箭头指向前进方向",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk))))
+                .enrich(version, lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps().get(1).text())
+                .isEqualTo("看图：圆形标记位于一条弧形刻度旁，箭头指向前进方向。这就是本节要定位的“轨道”。");
+    }
+
+    @Test
+    void rejects_a_visual_response_that_only_crops_a_section_heading() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "Setup section header",
+                                "The word 'Setup' printed in a large, bold serif font at the top left of the page.",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk))))
+                .enrich(UUID.randomUUID(), lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+    }
+
+    @Test
+    void rejects_a_visual_response_that_only_repeats_a_numbered_text_step() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "Setup step 7 text",
+                                "Text for the 7th setup step listing the faction order.",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk))))
+                .enrich(UUID.randomUUID(), lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+    }
+
+    @Test
     void leaves_the_section_unchanged_when_the_locator_misses_every_candidate() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lesson(chunk);
