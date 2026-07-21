@@ -1,7 +1,7 @@
 {
   "schemaVersion": "rulepilot.product-evaluation/v1",
   "name": "lantern-relay-ordinary-player-v1",
-  "sourceSha256": "656845f03608e62036fffcd64e2366f1ec592f123cd8e858c58cfd2d7d3583b8",
+  "sourceSha256": "1e108d75e7e0f5721678e382891ee2300a18f5f2e485d7ace829335ff976357e",
   "artifacts": {
     "rulebook": "../../lantern-relay-rules.txt",
     "lesson": "lesson.json",
