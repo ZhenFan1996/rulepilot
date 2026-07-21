@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.rulepilot.catalog.PublicGameCoverLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -19,7 +20,8 @@ class PublicLessonReaderTest {
     private final TeachingPlanRepository plans = mock(TeachingPlanRepository.class);
     private final IllustratedLessonRepository lessons = mock(IllustratedLessonRepository.class);
     private final PublicRulebookReferenceLookup rulebooks = mock(PublicRulebookReferenceLookup.class);
-    private final PublicLessonReader reader = new PublicLessonReader(plans, lessons, rulebooks);
+    private final PublicGameCoverLookup covers = mock(PublicGameCoverLookup.class);
+    private final PublicLessonReader reader = new PublicLessonReader(plans, lessons, rulebooks, covers);
 
     @Test
     void exposes_a_read_only_lesson_projection_without_an_owner() {
@@ -33,7 +35,27 @@ class PublicLessonReaderTest {
         assertThat(publicLesson).hasValueSatisfying(value -> {
             assertThat(value.rulebookTitle()).isEqualTo("Orbit Rules");
             assertThat(value.officialSourceUrl()).isEqualTo("https://publisher.example/rules.pdf");
+            assertThat(value.gameCover()).isNull();
             assertThat(value.citedPages()).containsExactlyInAnyOrder(2, 5);
+        });
+    }
+
+    @Test
+    void includes_a_cover_only_when_the_associated_catalog_game_has_public_bgg_metadata() {
+        Fixture fixture = fixture();
+        UUID editionId = UUID.randomUUID();
+        var reference = new PublicRulebookReferenceLookup.Reference(
+                fixture.plan.documentVersionId(), editionId, "Orbit Rules", "https://publisher.example/rules.pdf");
+        var cover = new PublicGameCoverLookup.Cover(
+                "Orbit", 123, "https://cf.geekdo-images.com/orbit.jpg", "https://boardgamegeek.com/boardgame/123");
+        when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
+        when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(fixture.lesson));
+        when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(reference));
+        when(covers.findByEdition(editionId)).thenReturn(Optional.of(cover));
+
+        assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
+            assertThat(value.gameCover()).isEqualTo(cover);
+            assertThat(value.gameCover().gameName()).isEqualTo("Orbit");
         });
     }
 
@@ -78,7 +100,8 @@ class PublicLessonReaderTest {
         return new Fixture(
                 plan,
                 lesson,
-                new PublicRulebookReferenceLookup.Reference(versionId, "Orbit Rules", "https://publisher.example/rules.pdf"));
+                new PublicRulebookReferenceLookup.Reference(
+                        versionId, null, "Orbit Rules", "https://publisher.example/rules.pdf"));
     }
 
     private record Fixture(

@@ -13,6 +13,10 @@ describe('PublicLessonView', () => {
       documentVersionId: 'version-1',
       rulebookTitle: 'Wingspan Rules',
       officialSourceUrl: 'https://publisher.example/rules.pdf',
+      gameCover: {
+        gameName: 'Wingspan', bggId: 266192, thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
+        bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+      },
       lesson: {
         id: 'lesson-1', status: 'DRAFT_READY', sections: [{
           position: 1, title: '摆好鸟类保护区', visualCaption: '先把玩家板放在自己面前。', steps: [{
@@ -35,7 +39,8 @@ describe('PublicLessonView', () => {
     const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Wingspan Rules')
+    expect(wrapper.text()).toContain('Wingspan')
+    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com/wingspan.jpg')
     expect(wrapper.text()).toContain('放置玩家板')
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))

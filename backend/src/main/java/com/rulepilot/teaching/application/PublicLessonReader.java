@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.catalog.PublicGameCoverLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.util.LinkedHashSet;
@@ -18,14 +19,17 @@ public class PublicLessonReader {
     private final TeachingPlanRepository plans;
     private final IllustratedLessonRepository lessons;
     private final PublicRulebookReferenceLookup rulebooks;
+    private final PublicGameCoverLookup covers;
 
     public PublicLessonReader(
             TeachingPlanRepository plans,
             IllustratedLessonRepository lessons,
-            PublicRulebookReferenceLookup rulebooks) {
+            PublicRulebookReferenceLookup rulebooks,
+            PublicGameCoverLookup covers) {
         this.plans = plans;
         this.lessons = lessons;
         this.rulebooks = rulebooks;
+        this.covers = covers;
     }
 
     @Transactional(readOnly = true)
@@ -33,7 +37,14 @@ public class PublicLessonReader {
         return plans.findById(teachingPlanId).flatMap(plan -> lessons.findLatestByPlan(plan.id()).flatMap(lesson -> rulebooks
                 .findReference(plan.documentVersionId())
                 .map(rulebook -> new PublicLesson(
-                        plan.id(), rulebook.documentVersionId(), rulebook.title(), rulebook.officialSourceUrl(), lesson))));
+                        plan.id(),
+                        rulebook.documentVersionId(),
+                        rulebook.title(),
+                        rulebook.officialSourceUrl(),
+                        rulebook.gameEditionId() == null
+                                ? null
+                                : covers.findByEdition(rulebook.gameEditionId()).orElse(null),
+                        lesson))));
     }
 
     @Transactional(readOnly = true)
@@ -52,6 +63,7 @@ public class PublicLessonReader {
             UUID documentVersionId,
             String rulebookTitle,
             String officialSourceUrl,
+            PublicGameCoverLookup.Cover gameCover,
             IllustratedLesson lesson) {
         public PublicLesson {
             if (teachingPlanId == null || documentVersionId == null || rulebookTitle == null || rulebookTitle.isBlank()

@@ -263,6 +263,7 @@ function createMemoryRouter() {
       { path: '/teach', name: 'teach', component: Empty },
       { path: '/lessons', name: 'lessons', component: Empty },
       { path: '/lesson/:planId', name: 'lesson', component: LessonView },
+      { path: '/read/:planId', name: 'public-lesson', component: Empty },
       { path: '/table/:planId', name: 'table-mode', component: Empty },
       { path: '/account', name: 'account', component: Empty },
       { path: '/settings/models', name: 'model-settings', component: Empty },

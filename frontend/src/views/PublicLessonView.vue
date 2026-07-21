@@ -32,6 +32,7 @@ interface PublicLessonResponse {
   documentVersionId: string
   rulebookTitle: string
   officialSourceUrl: string | null
+  gameCover: { gameName: string; bggId: number; thumbnailUrl: string; bggUrl: string } | null
   lesson: { id: string; status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'; sections: LessonSection[] }
 }
 
@@ -93,9 +94,17 @@ onMounted(() => { void load() })
 
     <article v-else-if="publicLesson" class="mx-auto max-w-4xl px-5 py-10 sm:px-8 lg:py-14">
       <div class="border-b border-ink/10 pb-8">
-        <p class="text-sm font-semibold text-copper">从规则书到开桌</p>
-        <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ publicLesson.rulebookTitle }}</h1>
-        <p class="mt-4 max-w-2xl leading-7 text-ink/60">这是一份公开的逐步讲解。先照着完成当前动作；需要核对时，可打开每一步的来源页。</p>
+        <div class="flex items-start gap-5 sm:gap-7">
+          <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.bggUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="`在 BGG 查看 ${publicLesson.gameCover.gameName}`">
+            <img :src="publicLesson.gameCover.thumbnailUrl" :alt="`${publicLesson.gameCover.gameName} 的游戏封面`" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
+          </a>
+          <div>
+            <p class="text-sm font-semibold text-copper">从规则书到开桌</p>
+            <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ publicLesson.gameCover?.gameName ?? publicLesson.rulebookTitle }}</h1>
+            <p v-if="publicLesson.gameCover && publicLesson.gameCover.gameName !== publicLesson.rulebookTitle" class="mt-2 text-sm font-medium text-ink/50">{{ publicLesson.rulebookTitle }}</p>
+            <p class="mt-4 max-w-2xl leading-7 text-ink/60">这是一份公开的逐步讲解。先照着完成当前动作；需要核对时，可打开每一步的来源页。</p>
+          </div>
+        </div>
         <a v-if="publicLesson.officialSourceUrl" :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex min-h-11 items-center rounded-lg border border-indigo/30 px-4 font-semibold text-indigo hover:bg-indigo/5">打开官方原规则书</a>
       </div>
 
