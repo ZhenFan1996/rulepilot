@@ -155,9 +155,18 @@ public class GroundedTeachingAgent {
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         List<LessonSection> sections = new ArrayList<>();
+        boolean visionEnabled = model.supportsVisualEvidence(plan.createdBy());
 
         TeachingPlan.PlannedSection first = plan.sections().getFirst();
-        sections.add(baseSection(plan, first, pacing.get(first.position()), List.of(), reusable, assistantRunId, queriesPerTopic));
+        sections.add(baseSection(
+                plan,
+                first,
+                pacing.get(first.position()),
+                List.of(),
+                reusable,
+                assistantRunId,
+                queriesPerTopic,
+                visionEnabled && first.visualEvidenceRecommended()));
         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
 
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
@@ -166,16 +175,18 @@ public class GroundedTeachingAgent {
             Map<Integer, LessonSection> completed = new LinkedHashMap<>();
             try (var executor = Executors.newFixedThreadPool(Math.min(baseSectionParallelism, remaining.size()))) {
                 List<Future<SectionOutcome>> futures = remaining.stream()
-                        .map(planned -> executor.submit(() -> new SectionOutcome(
-                                planned.position(),
-                                baseSection(
-                                        plan,
-                                        planned,
-                                        pacing.get(planned.position()),
-                                        sharedContext,
-                                        reusable,
-                                        assistantRunId,
-                                        queriesPerTopic))))
+                        .map(planned -> executor.submit(() -> {
+                            LessonSection section = baseSection(
+                                    plan,
+                                    planned,
+                                    pacing.get(planned.position()),
+                                    sharedContext,
+                                    reusable,
+                                    assistantRunId,
+                                    queriesPerTopic,
+                                    visionEnabled && planned.visualEvidenceRecommended());
+                            return new SectionOutcome(planned.position(), section);
+                        }))
                         .toList();
                 for (Future<SectionOutcome> future : futures) {
                     SectionOutcome outcome = await(future);
@@ -197,7 +208,8 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
-            int queriesPerTopic) {
+            int queriesPerTopic,
+            boolean includeVisualEvidence) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
@@ -240,7 +252,14 @@ public class GroundedTeachingAgent {
         }
         try {
             DraftCandidate composed = composeDraft(
-                    plan, planned, pacing, priorSections, evidence, assistantRunId, planned.position() - 1, false);
+                    plan,
+                    planned,
+                    pacing,
+                    priorSections,
+                    evidence,
+                    assistantRunId,
+                    planned.position() - 1,
+                    includeVisualEvidence);
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_BASE_SECTION_PUBLISHED");
             return composed.section();
         } catch (AgentExecutionStoppedException stopped) {
@@ -454,7 +473,7 @@ public class GroundedTeachingAgent {
         return previousLesson.sections().stream()
                 .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
                 .filter(section -> currentTopics.contains(section.topicKey()))
-                .filter(section -> !model.supportsVisualEvidence()
+                .filter(section -> !model.supportsVisualEvidence(plan.createdBy())
                         || !visualRequirements.getOrDefault(section.topicKey(), false)
                         || section.steps().stream().anyMatch(step ->
                                 step.kind() == TeachingMove.VISUAL && step.visualFocus() != null))
@@ -530,7 +549,7 @@ public class GroundedTeachingAgent {
             int sectionIndex,
             boolean includeVisualEvidence) {
         List<TeachingLessonModel.PageImageInput> pageImages = includeVisualEvidence
-                ? selectedPageImages(planned, evidence)
+                ? selectedPageImages(planned, evidence, plan.createdBy())
                 : List.of();
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
@@ -545,7 +564,8 @@ public class GroundedTeachingAgent {
                 priorSections,
                 evidence.stream().map(this::toModelEvidence).toList(),
                 pageImages,
-                planned.retrievalQueries());
+                planned.retrievalQueries(),
+                plan.createdBy());
         SectionDraft draft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -712,7 +732,8 @@ public class GroundedTeachingAgent {
                 request.priorSections(),
                 request.evidence(),
                 List.of(),
-                request.requiredRuleIntents());
+                request.requiredRuleIntents(),
+                request.modelConfigurationOwner());
     }
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
@@ -806,8 +827,8 @@ public class GroundedTeachingAgent {
     }
 
     private List<TeachingLessonModel.PageImageInput> selectedPageImages(
-            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
-        if (!planned.visualEvidenceRecommended() || !model.supportsVisualEvidence()) return List.of();
+            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence, String modelConfigurationOwner) {
+        if (!planned.visualEvidenceRecommended() || !model.supportsVisualEvidence(modelConfigurationOwner)) return List.of();
         Map<Integer, com.rulepilot.assistant.AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         Map<Integer, Integer> scores = new LinkedHashMap<>();
         Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();

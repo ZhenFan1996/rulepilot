@@ -42,6 +42,17 @@ class SpringAiTeachingLessonModelTest {
         assertThat(model.providerOptions(Role.VISUAL)).containsEntry("enable_thinking", false);
     }
 
+    @Test
+    void resolvesVisionFromTheLessonOwnerRatherThanWorkerThreadState() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.usesFake(Role.VISUAL, "player")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "player")).thenReturn(true);
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+
+        assertThat(model.supportsVisualEvidence("player")).isTrue();
+    }
+
     private SectionRequest request(List<PageImageInput> pageImages) {
         return new SectionRequest(
                 "setup",

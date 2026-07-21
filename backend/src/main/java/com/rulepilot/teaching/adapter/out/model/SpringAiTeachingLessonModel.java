@@ -49,6 +49,15 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     @Override
+    public boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        if (modelConfigurationOwner == null || modelConfigurationOwner.isBlank()) {
+            return supportsVisualEvidence();
+        }
+        return !models.usesFake(Role.VISUAL, modelConfigurationOwner)
+                && models.supportsVision(Role.VISUAL, modelConfigurationOwner);
+    }
+
+    @Override
     public SectionDraft compose(SectionRequest request) {
         Role role = roleFor(request);
         if (models.usesFake(role)) {
@@ -104,9 +113,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private SectionDraft composeOnce(SectionRequest request, String repairInstruction) {
         Role role = roleFor(request);
+        String owner = request.modelConfigurationOwner();
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role)).prompt();
-        Map<String, Object> providerOptions = providerOptions(role);
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
+        Map<String, Object> providerOptions = providerOptions(role, owner);
         if (!providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.extraBody(providerOptions);
@@ -143,19 +153,28 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         return toSectionDraft(draft, evidenceIds);
     }
 
-    Map<String, Object> providerOptions(Role role) {
+    Map<String, Object> providerOptions(Role role, String modelConfigurationOwner) {
         Map<String, Object> options = new LinkedHashMap<>();
         if (models.usesDeepSeekNonThinkingGeneration(role)) {
             options.put("thinking", Map.of("type", "disabled"));
         }
-        if ("qwen".equals(models.providerFor(role))) {
+        String provider = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                ? models.providerFor(role)
+                : models.providerFor(role, modelConfigurationOwner);
+        if ("qwen".equals(provider)) {
             options.put("enable_thinking", false);
         }
         return Map.copyOf(options);
     }
 
+    Map<String, Object> providerOptions(Role role) {
+        return providerOptions(role, null);
+    }
+
     Role roleFor(SectionRequest request) {
-        return !request.pageImages().isEmpty() && supportsVisualEvidence() ? Role.VISUAL : Role.TEACHING;
+        return !request.pageImages().isEmpty() && supportsVisualEvidence(request.modelConfigurationOwner())
+                ? Role.VISUAL
+                : Role.TEACHING;
     }
 
     private List<ModelEvidence> modelEvidence(SectionRequest request) {

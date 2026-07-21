@@ -15,6 +15,13 @@ public interface TeachingLessonModel {
         return false;
     }
 
+    /**
+     * Visual capability is selected from the lesson owner's model configuration, not worker-thread security state.
+     */
+    default boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return supportsVisualEvidence();
+    }
+
     SectionDraft compose(SectionRequest request);
 
     default SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
@@ -34,7 +41,8 @@ public interface TeachingLessonModel {
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
             List<PageImageInput> pageImages,
-            List<String> requiredRuleIntents) {
+            List<String> requiredRuleIntents,
+            String modelConfigurationOwner) {
 
         public SectionRequest(
                 String topicKey,
@@ -61,7 +69,8 @@ public interface TeachingLessonModel {
                     priorSections,
                     evidence,
                     List.of(),
-                    List.of());
+                    List.of(),
+                    null);
         }
 
         public SectionRequest(
@@ -90,7 +99,8 @@ public interface TeachingLessonModel {
                     priorSections,
                     evidence,
                     pageImages,
-                    List.of());
+                    List.of(),
+                    null);
         }
 
         public SectionRequest {
