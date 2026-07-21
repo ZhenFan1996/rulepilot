@@ -11,6 +11,18 @@ import org.junit.jupiter.api.Test;
 
 class AssistantRunTest {
 
+    @Test
+    void teachingPreparationCompletesAfterLessonPlanning() {
+        AssistantRun run = AssistantRun.start(
+                        AssistantRunMode.TEACHING_PREPARATION, UUID.randomUUID(), "teacher", STARTED)
+                .advance(AssistantRunState.DOCUMENT_READINESS, STARTED.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, STARTED.plusSeconds(2))
+                .advance(AssistantRunState.COMPLETED, STARTED.plusSeconds(3));
+
+        assertThat(run.state()).isEqualTo(AssistantRunState.COMPLETED);
+        assertThat(run.completedAt()).isEqualTo(STARTED.plusSeconds(3));
+    }
+
     private static final Instant STARTED = Instant.parse("2026-07-18T00:00:00Z");
 
     @Test

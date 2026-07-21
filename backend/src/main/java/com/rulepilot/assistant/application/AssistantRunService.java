@@ -176,7 +176,9 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     private BudgetLimits limitsFor(AssistantRunMode mode) {
-        return mode == AssistantRunMode.TEACHING ? teachingLimits : defaultLimits;
+        return mode == AssistantRunMode.TEACHING || mode == AssistantRunMode.TEACHING_PREPARATION
+                ? teachingLimits
+                : defaultLimits;
     }
 
     private void persist(AssistantRun current, AssistantRun changed, String summary) {

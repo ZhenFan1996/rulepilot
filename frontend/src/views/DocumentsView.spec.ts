@@ -8,6 +8,7 @@ import DocumentsView from './DocumentsView.vue'
 
 describe('DocumentsView recoverable lesson handoff', () => {
   afterEach(() => {
+    vi.useRealTimers()
     localStorage.clear()
     FakeEventSource.instances = []
     vi.unstubAllGlobals()
@@ -57,6 +58,27 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
+
+  it('shows an honest resumable stage while visual pages are being organized', async () => {
+    vi.useFakeTimers()
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+    })
+    const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING')
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在阅读图文并组织讲解顺序')
+    expect(wrapper.text()).toContain('已用时 0 秒')
+    expect(wrapper.text()).toContain('可以离开此页，后台会继续')
+    expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    wrapper.unmount()
+    await vi.runOnlyPendingTimersAsync()
+  })
 })
 
 async function mountDocuments() {
@@ -77,8 +99,8 @@ async function mountDocuments() {
   return { wrapper: mount(DocumentsView, { global: { plugins: [router] } }), router }
 }
 
-function mockApplicationFetch(documentStatus: () => string) {
-  return vi.fn(async (input: string | URL | Request, _options?: RequestInit) => {
+function mockApplicationFetch(documentStatus: () => string, preparationState = 'COMPLETED') {
+  return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = String(input)
     if (path.includes('/api/auth/session')) return response({ username: 'player' })
     if (path.includes('/api/v1/assistant-runs/active')) return response([])
@@ -98,7 +120,14 @@ function mockApplicationFetch(documentStatus: () => string) {
       }])
     }
     if (path.includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-    if (path.includes('/document-versions/version-1/teaching-plans')) return response({ id: 'plan-1' }, 201)
+    if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
+    if (path.includes('/api/v1/assistant-runs/prep-run-1')) {
+      return response({ run: { id: 'prep-run-1', state: preparationState, lastErrorCode: null } })
+    }
+    if (path.endsWith('/document-versions/version-1/teaching-plans/latest')) return response({ id: 'plan-1' })
+    if (path.endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST') {
+      return response({ assistantRunId: 'prep-run-1', state: 'RECEIVED', reused: false }, 202)
+    }
     if (path.includes('/teaching-plans/plan-1/illustrated-lessons')) return response({}, 202)
     return new Response(null, { status: 404 })
   })

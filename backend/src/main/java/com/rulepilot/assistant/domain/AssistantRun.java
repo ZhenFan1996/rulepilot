@@ -45,6 +45,11 @@ public record AssistantRun(
                     AssistantRunState.CRITIQUING,
                     Set.of(AssistantRunState.COMPLETED, AssistantRunState.DEGRADED)));
 
+    private static final Map<AssistantRunState, Set<AssistantRunState>> TEACHING_PREPARATION_TRANSITIONS = Map.of(
+            AssistantRunState.RECEIVED, Set.of(AssistantRunState.DOCUMENT_READINESS),
+            AssistantRunState.DOCUMENT_READINESS, Set.of(AssistantRunState.LESSON_PLANNING),
+            AssistantRunState.LESSON_PLANNING, Set.of(AssistantRunState.COMPLETED));
+
     private static final Map<AssistantRunState, Set<AssistantRunState>> QUESTION_TRANSITIONS = Map.ofEntries(
             Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
             Map.entry(
@@ -124,6 +129,10 @@ public record AssistantRun(
     }
 
     private Map<AssistantRunState, Set<AssistantRunState>> transitions() {
-        return mode == AssistantRunMode.TEACHING ? TEACHING_TRANSITIONS : QUESTION_TRANSITIONS;
+        return switch (mode) {
+            case TEACHING_PREPARATION -> TEACHING_PREPARATION_TRANSITIONS;
+            case TEACHING -> TEACHING_TRANSITIONS;
+            case QUESTION_ANSWER -> QUESTION_TRANSITIONS;
+        };
     }
 }

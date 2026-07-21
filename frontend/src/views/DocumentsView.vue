@@ -20,6 +20,10 @@ interface DocumentResponse {
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
 interface TeachingPlanResponse { id: string }
+interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
+interface TeachingPreparationRun {
+  run: { id: string; state: string; lastErrorCode: string | null }
+}
 interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; complete: boolean }
 interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
@@ -42,6 +46,7 @@ const durationMinutes = ref(25)
 const loading = ref(true)
 const uploading = ref(false)
 const preparingVersionId = ref('')
+const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
 const assigningDocumentId = ref('')
 const assignmentEditionIds = reactive<Record<string, string>>({})
@@ -53,6 +58,7 @@ const progressConnections = new Map<string, EventSource>()
 const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
 let disposed = false
+let preparationClock: ReturnType<typeof setInterval> | null = null
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
@@ -144,8 +150,7 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
   if (preferences.beginnerCount > preferences.playerCount) throw new Error('新手人数不能超过玩家人数。')
-  preparingVersionId.value = versionId
-  message.value = '正在整理讲解顺序…'
+  beginPreparation(versionId, 'RECEIVED')
   try {
     const csrf = await csrfToken()
     const planResponse = await checkedFetch(`/api/v1/document-versions/${versionId}/teaching-plans`, {
@@ -158,18 +163,116 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
       }),
     })
     if (!planResponse.ok) throw new Error('暂时无法开始讲解，请确认规则书已经读取完成。')
-    const plan = await planResponse.json() as TeachingPlanResponse
-    message.value = '目录已经准备好，正在启动后台讲解…'
-    const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
-      method: 'POST', headers: { [csrf.headerName]: csrf.token },
-    })
-    if (!lessonResponse.ok) throw new Error('讲解任务没有启动，请稍后重试。')
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
-    localStorage.setItem('rulepilot:last-plan-id', plan.id)
-    await router.push({ name: 'lessons', query: { started: plan.id } })
+    const launch = await planResponse.json() as TeachingPreparationLaunch
+    await waitForTeachingPreparation(launch.assistantRunId, preferences, csrf)
   } finally {
-    preparingVersionId.value = ''
+    if (preparingVersionId.value === versionId) endPreparation()
   }
+}
+
+function beginPreparation(versionId: string, state: string) {
+  preparingVersionId.value = versionId
+  preparationElapsedSeconds.value = 0
+  updatePreparationMessage(state)
+  if (preparationClock) clearInterval(preparationClock)
+  preparationClock = setInterval(() => preparationElapsedSeconds.value += 1, 1000)
+}
+
+function endPreparation() {
+  preparingVersionId.value = ''
+  preparationElapsedSeconds.value = 0
+  if (preparationClock) clearInterval(preparationClock)
+  preparationClock = null
+}
+
+function updatePreparationMessage(state: string) {
+  message.value = {
+    RECEIVED: '已经收到，马上开始整理讲解。',
+    DOCUMENT_READINESS: '正在确认规则书页面和图片。',
+    LESSON_PLANNING: '正在阅读图文并组织讲解顺序。',
+    COMPLETED: '讲解目录已准备好，正在打开可读内容。',
+  }[state] ?? '正在准备讲解，后台工作仍在继续。'
+}
+
+function preparationElapsedLabel() {
+  const seconds = preparationElapsedSeconds.value
+  if (seconds < 60) return `已用时 ${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  return `已用时 ${minutes} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
+}
+
+async function waitForTeachingPreparation(
+  runId: string,
+  preferences: PendingRulebookLesson,
+  csrf: CsrfResponse,
+  initial?: TeachingPreparationRun,
+) {
+  let snapshot = initial
+  while (!disposed && preparingVersionId.value === preferences.versionId) {
+    try {
+      if (!snapshot) {
+        const response = await checkedFetch(`/api/v1/assistant-runs/${runId}`)
+        if (!response.ok) throw new Error('暂时无法读取讲解准备进度。')
+        snapshot = await response.json() as TeachingPreparationRun
+      }
+      updatePreparationMessage(snapshot.run.state)
+      if (snapshot.run.state === 'COMPLETED') {
+        await openPreparedLesson(preferences, csrf)
+        return
+      }
+      if (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED') {
+        throw new Error('讲解准备没有完成。你可以稍后重新开始，规则书无需再次上传。')
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('没有完成')) throw error
+      message.value = '暂时没拿到最新进度，正在自动重连；后台准备不会停止。'
+    }
+    snapshot = undefined
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+  }
+}
+
+async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: CsrfResponse) {
+  const latestResponse = await checkedFetch(
+    `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest`,
+  )
+  if (!latestResponse.ok) throw new Error('讲解目录已经完成，但暂时无法打开。请稍后从“我的讲解”进入。')
+  const plan = await latestResponse.json() as TeachingPlanResponse
+  message.value = '基础讲解已开始生成，可以离开此页。'
+  const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
+    method: 'POST', headers: { [csrf.headerName]: csrf.token },
+  })
+  if (!lessonResponse.ok) throw new Error('讲解任务没有启动，请稍后重试。')
+  if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
+  localStorage.setItem('rulepilot:last-plan-id', plan.id)
+  await router.push({ name: 'lessons', query: { started: plan.id } })
+}
+
+async function resumeOrStartLesson(pending: PendingRulebookLesson) {
+  let snapshot: TeachingPreparationRun | null = null
+  try {
+    const response = await checkedFetch(
+      `/api/v1/assistant-runs/latest?mode=TEACHING_PREPARATION&subjectId=${pending.versionId}`,
+    )
+    if (response.ok) snapshot = await response.json() as TeachingPreparationRun
+  } catch {
+    // A missing run is safe to recover through the idempotent launch endpoint.
+  }
+  if (snapshot && (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED')) {
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+    throw new Error('上次讲解准备没有完成。规则书已经保留，可以点击“开始讲解”重试。')
+  }
+  if (snapshot) {
+    beginPreparation(pending.versionId, snapshot.run.state)
+    const csrf = await csrfToken()
+    try {
+      await waitForTeachingPreparation(snapshot.run.id, pending, csrf, snapshot)
+    } finally {
+      if (preparingVersionId.value === pending.versionId) endPreparation()
+    }
+    return
+  }
+  await startLesson(pending.versionId, pending)
 }
 
 function closeProgressConnection(versionId: string) {
@@ -215,7 +318,7 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
-    await startLesson(pending.versionId, pending).catch((error: unknown) => {
+    await resumeOrStartLesson(pending).catch((error: unknown) => {
       errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
     })
     return
@@ -361,6 +464,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  if (preparationClock) clearInterval(preparationClock)
+  preparationClock = null
   for (const versionId of new Set([...progressConnections.keys(), ...progressRetryTimers.keys()])) {
     closeProgressConnection(versionId)
   }
@@ -431,7 +536,17 @@ onBeforeUnmount(() => {
           </button>
         </form>
 
-        <p v-if="message" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
+        <p v-if="message && !preparingVersionId" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
+        <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="font-semibold text-ink">正在组织讲解</p>
+              <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
+            </div>
+            <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel() }}</span>
+          </div>
+          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">这一步会阅读页面图片并安排讲解顺序。可以离开此页，后台会继续；回来后会自动接上。</p>
+        </div>
         <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
         <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
           <div class="h-full bg-copper transition-all" :style="{ width: `${progress[processingVersionId]?.percentage ?? 0}%` }" />

@@ -24,7 +24,8 @@ class InterruptedTeachingRunRecovery {
 
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
-        int recovered = runs.failInterrupted(AssistantRunMode.TEACHING);
+        int recovered = runs.failInterrupted(AssistantRunMode.TEACHING)
+                + runs.failInterrupted(AssistantRunMode.TEACHING_PREPARATION);
         if (recovered > 0) {
             log.info("Marked {} interrupted teaching generation runs as retryable failures", recovered);
         }

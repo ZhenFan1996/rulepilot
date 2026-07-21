@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.in.web;
 
 import com.rulepilot.teaching.application.TeachingPlanService;
+import com.rulepilot.teaching.application.TeachingPlanLauncher;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.security.Principal;
 import java.util.UUID;
@@ -21,15 +22,18 @@ import org.springframework.web.server.ResponseStatusException;
 public class TeachingPlanController {
 
     private final TeachingPlanService plans;
+    private final TeachingPlanLauncher launcher;
 
-    public TeachingPlanController(TeachingPlanService plans) {
+    public TeachingPlanController(TeachingPlanService plans, TeachingPlanLauncher launcher) {
         this.plans = plans;
+        this.launcher = launcher;
     }
 
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    TeachingPlan create(@PathVariable UUID versionId, @RequestBody CreatePlanRequest request, Principal principal) {
-        return plans.create(
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    TeachingPlanLauncher.PlanLaunch create(
+            @PathVariable UUID versionId, @RequestBody CreatePlanRequest request, Principal principal) {
+        return launcher.launch(
                 versionId,
                 request.playerCount(),
                 request.beginnerCount(),
