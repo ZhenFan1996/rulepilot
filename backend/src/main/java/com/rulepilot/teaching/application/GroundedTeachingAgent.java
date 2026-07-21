@@ -244,6 +244,7 @@ public class GroundedTeachingAgent {
             if (conflictingEvidence) break;
         }
         List<RuleEvidence> evidence = conflictingEvidence ? List.of() : balancedEvidence(evidenceByIntent);
+        evidence = visualPageBoundEvidence(plan, planned, evidence, assistantRunId);
         if (evidence.isEmpty() || !evidenceVerifier.verify(new VerificationRequest(
                         plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
                 .verified()) {
@@ -503,6 +504,35 @@ public class GroundedTeachingAgent {
         Stream<String> queries = Stream.concat(
                 topic.retrievalQueries().stream(), objectiveQueries(topic.objective()).stream());
         return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
+    }
+
+    private List<RuleEvidence> visualPageBoundEvidence(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> retrieved,
+            UUID assistantRunId) {
+        boolean visualPlaceholder = retrieved.stream().anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        if (!visualPlaceholder || planned.sourcePageNumbers().isEmpty()) return retrieved;
+        try {
+            List<RuleEvidence> pageEvidence = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    operationName("readRuleEvidencePages", planned.position()),
+                    planned.sourcePageNumbers().size(),
+                    "Planner-selected visual rulebook pages retrieved",
+                    () -> tools.readRuleEvidencePages(
+                            plan.documentVersionId(), new LinkedHashSet<>(planned.sourcePageNumbers()), true),
+                    this::evidenceTokens);
+            if (!pageEvidence.isEmpty()) {
+                log.info(
+                        "Teaching topic {} is bound to visual source pages {}",
+                        planned.topicKey(), planned.sourcePageNumbers());
+                return pageEvidence;
+            }
+        } catch (RuntimeException failure) {
+            log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
+        }
+        return retrieved;
     }
 
     private List<String> objectiveQueries(String objective) {

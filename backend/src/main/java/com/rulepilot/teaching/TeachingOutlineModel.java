@@ -12,7 +12,8 @@ public interface TeachingOutlineModel {
             int beginnerCount,
             int durationMinutes,
             List<PageInput> pages,
-            List<PageImageInput> pageImages) {
+            List<PageImageInput> pageImages,
+            String modelConfigurationOwner) {
         public OutlineRequest {
             if (playerCount < 1 || beginnerCount < 0 || beginnerCount > playerCount
                     || durationMinutes < 2 || pages == null || pages.isEmpty() || pageImages == null) {
@@ -20,10 +21,22 @@ public interface TeachingOutlineModel {
             }
             pages = List.copyOf(pages);
             pageImages = List.copyOf(pageImages);
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null
+                    : modelConfigurationOwner.strip();
+        }
+
+        public OutlineRequest(
+                int playerCount,
+                int beginnerCount,
+                int durationMinutes,
+                List<PageInput> pages,
+                List<PageImageInput> pageImages) {
+            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null);
         }
 
         public OutlineRequest(int playerCount, int beginnerCount, int durationMinutes, List<PageInput> pages) {
-            this(playerCount, beginnerCount, durationMinutes, pages, List.of());
+            this(playerCount, beginnerCount, durationMinutes, pages, List.of(), null);
         }
     }
 
@@ -68,13 +81,16 @@ public interface TeachingOutlineModel {
             boolean required,
             boolean visualEvidenceRecommended,
             List<String> retrievalQueries,
-            List<String> coverageTags) {
+            List<String> coverageTags,
+            List<Integer> sourcePageNumbers) {
         public TopicDraft {
             if (title == null || title.isBlank() || title.length() > 160
                     || objective == null || objective.isBlank() || objective.length() > 600
                     || (key != null && key.length() > 100)
                     || (retrievalQueries != null && (retrievalQueries.size() > 8 || retrievalQueries.stream()
-                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)))) {
+                            .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)))
+                    || (sourcePageNumbers != null && (sourcePageNumbers.size() > 4 || sourcePageNumbers.stream()
+                            .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1)))) {
                 throw new IllegalArgumentException("teaching outline topic is invalid");
             }
             key = key == null ? "" : key.strip();
@@ -82,6 +98,18 @@ public interface TeachingOutlineModel {
             objective = objective.strip();
             retrievalQueries = retrievalQueries == null ? List.of() : List.copyOf(retrievalQueries);
             coverageTags = coverageTags == null ? List.of() : List.copyOf(coverageTags);
+            sourcePageNumbers = sourcePageNumbers == null ? List.of() : sourcePageNumbers.stream().distinct().toList();
+        }
+
+        public TopicDraft(
+                String key,
+                String title,
+                String objective,
+                boolean required,
+                boolean visualEvidenceRecommended,
+                List<String> retrievalQueries,
+                List<String> coverageTags) {
+            this(key, title, objective, required, visualEvidenceRecommended, retrievalQueries, coverageTags, List.of());
         }
     }
 }

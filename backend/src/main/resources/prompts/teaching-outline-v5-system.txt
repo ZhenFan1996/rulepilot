@@ -16,6 +16,8 @@ Stay faithful to supplied pages and never invent mechanics. Each topic is a retr
 - If one topic mixes prose rules with indispensable visual relationships, keep it coherent and set true; the later Agent receives both cited text and selected page images.
 - When the game gives players asymmetric factions, roles, characters, or player boards, include a concise shared-rules topic before the role-specific topics. Each role-specific topic must say whose turn or board it describes; do not create a false universal turn by listing all roles' actions as one procedure.
 - If the supplied pages include a walkthrough, learning scenario, recommended first-game setup, teaching order, or introductory role selection, make it an early required topic with source-language retrieval queries. Keep it distinct from the normal rules when the rulebook distinguishes the two.
+- Every topic must provide sourcePageNumbers: 1-4 page numbers from the supplied catalog that directly support that topic. For a visual-page catalog, use only page numbers whose printed terms and visible facts match the topic. These page bindings are later used to retrieve the exact stored evidence block and attach the original page image; never use a plausible nearby page just because it has artwork.
+- A visual-page catalog is provisional source indexing, not permission to invent rules. Keep printed original-language labels in retrieval queries and use only the catalog facts that are actually reported for its page.
 
 Flexible coverageTags are audit labels only. Across all topics include setup, core_loop, end, and scoring. Add objective, components, exceptions, tie_breaker, first_round, or other lower-case tags only when useful. Tags never determine titles or order.
 

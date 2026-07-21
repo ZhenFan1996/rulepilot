@@ -51,7 +51,8 @@ public record TeachingPlan(
             boolean required,
             boolean visualEvidenceRecommended,
             List<String> retrievalQueries,
-            List<String> coverageTags) {
+            List<String> coverageTags,
+            List<Integer> sourcePageNumbers) {
         public PlannedSection {
             if (position < 1
                     || topicKey == null || topicKey.isBlank() || topicKey.length() > 80
@@ -59,7 +60,9 @@ public record TeachingPlan(
                     || objective == null || objective.isBlank() || objective.length() > 600
                     || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 5
                     || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank() || query.length() > 300)
-                    || coverageTags == null) {
+                    || coverageTags == null
+                    || sourcePageNumbers == null || sourcePageNumbers.size() > 4
+                    || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
                 throw new IllegalArgumentException("generated teaching topic is invalid");
             }
             topicKey = topicKey.strip();
@@ -71,6 +74,19 @@ public record TeachingPlan(
                     .map(String::strip)
                     .distinct()
                     .toList();
+            sourcePageNumbers = sourcePageNumbers.stream().distinct().toList();
+        }
+
+        public PlannedSection(
+                int position,
+                String topicKey,
+                String title,
+                String objective,
+                boolean required,
+                boolean visualEvidenceRecommended,
+                List<String> retrievalQueries,
+                List<String> coverageTags) {
+            this(position, topicKey, title, objective, required, visualEvidenceRecommended, retrievalQueries, coverageTags, List.of());
         }
     }
 }

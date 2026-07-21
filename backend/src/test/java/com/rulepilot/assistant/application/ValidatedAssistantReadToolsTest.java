@@ -124,6 +124,40 @@ class ValidatedAssistantReadToolsTest {
         assertThat(result.get(2).pageImages()).isEmpty();
     }
 
+    @Test
+    void readsOnlyPlannerBoundPagesWithTheirStoredEvidenceAndImages() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit pageFive = evidence(UUID.randomUUID(), versionId, "Choose a habitat tile.", 5);
+        RuleEvidenceHit pageSeven = evidence(UUID.randomUUID(), versionId, "Place the wildlife token.", 7);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(pageNumbers).containsExactlyInAnyOrder(5, 7);
+                return List.of(pageFive, pageSeven);
+            }
+        };
+        var tools = new ValidatedAssistantReadTools(
+                (requestedVersion, query, options) -> List.of(),
+                lookup,
+                (documentVersionId, pageNumbers) -> List.of(
+                        new PageImage(5, "image/jpeg", new byte[] {5}, 800, 1200),
+                        new PageImage(7, "image/jpeg", new byte[] {7}, 800, 1200)));
+
+        var result = tools.readRuleEvidencePages(versionId, Set.of(5, 7), true);
+
+        assertThat(result).extracting(hit -> hit.pageFrom()).containsExactly(5, 7);
+        assertThat(result).allSatisfy(hit -> assertThat(hit.pageImages())
+                .singleElement()
+                .extracting(image -> image.pageNumber())
+                .isEqualTo(hit.pageFrom()));
+    }
+
     private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {
         return evidence(chunkId, versionId, "Place the board in the center.", 2);
     }

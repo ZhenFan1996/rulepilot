@@ -9,6 +9,10 @@ public interface RuleEvidenceLookup {
 
     List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds);
 
+    default List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+        return List.of();
+    }
+
     default List<RuleEvidenceHit> findAdjacent(
             UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
         return List.of();

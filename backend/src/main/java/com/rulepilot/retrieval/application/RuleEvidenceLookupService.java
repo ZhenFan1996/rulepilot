@@ -29,6 +29,15 @@ class RuleEvidenceLookupService implements RuleEvidenceLookup {
     }
 
     @Override
+    public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+                || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+            throw new IllegalArgumentException("document version and bounded evidence page numbers are required");
+        }
+        return evidence.findByPageNumbers(documentVersionId, Set.copyOf(pageNumbers));
+    }
+
+    @Override
     public List<RuleEvidenceHit> findAdjacent(
             UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
         if (documentVersionId == null || anchorChunkIds == null || anchorChunkIds.isEmpty()

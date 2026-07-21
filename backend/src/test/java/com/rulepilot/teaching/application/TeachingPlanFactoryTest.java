@@ -54,6 +54,28 @@ class TeachingPlanFactoryTest {
         assertThat(topic.coverageTags()).isEmpty();
     }
 
+    @Test
+    void preservesVisionCatalogPageBindingsForLaterEvidenceReads() {
+        var outline = new OutlineDraft(
+                "Cascadia",
+                "通过栖息地与动物搭配获得高分。",
+                List.of(
+                        new TopicDraft(
+                                "setup", "摆好开局", "按规则书完成开局。", true, true,
+                                List.of("Game Setup"), List.of("setup"), List.of(5, 7)),
+                        new TopicDraft(
+                                "turn", "进行回合", "完成一次回合。", true, true,
+                                List.of("Choose a Habitat Tile"), List.of("core_loop"), List.of(7)),
+                        new TopicDraft(
+                                "end", "结束并计分", "完成终局计分。", true, false,
+                                List.of("End of the Game"), List.of("end", "scoring"), List.of(15))));
+
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 4, 30, "player", outline);
+
+        assertThat(plan.sections().getFirst().sourcePageNumbers()).containsExactly(5, 7);
+        assertThat(plan.sections().get(1).sourcePageNumbers()).containsExactly(7);
+    }
+
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {
         return new TopicDraft(
                 key, title, "Explain " + title, true, visualEvidenceRecommended, List.of(title), tags);

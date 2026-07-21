@@ -197,6 +197,9 @@ class TeachingPlanSectionEntity {
     @Column(name = "coverage_tags", nullable = false)
     String coverageTags;
 
+    @Column(name = "source_page_numbers", nullable = false)
+    String sourcePageNumbers;
+
     protected TeachingPlanSectionEntity() {}
 
     TeachingPlanSectionEntity(UUID teachingPlanId, PlannedSection section) {
@@ -210,6 +213,9 @@ class TeachingPlanSectionEntity {
         this.visualEvidenceRecommended = section.visualEvidenceRecommended();
         this.retrievalQueries = String.join("\n", section.retrievalQueries());
         this.coverageTags = String.join(",", section.coverageTags());
+        this.sourcePageNumbers = section.sourcePageNumbers().stream()
+                .map(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     PlannedSection toDomain() {
@@ -221,6 +227,9 @@ class TeachingPlanSectionEntity {
                 required,
                 visualEvidenceRecommended,
                 retrievalQueries.lines().filter(value -> !value.isBlank()).toList(),
-                coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")));
+                coverageTags.isBlank() ? List.of() : List.of(coverageTags.split(",")),
+                sourcePageNumbers == null || sourcePageNumbers.isBlank()
+                        ? List.of()
+                        : java.util.Arrays.stream(sourcePageNumbers.split(",")).map(Integer::valueOf).toList());
     }
 }

@@ -91,6 +91,34 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
         }).toList();
     }
 
+    @Override
+    public List<RuleEvidence> readRuleEvidencePages(
+            UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+                || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
+            throw new IllegalArgumentException("bounded rule evidence page read is invalid");
+        }
+        List<RuleEvidenceHit> evidence = evidenceLookup.findByPageNumbers(documentVersionId, Set.copyOf(pageNumbers));
+        Map<Integer, RulePageImage> visuals = includePageImages
+                ? pageImages.read(documentVersionId, new LinkedHashSet<>(pageNumbers)).stream()
+                        .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                                DocumentPageImages.PageImage::pageNumber,
+                                image -> new RulePageImage(
+                                        image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height())))
+                : Map.of();
+        return evidence.stream().map(source -> new RuleEvidence(
+                source.chunkId(),
+                source.documentVersionId(),
+                source.sectionType(),
+                source.heading(),
+                source.excerpt(),
+                source.pageFrom(),
+                source.pageTo(),
+                visuals.values().stream()
+                        .filter(image -> image.pageNumber() >= source.pageFrom() && image.pageNumber() <= source.pageTo())
+                        .toList())).toList();
+    }
+
     private Map<Integer, RulePageImage> pageVisuals(
             SearchRuleEvidence request, List<RuleEvidenceHit> evidence) {
         if (!request.includePageImages()) {

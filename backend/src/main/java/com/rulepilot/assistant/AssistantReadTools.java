@@ -8,6 +8,11 @@ public interface AssistantReadTools {
 
     List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request);
 
+    default List<RuleEvidence> readRuleEvidencePages(
+            UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
+        return List.of();
+    }
+
     record SearchRuleEvidence(
             UUID documentVersionId,
             String query,

@@ -45,7 +45,8 @@ public class TeachingPlanFactory {
                             topic.required(),
                             topic.visualEvidenceRecommended(),
                             normalizedQueries(topic.retrievalQueries()),
-                            normalizedTags(topic.coverageTags()));
+                            normalizedTags(topic.coverageTags()),
+                            topic.sourcePageNumbers());
                 })
                 .toList();
         Set<String> covered = topics.stream()
