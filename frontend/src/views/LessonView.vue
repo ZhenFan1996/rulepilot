@@ -101,6 +101,14 @@ interface LessonComprehensionReport {
   readyVisualTaskCount: number
   visualAidRatedCount: number
   visualAidHelpfulCount: number
+  visualAids: Array<{
+    key: string
+    label: string
+    chapterPosition: number
+    sourcePages: number[]
+    visualFocus: NonNullable<LessonSection['steps'][number]['visualFocus']>
+    result: 'NOT_RATED' | 'HELPFUL' | 'NOT_HELPFUL'
+  }>
   tasks: Array<{
     type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME' | 'VERIFY_VISUAL_AID' | 'IDENTIFY_COMPONENTS' | 'COMPLETE_VISUAL_SETUP'
     label: string
@@ -700,15 +708,15 @@ async function recordComprehension(
 }
 
 async function recordVisualAid(
-  taskType: LessonComprehensionReport['tasks'][number]['type'],
+  visualAidKey: string,
   result: 'HELPFUL' | 'NOT_HELPFUL',
 ) {
   if (comprehensionSaving.value || !online.value) return
-  comprehensionSaving.value = `${taskType}-visual`
+  comprehensionSaving.value = `visual-${visualAidKey}`
   comprehensionError.value = ''
   try {
     const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/${taskType}/visual-aid`, {
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/visual-aids/${visualAidKey}`, {
       method: 'PUT',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
@@ -1657,29 +1665,6 @@ onUnmounted(() => {
                       还不清楚
                     </button>
                   </div>
-                  <div v-if="task.visualFocus && (task.result !== 'NOT_TRIED' || task.type === 'VERIFY_VISUAL_AID')" class="mt-3 border-t border-ink/8 pt-3">
-                    <p class="text-xs font-semibold text-ink/55">框选位置对完成这项任务有帮助吗？</p>
-                    <div class="mt-2 grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40"
-                        :class="task.visualAidResult === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'"
-                        :disabled="comprehensionSaving !== null || !online"
-                        @click="recordVisualAid(task.type, 'HELPFUL')"
-                      >
-                        有帮助
-                      </button>
-                      <button
-                        type="button"
-                        class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40"
-                        :class="task.visualAidResult === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'"
-                        :disabled="comprehensionSaving !== null || !online"
-                        @click="recordVisualAid(task.type, 'NOT_HELPFUL')"
-                      >
-                        没帮上忙
-                      </button>
-                    </div>
-                  </div>
                   <button
                     v-if="task.result === 'NEEDS_HELP' && task.chapterPositions.length"
                     type="button"
@@ -1690,6 +1675,26 @@ onUnmounted(() => {
                   </button>
                 </li>
               </ol>
+              <div v-if="comprehension?.visualAids.length" class="mt-6 border-t border-ink/10 pt-5">
+                <h4 class="font-display text-xl font-semibold">逐张看看这些规则书裁剪图</h4>
+                <p class="mt-1 text-sm leading-6 text-ink/55">每张图单独评分；你的反馈只用于判断这张图是否真的帮上忙。</p>
+                <ol class="mt-4 grid gap-3 sm:grid-cols-2">
+                  <li v-for="aid in comprehension.visualAids" :key="aid.key" class="rounded-2xl border border-indigo/15 bg-paper p-4">
+                    <figure v-if="!failedComprehensionImages.includes(aid.visualFocus.pageNumber)" class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
+                      <a :href="pageImageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开规则书大图" class="relative block">
+                        <img :src="pageImageUrl(aid.visualFocus.pageNumber)" :alt="`规则书第 ${aid.visualFocus.pageNumber} 页，框选 ${aid.label}`" class="block h-auto w-full" loading="lazy" @error="comprehensionImageFailed(aid.visualFocus.pageNumber)">
+                        <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(aid.visualFocus)" aria-hidden="true" />
+                      </a>
+                    </figure>
+                    <p class="mt-3 text-sm font-semibold">{{ aid.label }}</p>
+                    <p class="mt-1 text-xs font-semibold text-indigo">第 {{ aid.visualFocus.pageNumber }} 页 · 第 {{ aid.chapterPosition }} 节</p>
+                    <div class="mt-3 grid grid-cols-2 gap-2">
+                      <button type="button" class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40" :class="aid.result === 'HELPFUL' ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/15'" :disabled="comprehensionSaving !== null || !online" @click="recordVisualAid(aid.key, 'HELPFUL')">有帮助</button>
+                      <button type="button" class="min-h-10 rounded-xl border px-2 text-xs font-semibold disabled:opacity-40" :class="aid.result === 'NOT_HELPFUL' ? 'border-amber-700 bg-amber-50 text-amber-950' : 'border-ink/15'" :disabled="comprehensionSaving !== null || !online" @click="recordVisualAid(aid.key, 'NOT_HELPFUL')">没帮上忙</button>
+                    </div>
+                  </li>
+                </ol>
+              </div>
             </section>
 
             <details class="mt-8 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">

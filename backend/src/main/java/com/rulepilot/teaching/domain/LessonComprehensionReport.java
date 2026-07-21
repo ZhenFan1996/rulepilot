@@ -13,7 +13,8 @@ public record LessonComprehensionReport(
         int readyVisualTaskCount,
         int visualAidRatedCount,
         int visualAidHelpfulCount,
-        List<PlayerTask> tasks) {
+        List<PlayerTask> tasks,
+        List<VisualAid> visualAids) {
 
     public LessonComprehensionReport {
         if (lessonId == null || readyTaskCount < 0 || taskCount < 0 || readyTaskCount > taskCount
@@ -25,6 +26,7 @@ public record LessonComprehensionReport(
             throw new IllegalArgumentException("lesson visual comprehension totals are invalid");
         }
         tasks = List.copyOf(tasks);
+        visualAids = List.copyOf(visualAids);
     }
 
     public enum TaskType {
@@ -76,6 +78,25 @@ public record LessonComprehensionReport(
                 throw new IllegalArgumentException("visual aid can only be rated for a ready visual task");
             }
             chapterPositions = List.copyOf(chapterPositions);
+            sourcePages = List.copyOf(sourcePages);
+        }
+    }
+
+    public record VisualAid(
+            String key,
+            String label,
+            int chapterPosition,
+            List<Integer> sourcePages,
+            VisualFocus visualFocus,
+            VisualAidResult result) {
+
+        public VisualAid {
+            if (key == null || !key.matches("s[1-9][0-9]*-v[1-9][0-9]*") || label == null || label.isBlank()
+                    || chapterPosition < 1 || sourcePages == null || sourcePages.isEmpty() || visualFocus == null
+                    || result == null || !sourcePages.contains(visualFocus.pageNumber())) {
+                throw new IllegalArgumentException("visual aid task is invalid");
+            }
+            label = label.strip();
             sourcePages = List.copyOf(sourcePages);
         }
     }

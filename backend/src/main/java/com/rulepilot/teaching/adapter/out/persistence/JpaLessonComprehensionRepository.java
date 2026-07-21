@@ -45,6 +45,21 @@ public class JpaLessonComprehensionRepository implements LessonComprehensionRepo
     }
 
     @Override
+    public Map<String, VisualAidResult> findVisualAidResults(UUID lessonId, String username) {
+        @SuppressWarnings("unchecked")
+        var rows = (java.util.List<Object[]>) entityManager.createNativeQuery("""
+                        select visual_aid_key, result
+                        from lesson_visual_aid_feedback
+                        where lesson_id = :lessonId and created_by = :username
+                        """)
+                .setParameter("lessonId", lessonId)
+                .setParameter("username", username)
+                .getResultList();
+        return rows.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                row -> row[0].toString(), row -> VisualAidResult.valueOf(row[1].toString())));
+    }
+
+    @Override
     public void savePlayerResult(
             UUID id, UUID lessonId, TaskType taskType, PlayerResult result, String username, Instant updatedAt) {
         entityManager.createNativeQuery("""
@@ -66,29 +81,27 @@ public class JpaLessonComprehensionRepository implements LessonComprehensionRepo
     }
 
     @Override
-    public boolean saveVisualAidResult(
+    public void saveVisualAidResult(
             UUID lessonId,
-            TaskType taskType,
+            String visualAidKey,
             VisualAidResult result,
             String username,
             Instant updatedAt) {
-        int updated = entityManager.createNativeQuery("""
-                        insert into lesson_comprehension_result (
-                            id, lesson_id, task_type, result, visual_aid_result, created_by, updated_at
+        entityManager.createNativeQuery("""
+                        insert into lesson_visual_aid_feedback (
+                            id, lesson_id, visual_aid_key, result, created_by, updated_at
                         ) values (
-                            :id, :lessonId, :taskType, :playerResult, :result, :username, :updatedAt
+                            :id, :lessonId, :visualAidKey, :result, :username, :updatedAt
                         )
-                        on conflict (lesson_id, created_by, task_type) do update
-                        set visual_aid_result = excluded.visual_aid_result, updated_at = excluded.updated_at
+                        on conflict (lesson_id, created_by, visual_aid_key) do update
+                        set result = excluded.result, updated_at = excluded.updated_at
                         """)
                 .setParameter("id", UUID.randomUUID())
                 .setParameter("lessonId", lessonId)
                 .setParameter("username", username)
-                .setParameter("taskType", taskType.name())
-                .setParameter("playerResult", PlayerResult.NOT_TRIED.name())
+                .setParameter("visualAidKey", visualAidKey)
                 .setParameter("result", result.name())
                 .setParameter("updatedAt", updatedAt)
                 .executeUpdate();
-        return updated == 1;
     }
 }

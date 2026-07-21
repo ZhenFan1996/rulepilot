@@ -44,7 +44,7 @@ public class LessonComprehensionService {
     @Transactional(readOnly = true)
     public LessonComprehensionReport progress(UUID teachingPlanId, String username) {
         var lesson = latestLesson(teachingPlanId);
-        return evaluator.evaluate(lesson, results.findResults(lesson.id(), username));
+        return evaluate(lesson, username);
     }
 
     @Transactional
@@ -54,7 +54,7 @@ public class LessonComprehensionService {
             throw new IllegalArgumentException("player comprehension result must be an explicit choice");
         }
         var lesson = latestLesson(teachingPlanId);
-        var current = evaluator.evaluate(lesson, results.findResults(lesson.id(), username));
+        var current = evaluate(lesson, username);
         var task = current.tasks().stream()
                 .filter(candidate -> candidate.type() == taskType)
                 .findFirst()
@@ -64,36 +64,33 @@ public class LessonComprehensionService {
         }
         results.savePlayerResult(
                 UUID.randomUUID(), lesson.id(), taskType, result, username, Instant.now(clock));
-        return evaluator.evaluate(lesson, results.findResults(lesson.id(), username));
+        return evaluate(lesson, username);
     }
 
     @Transactional
     public LessonComprehensionReport recordVisualAid(
-            UUID teachingPlanId, TaskType taskType, VisualAidResult result, String username) {
+            UUID teachingPlanId, String visualAidKey, VisualAidResult result, String username) {
         if (result == null || result == VisualAidResult.NOT_RATED) {
             throw new IllegalArgumentException("visual aid result must be an explicit choice");
         }
         var lesson = latestLesson(teachingPlanId);
-        var current = evaluator.evaluate(lesson, results.findResults(lesson.id(), username));
-        var task = current.tasks().stream()
-                .filter(candidate -> candidate.type() == taskType)
+        var current = evaluate(lesson, username);
+        var aid = current.visualAids().stream()
+                .filter(candidate -> candidate.key().equals(visualAidKey))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("player comprehension task does not exist"));
-        if (task.readiness() != TaskReadiness.READY || task.visualFocus() == null) {
-            throw new IllegalArgumentException("visual comprehension task is not ready");
-        }
-        if (task.result() == PlayerResult.NOT_TRIED && taskType != TaskType.VERIFY_VISUAL_AID) {
-            throw new IllegalArgumentException("complete the player task before rating its visual aid");
-        }
-        if (!results.saveVisualAidResult(
-                lesson.id(), taskType, result, username, Instant.now(clock))) {
-            throw new IllegalStateException("player comprehension result does not exist");
-        }
-        return evaluator.evaluate(lesson, results.findResults(lesson.id(), username));
+                .orElseThrow(() -> new IllegalArgumentException("visual aid does not exist"));
+        results.saveVisualAidResult(lesson.id(), aid.key(), result, username, Instant.now(clock));
+        return evaluate(lesson, username);
     }
 
     private com.rulepilot.teaching.domain.IllustratedLesson latestLesson(UUID teachingPlanId) {
         return lessons.findLatestByPlan(teachingPlanId)
                 .orElseThrow(() -> new IllegalArgumentException("lesson does not exist"));
+    }
+
+    private LessonComprehensionReport evaluate(
+            com.rulepilot.teaching.domain.IllustratedLesson lesson, String username) {
+        return evaluator.evaluate(
+                lesson, results.findResults(lesson.id(), username), results.findVisualAidResults(lesson.id(), username));
     }
 }

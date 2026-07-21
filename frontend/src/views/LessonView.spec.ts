@@ -66,6 +66,25 @@ describe('LessonView progressive reading', () => {
         qualityReads++
         return Response.json({ status: 'READY', score: 100, checks: [] })
       }
+      if (path.endsWith('/comprehension')) {
+        return Response.json({
+          lessonId: 'lesson-1', readyTaskCount: 0, taskCount: 0, canDoCount: 0, needsHelpCount: 0,
+          readyVisualTaskCount: 2, visualAidRatedCount: 1, visualAidHelpfulCount: 1, tasks: [],
+          visualAids: [
+            { key: 's1-v3', label: '主棋盘区域', chapterPosition: 1, sourcePages: [1], result: 'HELPFUL',
+              visualFocus: { pageNumber: 1, label: '主棋盘区域', x: 100, y: 200, width: 500, height: 400 } },
+            { key: 's2-v3', label: '行动区', chapterPosition: 2, sourcePages: [2], result: 'NOT_RATED',
+              visualFocus: { pageNumber: 2, label: '行动区', x: 100, y: 200, width: 500, height: 400 } },
+          ],
+        })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/comprehension/visual-aids/s2-v3')) {
+        return Response.json({
+          lessonId: 'lesson-1', readyTaskCount: 0, taskCount: 0, canDoCount: 0, needsHelpCount: 0,
+          readyVisualTaskCount: 2, visualAidRatedCount: 2, visualAidHelpfulCount: 2, tasks: [], visualAids: [],
+        })
+      }
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       return new Response(null, { status: 404 })
     })
@@ -122,6 +141,13 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('我学完了')
     expect(wrapper.text()).not.toContain('整本仍在后台生成')
     expect(qualityReads).toBe(1)
+    expect(wrapper.text()).toContain('逐张看看这些规则书裁剪图')
+    expect(wrapper.text()).toContain('焦点图有帮助 1 / 1')
+    const helpfulButtons = wrapper.findAll('button').filter((button) => button.text() === '有帮助')
+    expect(helpfulButtons).toHaveLength(2)
+    await helpfulButtons[1]!.trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/v1/teaching-plans/plan-1/comprehension/visual-aids/s2-v3')
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
       .filter((path) => path.includes('/api/v1/assistant-runs/latest'))

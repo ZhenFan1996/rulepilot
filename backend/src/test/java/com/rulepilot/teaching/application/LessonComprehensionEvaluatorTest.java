@@ -52,7 +52,7 @@ class LessonComprehensionEvaluatorTest {
     }
 
     @Test
-    void buildsVisualTasksFromTheSameCitedFocusAndMeasuresUsefulnessSeparately() {
+    void buildsOneRateableVisualAidForEachCitedCrop() {
         var lesson = lesson(List.of(section(
                 1,
                 "board-assembly",
@@ -60,15 +60,16 @@ class LessonComprehensionEvaluatorTest {
                 TeachingMove.DO,
                 TeachingMove.VISUAL)));
 
-        var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of(
-                TaskType.IDENTIFY_COMPONENTS,
-                saved(PlayerResult.CAN_DO, VisualAidResult.HELPFUL),
-                TaskType.COMPLETE_VISUAL_SETUP,
-                saved(PlayerResult.NEEDS_HELP, VisualAidResult.NOT_HELPFUL)));
+        var report = new LessonComprehensionEvaluator().evaluate(
+                lesson,
+                Map.of(
+                        TaskType.IDENTIFY_COMPONENTS, saved(PlayerResult.CAN_DO),
+                        TaskType.COMPLETE_VISUAL_SETUP, saved(PlayerResult.NEEDS_HELP)),
+                Map.of("s1-v2", VisualAidResult.HELPFUL));
 
         assertThat(report.readyTaskCount()).isEqualTo(3);
-        assertThat(report.readyVisualTaskCount()).isEqualTo(3);
-        assertThat(report.visualAidRatedCount()).isEqualTo(2);
+        assertThat(report.readyVisualTaskCount()).isOne();
+        assertThat(report.visualAidRatedCount()).isOne();
         assertThat(report.visualAidHelpfulCount()).isEqualTo(1);
         assertThat(report.canDoCount()).isEqualTo(1);
         assertThat(report.needsHelpCount()).isEqualTo(1);
@@ -79,6 +80,10 @@ class LessonComprehensionEvaluatorTest {
         assertThat(componentTask.visualFocus()).isNotNull();
         assertThat(componentTask.sourcePages()).containsExactly(11);
         assertThat(report.tasks().get(6).prompt()).contains("按照本节步骤");
+        assertThat(report.visualAids()).singleElement().satisfies(aid -> {
+            assertThat(aid.key()).isEqualTo("s1-v2");
+            assertThat(aid.result()).isEqualTo(VisualAidResult.HELPFUL);
+        });
     }
 
     @Test
@@ -93,7 +98,7 @@ class LessonComprehensionEvaluatorTest {
 
         var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of());
 
-        assertThat(report.readyVisualTaskCount()).isEqualTo(3);
+        assertThat(report.readyVisualTaskCount()).isOne();
         assertThat(report.tasks().subList(4, 7))
                 .allMatch(task -> task.readiness() == TaskReadiness.READY && task.visualFocus() != null);
     }
@@ -133,6 +138,23 @@ class LessonComprehensionEvaluatorTest {
         assertThat(task.type()).isEqualTo(TaskType.VERIFY_VISUAL_AID);
         assertThat(task.readiness()).isEqualTo(TaskReadiness.READY);
         assertThat(task.visualFocus()).isNotNull();
+        assertThat(report.visualAids()).singleElement();
+    }
+
+    @Test
+    void exposes_each_visual_crop_as_a_separately_rateable_aid() {
+        var lesson = lesson(List.of(
+                section(1, "setup", List.of("setup"), TeachingMove.DO, TeachingMove.VISUAL),
+                section(2, "scoring", List.of("scoring"), TeachingMove.LEDGER, TeachingMove.VISUAL)));
+
+        var report = new LessonComprehensionEvaluator().evaluate(lesson, Map.of(), Map.of(
+                "s1-v2", VisualAidResult.HELPFUL,
+                "s2-v2", VisualAidResult.NOT_HELPFUL));
+
+        assertThat(report.readyVisualTaskCount()).isEqualTo(2);
+        assertThat(report.visualAidRatedCount()).isEqualTo(2);
+        assertThat(report.visualAidHelpfulCount()).isOne();
+        assertThat(report.visualAids()).extracting(aid -> aid.key()).containsExactly("s1-v2", "s2-v2");
     }
 
     private IllustratedLesson lesson(List<LessonSection> sections) {

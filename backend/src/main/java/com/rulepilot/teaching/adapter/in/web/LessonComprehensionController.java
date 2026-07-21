@@ -45,14 +45,14 @@ public class LessonComprehensionController {
         return comprehension.record(planId, taskType, request.result(), principal.getName());
     }
 
-    @PutMapping("/{taskType}/visual-aid")
+    @PutMapping("/visual-aids/{visualAidKey}")
     LessonComprehensionReport recordVisualAid(
             @PathVariable UUID planId,
-            @PathVariable TaskType taskType,
+            @PathVariable String visualAidKey,
             @RequestBody VisualAidRequest request,
             Principal principal) {
         owners.requireOwned(planId, principal.getName());
-        return comprehension.recordVisualAid(planId, taskType, request.result(), principal.getName());
+        return comprehension.recordVisualAid(planId, visualAidKey, request.result(), principal.getName());
     }
 
     record ResultRequest(PlayerResult result) {}

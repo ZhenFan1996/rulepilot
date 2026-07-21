@@ -12,6 +12,7 @@ import com.rulepilot.teaching.domain.LessonComprehensionReport.PlayerResult;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.PlayerTask;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.TaskReadiness;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.TaskType;
+import com.rulepilot.teaching.domain.LessonComprehensionReport.VisualAid;
 import com.rulepilot.teaching.domain.LessonComprehensionReport.VisualAidResult;
 import java.util.List;
 import java.util.Map;
@@ -62,27 +63,46 @@ public class LessonComprehensionEvaluator {
 
     public LessonComprehensionReport evaluate(
             IllustratedLesson lesson, Map<TaskType, SavedResult> savedResults) {
+        return evaluate(lesson, savedResults, Map.of());
+    }
+
+    public LessonComprehensionReport evaluate(
+            IllustratedLesson lesson,
+            Map<TaskType, SavedResult> savedResults,
+            Map<String, VisualAidResult> savedVisualAidResults) {
         List<PlayerTask> tasks = java.util.stream.Stream.concat(
                         TASKS.stream().map(definition -> task(
                                 lesson, definition, savedResults.getOrDefault(definition.type(), notTried()))),
                         VISUAL_TASKS.stream().map(definition -> visualTask(
                                 lesson, definition, savedResults.getOrDefault(definition.type(), notTried()))))
                 .toList();
+        List<VisualAid> visualAids = visualAids(lesson, savedVisualAidResults);
         int ready = (int) tasks.stream().filter(task -> task.readiness() == TaskReadiness.READY).count();
         int canDo = (int) tasks.stream().filter(task -> task.result() == PlayerResult.CAN_DO).count();
         int needsHelp = (int) tasks.stream().filter(task -> task.result() == PlayerResult.NEEDS_HELP).count();
-        int readyVisual = (int) tasks.stream()
-                .filter(task -> task.readiness() == TaskReadiness.READY && task.visualFocus() != null)
-                .count();
-        int visualRated = (int) tasks.stream()
-                .filter(task -> task.visualAidResult() != VisualAidResult.NOT_RATED)
-                .count();
-        int visualHelpful = (int) tasks.stream()
-                .filter(task -> task.visualAidResult() == VisualAidResult.HELPFUL)
-                .count();
+        int readyVisual = visualAids.size();
+        int visualRated = (int) visualAids.stream().filter(aid -> aid.result() != VisualAidResult.NOT_RATED).count();
+        int visualHelpful = (int) visualAids.stream().filter(aid -> aid.result() == VisualAidResult.HELPFUL).count();
         return new LessonComprehensionReport(
                 lesson.id(), ready, tasks.size(), canDo, needsHelp,
-                readyVisual, visualRated, visualHelpful, tasks);
+                readyVisual, visualRated, visualHelpful, tasks, visualAids);
+    }
+
+    private List<VisualAid> visualAids(
+            IllustratedLesson lesson, Map<String, VisualAidResult> savedVisualAidResults) {
+        return eligibleSections(lesson).stream()
+                .flatMap(section -> section.steps().stream()
+                        .filter(this::isCitedVisual)
+                        .map(step -> new VisualAid(
+                                "s%d-v%d".formatted(section.position(), step.position()),
+                                step.visualFocus().label(),
+                                section.position(),
+                                List.of(step.visualFocus().pageNumber()),
+                                step.visualFocus(),
+                                savedVisualAidResults.getOrDefault(
+                                        "s%d-v%d".formatted(section.position(), step.position()),
+                                        VisualAidResult.NOT_RATED))))
+                .toList();
     }
 
     private PlayerTask task(IllustratedLesson lesson, TaskDefinition definition, SavedResult saved) {
