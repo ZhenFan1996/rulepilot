@@ -61,9 +61,7 @@ export function teachingActivityText(
   const target = chapter ? `“${chapter.title}”` : '当前内容'
   if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
   if (activity.operation.startsWith('composeTeachingSection')) {
-    return chapter?.visualEvidenceRecommended
-      ? `正在阅读规则书图片并编写${target}`
-      : `正在编写${target}`
+    return `正在依据规则书编写${target}`
   }
   if (activity.operation.startsWith('correctTeachingSection')) return `正在根据勘误修正${target}`
   if (activity.operation.startsWith('reviseTeachingSection')) return `正在根据核对结果修正${target}`
@@ -90,6 +88,7 @@ export function supportedTeachingChapterCount(run: TeachingRunProgress | null) {
     activity.outcome === 'SUCCEEDED'
       && (activity.summary.includes('POST_PUBLICATION_REVIEW_ACCEPTED')
         || activity.summary.includes('REUSED_VERIFIED_SECTION')
+        || activity.summary.includes('CITED_BASE_SECTION_PUBLISHED')
         || activity.summary.includes('DRAFT_ACCEPTED')),
   )).size
 }
@@ -115,7 +114,7 @@ export function teachingRemainingTimeText(
   const estimatedMinutes = elapsedMinutes / completed * (total - completed)
   const low = Math.max(1, Math.floor(estimatedMinutes * 0.7))
   const high = Math.max(low + 1, Math.ceil(estimatedMinutes * 1.5))
-  return `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；图片章节可能更久。`
+  return `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；基础讲解会优先发布，配图与细节核对随后补充。`
 }
 
 function operationPosition(operation: string) {

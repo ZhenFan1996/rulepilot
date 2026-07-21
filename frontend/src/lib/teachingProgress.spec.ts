@@ -33,14 +33,14 @@ describe('teaching progress', () => {
   it('uses safe player language and derives chapter outcomes from publication activities', () => {
     const activities = [
       activity(1, 'composeTeachingSection|1', 'RUNNING'),
-      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_DRAFT_PUBLISHED'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
       activity(3, 'reviewPublishedTeachingSection', 'RUNNING'),
       activity(4, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: POST_PUBLICATION_REVIEW_ACCEPTED'),
       activity(5, 'publishTeachingSection|2', 'REJECTED'),
     ]
     const snapshot = run('run-1', activities)
 
-    expect(teachingActivityText(plan, activities, activities[0])).toBe('正在阅读规则书图片并编写“完成开局设置”')
+    expect(teachingActivityText(plan, activities, activities[0])).toBe('正在依据规则书编写“完成开局设置”')
     expect(processedTeachingChapterCount(snapshot)).toBe(2)
     expect(supportedTeachingChapterCount(snapshot)).toBe(1)
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z')))

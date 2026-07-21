@@ -109,7 +109,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('第 2 / 2 节')
     expect(wrapper.text()).toContain('开始第一轮')
     expect(wrapper.text()).toContain('整本仍在后台生成')
-    expect(wrapper.text()).toContain('正在阅读规则书图片并编写“先摆主板”')
+    expect(wrapper.text()).toContain('正在依据规则书编写“先摆主板”')
     expect(wrapper.text()).toContain('后台已处理 0/2 节')
     expect(wrapper.text()).toContain('1 次模型调用')
     expect(wrapper.text()).toContain('第一节完成后')
