@@ -132,6 +132,38 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void repairs_a_player_step_that_ends_in_an_incomplete_ellipsis() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return oneStepDraft(chunkId, "交易后你手上有2个木头和……完成了。");
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().satisfies(value -> assertThat(value).contains("do not end a rule"));
+                return oneStepDraft(chunkId, "交易后你手上有2个木头；如果仍不够建造，就保留资源等下一回合。");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(revisions).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("……");
+    }
+
+    @Test
     void removesEnglishQuestionFillerWithoutDroppingRetrievalConditions() {
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(),
@@ -1554,6 +1586,15 @@ class GroundedTeachingAgentTest {
                 List.of(topic(1, TeachingSectionType.SETUP)),
                 "player",
                 Instant.now());
+    }
+
+    private SectionDraft oneStepDraft(UUID chunkId, String text) {
+        return new SectionDraft(
+                "可执行步骤",
+                VisualKind.REFERENCE_CARD,
+                "按引用完成这一节。",
+                List.of(chunkId),
+                List.of(new StepDraft("照着做", TeachingMove.DO, text, List.of(chunkId))));
     }
 
     private TeachingPlan alternativeRoutePlan(UUID versionId) {

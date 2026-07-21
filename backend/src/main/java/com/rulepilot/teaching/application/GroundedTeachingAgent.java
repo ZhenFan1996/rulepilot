@@ -74,6 +74,8 @@ public class GroundedTeachingAgent {
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
+    private static final Pattern TRAILING_INCOMPLETE_THOUGHT = Pattern.compile(
+            "(?:…+|\\.\\.\\.)\\s*(?:完成(?:了)?|结束(?:了)?|等等|后续|其余)?[。！？!?]?\\s*$");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
             "(?i)(attached|attachment|image|rulebook|page\\s*\\d|图片|附件|规则书|第\\s*\\d+\\s*页|页面)");
     private static final Pattern INTERNAL_EVIDENCE_MARKER = Pattern.compile(
@@ -1259,6 +1261,12 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Replace inferred emoji icons with an evidenced natural-language rule term.");
         }
+        if (draft.steps().stream().anyMatch(step -> step != null
+                && step.text() != null
+                && TRAILING_INCOMPLETE_THOUGHT.matcher(step.text()).find())) {
+            throw new IllegalArgumentException(
+                    "Finish every player-facing step; do not end a rule, example, or calculation with an ellipsis.");
+        }
         if (INTERNAL_EVIDENCE_MARKER.matcher(draft.visualCaption()).find()
                 || draft.steps().stream().anyMatch(step -> step != null
                         && ((step.heading() != null && INTERNAL_EVIDENCE_MARKER.matcher(step.heading()).find())
@@ -1290,6 +1298,7 @@ public class GroundedTeachingAgent {
         if (message.contains("visual caption has no evidence")) return "VISUAL_CITATION_MISSING";
         if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
         if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
+        if (message.contains("do not end a rule")) return "STEP_TRUNCATED";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";

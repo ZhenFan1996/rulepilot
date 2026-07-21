@@ -10,7 +10,7 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v14-system.txt"),
+                resource("teaching-agent-v15-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v4-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
