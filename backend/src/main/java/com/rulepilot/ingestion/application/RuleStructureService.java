@@ -59,7 +59,7 @@ public class RuleStructureService implements RuleStructureCatalog, RulebookUnder
 
     @Override
     @Transactional(readOnly = true)
-    public com.rulepilot.ingestion.domain.RulebookUnderstanding understanding(UUID documentVersionId) {
+    public com.rulepilot.ingestion.layout.RulebookUnderstanding understanding(UUID documentVersionId) {
         return repository.findUnderstanding(documentVersionId)
                 .orElseThrow(() -> new IllegalArgumentException("rulebook understanding does not exist"));
     }

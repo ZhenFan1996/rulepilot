@@ -2,11 +2,11 @@ package com.rulepilot.ingestion.adapter.out.persistence;
 
 import com.rulepilot.ingestion.application.RuleStructureRepository;
 import com.rulepilot.ingestion.domain.LessonRuleSectionType;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.CoverageLedgerEntry;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.PageBlock;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.RuleEvidenceItem;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.TerminologyCandidate;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.CoverageLedgerEntry;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.RuleEvidenceItem;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.TerminologyCandidate;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;

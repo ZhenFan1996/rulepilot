@@ -1,7 +1,7 @@
 package com.rulepilot.ingestion.application;
 
 import com.rulepilot.ingestion.domain.LessonRuleSectionType;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

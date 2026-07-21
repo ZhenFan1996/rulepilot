@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.document.DocumentProcessing.ExtractedTextBlock;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

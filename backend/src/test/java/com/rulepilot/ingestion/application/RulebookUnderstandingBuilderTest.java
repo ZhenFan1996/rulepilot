@@ -4,8 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.document.DocumentProcessing.ExtractedTextBlock;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.BlockRole;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.CoverageState;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.CoverageState;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 

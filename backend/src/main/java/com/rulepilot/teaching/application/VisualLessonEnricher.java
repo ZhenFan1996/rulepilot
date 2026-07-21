@@ -2,7 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.Rectangle;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
@@ -81,7 +81,7 @@ public class VisualLessonEnricher {
     }
 
     private LessonSection enrichSection(
-            com.rulepilot.ingestion.domain.RulebookUnderstanding understanding,
+            com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
             String modelConfigurationOwner) {

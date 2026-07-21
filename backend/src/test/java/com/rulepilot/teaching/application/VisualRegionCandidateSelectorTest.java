@@ -2,10 +2,10 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.BlockRole;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.PageBlock;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.Rectangle;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;

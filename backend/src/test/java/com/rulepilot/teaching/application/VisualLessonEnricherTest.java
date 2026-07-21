@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;

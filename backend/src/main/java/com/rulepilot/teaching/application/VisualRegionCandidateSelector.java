@@ -1,8 +1,8 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.ingestion.domain.RulebookUnderstanding;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.PageBlock;
-import com.rulepilot.ingestion.domain.RulebookUnderstanding.Rectangle;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;

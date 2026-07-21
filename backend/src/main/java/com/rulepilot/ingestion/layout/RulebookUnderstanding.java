@@ -1,4 +1,4 @@
-package com.rulepilot.ingestion.domain;
+package com.rulepilot.ingestion.layout;
 
 import java.util.List;
 
