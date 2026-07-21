@@ -13,6 +13,8 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +22,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @Profile("!test")
 public class IllustratedLessonService {
+
+    private static final Logger log = LoggerFactory.getLogger(IllustratedLessonService.class);
 
     private final TeachingPlanRepository plans;
     private final GroundedTeachingAgent agent;
@@ -75,6 +79,7 @@ public class IllustratedLessonService {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
             throw stopped;
         } catch (RuntimeException exception) {
+            log.error("Teaching workflow failed for plan {} and run {}", teachingPlanId, run.id(), exception);
             failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
             throw exception;
         }
