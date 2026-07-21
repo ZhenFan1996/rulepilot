@@ -60,4 +60,14 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" null ")).isTrue();
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion("not valid JSON")).isFalse();
     }
+
+    @Test
+    void gives_the_single_retry_a_correction_that_matches_the_rejected_contract() {
+        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.UNSUPPORTED_SCOPE))
+                .contains("page", "claim");
+        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.INVALID_GEOMETRY))
+                .contains("x + width", "y + height");
+        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
+                .contains("JSON");
+    }
 }

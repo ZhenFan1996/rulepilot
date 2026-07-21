@@ -49,13 +49,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             log.info("Visual locator is unavailable for section {}", request.sectionTitle());
             return Optional.empty();
         }
-        LocateAttempt first = locateOnce(request, owner, false);
+        LocateAttempt first = locateOnce(request, owner, "");
         if (first.region().isPresent() || !first.retryable()) return first.region();
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
-        return locateOnce(request, owner, true).region();
+        return locateOnce(request, owner, retryInstruction(first.rejection())).region();
     }
 
-    private LocateAttempt locateOnce(VisualLocationRequest request, String owner, boolean correction) {
+    private LocateAttempt locateOnce(VisualLocationRequest request, String owner, String correction) {
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(qwenJsonOptions());
@@ -75,9 +75,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     .mapToObj(index -> Map.of("ref", "C" + (index + 1), "text", request.claims().get(index).text()))
                                     .toList())
                             .param("candidates", request.candidates())
-                            .param("correction", correction
-                                    ? "The previous response was rejected. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000."
-                                    : "");
+                            .param("correction", correction);
                     request.pages().forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
@@ -86,7 +84,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         Optional<ModelRegion> parsed = parseModelRegion(content);
         if (parsed.isEmpty()) {
             log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
-            return new LocateAttempt(Optional.empty(), !isExplicitNoRegion(content));
+            return new LocateAttempt(Optional.empty(), !isExplicitNoRegion(content), Rejection.MALFORMED_JSON);
         }
         ModelRegion response = parsed.get();
         List<UUID> supported = response.supportedClaimRefs().stream()
@@ -96,14 +94,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .toList();
         if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
             log.info("Visual locator returned an unsupported claim or page for section {}", request.sectionTitle());
-            return new LocateAttempt(Optional.empty(), true);
+            return new LocateAttempt(Optional.empty(), true, Rejection.UNSUPPORTED_SCOPE);
         }
         try {
             return new LocateAttempt(Optional.of(new LocatedRegion(
-                    response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported)), false);
+                    response.pageNumber(), response.label(), response.x(), response.y(), response.width(), response.height(), supported)), false,
+                    Rejection.NONE);
         } catch (IllegalArgumentException invalidModelOutput) {
             log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
-            return new LocateAttempt(Optional.empty(), true);
+            return new LocateAttempt(Optional.empty(), true, Rejection.INVALID_GEOMETRY);
         }
     }
 
@@ -121,6 +120,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     static boolean isExplicitNoRegion(String content) {
         return content != null && content.strip().equals("null");
+    }
+
+    static String retryInstruction(Rejection rejection) {
+        return switch (rejection) {
+            case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or null.";
+            case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references.";
+            case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
+            case NONE -> "";
+        };
     }
 
     static Optional<ModelRegion> parseModelRegion(String content) {
@@ -152,5 +160,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
     }
 
-    private record LocateAttempt(Optional<LocatedRegion> region, boolean retryable) {}
+    enum Rejection {
+        NONE,
+        MALFORMED_JSON,
+        UNSUPPORTED_SCOPE,
+        INVALID_GEOMETRY
+    }
+
+    private record LocateAttempt(Optional<LocatedRegion> region, boolean retryable, Rejection rejection) {}
 }
