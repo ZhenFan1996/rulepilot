@@ -22,13 +22,23 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private static final String SYSTEM = """
             You are a meticulous board-game rulebook visual reader. Inspect only the supplied page images.
-            Build a compact per-page source catalog for a later planner; do not write a lesson and do not invent rules.
+            Build a per-page rule evidence ledger for a later planner and writer; do not write a lesson and do not
+            invent rules.
             For every supplied page return exactly one item with its pageNumber. printedTerms must preserve the visible
             printed headings, labels, action names, component names, icon labels, and numbers in their original language
-            (verbatim where readable). factualSummary is concise Simplified Chinese and may report only what is visibly
-            printed or shown on that page, including diagrams and examples. keywords must contain 2-8 short original-
-            language terms that occur visibly on that same page. If a page is a cover, index, illustration, or unreadable,
-            say so explicitly instead of guessing. The page number and every reported term must come from an attached page.
+            (verbatim where readable). factualSummary is a complete Simplified-Chinese evidence ledger of the rules on
+            that one page, using original-language terms in parentheses where needed. It may report only what is visibly
+            printed or shown, including diagrams and examples.
+
+            For an operational rule page, do not summarize away details: record every visible branch and its exact
+            condition, whether it is optional or mandatory, timing and frequency limits, which exact components are
+            removed/drawn/replaced/left in place, and the order in which those changes happen. Preserve distinctions
+            such as 3 versus 4, any versus all, may versus must, once versus repeatable, and token versus tile. A later
+            writer will cite this ledger, so an incomplete generic paraphrase is invalid. Do not infer an unprinted
+            convention such as clockwise turn order, a redraw of a different component, or a player-specific setup.
+            keywords must contain 2-8 short original-language terms that occur visibly on that same page. If a page is
+            a cover, index, illustration, or unreadable, say so explicitly instead of guessing. The page number and every
+            reported term must come from an attached page.
             Return structured data only.
             """;
 
