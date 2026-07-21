@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.context.annotation.Primary;
@@ -120,6 +121,9 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         if (!providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.extraBody(providerOptions);
+            if (usesQwen(role, owner)) {
+                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+            }
             prompt = prompt.options(options);
         }
         ModelSectionDraft draft = prompt
@@ -158,10 +162,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         if (models.usesDeepSeekNonThinkingGeneration(role)) {
             options.put("thinking", Map.of("type", "disabled"));
         }
-        String provider = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
-                ? models.providerFor(role)
-                : models.providerFor(role, modelConfigurationOwner);
-        if ("qwen".equals(provider)) {
+        if (usesQwen(role, modelConfigurationOwner)) {
             options.put("enable_thinking", false);
         }
         return Map.copyOf(options);
@@ -169,6 +170,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     Map<String, Object> providerOptions(Role role) {
         return providerOptions(role, null);
+    }
+
+    private boolean usesQwen(Role role, String modelConfigurationOwner) {
+        String provider = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                ? models.providerFor(role)
+                : models.providerFor(role, modelConfigurationOwner);
+        return "qwen".equals(provider);
     }
 
     Role roleFor(SectionRequest request) {
