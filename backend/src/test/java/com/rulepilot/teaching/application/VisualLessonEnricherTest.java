@@ -97,12 +97,45 @@ class VisualLessonEnricherTest {
         assertThat(enriched.sections().getFirst().steps()).hasSize(1);
     }
 
+    @Test
+    void sends_the_most_relevant_candidate_pages_before_lower_numbered_pages() {
+        UUID version = UUID.randomUUID();
+        UUID chunk = UUID.randomUUID();
+        RulebookUnderstanding understanding = new RulebookUnderstanding(
+                List.of(
+                        block(2, "Probe", 100, 200),
+                        block(3, "Launch a probe", 100, 200)),
+                List.of(), List.of(), List.of());
+        DocumentPageImages images = (ignored, pages) -> List.of(
+                new DocumentPageImages.PageImage(2, "image/png", new byte[] {2}, 1_000, 1_000),
+                new DocumentPageImages.PageImage(3, "image/png", new byte[] {3}, 1_000, 1_000));
+        VisualRegionLocator locator = request -> {
+            assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
+            assertThat(request.candidates()).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
+                    .containsExactly(3, 2);
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    3, "Launch", 100, 200, 300, 160, List.of(chunk)));
+        };
+
+        var enriched = new VisualLessonEnricher(
+                        ignored -> understanding, images, new VisualRegionCandidateSelector(), locator)
+                .enrich(version, twoPageLesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps()).hasSize(2);
+    }
+
     private RulebookUnderstanding understanding() {
         return new RulebookUnderstanding(
                 List.of(new RulebookUnderstanding.PageBlock(
                         2, 0, 0, RulebookUnderstanding.BlockRole.BODY, "把探测器放到轨道上",
                         new RulebookUnderstanding.Rectangle(100, 200, 300, 180), null)),
                 List.of(), List.of(), List.of());
+    }
+
+    private RulebookUnderstanding.PageBlock block(int page, String text, int x, int y) {
+        return new RulebookUnderstanding.PageBlock(
+                page, 0, 0, RulebookUnderstanding.BlockRole.BODY, text,
+                new RulebookUnderstanding.Rectangle(x, y, 300, 160), null);
     }
 
     private IllustratedLesson lesson(UUID chunk) {
@@ -112,6 +145,18 @@ class VisualLessonEnricherTest {
                 1, "setup", List.of("setup"), "开局设置", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                 "把探测器放到轨道上。", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson twoPageLesson(UUID chunk) {
+        var step = new IllustratedLesson.LessonStep(
+                1, "Launch a probe", IllustratedLesson.TeachingMove.DO, "Launch a probe.", List.of(2, 3), List.of(chunk));
+        var section = new IllustratedLesson.LessonSection(
+                1, "launch", List.of("launch"), "Launch a probe", true,
+                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
+                "Launch a probe.", List.of(), List.of(), List.of(step));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

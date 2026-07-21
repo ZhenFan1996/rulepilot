@@ -12,7 +12,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -100,10 +99,17 @@ public class VisualLessonEnricher {
             log.info("No cited visual candidates for section {}", section.title());
             return section;
         }
-        Set<Integer> candidatePages = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<PageImage> pages = pageImages.read(documentVersionId, candidatePages).stream()
-                .sorted(Comparator.comparingInt(DocumentPageImages.PageImage::pageNumber))
+        List<Integer> candidatePageOrder = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
+                .distinct()
+                .toList();
+        Map<Integer, DocumentPageImages.PageImage> availablePages = pageImages.read(
+                        documentVersionId, new LinkedHashSet<>(candidatePageOrder))
+                .stream()
+                .collect(Collectors.toMap(
+                        DocumentPageImages.PageImage::pageNumber, image -> image, (first, ignored) -> first));
+        List<PageImage> pages = candidatePageOrder.stream()
+                .map(availablePages::get)
+                .filter(java.util.Objects::nonNull)
                 .limit(2)
                 .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
@@ -111,11 +117,17 @@ public class VisualLessonEnricher {
             log.info("No page image available for visual section {}", section.title());
             return section;
         }
+        Set<Integer> attachedPages = pages.stream()
+                .map(PageImage::pageNumber)
+                .collect(Collectors.toUnmodifiableSet());
+        List<VisualRegionCandidateSelector.Candidate> attachedCandidates = selected.stream()
+                .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
+                .toList();
         List<Claim> claims = claims(section);
         var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
-                        section.title(), claims, selected, pages, modelConfigurationOwner))
+                        section.title(), claims, attachedCandidates, pages, modelConfigurationOwner))
                 .filter(this::isCompactReaderCrop)
-                .filter(region -> intersectsCandidate(region, selected));
+                .filter(region -> intersectsCandidate(region, attachedCandidates));
         if (located.isEmpty()) {
             log.info("No cited visual region accepted for section {}", section.title());
             return section;

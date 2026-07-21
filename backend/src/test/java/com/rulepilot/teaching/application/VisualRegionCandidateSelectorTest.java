@@ -7,6 +7,7 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -64,6 +65,21 @@ class VisualRegionCandidateSelectorTest {
                     assertThat(candidate.rectangle()).isEqualTo(new Rectangle(0, 0, 1_000, 1_000));
                     assertThat(candidate.sourceText()).isEqualTo("Cited page 2");
                 });
+    }
+
+    @Test
+    void covers_the_first_and_last_cited_page_when_translation_has_three_or_more_pages() {
+        var understanding = new RulebookUnderstanding(
+                List.of(
+                        block(4, 0, BlockRole.BODY, "Setup board", 100, 200, 300, 160),
+                        block(5, 0, BlockRole.BODY, "Setup resources", 100, 200, 300, 160),
+                        block(6, 0, BlockRole.BODY, "Setup player board", 100, 200, 300, 160)),
+                List.of(), List.of(), List.of());
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding, new LinkedHashSet<>(List.of(4, 5, 6)), List.of("玩家设置规则"));
+
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::pageNumber).containsExactly(4, 6);
     }
 
     private PageBlock block(int page, int index, BlockRole role, String text, int x, int y, int width, int height) {

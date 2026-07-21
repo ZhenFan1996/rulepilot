@@ -38,7 +38,7 @@ public final class VisualRegionCandidateSelector {
                         .thenComparing(candidate -> candidate.block().readingOrder()))
                 .toList();
         if (lexicalMatches.isEmpty()) {
-            return citedPageCandidates(citedBlocks);
+            return citedPageCandidates(citedPages);
         }
         return lexicalMatches.stream()
                 .limit(MAX_CANDIDATES)
@@ -46,12 +46,12 @@ public final class VisualRegionCandidateSelector {
                 .toList();
     }
 
-    private List<Candidate> citedPageCandidates(List<ScoredBlock> citedBlocks) {
-        return citedBlocks.stream()
-                .map(candidate -> candidate.block().pageNumber())
-                .distinct()
-                .sorted()
-                .limit(MAX_CANDIDATES)
+    private List<Candidate> citedPageCandidates(Set<Integer> citedPages) {
+        List<Integer> pages = citedPages.stream().sorted().toList();
+        List<Integer> coveredPages = pages.size() <= 2
+                ? pages
+                : List.of(pages.getFirst(), pages.getLast());
+        return coveredPages.stream()
                 // A translated lesson has no reliable text-level anchor in an English (or other-language)
                 // source. Keep the page citation boundary, but let vision locate the visible teaching aid.
                 .map(pageNumber -> new Candidate(
