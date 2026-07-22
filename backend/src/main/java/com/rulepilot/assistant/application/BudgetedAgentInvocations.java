@@ -27,6 +27,11 @@ public class BudgetedAgentInvocations implements AuditedAgentInvocations {
     }
 
     @Override
+    public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {
+        if (runId != null) execution.stopRunning(runId, outcome, summary);
+    }
+
+    @Override
     public <T> T invoke(
             UUID runId,
             ActivityType type,

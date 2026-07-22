@@ -14,6 +14,20 @@ import org.junit.jupiter.api.Test;
 class BudgetedAgentInvocationsTest {
 
     @Test
+    void stopsRunningActivitiesWhenABoundedCallerTimesOut() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        UUID runId = UUID.randomUUID();
+
+        invocations.stopRunning(
+                runId, AgentExecutionControl.ActivityOutcome.FAILED, "Visual page interpretation timed out");
+
+        assertThat(control.stoppedRunId).isEqualTo(runId);
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.FAILED);
+        assertThat(control.summary).isEqualTo("Visual page interpretation timed out");
+    }
+
+    @Test
     void reservesAndAuditsSuccessfulInvocation() {
         RecordingControl control = new RecordingControl();
         var invocations = new BudgetedAgentInvocations(control);
@@ -88,6 +102,7 @@ class BudgetedAgentInvocationsTest {
         private String summary;
         private boolean stopOnReserve;
         private UUID recordedRunId;
+        private UUID stoppedRunId;
         private ActivityType recordedType;
 
         @Override
@@ -126,7 +141,11 @@ class BudgetedAgentInvocationsTest {
         }
 
         @Override
-        public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {}
+        public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {
+            this.stoppedRunId = runId;
+            this.outcome = outcome;
+            this.summary = summary;
+        }
 
         @Override
         public void requestCancellation(UUID runId, String ownerUsername) {}

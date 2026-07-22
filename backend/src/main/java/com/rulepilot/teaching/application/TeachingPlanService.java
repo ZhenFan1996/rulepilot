@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
@@ -295,6 +296,13 @@ public class TeachingPlanService {
                 try {
                     summaries.addAll(awaitCatalog(futures.get(index), visualCatalogTimeout).pages());
                 } catch (RuntimeException failedBatch) {
+                    if (catalogTimedOut(failedBatch)) {
+                        futures.forEach(work -> work.cancel(true));
+                        invocations.stopRunning(
+                                assistantRunId,
+                                ActivityOutcome.FAILED,
+                                "Visual page interpretation timed out; continuing without optional visual facts");
+                    }
                     if (requireEveryBatch) throw failedBatch;
                     log.warn(
                             "Visual page interpretation skipped failed batch {} for document {}",
@@ -438,6 +446,10 @@ public class TeachingPlanService {
         } catch (ExecutionException failed) {
             throw new IllegalStateException("visual rulebook catalog failed", failed.getCause());
         }
+    }
+
+    private static boolean catalogTimedOut(RuntimeException failure) {
+        return failure.getCause() instanceof TimeoutException;
     }
 
     private <T> T invokeModel(

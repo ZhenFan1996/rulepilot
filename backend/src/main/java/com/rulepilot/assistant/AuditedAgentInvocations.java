@@ -21,4 +21,7 @@ public interface AuditedAgentInvocations {
             String operation,
             AgentExecutionControl.ActivityOutcome outcome,
             String summary) {}
+
+    default void stopRunning(
+            UUID runId, AgentExecutionControl.ActivityOutcome outcome, String summary) {}
 }
