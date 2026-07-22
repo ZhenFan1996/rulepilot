@@ -215,6 +215,9 @@ public class TeachingPlanService {
                                         + " tags=" + topic.coverageTags())
                                 .toList());
                 outline = bindVisualCoreTopicEvidence(outline, pages);
+                // A direct core proof can replace the fourth source page in a bounded topic. Retain that displaced
+                // page as a small source-derived companion instead of silently weakening whole-rulebook coverage.
+                outline = augmentVisualCoverage(outline, sourceOutline);
                 plans.validate(outline);
                 validateVisualCoreTopicBindings(outline, pages);
                 validateVisualRulebookCoverage(outline, pages);

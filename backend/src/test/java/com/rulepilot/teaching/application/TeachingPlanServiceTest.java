@@ -246,6 +246,30 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void restoresASourcePageDisplacedByNewDirectCoreEvidenceAsASupplementaryTopic() {
+        List<PageInput> pages = List.of(
+                new PageInput(4, visualCatalogPage("END OF GAME", "When a runner reaches the finish space, determine the winner.")),
+                new PageInput(5, visualCatalogPage("REFERENCE", "Additional reference information.")),
+                new PageInput(6, visualCatalogPage("EXAMPLE", "An example state.")),
+                new PageInput(7, visualCatalogPage("GLOSSARY", "Defined terms.")),
+                new PageInput(8, visualCatalogPage("APPENDIX", "A final rules clarification.")));
+        OutlineDraft source = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(4)),
+                        topicWithTags("play", List.of("core_loop"), List.of(5)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(5, 6, 7, 8))));
+
+        OutlineDraft bound = TeachingPlanService.bindVisualCoreTopicEvidence(source, pages);
+        OutlineDraft restored = TeachingPlanService.augmentVisualCoverage(bound, source);
+
+        assertThat(restored.topics()).last().satisfies(topic -> {
+            assertThat(topic.sourcePageNumbers()).containsExactly(8);
+            assertThat(topic.coverageTags()).contains("end", "scoring");
+        });
+        TeachingPlanService.validateVisualRulebookCoverage(restored, pages);
+    }
+
+    @Test
     void doesNotTreatAFlowPageThatMentionsGameEndAsCompleteEndingEvidence() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
