@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -53,8 +53,6 @@ const uploading = ref(false)
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
-const assigningDocumentId = ref('')
-const assignmentEditionIds = reactive<Record<string, string>>({})
 const message = ref('')
 const errorMessage = ref('')
 const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
@@ -74,13 +72,11 @@ const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
 const visualVisionCapable = computed(() => visualProvider.value?.visionCapable === true)
-const visualProviderLabel = computed(() => ({
-  gemini: 'Gemini', openai: 'OpenAI', deepseek: 'DeepSeek', qwen: 'Qwen', compatible: '兼容模型', fake: '内置演示',
-}[modelConfiguration.value?.assignments.visual ?? 'fake'] ?? '当前模型'))
 
-function editionLabel(id: string | null) {
-  if (!id) return ''
-  return editionOptions.value.find((item) => item.id === id)?.label ?? '已关联游戏'
+function documentStatusLabel(status: string) {
+  return {
+    UPLOADED: '等待读取', EXTRACTING: '正在读取', READY: '可以开始讲解', FAILED: '读取失败',
+  }[status] ?? '正在处理'
 }
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
@@ -102,11 +98,6 @@ async function loadDocuments() {
   const response = await checkedFetch('/api/v1/documents')
   if (!response.ok) throw new Error('无法读取规则书。')
   documents.value = await response.json() as DocumentResponse[]
-  for (const entry of documents.value) {
-    if (!entry.document.gameEditionId && !assignmentEditionIds[entry.document.id]) {
-      assignmentEditionIds[entry.document.id] = editionId.value
-    }
-  }
 }
 
 async function load() {
@@ -454,28 +445,6 @@ async function uploadRulebook() {
   }
 }
 
-async function assignDocument(entry: DocumentResponse) {
-  const targetEditionId = assignmentEditionIds[entry.document.id]
-  if (!targetEditionId) return
-  assigningDocumentId.value = entry.document.id
-  errorMessage.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await checkedFetch(`/api/v1/documents/${entry.document.id}/edition`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({ editionId: targetEditionId }),
-    })
-    if (!response.ok) throw new Error('无法关联这个游戏版本。')
-    await loadDocuments()
-    message.value = `已关联到 ${editionLabel(targetEditionId)}，现在可以开始讲解。`
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '关联失败。'
-  } finally {
-    assigningDocumentId.value = ''
-  }
-}
-
 onMounted(() => {
   disposed = false
   void load()
@@ -494,63 +463,62 @@ onBeforeUnmount(() => {
   <AppShell>
     <main class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
       <section class="mx-auto max-w-2xl text-center">
-        <p class="text-sm font-medium text-copper">导入规则书</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">先把 PDF 放进来</h1>
-        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">不需要先创建游戏。上传后会直接生成讲解；如果暂不选择版本，RulePilot 会按规则书标题自动创建。</p>
+        <p class="text-sm font-medium text-copper">开始一份讲解</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">上传规则书</h1>
+        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">只需选择 PDF。游戏信息、来源和讲解偏好都可以稍后再补。</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <label for="rulebook-file" class="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-ink/25 bg-canvas px-6 py-8 text-center hover:border-copper/60">
-            <span class="font-display text-xl font-semibold">{{ file?.name ?? '选择一本 PDF 规则书' }}</span>
-            <span class="mt-2 text-sm text-ink/45">{{ file ? '点击可以换一本' : '最大 50 MiB' }}</span>
+            <span class="font-display text-xl font-semibold">{{ file?.name ?? '选择 PDF 规则书' }}</span>
+            <span class="mt-2 text-sm text-ink/45">{{ file ? '点击可以换一本' : '点击选择 · 最大 50 MiB' }}</span>
           </label>
           <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
 
-          <label class="mt-4 block text-sm font-semibold">标题 <span class="font-normal text-ink/40">（可选）</span>
-            <input v-model="title" maxlength="160" :placeholder="file ? titleFromFile(file) : '留空则使用 PDF 文件名'" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+          <label class="mt-4 block text-sm font-semibold">想自己起标题？ <span class="font-normal text-ink/40">（可选）</span>
+            <input v-model="title" maxlength="160" placeholder="例如：翼展规则书" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
           </label>
-
-          <label class="mt-4 block text-sm font-semibold">官方原文链接 <span class="font-normal text-ink/40">（可选）</span>
-            <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
-            <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">填写厂商公开页面或 PDF。公开讲解只会跳转回这个官方来源，不会重新托管原文件。</span>
-          </label>
-
-          <label v-if="editionOptions.length" class="mt-4 block text-sm font-semibold">关联游戏 <span class="font-normal text-ink/40">（可稍后）</span>
-            <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-              <option value="">让 RulePilot 自动创建</option>
-              <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-            </select>
-          </label>
-          <div v-else class="mt-4 rounded-lg bg-ink/5 px-4 py-3 text-sm leading-6 text-ink/60">
-            还没有游戏也没关系，RulePilot 会按规则书标题自动创建。
-            <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">也可以先去添加游戏</RouterLink>
-          </div>
-
-          <div v-if="modelConfiguration && !visualVisionCapable" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-            <p><span class="font-semibold">{{ visualProviderLabel }}目前不读取页面图片。</span>讲解仍可生成并附上原文页，但不会识别组件照片、版图位置或图标。</p>
-            <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">连接支持图片的 Gemini、OpenAI 或 Qwen VL</RouterLink>
-          </div>
 
           <details class="mt-4 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-ink/55">资料类型{{ editionId ? '、人数和讲解时长' : '' }}</summary>
-            <div class="mt-4 grid gap-4 sm:grid-cols-3">
-              <template v-if="editionId">
-                <label class="text-sm font-semibold">玩家<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                <label class="text-sm font-semibold">新手<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                <label class="text-sm font-semibold">分钟<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-              </template>
-              <label class="text-sm font-semibold sm:col-span-3">资料类型
-                <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
-                  <option value="BASE_RULEBOOK">基础规则书</option>
-                  <option value="EXPANSION_RULEBOOK">扩展规则书</option>
-                  <option value="OFFICIAL_FAQ">官方 FAQ</option>
-                  <option value="OFFICIAL_ERRATA">官方勘误</option>
+            <summary class="cursor-pointer text-sm font-semibold text-ink/55">可选：关联游戏、官方链接和讲解偏好</summary>
+            <div class="mt-4 space-y-4">
+              <label class="block text-sm font-semibold">官方原文链接
+                <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">填写出版方网页或 PDF 后，公开讲解会链接回这里。</span>
+              </label>
+
+              <label v-if="editionOptions.length" class="block text-sm font-semibold">关联到已有游戏
+                <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal">
+                  <option value="">暂不关联</option>
+                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
                 </select>
               </label>
+              <p v-else class="text-sm leading-6 text-ink/55">还没有添加游戏？不影响上传。需要时再去 <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">我的游戏</RouterLink> 整理。</p>
+
+              <div v-if="modelConfiguration && !visualVisionCapable" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
+                <p><span class="font-semibold">当前设置不会读取规则书图片。</span>文字讲解仍可开始；想识别图标、组件或版图，可以换用支持图片的模型。</p>
+                <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">前往模型设置</RouterLink>
+              </div>
+
+              <div class="grid gap-4 sm:grid-cols-3">
+                <template v-if="editionId">
+                  <label class="text-sm font-semibold">玩家<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                  <label class="text-sm font-semibold">新手<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                  <label class="text-sm font-semibold">分钟<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                </template>
+                <label class="text-sm font-semibold" :class="editionId ? 'sm:col-span-3' : ''">这是什么资料？
+                  <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                    <option value="BASE_RULEBOOK">基础规则书</option>
+                    <option value="EXPANSION_RULEBOOK">扩展规则书</option>
+                    <option value="OFFICIAL_FAQ">官方 FAQ</option>
+                    <option value="OFFICIAL_ERRATA">官方勘误</option>
+                  </select>
+                </label>
+              </div>
             </div>
           </details>
 
           <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
-            {{ preparingVersionId ? '正在启动讲解…' : uploading ? '正在上传…' : '上传并开始讲解' }}
+            {{ preparingVersionId ? '正在开始讲解…' : uploading ? '正在上传…' : '上传并生成讲解' }}
           </button>
         </form>
 
@@ -563,7 +531,7 @@ onBeforeUnmount(() => {
             </div>
             <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel() }}</span>
           </div>
-          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">这一步会阅读页面图片并安排讲解顺序。可以离开此页，后台会继续；回来后会自动接上。</p>
+          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">你可以离开这里，处理会在后台继续；回来后会自动接上。</p>
         </div>
         <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
         <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
@@ -574,8 +542,8 @@ onBeforeUnmount(() => {
       <section class="mt-14 border-t border-ink/10 pt-8">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="font-display text-2xl font-semibold">我的规则书</h2>
-            <p class="mt-1 text-sm text-ink/45">没有归属的规则书也会留在这里，随时可以关联游戏。</p>
+            <h2 class="font-display text-2xl font-semibold">已上传的规则书</h2>
+            <p class="mt-1 text-sm text-ink/45">读完后直接开始讲解；游戏信息需要时再整理。</p>
           </div>
           <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">管理游戏</RouterLink>
         </div>
@@ -590,22 +558,10 @@ onBeforeUnmount(() => {
               <div class="min-w-0">
                 <p class="truncate font-semibold">{{ entry.document.title }}</p>
                 <p class="mt-1 text-sm text-ink/45">
-                  {{ entry.latestVersion.status }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
-                  <span v-if="entry.document.gameEditionId"> · {{ editionLabel(entry.document.gameEditionId) }}</span>
-                  <span v-else> · 讲解时自动创建游戏</span>
+                  {{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
                 </p>
               </div>
               <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId)" class="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
-            </div>
-            <div v-if="!entry.document.gameEditionId" class="mt-4 flex flex-col gap-3 rounded-lg bg-ink/5 p-3 sm:flex-row">
-              <template v-if="editionOptions.length">
-                <select v-model="assignmentEditionIds[entry.document.id]" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-paper px-3 py-2.5 text-sm">
-                  <option value="">选择游戏版本</option>
-                  <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
-                </select>
-                <button :disabled="!assignmentEditionIds[entry.document.id] || Boolean(assigningDocumentId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="assignDocument(entry)">{{ assigningDocumentId === entry.document.id ? '正在关联…' : '关联游戏' }}</button>
-              </template>
-              <RouterLink v-else :to="{ name: 'catalog' }" class="py-2 text-center text-sm font-semibold text-indigo">添加一个游戏后再回来关联 →</RouterLink>
             </div>
           </li>
         </ul>

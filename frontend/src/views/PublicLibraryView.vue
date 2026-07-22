@@ -37,7 +37,10 @@ onMounted(() => { void load() })
     <header class="border-b border-ink/10 bg-paper/95">
       <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
         <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold tracking-tight">RulePilot</RouterLink>
-        <span class="text-sm text-ink/50">公开讲解库</span>
+        <div class="flex items-center gap-4">
+          <RouterLink :to="{ name: 'teach' }" class="text-sm font-semibold text-indigo">上传规则书</RouterLink>
+          <span class="hidden text-sm text-ink/50 sm:inline">公开讲解库</span>
+        </div>
       </div>
     </header>
 

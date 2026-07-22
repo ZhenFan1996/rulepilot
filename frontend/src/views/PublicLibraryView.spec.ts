@@ -18,6 +18,7 @@ describe('PublicLibraryView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: PublicLibraryView },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
       ],
     })

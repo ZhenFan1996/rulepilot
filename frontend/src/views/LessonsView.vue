@@ -275,7 +275,7 @@ onBeforeUnmount(() => {
           <h1 class="font-display text-4xl font-semibold tracking-tight">准备中的，也不会丢</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">生成会在后台继续。回来后可以看进度、处理失败，或从上次阅读的位置继续。</p>
         </div>
-        <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">准备新讲解</RouterLink>
+        <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">上传规则书</RouterLink>
       </div>
 
       <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">任务已经交给后台。你可以留在这里看进度，也可以先去做别的。</p>

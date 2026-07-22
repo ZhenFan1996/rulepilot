@@ -33,6 +33,7 @@ describe('AppShell background teaching status', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
@@ -50,6 +51,8 @@ describe('AppShell background teaching status', () => {
 
     expect(wrapper.text()).toContain('《星际探索》仍在后台准备')
     expect(wrapper.text()).toContain('可以继续浏览')
+    expect(wrapper.text()).toContain('公开讲解')
+    expect(wrapper.text()).toContain('我的讲解')
     expect(wrapper.findAll('[aria-label="1 份讲解正在生成"]')).toHaveLength(2)
 
     vi.advanceTimersByTime(5000)

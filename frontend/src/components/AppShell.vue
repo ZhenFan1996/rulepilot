@@ -29,11 +29,13 @@ const teachingTitles = new Map<string, string>()
 
 const navigation = [
   { name: 'home', path: '/', label: '首页' },
-  { name: 'catalog', path: '/catalog', label: '游戏' },
-  { name: 'teach', path: '/teach', label: '规则书' },
-  { name: 'lessons', path: '/lessons', label: '讲解' },
+  { name: 'public-library', path: '/library', label: '公开讲解' },
+  { name: 'teach', path: '/teach', label: '添加规则书' },
+  { name: 'lessons', path: '/lessons', label: '我的讲解' },
+  { name: 'catalog', path: '/catalog', label: '我的游戏' },
   { name: 'account', path: '/account', label: '我的' },
 ] as const
+const mobileNavigation = navigation.filter((item) => item.name !== 'catalog')
 
 const currentTitle = computed(() => navigation.find((item) => item.name === route.name)?.label ?? 'RulePilot')
 const detailedTeachingRoute = computed(() => route.name === 'lessons' || route.name === 'lesson')
@@ -210,7 +212,7 @@ onBeforeUnmount(() => {
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" aria-label="主要导航">
       <RouterLink
-        v-for="item in navigation"
+        v-for="item in mobileNavigation"
         :key="item.name"
         :to="item.path"
         class="min-h-11 rounded-lg px-1 py-2 text-center text-xs font-medium"

@@ -11,6 +11,7 @@ describe('HomeView', () => {
       routes: [
         { path: '/', name: 'home', component: HomeView },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
@@ -32,9 +33,9 @@ describe('HomeView', () => {
   it('presents the real tabletop tasks without implementation copy', async () => {
     const wrapper = await mountHome()
 
-    expect(wrapper.text()).toContain('添加规则书')
-    expect(wrapper.text()).toContain('我的讲解')
-    expect(wrapper.text()).toContain('从 BGG 读取资料')
+    expect(wrapper.text()).toContain('上传规则书')
+    expect(wrapper.text()).toContain('读公开讲解')
+    expect(wrapper.text()).toContain('不用先创建游戏')
     expect(wrapper.text()).not.toContain('Agent')
     expect(wrapper.text()).not.toContain('FROM RULEBOOK')
   })
@@ -87,8 +88,27 @@ describe('HomeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('player 的规则桌')
-    expect(wrapper.text()).toContain('继续讲翼展翅膀')
-    expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续上次的讲解')
+    expect(wrapper.text()).toContain('继续玩翼展翅膀')
+    expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
     expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
+  })
+
+  it('puts a public lesson alongside the first upload action', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/public/lessons')) {
+        return Response.json([{
+          teachingPlanId: 'public-plan-1', rulebookTitle: 'Wingspan Rules', sectionCount: 8, stepCount: 51,
+          gameCover: { gameName: 'Wingspan', imageUrl: 'https://cf.geekdo-images.com/wingspan.jpg' },
+        }])
+      }
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountHome()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('公开讲解')
+    expect(wrapper.get('a[href="/read/public-plan-1"]').text()).toContain('Wingspan')
   })
 })

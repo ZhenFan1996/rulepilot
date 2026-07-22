@@ -74,7 +74,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     expect(wrapper.text()).toContain('正在阅读图文并组织讲解顺序')
     expect(wrapper.text()).toContain('已用时 0 秒')
-    expect(wrapper.text()).toContain('可以离开此页，后台会继续')
+    expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
@@ -99,6 +99,22 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
   })
+
+  it('keeps the first upload step focused on a PDF and optional title', async () => {
+    const fetchMock = mockApplicationFetch(() => 'READY')
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('上传规则书')
+    expect(wrapper.text()).toContain('只需选择 PDF')
+    expect(wrapper.text()).toContain('想自己起标题？')
+    expect(wrapper.text()).toContain('可选：关联游戏、官方链接和讲解偏好')
+    expect(wrapper.text()).not.toContain('让 RulePilot 自动创建')
+    wrapper.unmount()
+  })
 })
 
 async function mountDocuments() {
@@ -106,6 +122,7 @@ async function mountDocuments() {
     history: createMemoryHistory(),
     routes: [
       { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/library', name: 'public-library', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: DocumentsView },
       { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
