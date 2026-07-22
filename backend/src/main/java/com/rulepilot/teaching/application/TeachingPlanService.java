@@ -422,7 +422,7 @@ public class TeachingPlanService {
                         .values().stream().toList();
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new java.util.ArrayList<>();
-        int parallelism = Math.min(2, batches.size());
+        int parallelism = Math.min(4, batches.size());
         ExecutorService executor = Executors.newFixedThreadPool(parallelism);
         try {
             List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream
@@ -571,12 +571,15 @@ public class TeachingPlanService {
         if (supportedPageByTag.isEmpty()) return outline;
         List<TeachingOutlineModel.TopicDraft> boundTopics = outline.topics().stream()
                 .map(topic -> {
-                    LinkedHashSet<Integer> sourcePages = new LinkedHashSet<>(topic.sourcePageNumbers());
+                    LinkedHashSet<Integer> directCorePages = new LinkedHashSet<>();
                     topic.coverageTags().stream()
                             .map(tag -> tag.toLowerCase(java.util.Locale.ROOT))
                             .map(supportedPageByTag::get)
                             .filter(java.util.Objects::nonNull)
-                            .forEach(sourcePages::add);
+                            .forEach(directCorePages::add);
+                    LinkedHashSet<Integer> sourcePages = new LinkedHashSet<>(directCorePages);
+                    sourcePages.addAll(topic.sourcePageNumbers());
+                    List<Integer> boundedPages = sourcePages.stream().limit(4).toList();
                     return new TeachingOutlineModel.TopicDraft(
                             topic.key(),
                             topic.title(),
@@ -585,7 +588,7 @@ public class TeachingPlanService {
                             topic.visualEvidenceRecommended(),
                             topic.retrievalQueries(),
                             topic.coverageTags(),
-                            List.copyOf(sourcePages));
+                            boundedPages);
                 })
                 .toList();
         return new TeachingOutlineModel.OutlineDraft(outline.gameTitle(), outline.premise(), boundTopics);
