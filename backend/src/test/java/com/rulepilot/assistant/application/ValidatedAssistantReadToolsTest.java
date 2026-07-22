@@ -158,6 +158,29 @@ class ValidatedAssistantReadToolsTest {
                 .isEqualTo(hit.pageFrom()));
     }
 
+    @Test
+    void permitsTheFivePageTeachingTopicReadBudget() {
+        UUID versionId = UUID.randomUUID();
+        Set<Integer> requestedPages = Set.of(1, 2, 3, 4, 5);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(pageNumbers).containsExactlyInAnyOrderElementsOf(requestedPages);
+                return List.of();
+            }
+        };
+        var tools = new ValidatedAssistantReadTools(
+                (requestedVersion, query, options) -> List.of(), lookup, (documentVersionId, pageNumbers) -> List.of());
+
+        assertThat(tools.readRuleEvidencePages(versionId, requestedPages, false)).isEmpty();
+    }
+
     private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {
         return evidence(chunkId, versionId, "Place the board in the center.", 2);
     }

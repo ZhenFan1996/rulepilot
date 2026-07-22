@@ -676,7 +676,8 @@ public class GroundedTeachingAgent {
                                 summary.pageNumber(),
                                 summary.printedTerms(),
                                 summary.factualSummary(),
-                                summary.keywords()))
+                                summary.keywords(),
+                                summary.visualAnchors()))
                         .toList());
             } catch (RuntimeException failure) {
                 log.warn(
@@ -687,6 +688,7 @@ public class GroundedTeachingAgent {
             }
         }
         if (interpreted.isEmpty()) return enriched;
+        visualFacts.merge(plan.documentVersionId(), interpreted);
         log.info(
                 "Teaching topic {} added on-demand visual facts for pages {}",
                 planned.topicKey(),

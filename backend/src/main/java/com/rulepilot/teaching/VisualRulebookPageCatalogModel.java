@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 
 /**
@@ -59,13 +60,24 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
-    record PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
+    record PageSummary(
+            int pageNumber,
+            String printedTerms,
+            String factualSummary,
+            List<String> keywords,
+            List<VisualAnchor> visualAnchors) {
+
+        public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
+            this(pageNumber, printedTerms, factualSummary, keywords, List.of());
+        }
+
         public PageSummary {
             if (pageNumber < 1
                     || (printedTerms != null && printedTerms.length() > 1_600)
                     || (factualSummary != null && factualSummary.length() > 1_600)
                     || (keywords != null && (keywords.size() > 16
-                            || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))) {
+                            || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
+                    || (visualAnchors != null && visualAnchors.size() > 8)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }
             printedTerms = printedTerms == null || printedTerms.isBlank()
@@ -77,6 +89,7 @@ public interface VisualRulebookPageCatalogModel {
             keywords = keywords == null || keywords.isEmpty()
                     ? List.of("page " + pageNumber)
                     : keywords.stream().map(String::strip).distinct().toList();
+            visualAnchors = visualAnchors == null ? List.of() : visualAnchors.stream().distinct().toList();
         }
     }
 }

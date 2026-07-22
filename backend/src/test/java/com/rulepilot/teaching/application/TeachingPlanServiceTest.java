@@ -8,6 +8,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.FutureTask;
@@ -90,7 +91,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void prioritizesTheIconLegendWithoutExceedingTheFourPageTopicLimit() {
+    void prioritizesTheIconLegendWithoutExceedingTheFivePageTopicLimit() {
         OutlineDraft outline = new OutlineDraft(
                 "Game",
                 "Premise",
@@ -102,7 +103,7 @@ class TeachingPlanServiceTest {
 
         OutlineDraft bound = TeachingPlanService.bindIconLegendEvidence(outline, pages);
 
-        assertThat(bound.topics().getFirst().sourcePageNumbers()).containsExactly(14, 15, 16, 7);
+        assertThat(bound.topics().getFirst().sourcePageNumbers()).containsExactly(14, 15, 16, 17, 7);
     }
 
     @Test
@@ -151,6 +152,26 @@ class TeachingPlanServiceTest {
         assertThat(TeachingPlanService.mergeVisualPageFacts(cached, fresh))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void backfills_compact_visual_anchors_without_rewriting_the_cached_page_ledger() {
+        PageFact cached = new PageFact(3, "END", "原有的终局事实。", List.of("END"));
+        PageFact refreshed = new PageFact(
+                3,
+                "Changed title",
+                "不应替换原有事实。",
+                List.of("changed"),
+                List.of(new VisualAnchor("score group", "Final scoring", "终局计分卡牌组。", 120, 420, 300, 180)));
+
+        var merged = TeachingPlanService.mergeVisualPageAnchorBackfill(List.of(cached), List.of(refreshed));
+
+        assertThat(TeachingPlanService.anchorlessVisualCatalogPages(List.of(cached))).containsExactly(3);
+        assertThat(merged).singleElement().satisfies(fact -> {
+            assertThat(fact.factualSummary()).isEqualTo("原有的终局事实。");
+            assertThat(fact.keywords()).containsExactly("END");
+            assertThat(fact.visualAnchors()).containsExactlyElementsOf(refreshed.visualAnchors());
+        });
     }
 
     @Test
@@ -211,7 +232,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void prioritizesDirectVisualCoreEvidenceWithoutExceedingTheFourPageTopicLimit() {
+    void prioritizesDirectVisualCoreEvidenceWithoutExceedingTheFivePageTopicLimit() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
                 new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
@@ -224,7 +245,7 @@ class TeachingPlanServiceTest {
 
         OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(outline, pages);
 
-        assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(4, 5, 6, 7);
+        assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(4, 5, 6, 7, 8);
         TeachingPlanService.validateVisualCoreTopicBindings(repaired, pages);
     }
 
@@ -246,7 +267,7 @@ class TeachingPlanServiceTest {
     }
 
     @Test
-    void restoresASourcePageDisplacedByNewDirectCoreEvidenceAsASupplementaryTopic() {
+    void restoresASourcePageDisplacedByNewDirectCoreEvidenceInTheExistingTopic() {
         List<PageInput> pages = List.of(
                 new PageInput(4, visualCatalogPage("END OF GAME", "When a runner reaches the finish space, determine the winner.")),
                 new PageInput(5, visualCatalogPage("REFERENCE", "Additional reference information.")),
@@ -262,8 +283,8 @@ class TeachingPlanServiceTest {
         OutlineDraft bound = TeachingPlanService.bindVisualCoreTopicEvidence(source, pages);
         OutlineDraft restored = TeachingPlanService.augmentVisualCoverage(bound, source);
 
-        assertThat(restored.topics()).last().satisfies(topic -> {
-            assertThat(topic.sourcePageNumbers()).containsExactly(8);
+        assertThat(restored.topics().get(2)).satisfies(topic -> {
+            assertThat(topic.sourcePageNumbers()).containsExactly(4, 5, 6, 7, 8);
             assertThat(topic.coverageTags()).contains("end", "scoring");
         });
         TeachingPlanService.validateVisualRulebookCoverage(restored, pages);
@@ -367,6 +388,42 @@ class TeachingPlanServiceTest {
         assertThat(augmented.topics().get(2).sourcePageNumbers()).containsExactly(4);
         assertThat(augmented.topics()).extracting(TopicDraft::key)
                 .contains("source-coverage-2", "source-coverage-3");
+    }
+
+    @Test
+    void mergesAnUncoveredPageIntoTheMatchingTopicInsteadOfDuplicatingItsChapter() {
+        OutlineDraft model = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "actions-and-costs",
+                        "行动、费用与结果",
+                        "Teach the player the main action.",
+                        true,
+                        true,
+                        List.of("action"),
+                        List.of("core_loop"),
+                        List.of(2, 3, 4, 5))));
+        OutlineDraft source = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "actions-and-costs",
+                        "行动、费用与结果",
+                        "Source coverage for the main action.",
+                        true,
+                        true,
+                        List.of("cost"),
+                        List.of("actions"),
+                        List.of(5, 6))));
+
+        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+
+        assertThat(augmented.topics()).hasSize(1);
+        assertThat(augmented.topics().getFirst().key()).isEqualTo("actions-and-costs");
+        assertThat(augmented.topics().getFirst().sourcePageNumbers()).containsExactly(2, 3, 4, 5, 6);
+        assertThat(augmented.topics().getFirst().retrievalQueries()).containsExactly("action", "cost");
+        assertThat(augmented.topics().getFirst().coverageTags()).containsExactly("core_loop", "actions");
     }
 
     private String visualCatalogPage(String terms, String facts) {

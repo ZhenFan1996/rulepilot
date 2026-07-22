@@ -381,7 +381,9 @@ class GroundedTeachingAgentTest {
                     14,
                     "KODORA; victory point token",
                     "KODORA只能在至少拥有2个胜利点时使用；把2个胜利点放在KODORA上。",
-                    List.of("KODORA", "victory point token"))));
+                    List.of("KODORA", "victory point token"),
+                    List.of(new VisualRulebookPageFacts.VisualAnchor(
+                            "worked example", "KODORA payment", "KODORA与两个胜利点标记。", 120, 220, 320, 280)))));
         };
         TeachingLessonModel model = request -> {
             assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
@@ -418,13 +420,28 @@ class GroundedTeachingAgentTest {
                         List.of(14))),
                 "player",
                 Instant.now());
+        List<VisualRulebookPageFacts.PageFact> mergedFacts = new java.util.ArrayList<>();
+        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID documentVersionId, List<VisualRulebookPageFacts.PageFact> pages) {}
+
+            @Override
+            public List<VisualRulebookPageFacts.PageFact> find(UUID documentVersionId, java.util.Set<Integer> pageNumbers) {
+                return List.of();
+            }
+
+            @Override
+            public void merge(UUID documentVersionId, List<VisualRulebookPageFacts.PageFact> pages) {
+                mergedFacts.addAll(pages);
+            }
+        };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 tools,
                 model,
                 new PolicyEvidenceVerifier(),
                 acceptedCritic(),
                 new ImmediateAuditedAgentInvocations(),
-                VisualRulebookPageFacts.empty(),
+                facts,
                 catalog,
                 4,
                 1);
@@ -432,6 +449,9 @@ class GroundedTeachingAgentTest {
         IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
 
         assertThat(catalogCalls).hasValue(1);
+        assertThat(mergedFacts).singleElement().satisfies(page -> assertThat(page.visualAnchors())
+                .extracting(VisualRulebookPageFacts.VisualAnchor::label)
+                .containsExactly("KODORA payment"));
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("2个胜利点");
     }

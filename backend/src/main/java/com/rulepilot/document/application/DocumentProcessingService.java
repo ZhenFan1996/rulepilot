@@ -135,7 +135,7 @@ class DocumentProcessingService implements DocumentProcessing, DocumentPageImage
     @Transactional(readOnly = true)
     public List<PageImage> read(UUID documentVersionId, Set<Integer> pageNumbers) {
         requireVersion(documentVersionId);
-        if (pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+        if (pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 5
                 || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
             throw new IllegalArgumentException("requested document page images are invalid");
         }

@@ -48,7 +48,7 @@ public class TeachingPlanService {
     private static final int MAX_PAGE_CATALOG_CHARACTERS = 3_200;
     private static final int MAX_OUTLINE_PAGE_IMAGES = 4;
     private static final int MAX_INTERPRETED_VISUAL_PAGES = 4;
-    private static final int MAX_TOPIC_SOURCE_PAGES = 4;
+    private static final int MAX_TOPIC_SOURCE_PAGES = 5;
     private static final int VISUAL_CATALOG_BATCH_SIZE = 2;
     private static final String VISUAL_CATALOG_PREFIX = "[Visual page catalog; verify against page image]";
     private static final String VISUAL_PAGE_CATALOG =
@@ -215,7 +215,7 @@ public class TeachingPlanService {
                                         + " tags=" + topic.coverageTags())
                                 .toList());
                 outline = bindVisualCoreTopicEvidence(outline, pages);
-                // A direct core proof can replace the fourth source page in a bounded topic. Retain that displaced
+                // A direct core proof can replace the final source page in a bounded topic. Retain that displaced
                 // page as a small source-derived companion instead of silently weakening whole-rulebook coverage.
                 outline = augmentVisualCoverage(outline, sourceOutline);
                 plans.validate(outline);
@@ -241,7 +241,7 @@ public class TeachingPlanService {
                                 documentVersionId,
                                 selectedVisualPages);
                     } else {
-                        visualFacts.replace(documentVersionId, interpreted);
+                        visualFacts.merge(documentVersionId, interpreted);
                         log.info(
                                 "Visual page interpretation stored document {} pages {}",
                                 documentVersionId,
@@ -312,6 +312,7 @@ public class TeachingPlanService {
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
         Set<Integer> missingPages = missingVisualCatalogPages(requestedPages, cached);
+        Set<Integer> anchorlessPages = anchorlessVisualCatalogPages(cached);
         if (!cached.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -320,12 +321,23 @@ public class TeachingPlanService {
                     ActivityOutcome.SUCCEEDED,
                     "Reused " + cached.size() + " page-scoped visual facts from this immutable rulebook version");
         }
-        // A first pass catalogs every rendered page. On later plan refreshes the immutable version cache is
-        // authoritative: an unavailable page remains explicitly unavailable until a focused teaching step asks for it.
-        // Re-reading a mostly complete rulebook just to retry one slow page delays the first usable lesson.
+        // A first pass catalogs every rendered page. Existing ledgers are authoritative, except for a one-time
+        // compact-anchor backfill after the visual index schema gains anchors. That backfill preserves the prior
+        // factual ledger and only adds newly verified page-local rectangles, so it cannot rewrite a published lesson.
         List<PageFact> fresh = cached.isEmpty()
                 ? catalogPageFacts(documentVersionId, requestedPages, null, rulebookTitle, owner, assistantRunId)
-                : List.of();
+                : anchorlessPages.isEmpty()
+                        ? List.of()
+                        : catalogPageFacts(documentVersionId, anchorlessPages, null, rulebookTitle, owner, assistantRunId);
+        if (!cached.isEmpty() && !anchorlessPages.isEmpty() && assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "backfillVisualAnchors",
+                    ActivityOutcome.SUCCEEDED,
+                    "Rechecked " + anchorlessPages.size()
+                            + " cached visual page(s) for compact icon, diagram, and example anchors");
+        }
         if (!cached.isEmpty() && !missingPages.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -335,11 +347,13 @@ public class TeachingPlanService {
                     "Deferred " + missingPages.size()
                             + " uncataloged page(s) to focused visual retrieval; cached page facts can start the lesson");
         }
-        List<PageFact> facts = mergeVisualPageFacts(cached, fresh);
+        List<PageFact> facts = cached.isEmpty()
+                ? mergeVisualPageFacts(cached, fresh)
+                : mergeVisualPageAnchorBackfill(cached, fresh);
         if (facts.isEmpty()) {
             throw new IllegalArgumentException("visual rulebook catalog did not produce any reliable page facts");
         }
-        if (!fresh.isEmpty()) visualFacts.replace(documentVersionId, facts);
+        if (!fresh.isEmpty()) visualFacts.merge(documentVersionId, facts);
         int unavailablePages = documentPages.size() - facts.size();
         if (unavailablePages > 0) {
             log.warn(
@@ -363,6 +377,13 @@ public class TeachingPlanService {
         return java.util.Collections.unmodifiableSet(missing);
     }
 
+    static Set<Integer> anchorlessVisualCatalogPages(List<PageFact> cached) {
+        return cached.stream()
+                .filter(fact -> fact.visualAnchors().isEmpty())
+                .map(PageFact::pageNumber)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
     static List<PageFact> mergeVisualPageFacts(List<PageFact> cached, List<PageFact> fresh) {
         return java.util.stream.Stream.concat(cached.stream(), fresh.stream())
                 .collect(java.util.stream.Collectors.toMap(
@@ -371,6 +392,26 @@ public class TeachingPlanService {
                         (existing, ignored) -> existing,
                         java.util.LinkedHashMap::new))
                 .values().stream()
+                .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
+                .toList();
+    }
+
+    static List<PageFact> mergeVisualPageAnchorBackfill(List<PageFact> cached, List<PageFact> fresh) {
+        Map<Integer, PageFact> freshByPage = fresh.stream().collect(Collectors.toMap(
+                PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
+        List<PageFact> retained = cached.stream()
+                .map(existing -> {
+                    PageFact refreshed = freshByPage.remove(existing.pageNumber());
+                    if (refreshed == null || refreshed.visualAnchors().isEmpty()) return existing;
+                    return new PageFact(
+                            existing.pageNumber(),
+                            existing.printedTerms(),
+                            existing.factualSummary(),
+                            existing.keywords(),
+                            refreshed.visualAnchors());
+                })
+                .toList();
+        return java.util.stream.Stream.concat(retained.stream(), freshByPage.values().stream())
                 .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
                 .toList();
     }
@@ -480,7 +521,11 @@ public class TeachingPlanService {
                 .values().stream()
                 .filter(summary -> pageNumbers.contains(summary.pageNumber()))
                 .map(summary -> new PageFact(
-                        summary.pageNumber(), summary.printedTerms(), summary.factualSummary(), summary.keywords()))
+                        summary.pageNumber(),
+                        summary.printedTerms(),
+                        summary.factualSummary(),
+                        summary.keywords(),
+                        summary.visualAnchors()))
                 .toList();
     }
 
@@ -659,6 +704,13 @@ public class TeachingPlanService {
                     .filter(page -> !covered.contains(page))
                     .toList();
             if (missingPages.isEmpty()) continue;
+            int existingTopic = matchingCoverageTopic(topics, sourceTopic);
+            if (existingTopic >= 0) {
+                TeachingOutlineModel.TopicDraft modelTopic = topics.get(existingTopic);
+                topics.set(existingTopic, mergeCoveragePages(modelTopic, sourceTopic, missingPages));
+                covered.addAll(missingPages);
+                continue;
+            }
             topics.add(new TeachingOutlineModel.TopicDraft(
                     "source-coverage-" + (topics.size() + 1),
                     sourceTopic.title(),
@@ -671,6 +723,45 @@ public class TeachingPlanService {
             covered.addAll(missingPages);
         }
         return new TeachingOutlineModel.OutlineDraft(modelOutline.gameTitle(), modelOutline.premise(), topics);
+    }
+
+    private static int matchingCoverageTopic(
+            List<TeachingOutlineModel.TopicDraft> topics, TeachingOutlineModel.TopicDraft sourceTopic) {
+        for (int index = 0; index < topics.size(); index++) {
+            TeachingOutlineModel.TopicDraft candidate = topics.get(index);
+            if (candidate.key().equalsIgnoreCase(sourceTopic.key())
+                    || canonicalTopicTitle(candidate.title()).equals(canonicalTopicTitle(sourceTopic.title()))) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static TeachingOutlineModel.TopicDraft mergeCoveragePages(
+            TeachingOutlineModel.TopicDraft modelTopic,
+            TeachingOutlineModel.TopicDraft sourceTopic,
+            List<Integer> missingPages) {
+        LinkedHashSet<Integer> pages = new LinkedHashSet<>(modelTopic.sourcePageNumbers());
+        pages.addAll(missingPages);
+        LinkedHashSet<String> queries = new LinkedHashSet<>(modelTopic.retrievalQueries());
+        queries.addAll(sourceTopic.retrievalQueries());
+        LinkedHashSet<String> tags = new LinkedHashSet<>(modelTopic.coverageTags());
+        tags.addAll(sourceTopic.coverageTags());
+        return new TeachingOutlineModel.TopicDraft(
+                modelTopic.key(),
+                modelTopic.title(),
+                modelTopic.objective(),
+                modelTopic.required() || sourceTopic.required(),
+                modelTopic.visualEvidenceRecommended() || sourceTopic.visualEvidenceRecommended(),
+                queries.stream().limit(4).toList(),
+                List.copyOf(tags),
+                List.copyOf(pages));
+    }
+
+    private static String canonicalTopicTitle(String value) {
+        return value == null ? "" : value.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^\\p{L}\\p{N}]+", "")
+                .strip();
     }
 
     private static boolean substantiveVisualCatalogPage(String text) {

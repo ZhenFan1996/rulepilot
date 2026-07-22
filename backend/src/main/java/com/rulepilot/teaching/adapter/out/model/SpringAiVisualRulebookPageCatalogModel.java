@@ -7,6 +7,7 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -54,6 +55,15 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             keywords must contain 2-8 short original-language terms that occur visibly on that same page. If a page is
             a cover, index, illustration, or unreadable, say so explicitly instead of guessing. The page number and every
             reported term must come from an attached page.
+            Also return visualAnchors as an array of at most six compact visible landmarks that a later visual locator
+            can inspect again: a named component or icon group, a labeled legend, a setup cluster, a diagram state,
+            a worked example, or one complete score row/group. This is an image-retrieval index, never a rule
+            conclusion. Do not create a whole-page anchor, a prose-only anchor, or a tall strip that spans neighbouring
+            score examples. Each anchor needs kind, label, visibleDescription, x, y, width, and height. Use a
+            top-left 0-1000 coordinate system; keep every rectangle inside the page and at least 20 by 20. label should
+            preserve a visible original-language term where possible. visibleDescription must be concise Simplified
+            Chinese describing only the literal image relationship inside the rectangle, not what the component does.
+            If a page has no compact, useful visual landmark, return an empty visualAnchors array.
             Return structured data only.
             """;
 
@@ -115,7 +125,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     material for this rulebook. Do not treat it as a turn, scoring, or end-game rule.
                                     {correction}
                                     Return a JSON object with a pages array. Each array item must have pageNumber,
-                                    printedTerms, factualSummary, and keywords.
+                                    printedTerms, factualSummary, keywords, and visualAnchors.
                                     """)
                             .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
                             .param("rulebookTitle", request.rulebookTitle() == null
@@ -166,7 +176,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         page.path("pageNumber").asInt(),
                         joinedText(page.get("printedTerms"), "; "),
                         joinedText(page.get("factualSummary"), "\n"),
-                        stringValues(page.get("keywords"))));
+                        stringValues(page.get("keywords")),
+                        visualAnchors(page.get("visualAnchors"))));
             }
             return new CatalogDraft(summaries);
         } catch (JsonProcessingException invalidJson) {
@@ -198,6 +209,28 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         String text = joinedText(value, "; ");
         return text == null || text.isBlank() ? java.util.List.of() : java.util.List.of(text);
+    }
+
+    /** Optional anchors must never make a page's textual visual ledger unusable. */
+    private static java.util.List<VisualAnchor> visualAnchors(JsonNode value) {
+        if (value == null || value.isNull() || !value.isArray()) return java.util.List.of();
+        java.util.List<VisualAnchor> anchors = new java.util.ArrayList<>();
+        value.forEach(anchor -> {
+            if (anchors.size() == 6 || !anchor.isObject()) return;
+            try {
+                anchors.add(new VisualAnchor(
+                        joinedText(anchor.get("kind"), " "),
+                        joinedText(anchor.get("label"), " "),
+                        joinedText(anchor.get("visibleDescription"), " "),
+                        anchor.path("x").asInt(Integer.MIN_VALUE),
+                        anchor.path("y").asInt(Integer.MIN_VALUE),
+                        anchor.path("width").asInt(Integer.MIN_VALUE),
+                        anchor.path("height").asInt(Integer.MIN_VALUE)));
+            } catch (IllegalArgumentException invalidAnchor) {
+                // The main page ledger is still usable when an optional model-proposed rectangle is malformed.
+            }
+        });
+        return anchors;
     }
 
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {
@@ -237,6 +270,6 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private static PageSummary rebound(PageSummary summary, int pageNumber) {
         return new PageSummary(
-                pageNumber, summary.printedTerms(), summary.factualSummary(), summary.keywords());
+                pageNumber, summary.printedTerms(), summary.factualSummary(), summary.keywords(), summary.visualAnchors());
     }
 }

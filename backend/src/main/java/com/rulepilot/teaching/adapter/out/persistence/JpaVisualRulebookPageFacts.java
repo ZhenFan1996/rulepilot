@@ -1,7 +1,11 @@
 package com.rulepilot.teaching.adapter.out.persistence;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import jakarta.persistence.Column;
@@ -47,6 +51,22 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
         }
         entityManager.createQuery("delete from VisualRulebookPageFactEntity p where p.documentVersionId = :versionId")
                 .setParameter("versionId", documentVersionId)
+                .executeUpdate();
+        pages.forEach(page -> entityManager.persist(new VisualRulebookPageFactEntity(documentVersionId, page)));
+    }
+
+    @Override
+    @Transactional
+    public void merge(UUID documentVersionId, List<PageFact> pages) {
+        if (documentVersionId == null || pages == null || pages.isEmpty()) {
+            throw new IllegalArgumentException("visual page facts are required");
+        }
+        Set<Integer> pageNumbers = pages.stream().map(PageFact::pageNumber).collect(java.util.stream.Collectors.toSet());
+        entityManager.createQuery(
+                        "delete from VisualRulebookPageFactEntity p where p.documentVersionId = :versionId "
+                                + "and p.pageNumber in :pageNumbers")
+                .setParameter("versionId", documentVersionId)
+                .setParameter("pageNumbers", pageNumbers)
                 .executeUpdate();
         pages.forEach(page -> entityManager.persist(new VisualRulebookPageFactEntity(documentVersionId, page)));
     }
@@ -199,6 +219,9 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
 @Table(name = "visual_rulebook_page_fact")
 class VisualRulebookPageFactEntity {
 
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final TypeReference<List<VisualAnchor>> VISUAL_ANCHORS = new TypeReference<>() {};
+
     @Id
     UUID id;
 
@@ -217,6 +240,9 @@ class VisualRulebookPageFactEntity {
     @Column(nullable = false, columnDefinition = "text")
     String keywords;
 
+    @Column(name = "visual_anchors", nullable = false, columnDefinition = "text")
+    String visualAnchors;
+
     protected VisualRulebookPageFactEntity() {}
 
     VisualRulebookPageFactEntity(UUID documentVersionId, PageFact page) {
@@ -226,9 +252,32 @@ class VisualRulebookPageFactEntity {
         this.printedTerms = page.printedTerms();
         this.factualSummary = page.factualSummary();
         this.keywords = String.join("\n", page.keywords());
+        this.visualAnchors = serialize(page.visualAnchors());
     }
 
     PageFact toDomain() {
-        return new PageFact(pageNumber, printedTerms, factualSummary, keywords.lines().filter(value -> !value.isBlank()).toList());
+        return new PageFact(
+                pageNumber,
+                printedTerms,
+                factualSummary,
+                keywords.lines().filter(value -> !value.isBlank()).toList(),
+                deserialize(visualAnchors));
+    }
+
+    private static String serialize(List<VisualAnchor> anchors) {
+        try {
+            return JSON.writeValueAsString(anchors);
+        } catch (JsonProcessingException failure) {
+            throw new IllegalStateException("could not serialize visual anchors", failure);
+        }
+    }
+
+    private static List<VisualAnchor> deserialize(String serialized) {
+        if (serialized == null || serialized.isBlank()) return List.of();
+        try {
+            return JSON.readValue(serialized, VISUAL_ANCHORS);
+        } catch (JsonProcessingException invalidStoredData) {
+            throw new IllegalStateException("stored visual anchors are invalid", invalidStoredData);
+        }
     }
 }

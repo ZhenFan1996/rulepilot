@@ -61,7 +61,7 @@ public record TeachingPlan(
                     || retrievalQueries == null || retrievalQueries.isEmpty() || retrievalQueries.size() > 5
                     || retrievalQueries.stream().anyMatch(query -> query == null || query.isBlank() || query.length() > 300)
                     || coverageTags == null
-                    || sourcePageNumbers == null || sourcePageNumbers.size() > 4
+                    || sourcePageNumbers == null || sourcePageNumbers.size() > 5
                     || sourcePageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
                 throw new IllegalArgumentException("generated teaching topic is invalid");
             }

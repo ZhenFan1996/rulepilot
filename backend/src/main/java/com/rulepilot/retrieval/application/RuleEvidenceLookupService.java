@@ -30,7 +30,7 @@ class RuleEvidenceLookupService implements RuleEvidenceLookup {
 
     @Override
     public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
-        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 5
                 || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
             throw new IllegalArgumentException("document version and bounded evidence page numbers are required");
         }

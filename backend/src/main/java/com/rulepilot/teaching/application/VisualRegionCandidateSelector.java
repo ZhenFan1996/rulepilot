@@ -4,6 +4,7 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,6 +18,8 @@ import org.springframework.stereotype.Component;
 public final class VisualRegionCandidateSelector {
 
     private static final int MAX_CANDIDATES = 4;
+    private static final Set<String> CJK_SINGLE_CHARACTER_FILLER = Set.of(
+            "的", "了", "在", "是", "和", "与", "及", "或", "将", "把", "从", "到", "每", "一", "个");
 
     public List<Candidate> select(
             RulebookUnderstanding understanding,
@@ -42,6 +45,7 @@ public final class VisualRegionCandidateSelector {
             throw new IllegalArgumentException("visual page facts are required");
         }
         Set<String> terms = normalizedTerms(sectionTerms);
+        Set<String> cjkCharacters = cjkCharacters(sectionTerms);
         if (citedPages.isEmpty()) return List.of();
         var factsByPage = visualPageFacts.stream()
                 .filter(fact -> citedPages.contains(fact.pageNumber()))
@@ -61,20 +65,43 @@ public final class VisualRegionCandidateSelector {
                         .thenComparing(candidate -> candidate.block().readingOrder()))
                 .toList();
         List<ScoredPage> visualMatches = factsByPage.values().stream()
-                .map(fact -> new ScoredPage(fact.pageNumber(), score(fact, terms)))
+                .map(fact -> new ScoredPage(fact.pageNumber(), score(fact, terms, cjkCharacters)))
                 .filter(candidate -> candidate.score() > 0)
                 .toList();
-        if (lexicalMatches.isEmpty() && visualMatches.isEmpty()) {
+        List<ScoredAnchor> anchorMatches = factsByPage.values().stream()
+                .flatMap(fact -> fact.visualAnchors().stream()
+                        .map(anchor -> new ScoredAnchor(fact.pageNumber(), anchor, score(anchor, terms, cjkCharacters))))
+                .filter(candidate -> candidate.score() > 0)
+                .sorted(Comparator.comparingInt(ScoredAnchor::score).reversed()
+                        .thenComparing(ScoredAnchor::pageNumber)
+                        .thenComparing(candidate -> candidate.anchor().y())
+                        .thenComparing(candidate -> candidate.anchor().x()))
+                .toList();
+        if (lexicalMatches.isEmpty() && visualMatches.isEmpty() && anchorMatches.isEmpty()) {
             return citedPageCandidates(citedPages);
         }
         List<Integer> visualPages = rankedPages(citedPages, lexicalMatches, visualMatches);
-        List<Candidate> selected = visualPages.stream()
+        List<Candidate> selected = anchorMatches.stream()
+                // An anchor comes from a distinct image-reading pass. It narrows the next visual query without
+                // becoming a player-facing claim, because the locator still inspects pixels before accepting it.
+                .limit(2)
+                .map(Candidate::from)
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        Set<Integer> anchoredPages = selected.stream()
+                .map(Candidate::pageNumber)
+                .collect(java.util.stream.Collectors.toSet());
+        visualPages.stream()
+                // A matching compact visual anchor is a better boundary than the entire same page. Keeping the full
+                // page out of that request prevents a locator from drifting to a neighbouring icon or score row.
+                .filter(page -> !anchoredPages.contains(page))
                 // A full cited page is a search boundary, not a crop that will be shown to the player. It lets the
                 // visual walkthrough find a legend, icon group, or worked state that the neighbouring text names.
                 .map(page -> citedPageCandidate(page, factsByPage.get(page)))
-                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+                .limit(MAX_CANDIDATES - selected.size())
+                .forEach(selected::add);
         lexicalMatches.stream()
                 .filter(candidate -> visualPages.contains(candidate.block().pageNumber()))
+                .filter(candidate -> !anchoredPages.contains(candidate.block().pageNumber()))
                 .limit(MAX_CANDIDATES - selected.size())
                 .map(candidate -> Candidate.from(candidate.block()))
                 .forEach(selected::add);
@@ -141,15 +168,30 @@ public final class VisualRegionCandidateSelector {
         return overlap * 10 + headingBonus + compactBonus;
     }
 
-    private int score(PageFact pageFact, Set<String> terms) {
+    private int score(PageFact pageFact, Set<String> terms, Set<String> cjkCharacters) {
         Set<String> factTerms = normalizedTerms(List.of(
                 pageFact.printedTerms(), pageFact.factualSummary(), String.join(" ", pageFact.keywords())));
         int overlap = (int) terms.stream().filter(factTerms::contains).count();
-        if (overlap == 0) return 0;
         int keywordOverlap = (int) terms.stream()
                 .filter(normalizedTerms(pageFact.keywords())::contains)
                 .count();
-        return overlap * 10 + keywordOverlap * 4;
+        int anchorOverlap = pageFact.visualAnchors().stream()
+                .mapToInt(anchor -> score(anchor, terms, cjkCharacters))
+                .max()
+                .orElse(0);
+        return overlap * 10 + keywordOverlap * 4 + anchorOverlap;
+    }
+
+    private int score(VisualAnchor anchor, Set<String> terms, Set<String> cjkCharacters) {
+        Set<String> anchorTerms = normalizedTerms(List.of(anchor.retrievalText()));
+        Set<String> anchorCharacters = cjkCharacters(List.of(anchor.retrievalText()));
+        int overlap = (int) terms.stream().filter(anchorTerms::contains).count();
+        int characterOverlap = (int) cjkCharacters.stream()
+                .filter(anchorCharacters::contains)
+                .count();
+        // Two-character fragments retain the main retrieval signal. A small single-character bonus distinguishes
+        // compact Chinese labels such as 熊/鹿/狐 that would otherwise tie on a shared "计分示例" description.
+        return overlap * 14 + characterOverlap * 2;
     }
 
     private String compactFactHint(PageFact pageFact) {
@@ -163,6 +205,16 @@ public final class VisualRegionCandidateSelector {
         return values.stream()
                 .filter(value -> value != null)
                 .flatMap(this::terms)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private Set<String> cjkCharacters(List<String> values) {
+        return values.stream()
+                .filter(value -> value != null)
+                .flatMapToInt(String::codePoints)
+                .filter(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
+                .mapToObj(codePoint -> new String(Character.toChars(codePoint)))
+                .filter(character -> !CJK_SINGLE_CHARACTER_FILLER.contains(character))
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     }
 
@@ -198,9 +250,20 @@ public final class VisualRegionCandidateSelector {
         private static Candidate from(PageBlock block) {
             return new Candidate(block.pageNumber(), block.rectangle(), block.text());
         }
+
+        private static Candidate from(ScoredAnchor match) {
+            VisualAnchor anchor = match.anchor();
+            return new Candidate(
+                    match.pageNumber(),
+                    new Rectangle(anchor.x(), anchor.y(), anchor.width(), anchor.height()),
+                    "Cataloged visual anchor (verify against the attached image): "
+                            + anchor.kind() + " — " + anchor.label() + ". " + anchor.visibleDescription());
+        }
     }
 
     private record ScoredBlock(PageBlock block, int score) {}
 
     private record ScoredPage(int pageNumber, int score) {}
+
+    private record ScoredAnchor(int pageNumber, VisualAnchor anchor, int score) {}
 }

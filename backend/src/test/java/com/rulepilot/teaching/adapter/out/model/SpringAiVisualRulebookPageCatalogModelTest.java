@@ -32,12 +32,34 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 {"pages":[{"pageNumber":7,
                 "printedTerms":["power tokens","victory point token"],
                 "factualSummary":["黄色图标表示能量标记。","红色图标表示胜利点。"],
-                "keywords":["power tokens","victory point token"]}]}
+                "keywords":["power tokens","victory point token"],
+                "visualAnchors":[{"kind":"icon legend","label":"power tokens",
+                "visibleDescription":"黄色圆形图标与 power tokens 标签相邻。",
+                "x":120,"y":280,"width":240,"height":140}]}]}
                 """);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
             assertThat(page.printedTerms()).isEqualTo("power tokens; victory point token");
             assertThat(page.factualSummary()).contains("能量标记", "胜利点");
+            assertThat(page.visualAnchors()).singleElement().satisfies(anchor -> {
+                assertThat(anchor.label()).isEqualTo("power tokens");
+                assertThat(anchor.x()).isEqualTo(120);
+            });
+        });
+    }
+
+    @Test
+    void keeps_the_page_catalog_when_an_optional_anchor_has_invalid_geometry() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
+                {"pages":[{"pageNumber":7,"printedTerms":"power tokens",
+                "factualSummary":"黄色图标与标签相邻。","keywords":["power tokens"],
+                "visualAnchors":[{"kind":"legend","label":"power tokens","visibleDescription":"黄色图标。",
+                "x":900,"y":900,"width":300,"height":300}]}]}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.printedTerms()).isEqualTo("power tokens");
+            assertThat(page.visualAnchors()).isEmpty();
         });
     }
 

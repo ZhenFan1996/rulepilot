@@ -49,8 +49,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
-            aid. A candidate can include a visual retrieval hint from a previous image pass. It is only a search hint:
-            inspect the supplied page yourself, and never report an object because the hint says it exists. When several
+            aid. A candidate named "Cataloged visual anchor" is a compact boundary proposed by a previous image pass:
+            inspect it yourself and prefer it when it visibly fits this exact step; do not expand into adjacent score
+            rows, cards, or diagrams. A candidate can include a visual retrieval hint from a previous image pass. It is
+            only a search hint: inspect the supplied page yourself, and never report an object because the hint says it
+            exists. When several
             crops are relevant, return at most two distinct anchors that work together: prefer an
             icon or component group with its printed legend, then a worked state, flow, or layout that shows the player
             what to do. A diagram or icon group is useful even if its meaning is explained by the cited text rather

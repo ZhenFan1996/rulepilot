@@ -2,6 +2,10 @@ package com.rulepilot.teaching.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class JpaVisualRulebookPageFactsTest {
@@ -33,5 +37,19 @@ class JpaVisualRulebookPageFactsTest {
         assertThat(JpaVisualRulebookPageFacts.searchTerms(
                         "Where can I place a Wildlife Token after placing it on Keystone Tiles?"))
                 .isEqualTo("place:* | wildlife:* | token:* | after:* | keystone:* | tile:*");
+    }
+
+    @Test
+    void preserves_visual_anchor_geometry_when_mapping_a_page_fact_to_storage() {
+        var original = new PageFact(
+                7,
+                "Fox scoring",
+                "狐狸图示旁有相邻的栖息地卡牌。",
+                List.of("Fox", "scoring"),
+                List.of(new VisualAnchor("score group", "Fox scoring", "狐狸卡牌与相邻卡牌的得分示例。", 90, 260, 280, 220)));
+
+        var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
+
+        assertThat(restored.visualAnchors()).containsExactlyElementsOf(original.visualAnchors());
     }
 }

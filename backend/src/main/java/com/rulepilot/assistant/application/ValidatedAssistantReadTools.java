@@ -94,7 +94,7 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
     @Override
     public List<RuleEvidence> readRuleEvidencePages(
             UUID documentVersionId, Set<Integer> pageNumbers, boolean includePageImages) {
-        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 4
+        if (documentVersionId == null || pageNumbers == null || pageNumbers.isEmpty() || pageNumbers.size() > 5
                 || pageNumbers.stream().anyMatch(page -> page == null || page < 1)) {
             throw new IllegalArgumentException("bounded rule evidence page read is invalid");
         }

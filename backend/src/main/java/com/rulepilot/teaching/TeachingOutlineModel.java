@@ -97,7 +97,7 @@ public interface TeachingOutlineModel {
                     || (key != null && key.length() > 100)
                     || (retrievalQueries != null && (retrievalQueries.size() > 8 || retrievalQueries.stream()
                             .anyMatch(query -> query == null || query.isBlank() || query.length() > 300)))
-                    || (sourcePageNumbers != null && (sourcePageNumbers.size() > 4 || sourcePageNumbers.stream()
+                    || (sourcePageNumbers != null && (sourcePageNumbers.size() > 5 || sourcePageNumbers.stream()
                             .anyMatch(pageNumber -> pageNumber == null || pageNumber < 1)))) {
                 throw new IllegalArgumentException("teaching outline topic is invalid");
             }

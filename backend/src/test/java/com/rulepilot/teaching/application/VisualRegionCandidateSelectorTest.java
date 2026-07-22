@@ -7,6 +7,7 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -137,6 +138,53 @@ class VisualRegionCandidateSelectorTest {
         assertThat(selected).singleElement().satisfies(candidate -> {
             assertThat(candidate.pageNumber()).isEqualTo(4);
             assertThat(candidate.sourceText()).doesNotContain("Visual retrieval hint");
+        });
+    }
+
+    @Test
+    void prioritizes_a_matching_cataloged_visual_anchor_over_the_whole_cited_page() {
+        var understanding = new RulebookUnderstanding(
+                List.of(block(8, 0, BlockRole.BODY, "Score the animals", 0, 0, 1_000, 1_000)),
+                List.of(), List.of(), List.of());
+        PageFact facts = new PageFact(
+                8,
+                "Animal scoring",
+                "本页包含多种动物的计分示例。",
+                List.of("scoring"),
+                List.of(
+                        new VisualAnchor("score group", "Bear scoring", "熊卡牌旁的计分示例。", 80, 100, 280, 220),
+                        new VisualAnchor("score group", "Fox scoring", "狐狸卡牌旁的计分示例。", 80, 470, 280, 220)));
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding, Set.of(8), List.of("熊的计分示例"), List.of(facts));
+
+        assertThat(selected.getFirst()).satisfies(candidate -> {
+            assertThat(candidate.pageNumber()).isEqualTo(8);
+            assertThat(candidate.rectangle()).isEqualTo(new Rectangle(80, 100, 280, 220));
+            assertThat(candidate.sourceText()).contains("Cataloged visual anchor").contains("Bear scoring");
+        });
+        assertThat(selected).allSatisfy(candidate ->
+                assertThat(candidate.sourceText()).doesNotContain("Cited page 8 visual context"));
+    }
+
+    @Test
+    void does_not_use_a_cataloged_anchor_from_an_uncited_page() {
+        var understanding = new RulebookUnderstanding(
+                List.of(block(8, 0, BlockRole.BODY, "Score the animals", 0, 0, 1_000, 1_000)),
+                List.of(), List.of(), List.of());
+        PageFact uncitedFact = new PageFact(
+                9,
+                "Animal scoring",
+                "熊的计分示例。",
+                List.of("scoring"),
+                List.of(new VisualAnchor("score group", "Bear scoring", "熊卡牌旁的计分示例。", 80, 100, 280, 220)));
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding, Set.of(8), List.of("熊的计分示例"), List.of(uncitedFact));
+
+        assertThat(selected).singleElement().satisfies(candidate -> {
+            assertThat(candidate.pageNumber()).isEqualTo(8);
+            assertThat(candidate.sourceText()).doesNotContain("Cataloged visual anchor");
         });
     }
 
