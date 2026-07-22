@@ -39,10 +39,21 @@ public class IllustratedLessonController {
         return launcher.launch(planId, principal.getName());
     }
 
+    @PostMapping("/latest/visuals")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    VisualEnrichmentLaunch enrichVisuals(@PathVariable UUID planId, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
+        lessons.latest(planId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
+        return new VisualEnrichmentLaunch(launcher.enrichLatest(planId));
+    }
+
     @GetMapping("/latest")
     IllustratedLesson latest(@PathVariable UUID planId, Principal principal) {
         owners.requireOwned(planId, principal.getName());
         return lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
     }
+
+    record VisualEnrichmentLaunch(boolean accepted) {}
 }

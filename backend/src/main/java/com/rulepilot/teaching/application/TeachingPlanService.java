@@ -1,5 +1,7 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentTeachingPreparation;
@@ -22,6 +24,8 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Supplier;
+import java.util.function.ToIntFunction;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.springframework.context.annotation.Profile;
@@ -60,6 +64,7 @@ public class TeachingPlanService {
     private final VisualRulebookPageCatalogModel visualCatalog;
     private final VisualRulebookPageFacts visualFacts;
     private final TeachingOutlineModel outlines;
+    private final AuditedAgentInvocations invocations;
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
 
@@ -71,6 +76,7 @@ public class TeachingPlanService {
             VisualRulebookPageCatalogModel visualCatalog,
             VisualRulebookPageFacts visualFacts,
             TeachingOutlineModel outlines,
+            AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository) {
         this.documents = documents;
@@ -80,6 +86,7 @@ public class TeachingPlanService {
         this.visualCatalog = visualCatalog;
         this.visualFacts = visualFacts;
         this.outlines = outlines;
+        this.invocations = invocations;
         this.plans = plans;
         this.repository = repository;
     }
@@ -87,6 +94,17 @@ public class TeachingPlanService {
     @Transactional
     public TeachingPlan create(
             UUID documentVersionId, int playerCount, int beginnerCount, int durationMinutes, String createdBy) {
+        return create(documentVersionId, playerCount, beginnerCount, durationMinutes, createdBy, null);
+    }
+
+    @Transactional
+    public TeachingPlan create(
+            UUID documentVersionId,
+            int playerCount,
+            int beginnerCount,
+            int durationMinutes,
+            String createdBy,
+            UUID assistantRunId) {
         var scope = documentScopes.findVersion(documentVersionId)
                 .filter(found -> found.createdBy().equals(createdBy))
                 .orElseThrow(() -> new IllegalArgumentException("rule document does not exist"));
@@ -96,7 +114,7 @@ public class TeachingPlanService {
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         var pages = visualOnly
-                ? catalogVisualPages(documentVersionId, documentPages, createdBy)
+                ? catalogVisualPages(documentVersionId, documentPages, createdBy, assistantRunId)
                 : documentPages.stream()
                         .map(page -> new PageInput(
                                 page.pageNumber(), page.text() == null || page.text().isBlank()
@@ -110,8 +128,15 @@ public class TeachingPlanService {
                 .map(image -> new PageImageInput(
                         image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
-        var outline = bindIconLegendEvidence(outlines.organize(new OutlineRequest(
-                playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy)), documentPages);
+        var outlineRequest = new OutlineRequest(
+                playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
+        var outline = bindIconLegendEvidence(invokeModel(
+                assistantRunId,
+                "organizeTeachingOutline",
+                outlineInputTokens(pages),
+                "Rulebook lesson topics organized",
+                () -> outlines.organize(outlineRequest),
+                this::outlineOutputTokens), documentPages);
         if (visualOnly) validateVisualPageBindings(outline, documentPages);
         if (!visualOnly && visualCatalog.available(createdBy)) {
             Set<Integer> selectedVisualPages = selectedVisualPageNumbers(outline, documentPages);
@@ -122,7 +147,8 @@ public class TeachingPlanService {
                             selectedVisualPages,
                             iconLegendPage(documentPages).orElse(null),
                             createdBy,
-                            false);
+                            false,
+                            assistantRunId);
                     if (interpreted.isEmpty()) {
                         log.warn(
                                 "Visual page interpretation produced no usable facts for document {} pages {}",
@@ -190,7 +216,10 @@ public class TeachingPlanService {
     }
 
     private List<PageInput> catalogVisualPages(
-            UUID documentVersionId, List<DocumentProcessing.PageView> documentPages, String owner) {
+            UUID documentVersionId,
+            List<DocumentProcessing.PageView> documentPages,
+            String owner,
+            UUID assistantRunId) {
         List<PageFact> facts = catalogPageFacts(
                 documentVersionId,
                 documentPages.stream()
@@ -198,7 +227,8 @@ public class TeachingPlanService {
                         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
                 null,
                 owner,
-                true);
+                true,
+                assistantRunId);
         visualFacts.replace(documentVersionId, facts);
         return facts.stream()
                 .map(summary -> new PageInput(
@@ -214,7 +244,8 @@ public class TeachingPlanService {
             Set<Integer> pageNumbers,
             Integer iconLegendPage,
             String owner,
-            boolean requireEveryBatch) {
+            boolean requireEveryBatch,
+            UUID assistantRunId) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         List<List<Integer>> batches = iconLegendPage != null && pageNumbers.contains(iconLegendPage)
                 ? crossPageIconBatches(orderedPages, iconLegendPage)
@@ -229,12 +260,24 @@ public class TeachingPlanService {
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new java.util.ArrayList<>();
         int parallelism = Math.min(2, batches.size());
         try (var executor = Executors.newFixedThreadPool(parallelism)) {
-            List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = batches.stream()
-                    .map(batch -> executor.submit(() -> visualCatalog.summarize(new VisualRulebookPageCatalogModel.CatalogRequest(
-                            pageImages.read(documentVersionId, new LinkedHashSet<>(batch)).stream()
-                                    .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
-                                    .toList(),
-                            owner))))
+            List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream
+                    .range(0, batches.size())
+                    .mapToObj(batchIndex -> executor.submit(() -> {
+                        List<PageImageInput> images = pageImages.read(
+                                        documentVersionId, new LinkedHashSet<>(batches.get(batchIndex)))
+                                .stream()
+                                .map(image -> new PageImageInput(
+                                        image.pageNumber(), image.mediaType(), image.content()))
+                                .toList();
+                        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner);
+                        return invokeModel(
+                                assistantRunId,
+                                "inspectRulebookVisualBatch|" + (batchIndex + 1),
+                                Math.max(1, images.size() * 800),
+                                "Rulebook visual batch interpreted",
+                                () -> visualCatalog.summarize(request),
+                                this::catalogOutputTokens);
+                    }))
                     .toList();
             for (int index = 0; index < futures.size(); index++) {
                 try {
@@ -376,6 +419,47 @@ public class TeachingPlanService {
         } catch (ExecutionException failed) {
             throw new IllegalStateException("visual rulebook catalog failed", failed.getCause());
         }
+    }
+
+    private <T> T invokeModel(
+            UUID assistantRunId,
+            String operation,
+            int inputTokens,
+            String successSummary,
+            Supplier<T> invocation,
+            ToIntFunction<T> outputTokens) {
+        if (assistantRunId == null) return invocation.get();
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.MODEL,
+                operation,
+                inputTokens,
+                successSummary,
+                invocation,
+                outputTokens);
+    }
+
+    private int outlineInputTokens(List<PageInput> pages) {
+        return Math.max(1, pages.stream().mapToInt(page -> page.text().length()).sum() / 4);
+    }
+
+    private int outlineOutputTokens(TeachingOutlineModel.OutlineDraft outline) {
+        int characters = outline.gameTitle().length() + outline.premise().length();
+        characters += outline.topics().stream()
+                .mapToInt(topic -> topic.title().length()
+                        + topic.objective().length()
+                        + topic.retrievalQueries().stream().mapToInt(String::length).sum())
+                .sum();
+        return Math.max(1, characters / 4);
+    }
+
+    private int catalogOutputTokens(VisualRulebookPageCatalogModel.CatalogDraft catalog) {
+        int characters = catalog.pages().stream()
+                .mapToInt(page -> page.printedTerms().length()
+                        + page.factualSummary().length()
+                        + page.keywords().stream().mapToInt(String::length).sum())
+                .sum();
+        return Math.max(1, characters / 4);
     }
 
     private void validateVisualPageBindings(

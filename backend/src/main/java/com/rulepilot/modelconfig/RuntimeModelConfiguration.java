@@ -94,9 +94,16 @@ public class RuntimeModelConfiguration {
     }
 
     public boolean usesDeepSeekNonThinkingGeneration(Role role) {
+        return usesDeepSeekNonThinkingGeneration(role, null);
+    }
+
+    public boolean usesDeepSeekNonThinkingGeneration(Role role, String username) {
+        String provider = username == null || username.isBlank()
+                ? providerFor(role)
+                : providerFor(role, username);
         return !deepSeekGenerationThinking
                 && (role == Role.TEACHING || role == Role.ANSWER || role == Role.CRITIC)
-                && "deepseek".equals(providerFor(role));
+                && "deepseek".equals(provider);
     }
 
     public String providerFor(Role role) {

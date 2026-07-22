@@ -79,4 +79,19 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
                 .contains("JSON");
     }
+
+    @Test
+    void clampsARegionThatSlightlyOverrunsTheModelsNormalizedPageBoundary() {
+        var normalized = SpringAiVisualRegionLocator.normalizedGeometry(
+                new SpringAiVisualRegionLocator.ModelRegion(
+                        1, "card detail", "可见卡牌图标", 960, 970, 100, 100, java.util.List.of("C1")));
+
+        assertThat(normalized)
+                .extracting(
+                        SpringAiVisualRegionLocator.ModelRegion::x,
+                        SpringAiVisualRegionLocator.ModelRegion::y,
+                        SpringAiVisualRegionLocator.ModelRegion::width,
+                        SpringAiVisualRegionLocator.ModelRegion::height)
+                .containsExactly(960, 970, 40, 30);
+    }
 }

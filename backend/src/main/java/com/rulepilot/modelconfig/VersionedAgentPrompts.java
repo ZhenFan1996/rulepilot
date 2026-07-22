@@ -25,28 +25,32 @@ public class VersionedAgentPrompts {
 
     public VersionedAgentPrompts(
             @Value("classpath:prompts/teaching-agent-v16-system.txt") Resource teachingSystem,
+            @Value("classpath:prompts/teaching-agent-v17-fidelity-system.txt") Resource teachingFidelity,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
+            @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
+            @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
+            @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
-        this.teachingSystem = read(teachingSystem);
+        this.teachingSystem = combined(teachingSystem, teachingFidelity);
         this.teachingUser = read(teachingUser);
-        this.teachingOutlineSystem = read(teachingOutlineSystem);
+        this.teachingOutlineSystem = combined(teachingOutlineSystem, teachingOutlineFidelity);
         this.teachingOutlineUser = read(teachingOutlineUser);
-        this.answerSystem = read(answerSystem);
+        this.answerSystem = combined(answerSystem, answerFidelity);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = read(criticSystem);
+        this.criticSystem = combined(criticSystem, criticFidelity);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);
@@ -111,5 +115,9 @@ public class VersionedAgentPrompts {
             throw new IllegalArgumentException("agent prompt resource must not be blank");
         }
         return content;
+    }
+
+    private static String combined(Resource base, Resource revision) throws IOException {
+        return read(base) + "\n\n" + read(revision);
     }
 }

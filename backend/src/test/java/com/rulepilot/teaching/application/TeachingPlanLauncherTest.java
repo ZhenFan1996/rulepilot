@@ -46,7 +46,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice")).thenReturn(plan);
+        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id())).thenReturn(plan);
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -89,7 +89,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice"))
+        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
                 .thenThrow(new IllegalStateException("model unavailable"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());

@@ -243,4 +243,43 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE", "PHASES");
         assertThat(intents.getLast().currentSectionType()).isEqualTo("ROUND_STRUCTURE");
     }
+
+    @Test
+    void addsAnUnfilteredRoundResetIntentForQuestionsAboutWhatReturnsAtRoundEnd() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "一轮结束时，颜料堆前的学生会全部回到玩家版图吗？",
+                "一轮结束时，颜料堆前的学生会全部回到玩家版图吗？",
+                QuestionType.RULE_QUERY,
+                List.of("一轮", "学生"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(intents.getFirst().query()).contains("end of round", "recover dice", "学生");
+        assertThat(intents.getFirst().sectionTypes()).isEmpty();
+        assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
+    }
+
+    @Test
+    void addsWorkedExampleIntentForWhetherUnusedDiceCanWaitForALaterTurn() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "我能把剩下的骰子留到下一次轮到我时再用吗？",
+                "我能把剩下的骰子留到下一次轮到我时再用吗？",
+                QuestionType.RULE_QUERY,
+                List.of("骰子", "下一次"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(intents.getFirst().query()).contains("worked example", "remaining active dice", "示例回合");
+        assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
+    }
 }

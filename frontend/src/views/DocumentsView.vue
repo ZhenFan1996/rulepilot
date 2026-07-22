@@ -23,6 +23,11 @@ interface TeachingPlanResponse { id: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
   run: { id: string; state: string; lastErrorCode: string | null }
+  activities?: Array<{
+    sequence: number
+    operation: string
+    outcome: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'
+  }>
 }
 interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; complete: boolean }
 interface ModelConfigurationResponse {
@@ -185,7 +190,20 @@ function endPreparation() {
   preparationClock = null
 }
 
-function updatePreparationMessage(state: string) {
+function updatePreparationMessage(state: string, activities: TeachingPreparationRun['activities'] = []) {
+  const active = [...activities].reverse().find((activity) => activity.outcome === 'RUNNING')
+    ?? activities.at(-1)
+  if (active?.operation.startsWith('inspectRulebookVisualBatch')) {
+    const batch = active.operation.split('|')[1]
+    message.value = batch
+      ? `正在识别第 ${batch} 组页面里的组件、图标和示例。`
+      : '正在识别页面里的组件、图标和示例。'
+    return
+  }
+  if (active?.operation.startsWith('organizeTeachingOutline')) {
+    message.value = '页面要点已经读完，正在安排讲解顺序。'
+    return
+  }
   message.value = {
     RECEIVED: '已经收到，马上开始整理讲解。',
     DOCUMENT_READINESS: '正在确认规则书页面和图片。',
@@ -215,7 +233,7 @@ async function waitForTeachingPreparation(
         if (!response.ok) throw new Error('暂时无法读取讲解准备进度。')
         snapshot = await response.json() as TeachingPreparationRun
       }
-      updatePreparationMessage(snapshot.run.state)
+      updatePreparationMessage(snapshot.run.state, snapshot.activities)
       if (snapshot.run.state === 'COMPLETED') {
         await openPreparedLesson(preferences, csrf)
         return

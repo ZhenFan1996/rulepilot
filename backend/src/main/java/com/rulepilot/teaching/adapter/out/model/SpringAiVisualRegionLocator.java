@@ -106,6 +106,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return new LocateAttempt(Optional.empty(), true, Rejection.UNSUPPORTED_SCOPE);
         }
         try {
+            response = normalizedGeometry(response);
             return new LocateAttempt(Optional.of(new LocatedRegion(
                     response.pageNumber(), response.label(), response.visibleDescription(), response.x(), response.y(),
                     response.width(), response.height(), supported)), false,
@@ -114,6 +115,22 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
             return new LocateAttempt(Optional.empty(), true, Rejection.INVALID_GEOMETRY);
         }
+    }
+
+    static ModelRegion normalizedGeometry(ModelRegion region) {
+        int x = Math.max(0, Math.min(980, region.x()));
+        int y = Math.max(0, Math.min(980, region.y()));
+        int width = Math.max(20, Math.min(region.width(), 1_000 - x));
+        int height = Math.max(20, Math.min(region.height(), 1_000 - y));
+        return new ModelRegion(
+                region.pageNumber(),
+                region.label(),
+                region.visibleDescription(),
+                x,
+                y,
+                width,
+                height,
+                region.supportedClaimRefs());
     }
 
     private UUID claimId(String reference, VisualLocationRequest request) {

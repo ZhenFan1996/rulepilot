@@ -19,8 +19,8 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
     private static final Pattern SPACE = Pattern.compile("\\s+");
     private static final Pattern WORD = Pattern.compile("[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*");
     private static final Pattern SITUATION = Pattern.compile(
-            "\\b(can|may|could) i\\b|\\b(on my turn|in my hand|i have|we have|my token|my card)\\b|"
-                    + "我的(回合|手牌|卡牌|棋子)|当前局面|此时");
+            "\\b(my hand|i have|we have|my token|my card)\\b|"
+                    + "我的(手牌|卡牌|棋子)|当前局面|此时");
     private static final Pattern STEP_REFERENCE = Pattern.compile(
             "\\b(this|that|previous|next) (step|part|section)\\b|\\bwhy (do|did) we\\b|"
                     + "这一步|上一步|下一步|刚才|这个步骤|这里为什么");

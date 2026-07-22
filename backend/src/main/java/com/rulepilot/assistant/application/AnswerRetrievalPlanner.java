@@ -47,6 +47,14 @@ public final class AnswerRetrievalPlanner {
         if (stateTransitionQuery != null) {
             intents.add(new RetrievalIntent(stateTransitionQuery, Set.of(), null));
         }
+        String roundResetQuery = roundResetQuery(question.normalizedQuestion());
+        if (roundResetQuery != null) {
+            intents.add(new RetrievalIntent(roundResetQuery, Set.of(), null));
+        }
+        String deferredTurnQuery = deferredTurnQuery(question.normalizedQuestion());
+        if (deferredTurnQuery != null) {
+            intents.add(new RetrievalIntent(deferredTurnQuery, Set.of(), null));
+        }
         if (rewrittenQueries != null) {
             rewrittenQueries.stream()
                     .map(AnswerRetrievalPlanner::bounded)
@@ -153,7 +161,24 @@ public final class AnswerRetrievalPlanner {
         addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
         addWhenContains(sections, text, "PHASES", "phase", "trick", "阶段", "墩");
         addWhenContains(
-                sections, text, "ROUND_STRUCTURE", "round", "turn order", "next trick", "lead", "轮次", "回合顺序", "下一墩", "领出");
+                sections,
+                text,
+                "ROUND_STRUCTURE",
+                "round",
+                "turn order",
+                "next trick",
+                "lead",
+                "轮次",
+                "一轮",
+                "回合结束",
+                "轮次结束",
+                "轮结束",
+                "下一次轮到",
+                "剩下的骰子",
+                "剩余骰子",
+                "回合顺序",
+                "下一墩",
+                "领出");
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
         addWhenContains(sections, text, "OBJECTIVE", "objective", "win", "目标", "获胜", "胜利");
         return sections.stream().limit(MAX_SECTION_FILTERS).collect(Collectors.toUnmodifiableSet());
@@ -208,6 +233,25 @@ public final class AnswerRetrievalPlanner {
         if (!actorExits || !asksNextActor) return null;
         return bounded(question + " state transition successor actor replacement active player skipped "
                 + "after hand empty next trick lead exception 状态变化 后继行动者 替代玩家 无牌 跳过 下一墩 领出 例外");
+    }
+
+    private static String roundResetQuery(String question) {
+        boolean asksRoundEnd = containsAny(
+                question, "end of round", "round ends", "round end", "一轮结束", "轮次结束", "回合结束", "轮结束");
+        boolean asksReset = containsAny(question, "recover", "return", "reset", "回收", "归还", "回到", "重置", "拿回");
+        if (!asksRoundEnd || !asksReset) return null;
+        return bounded(question + " end of round recover dice only reset active pieces return students conditional "
+                + "round reset state transition 一轮结束 回收骰子 学生 条件 返回 重置");
+    }
+
+    private static String deferredTurnQuery(String question) {
+        boolean asksLaterTurn = containsAny(
+                question, "next time", "next turn", "later turn", "下一次轮到", "下次轮到", "之后轮到");
+        boolean asksAboutRemainingPieces = containsAny(
+                question, "remaining dice", "unused dice", "active dice", "剩下的骰子", "剩余骰子", "未用骰子", "活跃骰子");
+        if (!asksLaterTurn || !asksAboutRemainingPieces) return null;
+        return bounded(question + " worked example player turn ends remaining active dice later turn spend one or more "
+                + "round ends all dice spent turn sequence 示例回合 剩余骰子 下次回合 使用一颗或多颗骰子");
     }
 
     private static String bounded(String value) {

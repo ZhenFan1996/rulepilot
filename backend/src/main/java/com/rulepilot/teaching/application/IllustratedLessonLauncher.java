@@ -64,5 +64,11 @@ public class IllustratedLessonLauncher {
         return new LessonLaunch(run.id(), run.state(), false);
     }
 
+    public boolean enrichLatest(UUID teachingPlanId) {
+        if (visuals == null) return false;
+        executor.execute(() -> visuals.enrichLatest(teachingPlanId));
+        return true;
+    }
+
     public record LessonLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}
 }

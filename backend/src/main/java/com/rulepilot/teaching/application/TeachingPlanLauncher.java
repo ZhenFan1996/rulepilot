@@ -79,7 +79,7 @@ public class TeachingPlanLauncher {
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
             var plan = plans.create(
-                    documentVersionId, playerCount, beginnerCount, durationMinutes, ownerUsername);
+                    documentVersionId, playerCount, beginnerCount, durationMinutes, ownerUsername, current.id());
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.COMPLETED,
                     "Teaching plan is ready");

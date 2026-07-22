@@ -751,7 +751,8 @@ class StructuredRuleAnswerServiceTest {
                 new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of(expansionId)));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(captured.get().questionType()).isEqualTo(com.rulepilot.assistant.domain.QuestionType.SITUATION_QUERY);
+        assertThat(captured.get().questionType())
+                .isEqualTo(com.rulepilot.assistant.domain.QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(captured.get().context().currentLessonSection()).isEqualTo("ACTIONS");
         assertThat(captured.get().context().gamePhase()).isEqualTo("ACTION_PHASE");
         assertThat(captured.get().context().playerCount()).isEqualTo(4);
@@ -920,7 +921,7 @@ class StructuredRuleAnswerServiceTest {
                         assertThat(options.sectionTypes()).isEmpty();
                         return List.of();
                     }
-                    assertThat(query).contains("legal action", "ACTION PHASE", "4 players");
+                    assertThat(query).contains("step prerequisite consequence exception", "ACTION PHASE", "4 players");
                     assertThat(options.sectionTypes()).contains("ACTIONS");
                     return List.of(new HybridEvidenceHit(source, 0.03, 1, null, true));
                 },

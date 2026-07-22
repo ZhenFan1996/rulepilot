@@ -13,9 +13,31 @@ import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import java.util.List;
+import java.util.Map;
+import java.net.SocketTimeoutException;
 import org.junit.jupiter.api.Test;
 
 class SpringAiTeachingOutlineModelTest {
+
+    @Test
+    void disablesThinkingForTheOwnersDeepSeekPlanningModel() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player"))
+                .thenReturn(true);
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
+
+        var options = model.providerOptions(Role.TEACHING, "player");
+
+        assertThat(options.build().getExtraBody()).isEqualTo(Map.of("thinking", Map.of("type", "disabled")));
+    }
+
+    @Test
+    void recognizesNestedTimeoutsSoTheyAreNotRetriedAsSchemaFailures() {
+        RuntimeException failure = new RuntimeException("model failed", new SocketTimeoutException("read timed out"));
+
+        assertThat(SpringAiTeachingOutlineModel.isTimeout(failure)).isTrue();
+    }
 
     @Test
     void resolvesTheVisualModelFromThePlanOwnerInsteadOfTheWorkerThread() {

@@ -51,6 +51,16 @@ class DeterministicQuestionUnderstandingTest {
     }
 
     @Test
+    void treatsAGeneralTurnTimingQuestionAsARuleQueryWithoutDemandingLiveTableState() {
+        var result = understanding.understand(
+                "我的回合可以先花一颗骰子行动，等下一次轮到我时再用剩下的吗？",
+                new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
+        assertThat(result.needsClarification()).isFalse();
+    }
+
+    @Test
     void asksForLessonSectionWhenStepReferenceHasNoContext() {
         var result = understanding.understand(
                 "Why did we do that in the previous step?",

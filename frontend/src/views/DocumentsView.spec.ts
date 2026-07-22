@@ -79,6 +79,26 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
   })
+
+  it('shows the real visual-reading batch instead of a silent planning wait', async () => {
+    vi.useFakeTimers()
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+    })
+    const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING', [{
+      sequence: 1, operation: 'inspectRulebookVisualBatch|2', outcome: 'RUNNING',
+    }])
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在识别第 2 组页面里的组件、图标和示例')
+    wrapper.unmount()
+    await vi.runOnlyPendingTimersAsync()
+  })
 })
 
 async function mountDocuments() {
@@ -99,7 +119,11 @@ async function mountDocuments() {
   return { wrapper: mount(DocumentsView, { global: { plugins: [router] } }), router }
 }
 
-function mockApplicationFetch(documentStatus: () => string, preparationState = 'COMPLETED') {
+function mockApplicationFetch(
+  documentStatus: () => string,
+  preparationState = 'COMPLETED',
+  preparationActivities: Array<{ sequence: number; operation: string; outcome: string }> = [],
+) {
   return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = String(input)
     if (path.includes('/api/auth/session')) return response({ username: 'player' })
@@ -122,7 +146,10 @@ function mockApplicationFetch(documentStatus: () => string, preparationState = '
     if (path.includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
     if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
     if (path.includes('/api/v1/assistant-runs/prep-run-1')) {
-      return response({ run: { id: 'prep-run-1', state: preparationState, lastErrorCode: null } })
+      return response({
+        run: { id: 'prep-run-1', state: preparationState, lastErrorCode: null },
+        activities: preparationActivities,
+      })
     }
     if (path.endsWith('/document-versions/version-1/teaching-plans/latest')) return response({ id: 'plan-1' })
     if (path.endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST') {

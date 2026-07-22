@@ -11,14 +11,18 @@ class VersionedAgentPromptsTest {
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
                 resource("teaching-agent-v16-system.txt"),
+                resource("teaching-agent-v17-fidelity-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
+                resource("teaching-outline-v7-fidelity-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
+                resource("rule-answer-agent-v7-fidelity-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
                 resource("content-critic-v7-system.txt"),
+                resource("content-critic-v8-fidelity-system.txt"),
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
@@ -54,6 +58,7 @@ class VersionedAgentPromptsTest {
                         "never append a seventh step",
                         "strongest complete rule sentence",
                         "indispensable visual relationships for the objective",
+                        "printed order exactly",
                         "complete objective coverage",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
@@ -82,6 +87,9 @@ class VersionedAgentPromptsTest {
                         "page prose is sufficient",
                         "page-by-page coverage audit",
                         "later pages",
+                        "exact subject of every state transition",
+                        "either A or B",
+                        "Every explicit walkthrough or Example Round",
                         "asymmetric factions",
                         "walkthrough");
         assertThat(prompts.answerSystem())
@@ -98,6 +106,8 @@ class VersionedAgentPromptsTest {
                         "Pass/跳过",
                         "default next-actor rule",
                         "unable to act",
+                        "unused piece can remain for a later turn",
+                        "unlisted component",
                         "empty exceptions list",
                         "Every explanatory sentence",
                         "matching",
@@ -129,6 +139,10 @@ class VersionedAgentPromptsTest {
                         "Recount every enumerated list",
                         "invented species",
                         "same official term",
+                        "state-transition subjects word by word",
+                        "exclusive branches",
+                        "reverses two explicitly ordered state changes",
+                        "Re-audit every corrected claim",
                         "at most 12 issues",
                         "ATOMIC_CONFIRMATION",
                         "faithful contextual translation",

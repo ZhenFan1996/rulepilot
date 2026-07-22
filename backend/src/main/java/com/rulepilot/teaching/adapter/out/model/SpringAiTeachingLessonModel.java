@@ -160,7 +160,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     Map<String, Object> providerOptions(Role role, String modelConfigurationOwner) {
         Map<String, Object> options = new LinkedHashMap<>();
-        if (models.usesDeepSeekNonThinkingGeneration(role)) {
+        if (models.usesDeepSeekNonThinkingGeneration(role, modelConfigurationOwner)) {
             options.put("thinking", Map.of("type", "disabled"));
         }
         if (usesQwen(role, modelConfigurationOwner)) {
