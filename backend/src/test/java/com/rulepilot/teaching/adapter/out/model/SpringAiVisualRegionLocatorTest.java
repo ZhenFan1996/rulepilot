@@ -155,6 +155,22 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void requests_a_tighter_retry_when_a_crop_is_nearly_a_full_page_even_if_it_is_not_a_tall_icon_legend() {
+        var broadComponentOverview = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                3, "组件图示", "桌面上的多个游戏组件与对应图标", 50, 60, 900, 850, List.of(UUID.randomUUID()));
+        var compactWorkedState = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                3, "放置示例", "一块栖息地板块与相邻的野生动物标记", 100, 420, 400, 300, List.of(UUID.randomUUID()));
+
+        assertThat(SpringAiVisualRegionLocator.requiresTighterReaderViewport(broadComponentOverview)).isTrue();
+        assertThat(SpringAiVisualRegionLocator.requiresTighterReaderViewport(compactWorkedState)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.withoutOversizedReaderViewports(
+                        List.of(broadComponentOverview, compactWorkedState)))
+                .containsExactly(compactWorkedState);
+        assertThat(SpringAiVisualRegionLocator.tightReaderViewportInstruction())
+                .contains("too much", "compact rectangle");
+    }
+
+    @Test
     void rebinds_a_visual_crop_to_the_matching_source_page_when_the_model_numbers_a_neighbouring_claim() {
         Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2));
         Claim cardAnatomy = new Claim(UUID.randomUUID(), "文物卡的构成", List.of(3));

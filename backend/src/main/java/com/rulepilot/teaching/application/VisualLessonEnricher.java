@@ -34,6 +34,9 @@ public class VisualLessonEnricher {
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
     private static final int MIN_READER_VIEWPORT_WIDTH = 180;
     private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
+    // A useful in-context aid must be materially smaller than its source page. Larger regions make the reader scan
+    // the rulebook again instead of letting the matched rule explain one recognizable visual relationship.
+    private static final long MAX_READER_CROP_AREA = 600_000L;
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
@@ -90,26 +93,29 @@ public class VisualLessonEnricher {
     public EnrichmentResult enrichWithReport(
             UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
         var map = understanding.understanding(documentVersionId);
+        IllustratedLesson readerReadyLesson = discardOverlyBroadVisuals(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(
-                lesson.sections(), maxSections, maxVisualStepsPerSection);
-        List<VisualFocus> acceptedVisuals = lesson.sections().stream()
+                readerReadyLesson.sections(), maxSections, maxVisualStepsPerSection);
+        List<VisualFocus> acceptedVisuals = readerReadyLesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .map(LessonStep::visualFocus)
                 .filter(java.util.Objects::nonNull)
+                .filter(focus -> !needsTighterReaderCrop(focus))
                 .collect(Collectors.toCollection(ArrayList::new));
         List<SectionResult> sectionResults = new ArrayList<>();
-        for (LessonSection section : lesson.sections()) {
+        for (LessonSection section : readerReadyLesson.sections()) {
             if (!selectedPositions.contains(section.position())) continue;
             SectionResult enriched = enrichSection(map, documentVersionId, section, modelConfigurationOwner);
             sectionResults.add(keepDistinctVisuals(section, enriched, acceptedVisuals));
         }
         Map<Integer, SectionResult> byPosition = sectionResults.stream()
                 .collect(Collectors.toMap(result -> result.section().position(), result -> result));
-        List<LessonSection> sections = lesson.sections().stream()
+        List<LessonSection> sections = readerReadyLesson.sections().stream()
                 .map(section -> byPosition.getOrDefault(section.position(), new SectionResult(section, null)).section())
                 .toList();
         IllustratedLesson enriched = new IllustratedLesson(
-                lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
+                readerReadyLesson.id(), readerReadyLesson.teachingPlanId(), readerReadyLesson.status(), sections,
+                readerReadyLesson.generatorVersion(), readerReadyLesson.createdAt());
         return new EnrichmentResult(
                 enriched,
                 sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
@@ -121,14 +127,16 @@ public class VisualLessonEnricher {
             LessonSection section,
             String modelConfigurationOwner) {
         int existingVisualSteps = (int) section.steps().stream()
-                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .filter(step -> step.kind() == TeachingMove.VISUAL && !needsTighterReaderCrop(step.visualFocus()))
                 .count();
         if (existingVisualSteps >= maxVisualStepsPerSection) {
             return result(section, Outcome.ALREADY_PRESENT);
         }
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         Outcome rejected = null;
-        int availableStepSlots = (int) section.steps().stream().filter(step -> step.kind() != TeachingMove.VISUAL).count();
+        int availableStepSlots = (int) section.steps().stream()
+                .filter(step -> step.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(step.visualFocus()))
+                .count();
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
         for (LessonStep step : visualTargets(section, limit)) {
             StepLocation location = locateForStep(
@@ -149,7 +157,7 @@ public class VisualLessonEnricher {
      */
     private List<LessonStep> visualTargets(LessonSection section, int limit) {
         return section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL)
+                .filter(step -> step.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(step.visualFocus()))
                 .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
                 .sorted(java.util.Comparator.comparingInt(this::visualAffinity).reversed()
                         .thenComparingInt(LessonStep::position))
@@ -403,7 +411,52 @@ public class VisualLessonEnricher {
     }
 
     private boolean isCompactReaderCrop(VisualRegionLocator.LocatedRegion region) {
-        return region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000;
+        return (region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000)
+                && (long) region.width() * region.height() <= MAX_READER_CROP_AREA;
+    }
+
+    private boolean needsTighterReaderCrop(VisualFocus focus) {
+        return focus != null && (long) focus.width() * focus.height() > MAX_READER_CROP_AREA;
+    }
+
+    /**
+     * A near-full page is worse than no image: it duplicates the manual without showing what the rule wants the
+     * player to notice. Restore the cited rule prose first, then let this run add a replacement only if vision finds
+     * a genuine local aid.
+     */
+    private IllustratedLesson discardOverlyBroadVisuals(IllustratedLesson lesson) {
+        boolean changed = false;
+        List<LessonSection> sections = new ArrayList<>();
+        for (LessonSection section : lesson.sections()) {
+            List<LessonStep> steps = new ArrayList<>();
+            for (LessonStep step : section.steps()) {
+                if (step.kind() == TeachingMove.VISUAL && needsTighterReaderCrop(step.visualFocus())) {
+                    steps.add(new LessonStep(
+                            step.position(), step.heading(), TeachingMove.DO, originalRuleText(step),
+                            step.sourcePages(), step.sourceChunkIds()));
+                    changed = true;
+                } else {
+                    steps.add(step);
+                }
+            }
+            Set<Integer> retainedVisualPages = steps.stream()
+                    .filter(step -> step.kind() == TeachingMove.VISUAL && step.visualFocus() != null)
+                    .map(step -> step.visualFocus().pageNumber())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            Set<UUID> retainedVisualChunks = steps.stream()
+                    .filter(step -> step.kind() == TeachingMove.VISUAL)
+                    .flatMap(step -> step.sourceChunkIds().stream())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            sections.add(new LessonSection(
+                    section.position(), section.topicKey(), section.coverageTags(), section.title(), section.required(),
+                    section.evidenceStatus(), section.visualKind(), section.visualCaption(),
+                    section.visualSourcePages().stream().filter(retainedVisualPages::contains).toList(),
+                    section.visualSourceChunkIds().stream().filter(retainedVisualChunks::contains).toList(),
+                    steps));
+        }
+        if (!changed) return lesson;
+        return new IllustratedLesson(
+                lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
     }
 
     private boolean isReadableForPlayer(VisualRegionLocator.LocatedRegion region) {
@@ -541,7 +594,7 @@ public class VisualLessonEnricher {
         for (LessonStep step : candidate.section().steps()) {
             LessonStep originalStep = originalSteps.get(step.position());
             boolean newlyVisual = originalStep != null
-                    && originalStep.kind() != TeachingMove.VISUAL
+                    && (originalStep.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(originalStep.visualFocus()))
                     && step.kind() == TeachingMove.VISUAL
                     && step.visualFocus() != null;
             if (newlyVisual && acceptedVisuals.stream().anyMatch(existing -> overlapsSubstantially(
@@ -589,7 +642,8 @@ public class VisualLessonEnricher {
             LessonSection section, List<VisualRegionLocator.LocatedRegion> regions) {
         List<LessonStep> steps = new ArrayList<>(section.steps());
         Set<Integer> availableIndexes = java.util.stream.IntStream.range(0, steps.size())
-                .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL)
+                .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL
+                        || needsTighterReaderCrop(steps.get(index).visualFocus()))
                 .boxed()
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<Integer> sourcePages = section.visualSourcePages();
@@ -610,7 +664,7 @@ public class VisualLessonEnricher {
             }
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
             String observation = stripTrailingPunctuation(region.visibleDescription());
-            String visualText = visualText(observation, supportedStep.text(), isIconFocused(region));
+            String visualText = visualText(observation, originalRuleText(supportedStep), isIconFocused(region));
             String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
             steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
@@ -638,6 +692,18 @@ public class VisualLessonEnricher {
                 : "图中可见" + observation + "。结合图片完成这一步：";
         String combined = prefix + ruleText;
         return combined.length() <= 600 ? combined : ruleText;
+    }
+
+    private String originalRuleText(LessonStep step) {
+        if (step.kind() != TeachingMove.VISUAL) return step.text();
+        for (String connector : List.of("。结合图片完成这一步：", "。先认出这组图标，再按规则处理：")) {
+            int boundary = step.text().indexOf(connector);
+            if (boundary >= 0) {
+                String text = step.text().substring(boundary + connector.length()).strip();
+                if (!text.isBlank()) return text;
+            }
+        }
+        return step.text();
     }
 
     private boolean containsHan(String text) {

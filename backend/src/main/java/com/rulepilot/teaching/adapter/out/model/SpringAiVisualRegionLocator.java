@@ -30,6 +30,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final long MAX_READER_CROP_AREA = 600_000L;
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
@@ -108,13 +109,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         GuideAttempt first = locateGuideOnce(request, owner, "");
         if (!first.guide().regions().isEmpty()) {
-            List<LocatedRegion> compactFirst = withoutOversizedIconLegends(first.guide().regions());
+            List<LocatedRegion> compactFirst = withoutOversizedReaderViewports(first.guide().regions());
             if (!compactFirst.isEmpty()) {
                 return LocateGuideResult.found(compactFirst);
             }
-            log.info("Retrying visual locator to tighten an icon crop for section {}", request.sectionTitle());
-            GuideAttempt tightened = locateGuideOnce(request, owner, tightIconViewportInstruction());
-            List<LocatedRegion> compactTightened = withoutOversizedIconLegends(tightened.guide().regions());
+            log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
+            GuideAttempt tightened = locateGuideOnce(request, owner, tightReaderViewportInstruction());
+            List<LocatedRegion> compactTightened = withoutOversizedReaderViewports(tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
                 return LocateGuideResult.found(compactTightened);
             }
@@ -134,6 +135,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return regions.stream().filter(region -> !requiresTighterIconViewport(region)).toList();
     }
 
+    static List<LocatedRegion> withoutOversizedReaderViewports(List<LocatedRegion> regions) {
+        return regions.stream().filter(region -> !requiresTighterReaderViewport(region)).toList();
+    }
+
+    static boolean requiresTighterReaderViewport(LocatedRegion region) {
+        return requiresTighterIconViewport(region)
+                || (long) region.width() * region.height() > MAX_READER_CROP_AREA;
+    }
+
     static boolean requiresTighterIconViewport(LocatedRegion region) {
         String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
         boolean iconLegend = observation.contains("图例")
@@ -145,6 +155,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     static String tightIconViewportInstruction() {
         return "The previous icon crop was too tall and likely included unrelated numbered prose. Return a tighter rectangle around only the literal icons and their direct labels. Do not include adjacent steps, paragraphs, component counts, or a page footer. If that tight icon crop is not available, return an empty regions array.";
+    }
+
+    static String tightReaderViewportInstruction() {
+        return "The previous crop occupied too much of the page or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, score reference, or worked state that directly helps the cited step. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {

@@ -573,6 +573,61 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void rejects_a_near_whole_page_response_instead_of_passing_a_shrunken_page_as_a_rule_diagram() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "组件总览", "桌面上的组件图示与名称", 50, 60, 900, 850, List.of(chunk))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_WHOLE_PAGE);
+    }
+
+    @Test
+    void replaces_an_overly_broad_existing_visual_with_a_compact_crop_for_the_same_rule() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson source = lessonWithOverlyBroadVisual(chunk);
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "轨道与探测器", "一枚圆形探测器标记位于弧形轨道旁", 320, 420, 260, 180, List.of(chunk), List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), source, "owner");
+
+        var step = result.lesson().sections().getFirst().steps().getFirst();
+        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(step.visualFocus()).isEqualTo(new IllustratedLesson.VisualFocus(2, "轨道与探测器", 320, 420, 260, 180));
+        assertThat(step.text()).contains("把探测器放到轨道上。")
+                .doesNotContain("结合图片完成这一步：图中可见");
+    }
+
+    @Test
+    void restores_the_original_rule_text_when_an_overly_broad_visual_has_no_compact_replacement() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.empty())
+                .enrichWithReport(UUID.randomUUID(), lessonWithOverlyBroadVisual(chunk), "owner");
+
+        var step = result.lesson().sections().getFirst().steps().getFirst();
+        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(step.visualFocus()).isNull();
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+    }
+
+    @Test
     void sends_the_most_relevant_candidate_pages_before_lower_numbered_pages() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();
@@ -634,6 +689,24 @@ class VisualLessonEnricherTest {
                 1, "launch", List.of("launch"), "Launch a probe", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                 "Launch a probe.", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson lessonWithOverlyBroadVisual(UUID chunk) {
+        var step = new IllustratedLesson.LessonStep(
+                1,
+                "放置探测器",
+                IllustratedLesson.TeachingMove.VISUAL,
+                "图中可见旧的整页组件总览。结合图片完成这一步：把探测器放到轨道上。",
+                List.of(2),
+                List.of(chunk),
+                new IllustratedLesson.VisualFocus(2, "旧的整页组件总览", 50, 60, 900, 850));
+        var section = new IllustratedLesson.LessonSection(
+                1, "setup", List.of("setup"), "开局设置", true,
+                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
+                "把探测器放到轨道上。", List.of(2), List.of(chunk), List.of(step));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());
