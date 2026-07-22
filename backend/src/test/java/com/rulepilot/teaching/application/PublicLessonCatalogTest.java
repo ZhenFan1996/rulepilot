@@ -50,7 +50,7 @@ class PublicLessonCatalogTest {
                 1, "setup", List.of(), "Setup", true, IllustratedLesson.EvidenceStatus.CITED_DRAFT,
                 IllustratedLesson.VisualKind.REFERENCE_CARD, "", List.of(), List.of(), List.of(step));
         var lesson = new IllustratedLesson(
-                UUID.randomUUID(), plan.id(), IllustratedLesson.LessonStatus.DRAFT_READY, List.of(section), "test", Instant.now());
+                UUID.randomUUID(), plan.id(), IllustratedLesson.LessonStatus.COMPLETE, List.of(section), "test", Instant.now());
         return new PublicLessonReader.PublicLesson(
                 plan.id(), plan.documentVersionId(), "Orbit Rules", officialSourceUrl, null, lesson);
     }

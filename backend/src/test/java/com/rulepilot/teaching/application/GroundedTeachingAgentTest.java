@@ -21,6 +21,7 @@ import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.TeachingLessonModel.SectionRequest;
 import com.rulepilot.teaching.TeachingLessonModel.StepDraft;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson;
@@ -296,6 +297,96 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.sections()).singleElement().satisfies(section -> assertThat(section.evidenceStatus())
                 .isEqualTo(EvidenceStatus.SUPPORTED));
+    }
+
+    @Test
+    void interpretsAnUncatalogedRequiredVisualPageBeforeWritingTheLesson() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence pageEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "ACTION",
+                "Visual rulebook page 14",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
+                14,
+                14,
+                List.of(new RulePageImage(14, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                return List.of(pageEvidence);
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId, java.util.Set<Integer> pages, boolean includePageImages) {
+                return List.of(pageEvidence);
+            }
+        };
+        AtomicInteger catalogCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel catalog = request -> {
+            catalogCalls.incrementAndGet();
+            assertThat(request.pages()).extracting(com.rulepilot.teaching.TeachingOutlineModel.PageImageInput::pageNumber)
+                    .containsExactly(14);
+            assertThat(request.rulebookTitle()).isEqualTo("Game");
+            return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(new VisualRulebookPageCatalogModel.PageSummary(
+                    14,
+                    "KODORA; victory point token",
+                    "KODORA只能在至少拥有2个胜利点时使用；把2个胜利点放在KODORA上。",
+                    List.of("KODORA", "victory point token"))));
+        };
+        TeachingLessonModel model = request -> {
+            assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
+                    .asString()
+                    .contains("至少拥有2个胜利点");
+            return new SectionDraft(
+                    "KODORA行动",
+                    VisualKind.REFERENCE_CARD,
+                    "先确认胜利点数量，再放置2个胜利点。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "支付胜利点",
+                            TeachingMove.DO,
+                            "拥有至少2个胜利点时，把2个胜利点放在KODORA上。",
+                            List.of(chunkId))));
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "kodora",
+                        "KODORA行动",
+                        "Explain KODORA",
+                        true,
+                        true,
+                        List.of("KODORA"),
+                        List.of("actions"),
+                        List.of(14))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                VisualRulebookPageFacts.empty(),
+                catalog,
+                4,
+                1);
+
+        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(catalogCalls).hasValue(1);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("2个胜利点");
     }
 
     @Test
@@ -957,7 +1048,8 @@ class GroundedTeachingAgentTest {
                 4,
                 4,
                 List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
-        AtomicInteger textRevisions = new AtomicInteger();
+        AtomicInteger visualCompositions = new AtomicInteger();
+        AtomicInteger textCompositions = new AtomicInteger();
         TeachingLessonModel model = new TeachingLessonModel() {
             @Override
             public boolean supportsVisualEvidence() {
@@ -966,37 +1058,22 @@ class GroundedTeachingAgentTest {
 
             @Override
             public SectionDraft compose(SectionRequest request) {
-                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4);
-                return new SectionDraft(
-                        "照图拼好主棋盘",
-                        VisualKind.TABLE_LAYOUT,
-                        "主棋盘由三块弧形板拼接后放在桌面中央。",
-                        List.of(chunkId),
-                        List.of(new StepDraft(
-                                "找到三块主板",
-                                TeachingMove.VISUAL,
-                                "先在图中找到拼接后的主棋盘，再按同样关系摆到桌面中央。",
-                                List.of(chunkId),
-                                new VisualFocusDraft(3, "拼接后的主棋盘", 900, 990, 300, 120))));
-            }
-
-            @Override
-            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
-                if (!request.pageImages().isEmpty()) return compose(request);
-                if (textRevisions.incrementAndGet() == 1) {
-                    assertThat(feedback).anyMatch(message -> message.contains("text-only"));
+                if (!request.pageImages().isEmpty()) {
+                    visualCompositions.incrementAndGet();
+                    assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4);
                     return new SectionDraft(
-                            "仍带错误图片的回退",
-                            VisualKind.REFERENCE_CARD,
-                            "把主棋盘放到桌面中央。",
+                            "照图拼好主棋盘",
+                            VisualKind.TABLE_LAYOUT,
+                            "主棋盘由三块弧形板拼接后放在桌面中央。",
                             List.of(chunkId),
                             List.of(new StepDraft(
-                                    "错误视觉步骤",
+                                    "找到三块主板",
                                     TeachingMove.VISUAL,
-                                    "把主棋盘放到桌面中央。",
-                                    List.of(chunkId))));
+                                    "先在图中找到拼接后的主棋盘，再按同样关系摆到桌面中央。",
+                                    List.of(chunkId),
+                                    new VisualFocusDraft(3, "拼接后的主棋盘", 900, 990, 300, 120))));
                 }
-                assertThat(feedback).anyMatch(message -> message.contains("Keep this section text-only"));
+                textCompositions.incrementAndGet();
                 return new SectionDraft(
                         "照着文字完成开局",
                         VisualKind.REFERENCE_CARD,
@@ -1007,6 +1084,12 @@ class GroundedTeachingAgentTest {
                                 TeachingMove.DO,
                                 "把主棋盘放到桌面中央。",
                                 List.of(chunkId))));
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                assertThat(request.pageImages()).isNotEmpty();
+                return compose(request);
             }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -1024,7 +1107,8 @@ class GroundedTeachingAgentTest {
             assertThat(step.kind()).isEqualTo(TeachingMove.DO);
             assertThat(step.visualFocus()).isNull();
         });
-        assertThat(textRevisions).hasValue(2);
+        assertThat(visualCompositions).hasValue(2);
+        assertThat(textCompositions).hasValue(1);
     }
 
     @Test
@@ -1078,14 +1162,14 @@ class GroundedTeachingAgentTest {
                 3,
                 List.of());
         TeachingLessonModel textOnlyModel = request -> new TeachingLessonModel.SectionDraft(
-                "准备 [BOOST] 骰子",
+                "准备 [BOOST] 与 👣 骰子",
                 VisualKind.REFERENCE_CARD,
-                "把 [BOOST] 骰子放在玩家板旁。",
+                "把 [BOOST] 骰子和 👣 图标放在玩家板旁。",
                 List.of(chunkId),
                 List.of(new TeachingLessonModel.StepDraft(
-                        "摆放 [BOOST] 骰子",
+                        "摆放 [BOOST] 与 👣 图标",
                         TeachingMove.DO,
-                        "把 [BOOST] 骰子放在玩家板旁。",
+                        "把 [BOOST] 骰子和 👣 图标放在玩家板旁。",
                         List.of(chunkId))));
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(evidence),
@@ -1098,9 +1182,9 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().title()).isEqualTo("准备 “BOOST”图标 骰子");
+        assertThat(lesson.sections().getFirst().title()).isEqualTo("准备 “BOOST”图标 与 “脚印（移动）”图标 骰子");
         assertThat(lesson.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("把 “BOOST”图标 骰子放在玩家板旁。");
+                .isEqualTo("把 “BOOST”图标 骰子和 “脚印（移动）”图标放在玩家板旁。");
     }
 
     @Test
@@ -1715,6 +1799,62 @@ class GroundedTeachingAgentTest {
                         "领取奖励",
                         TeachingMove.DO,
                         "已提供的证据中没有提到具体奖励。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsPendingRuleLanguageFromPlayerFacingSteps() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "游戏结束",
+                VisualKind.REFERENCE_CARD,
+                "确认游戏结束条件。",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "游戏何时结束？",
+                        TeachingMove.UNDERSTAND,
+                        "当前可用的结束触发条件未在已有资料中说明。请等待确定游戏结束的方式后再进行计分。",
+                        List.of(evidence.chunkId()))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+    }
+
+    @Test
+    void rejectsAClaimThatTheSuppliedRulebookPageDoesNotContainTheEndingRule() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        TeachingLessonModel model = request -> new SectionDraft(
+                "结束、计分与胜者",
+                VisualKind.REFERENCE_CARD,
+                "页面没有提到游戏何时结束或如何计分。",
+                List.of(evidence.chunkId()),
+                List.of(new StepDraft(
+                        "当前游戏材料不含结束规则",
+                        TeachingMove.UNDERSTAND,
+                        "关于结束触发、最终处理与同分规则，需要从游戏的其他规则部分来了解。",
                         List.of(evidence.chunkId()))));
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(evidence),

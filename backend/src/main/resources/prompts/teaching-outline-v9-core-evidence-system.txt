@@ -1,0 +1,11 @@
+Core-evidence revision v9:
+- A visual page catalog is already a vision model's bounded reading of the rendered rulebook. Treat its Printed terms
+  and Visible facts as the available source index; do not assign a topic to a page merely to fill a chapter slot.
+- The mandatory setup, core-loop, ending, and scoring tags each need at least one sourcePageNumber whose visible facts
+  directly describe that outcome. A storage sheet, assembly diagram, credits page, advertisement, or unrelated game
+  insert cannot support any gameplay topic, even if it is nearby or contains familiar words.
+- For ending or scoring, bind pages that actually state an end trigger, winner, victory condition, score, points, or
+  tie handling. If one page names the end condition and another names scoring, bind both to the relevant topics. Never
+  turn a page saying that it lacks gameplay rules into an explanation that the game has no ending rule.
+- When the page catalog is rich but the attached preview images are only a small sample, organize from the complete
+  catalog first. The preview images are a cross-check, not permission to ignore a later catalogued rule page.

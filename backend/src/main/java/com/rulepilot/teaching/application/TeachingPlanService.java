@@ -127,7 +127,7 @@ public class TeachingPlanService {
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         var pages = visualOnly
-                ? catalogVisualPages(documentVersionId, documentPages, createdBy, assistantRunId)
+                ? catalogVisualPages(documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
                 : documentPages.stream()
                         .map(page -> new PageInput(
                                 page.pageNumber(), page.text() == null || page.text().isBlank()
@@ -153,7 +153,9 @@ public class TeachingPlanService {
                         () -> outlines.organize(outlineRequest),
                         this::outlineOutputTokens), documentPages));
         try {
+            if (visualOnly) validateVisualFastBaseline(outline);
             plans.validate(outline);
+            if (visualOnly) validateVisualCoreTopicBindings(outline, pages);
         } catch (IllegalArgumentException invalidOutline) {
             log.warn("Teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
             if (assistantRunId != null) {
@@ -167,6 +169,7 @@ public class TeachingPlanService {
             outline = preferDocumentTitle(
                     scope.documentTitle(), bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages));
             plans.validate(outline);
+            if (visualOnly) validateVisualCoreTopicBindings(outline, pages);
         }
         if (visualOnly) {
             try {
@@ -186,7 +189,26 @@ public class TeachingPlanService {
                 var sourceOutline = preferDocumentTitle(
                         scope.documentTitle(), bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages));
                 outline = augmentVisualCoverage(outline, sourceOutline);
+                if (outline.topics().size() > 10) {
+                    outline = keepFastVisualBaseline(outline, sourceOutline);
+                    if (assistantRunId != null) {
+                        invocations.record(
+                                assistantRunId,
+                                ActivityType.VALIDATION,
+                                "compactVisualOutline",
+                                ActivityOutcome.REJECTED,
+                                "Page coverage made the model outline too fragmented; source-derived teaching groups were retained");
+                    }
+                }
+                log.info(
+                        "Using compact visual teaching outline for documentVersionId={}: {}",
+                        documentVersionId,
+                        outline.topics().stream()
+                                .map(topic -> topic.key() + "=" + topic.sourcePageNumbers()
+                                        + " tags=" + topic.coverageTags())
+                                .toList());
                 plans.validate(outline);
+                validateVisualCoreTopicBindings(outline, pages);
                 validateVisualRulebookCoverage(outline, pages);
             }
         }
@@ -199,6 +221,7 @@ public class TeachingPlanService {
                             documentVersionId,
                             selectedVisualPages,
                             iconLegendPage(documentPages).orElse(null),
+                            scope.documentTitle(),
                             createdBy,
                             assistantRunId);
                     if (interpreted.isEmpty()) {
@@ -270,20 +293,42 @@ public class TeachingPlanService {
     private List<PageInput> catalogVisualPages(
             UUID documentVersionId,
             List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
             String owner,
             UUID assistantRunId) {
-        List<PageFact> facts = catalogPageFacts(
-                documentVersionId,
-                documentPages.stream()
-                        .map(DocumentProcessing.PageView::pageNumber)
-                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
-                null,
-                owner,
-                assistantRunId);
+        Set<Integer> requestedPages = documentPages.stream()
+                .map(DocumentProcessing.PageView::pageNumber)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
+        Set<Integer> missingPages = missingVisualCatalogPages(requestedPages, cached);
+        if (!cached.isEmpty() && assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "reuseVisualPageFacts",
+                    ActivityOutcome.SUCCEEDED,
+                    "Reused " + cached.size() + " page-scoped visual facts from this immutable rulebook version");
+        }
+        // A first pass catalogs every rendered page. On later plan refreshes the immutable version cache is
+        // authoritative: an unavailable page remains explicitly unavailable until a focused teaching step asks for it.
+        // Re-reading a mostly complete rulebook just to retry one slow page delays the first usable lesson.
+        List<PageFact> fresh = cached.isEmpty()
+                ? catalogPageFacts(documentVersionId, requestedPages, null, rulebookTitle, owner, assistantRunId)
+                : List.of();
+        if (!cached.isEmpty() && !missingPages.isEmpty() && assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "deferUncatalogedVisualPages",
+                    ActivityOutcome.REJECTED,
+                    "Deferred " + missingPages.size()
+                            + " uncataloged page(s) to focused visual retrieval; cached page facts can start the lesson");
+        }
+        List<PageFact> facts = mergeVisualPageFacts(cached, fresh);
         if (facts.isEmpty()) {
             throw new IllegalArgumentException("visual rulebook catalog did not produce any reliable page facts");
         }
-        visualFacts.replace(documentVersionId, facts);
+        if (!fresh.isEmpty()) visualFacts.replace(documentVersionId, facts);
         int unavailablePages = documentPages.size() - facts.size();
         if (unavailablePages > 0) {
             log.warn(
@@ -299,6 +344,24 @@ public class TeachingPlanService {
             }
         }
         return visualPageInputs(documentPages, facts);
+    }
+
+    static Set<Integer> missingVisualCatalogPages(Set<Integer> requestedPages, List<PageFact> cached) {
+        LinkedHashSet<Integer> missing = new LinkedHashSet<>(requestedPages);
+        cached.stream().map(PageFact::pageNumber).forEach(missing::remove);
+        return java.util.Collections.unmodifiableSet(missing);
+    }
+
+    static List<PageFact> mergeVisualPageFacts(List<PageFact> cached, List<PageFact> fresh) {
+        return java.util.stream.Stream.concat(cached.stream(), fresh.stream())
+                .collect(java.util.stream.Collectors.toMap(
+                        PageFact::pageNumber,
+                        java.util.function.Function.identity(),
+                        (existing, ignored) -> existing,
+                        java.util.LinkedHashMap::new))
+                .values().stream()
+                .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
+                .toList();
     }
 
     static List<PageInput> visualPageInputs(
@@ -337,6 +400,7 @@ public class TeachingPlanService {
             UUID documentVersionId,
             Set<Integer> pageNumbers,
             Integer iconLegendPage,
+            String rulebookTitle,
             String owner,
             UUID assistantRunId) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
@@ -363,7 +427,7 @@ public class TeachingPlanService {
                                 .map(image -> new PageImageInput(
                                         image.pageNumber(), image.mediaType(), image.content()))
                                 .toList();
-                        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner);
+                        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
                         return invokeModel(
                                 assistantRunId,
                                 "inspectRulebookVisualBatch|" + (batchIndex + 1),
@@ -468,6 +532,66 @@ public class TeachingPlanService {
         }
     }
 
+    static void validateVisualCoreTopicBindings(
+            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
+        Map<Integer, String> pages = visualCatalogPages.stream().collect(Collectors.toMap(
+                PageInput::pageNumber, PageInput::text, (first, duplicate) -> first));
+        for (String tag : List.of("setup", "core_loop", "end", "scoring")) {
+            boolean directlyBound = outline.topics().stream()
+                    .filter(topic -> topic.coverageTags().stream()
+                            .map(value -> value.toLowerCase(java.util.Locale.ROOT))
+                            .anyMatch(tag::equals))
+                    .flatMap(topic -> topic.sourcePageNumbers().stream())
+                    .map(pages::get)
+                    .anyMatch(page -> page != null && directVisualEvidenceFor(tag, page));
+            if (!directlyBound) {
+                throw new IllegalArgumentException(
+                        "visual rulebook outline must bind " + tag + " to a page whose visible facts support it");
+            }
+        }
+    }
+
+    static void validateVisualFastBaseline(TeachingOutlineModel.OutlineDraft outline) {
+        if (outline.topics().size() > 10) {
+            throw new IllegalArgumentException(
+                    "visual rulebook outline exceeds the ten-section fast baseline and must be compacted");
+        }
+    }
+
+    static TeachingOutlineModel.OutlineDraft keepFastVisualBaseline(
+            TeachingOutlineModel.OutlineDraft expanded, TeachingOutlineModel.OutlineDraft sourceDerived) {
+        return expanded.topics().size() <= 10 ? expanded : sourceDerived;
+    }
+
+    private static boolean directVisualEvidenceFor(String tag, String page) {
+        String facts = page.toLowerCase(java.util.Locale.ROOT);
+        return switch (tag) {
+            case "setup" -> containsAny(facts,
+                    "set up", "setup", "setting up", "player setup", "设置", "准备", "起始资源");
+            case "core_loop" -> containsAny(facts,
+                    "how to play", "gameplay", "turn", "round", "phase", "roll phase", "run phase", "action",
+                    "move", "游戏流程", "回合", "轮次", "阶段", "行动", "移动");
+            case "end" -> hasCompleteEndingEvidence(facts);
+            case "scoring" -> containsAny(facts,
+                    "winner", "victory", "how to win", "scoring", "score", "points",
+                    "获胜", "胜者", "胜利", "计分", "分数", "平局");
+            default -> false;
+        };
+    }
+
+    private static boolean hasCompleteEndingEvidence(String facts) {
+        boolean endingTrigger = containsAny(facts,
+                "end of game", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间");
+        boolean resolution = containsAny(facts,
+                "winner", "victory", "how to win", "scoring", "score", "tie",
+                "获胜", "胜者", "胜利", "计分", "分数", "平局");
+        return endingTrigger && resolution;
+    }
+
+    private static boolean containsAny(String value, String... needles) {
+        return java.util.Arrays.stream(needles).anyMatch(value::contains);
+    }
+
     static TeachingOutlineModel.OutlineDraft augmentVisualCoverage(
             TeachingOutlineModel.OutlineDraft modelOutline, TeachingOutlineModel.OutlineDraft sourceOutline) {
         Set<Integer> covered = modelOutline.topics().stream()
@@ -499,11 +623,30 @@ public class TeachingPlanService {
         boolean cover = (normalized.contains("cover") || normalized.contains("封面"))
                 && (normalized.contains("no game mechanism")
                         || normalized.contains("no rule text")
+                        || normalized.contains("no gameplay rules")
+                        || normalized.contains("no operational instructions")
                         || normalized.contains("visual cover")
                         || normalized.contains("无游戏机制")
                         || normalized.contains("无游戏规则")
                         || normalized.contains("仅作为视觉封面"));
-        return !credits && !cover;
+        boolean storageOnlyInsert = normalized.contains("storage or assembly instructions")
+                && (normalized.contains("not gameplay")
+                        || normalized.contains("non-gameplay")
+                        || normalized.contains("this page is")
+                        || normalized.contains("only for storage")
+                        || normalized.contains("仅为收纳或组装说明"));
+        boolean nonGameplayInsert = normalized.contains("非游戏规则")
+                || normalized.contains("非游戏玩法")
+                || normalized.contains("non-gameplay material")
+                || normalized.contains("non-gameplay rule")
+                || normalized.contains("宣传页")
+                || normalized.contains("宣传广告")
+                || normalized.contains("广告页")
+                || normalized.contains("advertisement for another")
+                || normalized.contains("仅为收纳或组装说明")
+                || storageOnlyInsert
+                || normalized.contains("仅为封面设计");
+        return !credits && !cover && !nonGameplayInsert;
     }
 
     static Set<Integer> selectedVisualPageNumbers(

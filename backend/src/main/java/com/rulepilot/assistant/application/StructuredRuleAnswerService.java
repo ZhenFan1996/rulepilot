@@ -71,7 +71,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v30-adjacent-successor-evidence";
+    private static final String ANSWER_POLICY_VERSION = "answer-v40-evidence-completeness-boundary";
     private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
             "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
@@ -118,6 +118,16 @@ public class StructuredRuleAnswerService {
                     + "clockwise|counterclockwise|dealer|first player|previous player|下一位|其他|仍在游戏|"
                     + "左手边|右手边|顺时针|逆时针|庄家|起始玩家|上一位)"
                     + "[\\s\\S]{0,100}(?:starts|leads|开始|领出)");
+    private static final Pattern EVIDENCED_REPLENISHMENT_PROCEDURE = Pattern.compile(
+            "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
+                    + "(?=.*(?:empty|no\\s+(?:dice|cards?|tokens?)|无(?:骰|牌|令牌)|没有(?:骰|牌|令牌)|为空|耗尽))"
+                    + ".*(?:discard|return|recycle|refill|reshuffle|continue|弃置|移回|回收|补充|洗混|继续)");
+    private static final Pattern DIRECT_CHINESE_REPLENISHMENT_SENTENCE = Pattern.compile(
+            "(?:若|如果|当)[^。；;]{0,120}(?:无|没有|为空|耗尽)[^。；;]{0,180}"
+                    + "(?:弃置|移回|回收|补充|洗混|继续)[^。；;]{0,180}[。；;]");
+    private static final Pattern EXHAUSTED_SOURCE_QUESTION = Pattern.compile(
+            "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
+                    + "(?=.*(?:not\\s+enough|insufficient|empty|runs\\s+out|不足|不够|用完|没有骰子)).*");
     private static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
@@ -361,8 +371,12 @@ public class StructuredRuleAnswerService {
                     assistantRunId, username, gameSessionId, modelRequest, draft);
         }
         if (!draft.answerable()) {
-            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
+            draft = directReplenishmentFallback(modelRequest).orElse(null);
+            if (draft == null) {
+                return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
+            }
         }
+        draft = replaceMisdirectedReplenishmentDraft(modelRequest, draft);
         List<String> playerFacingRepair = playerFacingRepairFeedback(modelRequest, draft);
         if (!playerFacingRepair.isEmpty()) {
             try {
@@ -506,11 +520,20 @@ public class StructuredRuleAnswerService {
             UUID gameSessionId,
             ModelRequest modelRequest,
             ModelDraft previousDraft) {
-        String feedback = "EVIDENCE_SUFFICIENCY: Re-evaluate the question against every supplied excerpt. If the "
-                + "evidence gives a prerequisite or conditional branch but the current table state is unknown, "
-                + "answer conditionally instead of assuming the condition or refusing. Preserve relative rules, "
-                + "scope, timing, negation, and exceptions exactly. Remain unanswerable when the excerpts still "
-                + "do not directly resolve the question.";
+        String baseFeedback = "EVIDENCE_SUFFICIENCY: Re-evaluate the question against every supplied excerpt. The "
+                + "condition written into a player's question is available table context: when an excerpt states "
+                + "the outcome for that exact condition, answer the rule directly instead of treating unrelated "
+                + "live-state details as missing. This includes a named replenishment condition, a stated end trigger, "
+                + "and an explicitly described tie state. If the evidence gives a prerequisite or conditional branch "
+                + "but the current table state is otherwise unknown, answer conditionally instead of assuming the "
+                + "condition or refusing. Preserve relative rules, scope, timing, negation, and exceptions exactly. "
+                + "Remain unanswerable when the excerpts still do not directly resolve the question.";
+        String feedback = hasEvidencedReplenishmentProcedure(modelRequest)
+                ? baseFeedback + " DIRECT_REPLENISHMENT_PROCEDURE: A supplied excerpt explicitly gives the sequence for "
+                        + "continuing when the named draw or supply area becomes empty. Apply that stated sequence to "
+                        + "a question about reaching the required draw amount, and cite its source. Do not abstain merely "
+                        + "because the player did not state how many items were present before that area became empty."
+                : baseFeedback;
         RuleAnswerRateLimiter.Permit permit =
                 rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
@@ -525,6 +548,47 @@ public class StructuredRuleAnswerService {
         } finally {
             permit.close();
         }
+    }
+
+    private boolean hasEvidencedReplenishmentProcedure(ModelRequest request) {
+        return request.evidence().stream()
+                .map(EvidenceInput::excerpt)
+                .anyMatch(excerpt -> EVIDENCED_REPLENISHMENT_PROCEDURE.matcher(excerpt).find());
+    }
+
+    private Optional<ModelDraft> directReplenishmentFallback(ModelRequest request) {
+        if (!EXHAUSTED_SOURCE_QUESTION.matcher(request.question()).matches()) {
+            return Optional.empty();
+        }
+        return request.evidence().stream()
+                .map(source -> directChineseReplenishmentFallback(source).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .findFirst();
+    }
+
+    private ModelDraft replaceMisdirectedReplenishmentDraft(ModelRequest request, ModelDraft draft) {
+        if (!EXHAUSTED_SOURCE_QUESTION.matcher(request.question()).matches()
+                || !hasEvidencedReplenishmentProcedure(request)) {
+            return draft;
+        }
+        return directReplenishmentFallback(request).orElse(draft);
+    }
+
+    private Optional<ModelDraft> directChineseReplenishmentFallback(EvidenceInput source) {
+        java.util.regex.Matcher matcher = DIRECT_CHINESE_REPLENISHMENT_SENTENCE.matcher(source.excerpt());
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        String ruling = matcher.group().strip();
+        if (ruling.length() > 240) {
+            return Optional.empty();
+        }
+        return Optional.of(new ModelDraft(
+                ruling,
+                "抽取过程中该区域用尽时，先按这条规则回收，再继续本次抽取。",
+                List.of(source.chunkId()),
+                List.of(),
+                "HIGH"));
     }
 
     private List<String> playerFacingRepairFeedback(ModelRequest request, ModelDraft draft) {
@@ -859,9 +923,26 @@ public class StructuredRuleAnswerService {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         Map<Integer, PageFactMatch> visualFactsByPage = new LinkedHashMap<>();
+        Set<Integer> requiredVisualFactPages = new LinkedHashSet<>();
         boolean conflicting = false;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
+        if (EXHAUSTED_SOURCE_QUESTION.matcher(question.normalizedQuestion()).matches()) {
+            List<PageFactMatch> replenishmentMatches = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    "searchExplicitReplenishmentProcedure",
+                    18,
+                    "Direct replenishment procedure evidence retrieved",
+                    () -> visualFacts.search(
+                            context.documentVersionId(),
+                            replenishmentRetrievalQuery(question.normalizedQuestion()),
+                            3),
+                    matches -> matches.size() * 80);
+            replenishmentMatches.forEach(match -> visualFactsByPage.merge(
+                    match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+            replenishmentMatches.forEach(match -> requiredVisualFactPages.add(match.pageNumber()));
+        }
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
             RetrievalIntent intent = intents.get(intentIndex);
             try {
@@ -938,7 +1019,7 @@ public class StructuredRuleAnswerService {
             return new RetrievalResult(List.of(), true);
         }
         Set<UUID> visualEvidenceIds = mergeVisualPageEvidence(
-                assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage);
+                assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, requiredVisualFactPages);
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
         List<HybridEvidenceHit> selectedVisualEvidence = visualEvidenceIds.stream()
                 .map(evidenceById::get)
@@ -971,6 +1052,12 @@ public class StructuredRuleAnswerService {
         return new RetrievalResult(selected.values().stream().limit(5).toList(), false);
     }
 
+    private String replenishmentRetrievalQuery(String question) {
+        String prefix = "耗尽 为空 回收 移回 补充 洗混 继续 ";
+        String combined = prefix + question.strip();
+        return combined.length() <= 600 ? combined : combined.substring(0, 600);
+    }
+
     private boolean requiresIconLegend(java.util.Collection<PageFactMatch> facts) {
         return facts.stream().anyMatch(fact -> UNRESOLVED_VISUAL_SYMBOL.matcher(
                         fact.printedTerms() + " " + fact.factualSummary())
@@ -981,26 +1068,32 @@ public class StructuredRuleAnswerService {
             UUID assistantRunId,
             UUID documentVersionId,
             Map<UUID, HybridEvidenceHit> evidenceById,
-            Map<Integer, PageFactMatch> factsByPage) {
+            Map<Integer, PageFactMatch> factsByPage,
+            Set<Integer> requiredPages) {
         if (factsByPage.isEmpty()) return Set.of();
-        Set<Integer> pages = factsByPage.values().stream()
+        Set<Integer> pages = new LinkedHashSet<>();
+        requiredPages.stream()
+                .filter(factsByPage::containsKey)
+                .sorted()
+                .forEach(pages::add);
+        factsByPage.values().stream()
                 .sorted(Comparator.comparingDouble(PageFactMatch::score).reversed()
                         .thenComparingInt(PageFactMatch::pageNumber))
-                .limit(4)
                 .map(PageFactMatch::pageNumber)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+                .forEach(pages::add);
+        Set<Integer> selectedPages = pages.stream().limit(4).collect(Collectors.toCollection(LinkedHashSet::new));
         List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> pageSources = invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
                 "readVisualRulebookFactPages",
-                pages.size(),
-                "Original rulebook pages for visual facts retrieved",
-                () -> evidenceLookup.findByPageNumbers(documentVersionId, pages),
+                selectedPages.size(),
+                "Original rulebook pages " + selectedPages + " for visual facts retrieved",
+                () -> evidenceLookup.findByPageNumbers(documentVersionId, selectedPages),
                 sources -> sources.size() * 80);
         Set<UUID> enriched = new LinkedHashSet<>();
         Map<Integer, Integer> rankByPage = new LinkedHashMap<>();
         int rank = 1;
-        for (Integer page : pages) rankByPage.put(page, rank++);
+        for (Integer page : selectedPages) rankByPage.put(page, rank++);
         for (var source : pageSources) {
             if (source.pageFrom() != source.pageTo()) continue;
             PageFactMatch fact = factsByPage.get(source.pageFrom());

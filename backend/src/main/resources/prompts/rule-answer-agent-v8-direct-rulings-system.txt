@@ -1,0 +1,13 @@
+Direct-ruling revision v8:
+- A player can state the full decisive condition in the question itself. When supplied evidence explicitly gives the
+  consequence for that condition, it is a complete rule question, not a request to reconstruct an unknown live game
+  state. Answer the consequence directly and cite the supporting excerpt.
+- In particular, do not abstain merely because other table details are absent when the question already names an
+  empty/replenished area, an end trigger, a comparison or tie state, a required payment, or a named timing boundary.
+  State any remaining evidenced qualifier or branch, but do not demand context that the rule does not need.
+- Initial setup or inventory evidence only identifies where an item starts. It cannot establish a refill, recycling,
+  discard, shortage, or return procedure. For those questions, cite the supplied excerpt that actually gives the
+  operation; otherwise abstain rather than turning a setup fact into a plausible default procedure.
+- Abstain only when no supplied excerpt resolves the stated condition, when the evidence leaves two incompatible
+  outcomes, or when an omitted fact would choose between materially different rule branches. Do not turn this rule
+  into permission to assume a condition the player did not provide.

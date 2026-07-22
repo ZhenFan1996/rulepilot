@@ -27,13 +27,18 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v16-system.txt") Resource teachingSystem,
             @Value("classpath:prompts/teaching-agent-v17-fidelity-system.txt") Resource teachingFidelity,
             @Value("classpath:prompts/teaching-agent-v18-visual-fit-system.txt") Resource teachingVisualFit,
+            @Value("classpath:prompts/teaching-agent-v19-player-language-system.txt") Resource teachingPlayerLanguage,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
             @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
+            @Value("classpath:prompts/teaching-outline-v9-core-evidence-system.txt") Resource teachingOutlineCoreEvidence,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
+            @Value("classpath:prompts/rule-answer-agent-v8-direct-rulings-system.txt") Resource answerDirectRulings,
+            @Value("classpath:prompts/rule-answer-agent-v9-prohibition-fidelity-system.txt") Resource answerProhibitionFidelity,
+            @Value("classpath:prompts/rule-answer-agent-v10-completeness-boundary-system.txt") Resource answerCompletenessBoundary,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -44,11 +49,13 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
-        this.teachingSystem = combined(teachingSystem, teachingFidelity, teachingVisualFit);
+        this.teachingSystem = combined(teachingSystem, teachingFidelity, teachingVisualFit, teachingPlayerLanguage);
         this.teachingUser = read(teachingUser);
-        this.teachingOutlineSystem = combined(teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity);
+        this.teachingOutlineSystem = combined(
+                teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity, teachingOutlineCoreEvidence);
         this.teachingOutlineUser = read(teachingOutlineUser);
-        this.answerSystem = combined(answerSystem, answerFidelity);
+        this.answerSystem = combined(
+                answerSystem, answerFidelity, answerDirectRulings, answerProhibitionFidelity, answerCompletenessBoundary);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);

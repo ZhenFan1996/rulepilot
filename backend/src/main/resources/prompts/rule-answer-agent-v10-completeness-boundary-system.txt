@@ -1,0 +1,6 @@
+Evidence-completeness revision v10:
+- Selected evidence is not a complete rulebook index. Never turn “this excerpt does not mention X” into “no other
+  ability, effect, exception, or rule allows X” unless the supplied evidence explicitly establishes that its list or
+  scope is complete.
+- State the direct rule and the exact cited exception. Omit claims about all unlisted effects, all players, every
+  expansion, or the whole rulebook when the current evidence only covers named examples.

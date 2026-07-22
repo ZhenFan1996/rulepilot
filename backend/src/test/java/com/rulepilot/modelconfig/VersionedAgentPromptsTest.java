@@ -13,13 +13,18 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v16-system.txt"),
                 resource("teaching-agent-v17-fidelity-system.txt"),
                 resource("teaching-agent-v18-visual-fit-system.txt"),
+                resource("teaching-agent-v19-player-language-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
                 resource("teaching-outline-v8-visual-density-system.txt"),
+                resource("teaching-outline-v9-core-evidence-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
+                resource("rule-answer-agent-v8-direct-rulings-system.txt"),
+                resource("rule-answer-agent-v9-prohibition-fidelity-system.txt"),
+                resource("rule-answer-agent-v10-completeness-boundary-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -65,6 +70,9 @@ class VersionedAgentPromptsTest {
                         "crop earns its place",
                         "block of example prose",
                         "natural Simplified Chinese",
+                        "Player-language revision v19",
+                        "Citation IDs are machine fields only",
+                        "negative evidence statement is not a game rule",
                         "rest of the page hidden",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
@@ -99,7 +107,10 @@ class VersionedAgentPromptsTest {
                         "asymmetric factions",
                         "walkthrough",
                         "several distinct player needs",
-                        "Three to six visual topics");
+                        "Three to six visual topics",
+                        "Core-evidence revision v9",
+                        "storage sheet",
+                        "end trigger, winner, victory condition");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",
@@ -119,7 +130,14 @@ class VersionedAgentPromptsTest {
                         "empty exceptions list",
                         "Every explanatory sentence",
                         "matching",
-                        "same type");
+                        "same type",
+                        "Direct-ruling revision v8",
+                        "full decisive condition in the question itself",
+                        "Initial setup or inventory evidence",
+                        "Prohibition-fidelity revision v9",
+                        "does not bypass a prohibited terrain",
+                        "Evidence-completeness revision v10",
+                        "Selected evidence is not a complete rulebook index");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");

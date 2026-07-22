@@ -166,6 +166,244 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void retriesAVisualFactBackedRuleWhenTheQuestionAlreadyStatesItsCondition() {
+        UUID pageChunkId = UUID.randomUUID();
+        RuleEvidenceHit pageSource = new RuleEvidenceHit(
+                pageChunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Draw phase",
+                "Visual rulebook page evidence is available.",
+                10,
+                10,
+                1.0);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(
+                        10,
+                        "Draw Zone, Discard Zone",
+                        "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
+                        95));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(pageNumbers).containsExactly(10);
+                return List.of(pageSource);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                assertThat(request.evidence()).singleElement().satisfies(source -> assertThat(source.excerpt())
+                        .contains("若抽骰区没有骰子", "弃骰区的所有骰子移回抽骰区"));
+                return new ModelDraft(false, "Current state is incomplete.", null, null, List.of(), List.of(), "LOW");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString().contains(
+                        "condition written into a player's question",
+                        "named replenishment condition",
+                        "DIRECT_REPLENISHMENT_PROCEDURE");
+                return new ModelDraft(
+                        "把弃骰区全部移回抽骰区，再继续抽骰。",
+                        "抽骰区为空时，先回收弃骰区的全部骰子到抽骰区；随后继续本次抽骰流程。",
+                        List.of(pageChunkId),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
+
+        var answer = service.answer(
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("弃骰区");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(10);
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void publishesACitedDirectReplenishmentProcedureOnlyAfterTwoEvidenceBackedAbstentions() {
+        UUID pageChunkId = UUID.randomUUID();
+        RuleEvidenceHit pageSource = new RuleEvidenceHit(
+                pageChunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Draw phase",
+                "Visual rulebook page evidence is available.",
+                10,
+                10,
+                1.0);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(
+                        10,
+                        "Draw Zone, Discard Zone",
+                        "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
+                        95));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(pageSource);
+            }
+        };
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(false, "Unable to compose.", null, null, List.of(), List.of(), "LOW");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                return new ModelDraft(false, "Still unable to compose.", null, null, List.of(), List.of(), "LOW");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
+
+        var answer = service.answer(
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).isEqualTo("若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。");
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(pageChunkId);
+    }
+
+    @Test
+    void retrievesExplicitReplenishmentEvidenceBeforeComposingAnExhaustedDrawZoneAnswer() {
+        UUID pageChunkId = UUID.randomUUID();
+        RuleEvidenceHit pageSource = new RuleEvidenceHit(
+                pageChunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Draw phase",
+                "Visual rulebook page evidence is available.",
+                10,
+                10,
+                1.0);
+        List<String> visualQueries = new java.util.ArrayList<>();
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> {
+            visualQueries.add(query);
+            return query.contains("耗尽")
+                    ? List.of(visualFact(
+                            10,
+                            "Draw Zone, Discard Zone",
+                            "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
+                            95))
+                    : List.of();
+        };
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(pageNumbers).contains(10);
+                return List.of(pageSource);
+            }
+        };
+        RuleAnswerModel model = request -> {
+            assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId).contains(pageChunkId);
+            return new ModelDraft(
+                    "抽骰区为空时，回收弃骰区后继续抽骰。",
+                    "将弃骰区的全部骰子移回抽骰区，再继续本次抽骰。",
+                    List.of(pageChunkId),
+                    List.of(),
+                    "HIGH");
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
+
+        var answer = service.answer(
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(visualQueries).anyMatch(query -> query.contains("耗尽")
+                && query.contains("回收")
+                && query.contains("继续"));
+    }
+
+    @Test
+    void replacesAnAnswerThatCitesDrawAmountInsteadOfTheDirectReplenishmentProcedure() {
+        UUID replenishmentChunkId = UUID.randomUUID();
+        UUID drawAmountChunkId = UUID.randomUUID();
+        RuleEvidenceHit replenishment = new RuleEvidenceHit(
+                replenishmentChunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Draw phase",
+                "Visual rulebook page evidence is available.",
+                10,
+                10,
+                1.0);
+        RuleEvidenceHit drawAmount = new RuleEvidenceHit(
+                drawAmountChunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Draw amount",
+                "Visual rulebook page evidence is available.",
+                11,
+                11,
+                1.0);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> query.contains("耗尽")
+                ? List.of(visualFact(
+                        10,
+                        "Draw Zone, Discard Zone",
+                        "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
+                        95))
+                : List.of(visualFact(
+                        11,
+                        "Draw Amount",
+                        "基础抽牌量为9，手形标记和红线会调整抽牌量。",
+                        80));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(replenishment, drawAmount);
+            }
+        };
+        RuleAnswerModel model = request -> new ModelDraft(
+                "按抽牌量计算。",
+                "抽牌量由基础值和修正值组成，因此按剩余数量抽取。",
+                List.of(drawAmountChunkId),
+                List.of(),
+                "HIGH");
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
+
+        var answer = service.answer(
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("弃骰区", "继续抽骰");
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(replenishmentChunkId);
+    }
+
+    @Test
     void enrichesExtractedTextWithSamePageVisualFactsWhenInlineIconsAreMissing() {
         UUID chunkId = UUID.randomUUID();
         RuleEvidenceHit textSource = new RuleEvidenceHit(

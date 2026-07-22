@@ -19,6 +19,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
@@ -64,7 +65,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v28-repaired-inline-visuals";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v30-source-bound-outline";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -78,6 +79,22 @@ public class GroundedTeachingAgent {
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[([A-Za-z][A-Za-z _-]{0,30})]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
+    private static final Map<String, String> PLAYER_FACING_EMOJI_ICON_LABELS = Map.ofEntries(
+            Map.entry("👣", "“脚印（移动）”图标"),
+            Map.entry("🟠", "“橙色圆形”图标"),
+            Map.entry("🔵", "“蓝色圆形”图标"),
+            Map.entry("🟣", "“紫色圆形”图标"),
+            Map.entry("🟤", "“棕色圆形”图标"),
+            Map.entry("🔴", "“红色圆形”图标"),
+            Map.entry("🟡", "“黄色圆形”图标"),
+            Map.entry("🟢", "“绿色圆形”图标"),
+            Map.entry("⚫", "“黑色圆形”图标"),
+            Map.entry("⚪", "“白色圆形”图标"),
+            Map.entry("⬛", "“黑色方块”图标"),
+            Map.entry("⬜", "“白色方块”图标"),
+            Map.entry("✋", "“手掌”图标"),
+            Map.entry("🖐", "“手掌”图标"),
+            Map.entry("🎲", "“骰子”图标"));
     private static final Pattern TRAILING_INCOMPLETE_THOUGHT = Pattern.compile(
             "(?:…+|\\.\\.\\.)\\s*(?:完成(?:了)?|结束(?:了)?|等等|后续|其余)?[。！？!?]?\\s*$");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
@@ -106,6 +123,7 @@ public class GroundedTeachingAgent {
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final VisualRulebookPageFacts visualFacts;
+    private final VisualRulebookPageCatalogModel visualCatalog;
     private final int maxToolCalls;
     private final int baseSectionParallelism;
 
@@ -117,6 +135,7 @@ public class GroundedTeachingAgent {
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog,
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
         this.tools = tools;
@@ -125,8 +144,30 @@ public class GroundedTeachingAgent {
         this.critic = critic;
         this.invocations = invocations;
         this.visualFacts = visualFacts;
+        this.visualCatalog = visualCatalog;
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
+    }
+
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            int maxToolCalls,
+            int baseSectionParallelism) {
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                visualFacts,
+                VisualRulebookPageCatalogModel.unavailable(),
+                maxToolCalls,
+                baseSectionParallelism);
     }
 
     public GroundedTeachingAgent(
@@ -144,6 +185,7 @@ public class GroundedTeachingAgent {
                 critic,
                 invocations,
                 VisualRulebookPageFacts.empty(),
+                VisualRulebookPageCatalogModel.unavailable(),
                 maxToolCalls,
                 baseSectionParallelism);
     }
@@ -155,7 +197,16 @@ public class GroundedTeachingAgent {
             GeneratedContentCritic critic,
             AuditedAgentInvocations invocations,
             int maxToolCalls) {
-        this(tools, model, evidenceVerifier, critic, invocations, VisualRulebookPageFacts.empty(), maxToolCalls, 3);
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                VisualRulebookPageFacts.empty(),
+                VisualRulebookPageCatalogModel.unavailable(),
+                maxToolCalls,
+                3);
     }
 
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
@@ -574,7 +625,12 @@ public class GroundedTeachingAgent {
                 log.info(
                         "Teaching topic {} is bound to visual source pages {}",
                         planned.topicKey(), planned.sourcePageNumbers());
-                return enrichVisualPageFacts(plan.documentVersionId(), pageEvidence);
+                List<RuleEvidence> enriched = enrichVisualPageFacts(plan.documentVersionId(), pageEvidence, List.of());
+                if (!hasUncatalogedVisualPageEvidence(enriched) || !visualCatalog.available(plan.createdBy())) {
+                    return enriched;
+                }
+                return enrichWithRequiredVisualPageFacts(
+                        plan, planned, pageEvidence, enriched, assistantRunId);
             }
         } catch (RuntimeException failure) {
             log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
@@ -582,16 +638,75 @@ public class GroundedTeachingAgent {
         return retrieved;
     }
 
-    private List<RuleEvidence> enrichVisualPageFacts(UUID documentVersionId, List<RuleEvidence> evidence) {
+    private List<RuleEvidence> enrichWithRequiredVisualPageFacts(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> pageEvidence,
+            List<RuleEvidence> enriched,
+            UUID assistantRunId) {
+        Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
+        pageEvidence.stream()
+                .filter(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()))
+                .flatMap(source -> source.pageImages().stream())
+                .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
+        List<VisualRulebookPageFacts.PageFact> interpreted = new ArrayList<>();
+        for (AssistantReadTools.RulePageImage image : images.values()) {
+            try {
+                var request = new VisualRulebookPageCatalogModel.CatalogRequest(
+                        List.of(new com.rulepilot.teaching.TeachingOutlineModel.PageImageInput(
+                                image.pageNumber(), image.mediaType(), image.content())),
+                        plan.createdBy(),
+                        plan.gameTitle());
+                var catalog = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.MODEL,
+                        "inspectRequiredVisualPage|" + planned.position() + "|" + image.pageNumber(),
+                        800,
+                        "Required visual rulebook page interpreted for grounded teaching",
+                        () -> visualCatalog.summarize(request),
+                        result -> estimateTokens(result.toString()));
+                interpreted.addAll(catalog.pages().stream()
+                        .map(summary -> new VisualRulebookPageFacts.PageFact(
+                                summary.pageNumber(),
+                                summary.printedTerms(),
+                                summary.factualSummary(),
+                                summary.keywords()))
+                        .toList());
+            } catch (RuntimeException failure) {
+                log.warn(
+                        "Required visual page interpretation failed for topic {} page {}: {}",
+                        planned.topicKey(),
+                        image.pageNumber(),
+                        failure.getMessage());
+            }
+        }
+        if (interpreted.isEmpty()) return enriched;
+        log.info(
+                "Teaching topic {} added on-demand visual facts for pages {}",
+                planned.topicKey(),
+                interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
+        return enrichVisualPageFacts(plan.documentVersionId(), pageEvidence, interpreted);
+    }
+
+    private boolean hasUncatalogedVisualPageEvidence(List<RuleEvidence> evidence) {
+        return evidence.stream().anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+    }
+
+    private List<RuleEvidence> enrichVisualPageFacts(
+            UUID documentVersionId,
+            List<RuleEvidence> evidence,
+            List<VisualRulebookPageFacts.PageFact> supplementalFacts) {
         Set<Integer> pages = evidence.stream()
                 .filter(source -> source.pageFrom() == source.pageTo())
                 .map(RuleEvidence::pageFrom)
                 .collect(Collectors.toUnmodifiableSet());
         if (pages.isEmpty()) return evidence;
-        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
+        Map<Integer, String> factsByPage = Stream.concat(
+                        visualFacts.find(documentVersionId, pages).stream(), supplementalFacts.stream())
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText));
+                        VisualRulebookPageFacts.PageFact::evidenceText,
+                        (existing, supplied) -> supplied));
         if (factsByPage.isEmpty()) return evidence;
         return evidence.stream()
                 .map(source -> {
@@ -708,7 +823,6 @@ public class GroundedTeachingAgent {
                                 planned,
                                 evidence,
                                 modelRequest,
-                                draft,
                                 assistantRunId,
                                 sectionIndex,
                                 repair + 1);
@@ -752,22 +866,17 @@ public class GroundedTeachingAgent {
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> evidence,
             TeachingLessonModel.SectionRequest visualRequest,
-            SectionDraft visualDraft,
             UUID assistantRunId,
             int sectionIndex,
             int validationAttempt) {
         TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
-        List<String> feedback = List.of(
-                "Visual localization could not be validated. Preserve complete grounded rule coverage, "
-                        + "but return a text-only section with no VISUAL step, page mention, or visualFocus.");
         SectionDraft textOnlyDraft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
                 operationName("fallbackToTextTeachingSection", planned.position()),
-                estimateTokens(textOnlyRequest.toString()) + estimateTokens(visualDraft.toString())
-                        + estimateTokens(feedback.toString()),
-                "Visual teaching section fell back to complete grounded text",
-                () -> model.revise(textOnlyRequest, visualDraft, feedback),
+                estimateTokens(textOnlyRequest.toString()),
+                "Visual teaching section recomposed as complete grounded text",
+                () -> model.compose(textOnlyRequest),
                 result -> estimateTokens(result.toString()));
         textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
         for (int repair = 0; ; repair++) {
@@ -884,9 +993,18 @@ public class GroundedTeachingAgent {
     }
 
     private String playerFacingText(String value) {
-        String normalized = naturalLanguageIconMarker(value);
+        String normalized = naturalLanguageEmojiIcon(naturalLanguageIconMarker(value));
         if (normalized == null || normalized.isBlank()) return normalized;
         return LEADING_INTERNAL_EVIDENCE_LANGUAGE.matcher(normalized).replaceAll("").strip();
+    }
+
+    private String naturalLanguageEmojiIcon(String value) {
+        if (value == null || value.isBlank()) return value;
+        StringBuilder normalized = new StringBuilder(value.length());
+        value.codePoints().forEach(codePoint -> normalized.append(
+                PLAYER_FACING_EMOJI_ICON_LABELS.getOrDefault(
+                        new String(Character.toChars(codePoint)), new String(Character.toChars(codePoint)))));
+        return normalized.toString().replace("图标 图标", "图标").replace("图标图标", "图标");
     }
 
     private SectionDraft alignVisualStepsWithPageEvidence(
@@ -1496,6 +1614,13 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Remove internal short evidence references such as E1 from player-facing teaching text.");
         }
+        if (PlayerFacingLessonLanguagePolicy.hasSourceGap(draft.visualCaption())
+                || draft.steps().stream().anyMatch(step -> step != null
+                        && (PlayerFacingLessonLanguagePolicy.hasSourceGap(step.heading())
+                                || PlayerFacingLessonLanguagePolicy.hasSourceGap(step.text())))) {
+            throw new IllegalArgumentException(
+                    "Do not show players a source gap, pending rule, or request to wait; teach a supported rule directly.");
+        }
         boolean drawsFromBag = draft.steps().stream()
                 .anyMatch(step -> step != null && step.text() != null && DRAW_FROM_BAG.matcher(step.text()).find());
         boolean finalCheckClaimsAllRemain = draft.steps().stream()
@@ -1527,6 +1652,7 @@ public class GroundedTeachingAgent {
         if (message.contains("do not end a rule")) return "STEP_TRUNCATED";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
+        if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";
         if (message.contains("all tokens remain in the bag")) return "FINAL_SUPPLY_STATE_CONTRADICTION";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";

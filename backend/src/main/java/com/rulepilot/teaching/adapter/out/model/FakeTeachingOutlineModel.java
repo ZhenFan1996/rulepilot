@@ -108,15 +108,42 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                 && containsAny(text, List.of(
                         "no game mechanism",
                         "no rule text",
+                        "no gameplay rules",
+                        "no operational instructions",
                         "visual cover",
                         "无游戏机制",
                         "无游戏规则",
                         "仅作为视觉封面"));
-        return !credits && !cover;
+        boolean storageOnlyInsert = text.contains("storage or assembly instructions")
+                && containsAny(text, List.of("not gameplay", "non-gameplay", "this page is", "only for storage", "仅为收纳或组装说明"));
+        boolean nonGameplayInsert = containsAny(text, List.of(
+                "非游戏规则",
+                "非游戏玩法",
+                "non-gameplay material",
+                "non-gameplay rule",
+                "宣传页",
+                "宣传广告",
+                "广告页",
+                "advertisement for another",
+                "仅为收纳或组装说明",
+                "仅为封面设计")) || storageOnlyInsert;
+        return !credits && !cover && !nonGameplayInsert;
     }
 
     private int visualTopicIndex(String pageText) {
         String text = pageText.toLowerCase(Locale.ROOT);
+        if (containsAny(text, List.of(
+                "component", "contents", "goal", "objective", "anatomy", "卡牌构成", "组件",
+                "游戏目标", "玩家目标", "获胜目标", "胜利条件", "目标为", "目标：", "目标:"))) {
+            return 0;
+        }
+        if (hasCompleteEndingEvidence(text)) return 6;
+        if (containsAny(text, List.of(
+                "champion tours", "tour de cube", "variant", "expansion", "scenario", "historical",
+                "变体", "扩展", "战役", "历史"))) return 5;
+        if (containsAny(text, List.of("set up", "setup", "setting up", "starting resources", "设置", "起始资源"))) {
+            return 1;
+        }
         if (containsAny(text, List.of("frequently", "faq", "common question", "常见问题", "问答"))) return 4;
         if (containsAny(text, List.of(
                 "example",
@@ -132,13 +159,26 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                 "历史",
                 "速查",
                 "变体"))) return 5;
-        if (containsAny(text, List.of("component", "contents", "anatomy", "卡牌构成", "组件"))) return 0;
-        if (containsAny(text, List.of("set up", "setup", "starting", "advanced", "team", "设置", "起始"))) return 1;
-        if (containsAny(text, List.of("game overview", "how to play", "draw", "round", "游戏概览", "轮次"))) return 2;
-        if (containsAny(text, List.of("attack", "tactic", "frequently", "faq", "restriction", "攻击", "战术", "常见问题"))) return 4;
-        if (containsAny(text, List.of("action", "deploy", "move", "control", "maneuver", "行动", "部署", "移动", "控制", "机动"))) return 3;
-        if (containsAny(text, List.of("game over", "ending", "how to win", "scoring", "victory", "游戏结束", "胜利", "计分"))) return 6;
+        if (containsAny(text, List.of(
+                "game overview", "how to play", "roll phase", "run phase", "draw", "round", "turn",
+                "游戏概览", "轮次", "回合", "阶段"))) return 2;
+        if (containsAny(text, List.of(
+                "dice overview", "fan track", "action", "deploy", "move", "control", "maneuver",
+                "骰子概览", "风扇赛道", "行动", "部署", "移动", "控制", "机动"))) return 3;
+        if (containsAny(text, List.of(
+                "ability", "attack", "tactic", "restriction", "exception", "abilities", "攻击", "战术", "限制", "例外"))) {
+            return 4;
+        }
         return 3;
+    }
+
+    private boolean hasCompleteEndingEvidence(String text) {
+        boolean endingTrigger = containsAny(text, List.of(
+                "end of game", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间"));
+        boolean resolution = containsAny(text, List.of(
+                "winner", "victory", "how to win", "scoring", "score", "tie",
+                "获胜", "胜者", "胜利", "计分", "分数", "平局"));
+        return endingTrigger && resolution;
     }
 
     private TopicDraft topic(

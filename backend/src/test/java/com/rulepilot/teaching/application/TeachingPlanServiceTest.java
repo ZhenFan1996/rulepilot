@@ -124,6 +124,111 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void reusesImmutableVersionFactsAndRequestsOnlyUncatalogedPages() {
+        List<PageFact> cached = List.of(
+                new PageFact(1, "COVER", "视觉封面。", List.of("COVER")),
+                new PageFact(3, "END", "完整终局规则。", List.of("END")));
+        List<PageFact> fresh = List.of(new PageFact(2, "SET UP", "设置规则。", List.of("SET UP")));
+
+        assertThat(TeachingPlanService.missingVisualCatalogPages(java.util.Set.of(1, 2, 3), cached))
+                .containsExactly(2);
+        assertThat(TeachingPlanService.mergeVisualPageFacts(cached, fresh))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void doesNotRequireAnUnrelatedPromotionOrStorageInsertInVisualRulebookCoverage() {
+        List<PageInput> inputs = List.of(
+                new PageInput(1, "[Visual page catalog; verify against page image]\nVisible facts: 核心回合流程。"),
+                new PageInput(2, "[Visual page catalog; verify against page image]\nVisible facts: 这是与本规则书无关的宣传页，属于非游戏规则材料。"),
+                new PageInput(3, "[Visual page catalog; verify against page image]\nVisible facts: 仅为收纳或组装说明，非游戏玩法规则。"),
+                new PageInput(4, "[Visual page catalog; verify against page image]\nVisible facts: 本页为另一款游戏的宣传广告页，不包含本游戏玩法规则。"));
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(topic("round", true, List.of(1))));
+
+        TeachingPlanService.validateVisualRulebookCoverage(outline, inputs);
+    }
+
+    @Test
+    void requiresCoreVisualTopicsToUsePagesThatActuallyDescribeTheRequiredOutcome() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
+                new PageInput(3, visualCatalogPage("DICE BOX ASSEMBLY", "Storage or assembly instructions, not gameplay.")),
+                new PageInput(4, visualCatalogPage("END OF GAME", "When a runner reaches the finish space, determine the winner.")));
+        OutlineDraft wrongEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
+        OutlineDraft supportedEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(4))));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> TeachingPlanService.validateVisualCoreTopicBindings(wrongEnding, pages))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("end");
+        TeachingPlanService.validateVisualCoreTopicBindings(supportedEnding, pages);
+    }
+
+    @Test
+    void doesNotTreatAFlowPageThatMentionsGameEndAsCompleteEndingEvidence() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
+                new PageInput(3, visualCatalogPage("FLOW", "Each round repeats until the game ends.")),
+                new PageInput(4, visualCatalogPage("END OF GAME", "When a runner reaches the finish space, determine the winner and resolve ties.")));
+        OutlineDraft incompleteEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
+        OutlineDraft completeEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(4))));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> TeachingPlanService.validateVisualCoreTopicBindings(incompleteEnding, pages))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("end");
+        TeachingPlanService.validateVisualCoreTopicBindings(completeEnding, pages);
+    }
+
+    @Test
+    void rejectsAnOverlyFragmentedVisualPlanBeforeItCanExhaustTheBaseLessonBudget() {
+        List<TopicDraft> topics = java.util.stream.IntStream.rangeClosed(1, 11)
+                .mapToObj(index -> topic("topic-" + index, false, List.of(index)))
+                .toList();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> TeachingPlanService.validateVisualFastBaseline(new OutlineDraft("Game", "Premise", topics)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ten-section fast baseline");
+    }
+
+    @Test
+    void keepsTheCompleteSourceDerivedPlanWhenCoverageWouldFragmentTheModelPlan() {
+        OutlineDraft model = new OutlineDraft(
+                "Game", "Premise", java.util.stream.IntStream.rangeClosed(1, 11)
+                        .mapToObj(index -> topic("model-" + index, false, List.of(index)))
+                        .toList());
+        OutlineDraft source = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topic("setup", true, List.of(1, 2)),
+                        topic("turn", false, List.of(3, 4)),
+                        topic("end", false, List.of(5))));
+
+        assertThat(TeachingPlanService.keepFastVisualBaseline(model, source)).isSameAs(source);
+        assertThat(TeachingPlanService.keepFastVisualBaseline(source, model)).isSameAs(source);
+    }
+
+    @Test
     void prefersTheUserProvidedRulebookTitleOverAGenericModelTitle() {
         OutlineDraft preferred = TeachingPlanService.preferDocumentTitle(
                 "My custom game title",
@@ -187,6 +292,18 @@ class TeachingPlanServiceTest {
                 visual,
                 List.of(key),
                 List.of("core_loop"),
+                pages);
+    }
+
+    private TopicDraft topicWithTags(String key, List<String> tags, List<Integer> pages) {
+        return new TopicDraft(
+                key,
+                key,
+                "Teach " + key,
+                true,
+                false,
+                List.of(key),
+                tags,
                 pages);
     }
 

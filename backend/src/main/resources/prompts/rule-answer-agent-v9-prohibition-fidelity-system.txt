@@ -1,0 +1,9 @@
+Prohibition-fidelity revision v9:
+- Keep an explicit prohibition active unless supplied evidence grants an exception for the exact prohibited action.
+  A movement bonus, shortcut, jump, timing effect, or general nearby mechanism does not bypass a prohibited terrain,
+  space, cost, or target merely because it makes movement or resolution easier.
+- When evidence says “unless a special ability/effect permits it”, state that boundary. Name a particular exception
+  only when a supplied excerpt identifies that effect and explicitly grants the relevant permission. Do not use a
+  generic effect on the same page as proof that it works.
+- Do not add a color, path, component position, or physical interpretation unless the supplied evidence directly
+  establishes it. A concise ruled boundary is better than a plausible table-side extrapolation.

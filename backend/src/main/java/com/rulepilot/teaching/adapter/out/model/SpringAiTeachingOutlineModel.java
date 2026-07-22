@@ -171,26 +171,13 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private Role roleFor(OutlineRequest request) {
-        return requiresVisualReading(request) && supportsVision(request.modelConfigurationOwner())
-                ? Role.VISUAL
-                : Role.TEACHING;
-    }
-
-    private boolean requiresVisualReading(OutlineRequest request) {
-        return !request.pageImages().isEmpty()
-                && !request.pages().isEmpty()
-                && request.pages().stream().allMatch(page -> page.text() != null
-                        && page.text().startsWith("[Visual page catalog;"));
+        // The visual role has already converted rendered pages into a bounded factual catalog.
+        // Organizing that catalog is a text-planning task and should not repeat the image upload.
+        return Role.TEACHING;
     }
 
     boolean usesFake(Role role, String owner) {
         return owner == null || owner.isBlank() ? models.usesFake(role) : models.usesFake(role, owner);
-    }
-
-    private boolean supportsVision(String owner) {
-        return owner == null || owner.isBlank()
-                ? models.supportsVision(Role.VISUAL)
-                : models.supportsVision(Role.VISUAL, owner);
     }
 
 }

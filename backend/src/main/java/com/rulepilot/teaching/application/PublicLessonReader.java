@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.catalog.PublicGameCoverLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -34,7 +35,9 @@ public class PublicLessonReader {
 
     @Transactional(readOnly = true)
     public Optional<PublicLesson> find(UUID teachingPlanId) {
-        return plans.findById(teachingPlanId).flatMap(plan -> lessons.findLatestByPlan(plan.id()).flatMap(lesson -> rulebooks
+        return plans.findById(teachingPlanId).flatMap(plan -> lessons.findLatestByPlan(plan.id())
+                .filter(PublicLessonReader::isPubliclyReadable)
+                .flatMap(lesson -> rulebooks
                 .findReference(plan.documentVersionId())
                 .map(rulebook -> new PublicLesson(
                         plan.id(),
@@ -42,7 +45,15 @@ public class PublicLessonReader {
                         rulebook.title(),
                         rulebook.officialSourceUrl(),
                         cover(rulebook),
-                        lesson))));
+                lesson))));
+    }
+
+    static boolean isPubliclyReadable(IllustratedLesson lesson) {
+        if (lesson == null || lesson.status() == LessonStatus.INCOMPLETE) return false;
+        return lesson.sections().stream().noneMatch(section -> PlayerFacingLessonLanguagePolicy.hasSourceGap(section.title())
+                || PlayerFacingLessonLanguagePolicy.hasSourceGap(section.visualCaption())
+                || section.steps().stream().anyMatch(step -> PlayerFacingLessonLanguagePolicy.hasSourceGap(step.heading())
+                        || PlayerFacingLessonLanguagePolicy.hasSourceGap(step.text())));
     }
 
     private PublicCover cover(PublicRulebookReferenceLookup.Reference rulebook) {

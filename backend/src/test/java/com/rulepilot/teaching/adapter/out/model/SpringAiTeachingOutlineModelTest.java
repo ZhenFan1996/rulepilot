@@ -40,11 +40,9 @@ class SpringAiTeachingOutlineModelTest {
     }
 
     @Test
-    void resolvesTheVisualModelFromThePlanOwnerInsteadOfTheWorkerThread() {
+    void usesTheOwnersTeachingModelToOrganizeAnAlreadyCataloguedVisualRulebook() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.supportsVision(Role.VISUAL, "player")).thenReturn(true);
-        when(configuration.usesFake(Role.VISUAL, "player")).thenReturn(true);
-        when(configuration.usesFake(Role.VISUAL)).thenReturn(false);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(true);
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
                 configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
 
@@ -57,6 +55,8 @@ class SpringAiTeachingOutlineModelTest {
                 "player"));
 
         assertThat(outline.gameTitle()).isEqualTo("Imported rulebook");
+        verify(configuration).usesFake(Role.TEACHING, "player");
+        verify(configuration, never()).usesFake(Role.VISUAL, "player");
     }
 
     @Test

@@ -43,6 +43,10 @@ public final class AnswerRetrievalPlanner {
         }
         String currentSection = knownSection(context.currentLessonSection());
         List<RetrievalIntent> intents = new ArrayList<>();
+        String exhaustedSourceQuery = exhaustedSourceQuery(question.normalizedQuestion());
+        if (exhaustedSourceQuery != null) {
+            intents.add(new RetrievalIntent(exhaustedSourceQuery, Set.of(), null));
+        }
         String stateTransitionQuery = stateTransitionQuery(question.normalizedQuestion());
         if (stateTransitionQuery != null) {
             intents.add(new RetrievalIntent(stateTransitionQuery, Set.of(), null));
@@ -233,6 +237,42 @@ public final class AnswerRetrievalPlanner {
         if (!actorExits || !asksNextActor) return null;
         return bounded(question + " state transition successor actor replacement active player skipped "
                 + "after hand empty next trick lead exception 状态变化 后继行动者 替代玩家 无牌 跳过 下一墩 领出 例外");
+    }
+
+    private static String exhaustedSourceQuery(String question) {
+        boolean asksAboutSourceArea = containsAny(
+                question,
+                "draw zone",
+                "draw dice",
+                "draw amount",
+                "deck",
+                "pile",
+                "supply",
+                "pool",
+                "draw",
+                "take",
+                "refill",
+                "抽",
+                "摸",
+                "取",
+                "补",
+                "拿",
+                "牌堆",
+                "供应",
+                "区域");
+        boolean asksAboutShortage = containsAny(
+                question,
+                "not enough",
+                "insufficient",
+                "empty",
+                "runs out",
+                "不足",
+                "不够",
+                "用完",
+                "没有骰子");
+        if (!asksAboutSourceArea || !asksAboutShortage) return null;
+        return bounded(question + " source area supply pile deck depleted empty insufficient discard return recycle "
+                + "refill reshuffle continue procedure 资源区 牌堆 供应区 耗尽 为空 弃置 回收 移回 补充 洗混 继续");
     }
 
     private static String roundResetQuery(String question) {

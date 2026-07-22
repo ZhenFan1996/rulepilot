@@ -91,6 +91,11 @@ export function summarizeRunProgress(details) {
     + `工具 ${budget.usedToolCalls ?? 0}/${budget.maxToolCalls ?? '?'} · 活动 ${(details.activities ?? []).length}${operation}`
 }
 
+export function resetGeneratedLessonStateForPlanRefresh(state) {
+  const { preparation, plan, teaching, result, ...reusableState } = state
+  return reusableState
+}
+
 export function selectReusableDocument(documents, entry, checksum) {
   const expectedTitle = `${entry.title} Rules`.toLocaleLowerCase('en-US')
   return (documents ?? [])
@@ -397,6 +402,12 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     if (status === 'FAILED') throw new Error('Rulebook extraction failed')
     state.document.status = status
     await checkpoint(outputPath, state)
+  }
+
+  if (options.refreshPlan && (state.preparation || state.plan || state.teaching || state.result)) {
+    state = resetGeneratedLessonStateForPlanRefresh(state)
+    await checkpoint(outputPath, state)
+    progress(state, '已清除旧提纲与草稿检查点，重新理解规则书并生成新的讲解')
   }
 
   if (!state.plan && !options.refreshPlan) {

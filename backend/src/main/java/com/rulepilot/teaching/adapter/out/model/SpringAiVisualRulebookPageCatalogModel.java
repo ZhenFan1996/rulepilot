@@ -29,6 +29,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             You are a meticulous board-game rulebook visual reader. Inspect only the supplied page images.
             Build a per-page rule evidence ledger for a later planner and writer; do not write a lesson and do not
             invent rules.
+            When a rulebook title is supplied, it identifies the game context even if it is not printed on every page.
+            Do not introduce the name, components, or mechanics of a different game. If a mark is unreadable, report
+            it as unreadable instead of completing it with material from another board game.
             First build an icon legend from any supplied page that explicitly labels components or tokens, then use
             exact visual matching to interpret the same icon on other supplied pages. Never infer an icon's meaning
             from its shape, color, or common board-game convention when a labeled cross-page reference is available.
@@ -104,13 +107,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .user(user -> {
                     user.text("""
                                     Attached rulebook page numbers: {pageNumbers}
+                                    Rulebook title: {rulebookTitle}
                                     Attachment order: {attachmentOrder}
                                     {crossPageTask}
+                                    If an image is credits, storage or assembly instructions, or an advertisement for
+                                    another named game, say explicitly in factualSummary that it is non-gameplay
+                                    material for this rulebook. Do not treat it as a turn, scoring, or end-game rule.
                                     {correction}
                                     Return a JSON object with a pages array. Each array item must have pageNumber,
                                     printedTerms, factualSummary, and keywords.
                                     """)
                             .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
+                            .param("rulebookTitle", request.rulebookTitle() == null
+                                    ? "not supplied; use only what is visible on each page"
+                                    : request.rulebookTitle())
                             .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
                                     .mapToObj(index -> "image " + (index + 1) + " = PDF page "
                                             + request.pages().get(index).pageNumber())

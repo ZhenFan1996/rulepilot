@@ -8,6 +8,7 @@ import {
   slugify,
   summarizeLesson,
   summarizeRunProgress,
+  resetGeneratedLessonStateForPlanRefresh,
 } from './generate-public-corpus-entry.mjs'
 
 test('selects one qualified title without accepting excluded or fuzzy entries', () => {
@@ -85,6 +86,26 @@ test('summarizes player-visible lesson density and visual grounding', () => {
     visualStepCount: 1,
     evidenceStatuses: ['SUPPORTED', 'CITED_DRAFT'],
     sectionTitles: ['设置', '算分'],
+  })
+})
+
+test('keeps the reusable source checkpoint while refreshing the generated lesson state', () => {
+  const refreshed = resetGeneratedLessonStateForPlanRefresh({
+    title: 'Example Game',
+    source: { sha256: 'checksum' },
+    catalog: { editionId: 'edition-1' },
+    document: { id: 'document-1', versionId: 'version-1', status: 'READY' },
+    preparation: { runId: 'prepare-old', state: 'COMPLETED' },
+    plan: { id: 'plan-old' },
+    teaching: { runId: 'teach-old', state: 'COMPLETED' },
+    result: { lessonId: 'lesson-old', status: 'DRAFT_READY' },
+  })
+
+  assert.deepEqual(refreshed, {
+    title: 'Example Game',
+    source: { sha256: 'checksum' },
+    catalog: { editionId: 'edition-1' },
+    document: { id: 'document-1', versionId: 'version-1', status: 'READY' },
   })
 })
 

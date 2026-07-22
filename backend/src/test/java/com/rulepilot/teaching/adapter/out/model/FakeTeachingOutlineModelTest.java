@@ -58,6 +58,76 @@ class FakeTeachingOutlineModelTest {
                 .doesNotContain(1);
     }
 
+    @Test
+    void bindsTheEndingTopicToAnActualEndingPageAndSkipsAssemblyOrPromotionInserts() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "TEST GAME", "cover; no game mechanism"),
+                        visualPage(2, "SET UP", "setup steps and starting resources"),
+                        visualPage(3, "HOW TO PLAY", "turn phases and actions"),
+                        visualPage(4, "END OF GAME", "when a runner reaches the finish space, determine the winner"),
+                        visualPage(5, "DICE BOX ASSEMBLY", "storage or assembly instructions, not gameplay"),
+                        visualPage(6, "OTHER GAME", "advertisement for another game; non-gameplay material"),
+                        visualPage(7, "COMPONENTS", "component list; see page 19 for storage or assembly instructions")),
+                List.of()));
+
+        assertThat(topicPages(outline, "结束、计分与胜者")).contains(4).doesNotContain(5, 6);
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).contains(7).doesNotContain(5, 6);
+    }
+
+    @Test
+    void excludesAnEnglishCoverWithoutDroppingAComponentsPageThatMentionsStorage() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "RULEBOOK COVER", "cover artwork. No gameplay rules, components, or operational instructions are present."),
+                        visualPage(2, "COMPONENTS", "player boards, fan track, phase tokens, dice boxes, and a storage box; see page 19 for assembly"),
+                        visualPage(3, "SET UP", "starting resources"),
+                        visualPage(4, "HOW TO PLAY", "turn phases"),
+                        visualPage(5, "END OF GAME", "winner and scoring")),
+                List.of()));
+
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).contains(2).doesNotContain(1);
+    }
+
+    @Test
+    void doesNotMistakeAFinishSpaceTargetForTheGameObjective() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "设置", "游戏设置与起始资源"),
+                        visualPage(2, "游戏流程", "回合包括掷骰和移动阶段"),
+                        visualPage(3, "终局", "到达终点空间时触发游戏结束；目标空间与捷径的颜色须相同；获胜者由最远距离决定")),
+                List.of()));
+
+        assertThat(topicPages(outline, "结束、计分与胜者")).contains(3);
+        assertThat(topicPages(outline, "目标、组件与关键信息")).doesNotContain(3);
+    }
+
+    @Test
+    void requiresAnEndingTriggerAndWinnerResolutionBeforeRoutingAPageToTheEndingTopic() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "游戏流程", "每轮重复进行，直到游戏结束。"),
+                        visualPage(2, "终局", "当任何跑者到达终点空间时游戏结束；完成当前回合后，最远的玩家获胜，平局则继续比赛。")),
+                List.of()));
+
+        assertThat(topicPages(outline, "结束、计分与胜者")).contains(2).doesNotContain(1);
+        assertThat(outline.topics())
+                .flatExtracting(topic -> topic.sourcePageNumbers())
+                .contains(1);
+    }
+
     private List<Integer> topicPages(com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft outline, String title) {
         return outline.topics().stream()
                 .filter(topic -> topic.title().equals(title))

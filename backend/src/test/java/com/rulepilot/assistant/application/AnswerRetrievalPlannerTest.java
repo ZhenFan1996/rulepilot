@@ -14,6 +14,24 @@ import org.junit.jupiter.api.Test;
 class AnswerRetrievalPlannerTest {
 
     @Test
+    void plansAReplenishmentIntentForAnExhaustedChineseSourceAreaQuestion() {
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                UUID.randomUUID(),
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
+                QuestionType.RULE_QUERY,
+                List.of("抽骰区", "骰子"),
+                Set.of(),
+                "ROUND_STRUCTURE");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+
+        assertThat(intents.getFirst().query()).contains(
+                "source area", "depleted", "recycle", "reshuffle", "继续");
+    }
+
+    @Test
     void putsBoundedModelProvidedQueriesFirstWithoutAddingSectionFilters() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),

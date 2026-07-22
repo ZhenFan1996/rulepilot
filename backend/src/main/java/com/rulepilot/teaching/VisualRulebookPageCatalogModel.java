@@ -15,7 +15,26 @@ public interface VisualRulebookPageCatalogModel {
         return true;
     }
 
-    record CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
+    static VisualRulebookPageCatalogModel unavailable() {
+        return new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new IllegalStateException("visual page catalog is unavailable");
+            }
+
+            @Override
+            public boolean available(String modelConfigurationOwner) {
+                return false;
+            }
+        };
+    }
+
+    record CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
+
+        public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
+            this(pages, modelConfigurationOwner, null);
+        }
+
         public CatalogRequest {
             if (pages == null || pages.isEmpty() || pages.size() > 4) {
                 throw new IllegalArgumentException("visual page catalog request is invalid");
@@ -24,6 +43,10 @@ public interface VisualRulebookPageCatalogModel {
             modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                     ? null
                     : modelConfigurationOwner.strip();
+            if (rulebookTitle != null && rulebookTitle.length() > 160) {
+                throw new IllegalArgumentException("visual page catalog rulebook title is invalid");
+            }
+            rulebookTitle = rulebookTitle == null || rulebookTitle.isBlank() ? null : rulebookTitle.strip();
         }
     }
 
