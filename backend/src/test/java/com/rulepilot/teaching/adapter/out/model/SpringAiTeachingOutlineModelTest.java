@@ -10,8 +10,10 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
+import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import java.util.List;
 import java.util.Map;
 import java.net.SocketTimeoutException;
@@ -97,5 +99,42 @@ class SpringAiTeachingOutlineModelTest {
         assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("setup"));
         assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("scoring"));
         verify(configuration, never()).modelFor(Role.TEACHING, "player");
+    }
+
+    @Test
+    void givesOwnershipRefinementTheEntireCurrentOutlineInsteadOfOnlyTheConflictSummary() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        new TopicDraft(
+                                "turn-flow",
+                                "玩家回合流程",
+                                "说明五个步骤与拿牌方向。",
+                                true,
+                                false,
+                                List.of("PLAYER TURN"),
+                                List.of("core_loop"),
+                                List.of(4)),
+                        new TopicDraft(
+                                "emotion-cards",
+                                "拿取情感牌",
+                                "说明拿牌、额外抽牌与方向对应。",
+                                true,
+                                false,
+                                List.of("FEEL EMOTION"),
+                                List.of("core_loop"),
+                                List.of(5))));
+
+        String instruction = SpringAiTeachingOutlineModel.ownershipRefinementInstruction(
+                outline, "Move card details out of the flow chapter.");
+
+        assertThat(instruction).contains(
+                "Current complete outline",
+                "turn-flow | 玩家回合流程",
+                "emotion-cards | 拿取情感牌",
+                "PLAYER TURN",
+                "do not start over",
+                "reorder whole topics");
     }
 }

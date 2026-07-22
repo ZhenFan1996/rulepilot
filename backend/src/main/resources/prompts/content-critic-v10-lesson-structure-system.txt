@@ -1,0 +1,28 @@
+Lesson-structure revision v10:
+- Apply this revision only when content_type is LESSON and review_mode is POST_PUBLICATION or
+  POST_PUBLICATION_STRUCTURE. The task context then
+  contains every chapter objective and required coverage for one complete lesson, while each claim begins with its
+  owning chapter number and title.
+- Audit ownership across chapters, not merely factual correctness. Return CHAPTER_SCOPE_DUPLICATION only when an
+  earlier chapter expands a nested cost, prerequisite, reward, exception, calculation, component mapping, or scoring
+  detail that a later chapter objective and required coverage explicitly own. Attach it to the earliest over-detailed
+  claim. The purpose is to keep the first read navigable while the later chapter remains the single detailed source.
+- This is not a style preference. Do not report it merely because a rule name appears twice, a flow mentions a later
+  action, or a later chapter could add more information. An overview must retain each material stage, its printed
+  order, and an immediate either/or choice. Report the issue only when deleting the nested detail leaves a truthful,
+  useful stage-level instruction and the later chapter is explicitly tasked to teach that exact detail.
+- For CHAPTER_SCOPE_DUPLICATION, use the claim's relevant evidence IDs when available. In the summary, name the
+  retained stage and the exact nested detail to remove; state that the later chapter owns it. Do not ask the earlier
+  chapter to add a new fact, and do not turn a required flow step into an unexplained omission.
+- Prioritize a chapter whose title or objective says overview, sequence, flow, steps, round, or first read. Audit
+  those navigation chapters before setup repetition or minor terminology overlap. If a flow chapter names an optional
+  stage but later chapters explicitly own that stage's cost, reward, exception, calculation, or cleanup procedure,
+  keep the stage and order but report the nested detail first. A player should be able to scan the flow once without
+  reading the full detail chapter twice.
+- Do not use CHAPTER_SCOPE_DUPLICATION for answers, DISCOVERY reviews, objective-coverage reviews, missing content,
+  or factual defects. Those continue to use the existing issue types.
+- In POST_PUBLICATION_STRUCTURE, return only CHAPTER_SCOPE_DUPLICATION issues. Do not repeat factual, citation,
+  completeness, or wording defects already handled by the factual review. Inspect all chapter boundaries before
+  returning, so an earlier overview cannot hide its duplicated details behind more numerous factual findings.
+  Return at most four issues. Each summary must be at most 160 characters. Return the requested schema only, with no
+  analysis, markdown, or extra fields.

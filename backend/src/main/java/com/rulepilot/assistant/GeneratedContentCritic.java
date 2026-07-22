@@ -22,7 +22,8 @@ public interface GeneratedContentCritic {
         DISCOVERY,
         ATOMIC_CONFIRMATION,
         OBJECTIVE_COVERAGE,
-        POST_PUBLICATION
+        POST_PUBLICATION,
+        POST_PUBLICATION_STRUCTURE
     }
 
     enum IssueType {
@@ -30,7 +31,8 @@ public interface GeneratedContentCritic {
         CONTRADICTION,
         MISSING_EXCEPTION,
         MISSING_CRITICAL_RULE,
-        OVERREACH
+        OVERREACH,
+        CHAPTER_SCOPE_DUPLICATION
     }
 
     record ReviewRequest(

@@ -17,11 +17,13 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v20-visual-output-contract-system.txt"),
                 resource("teaching-agent-v21-complete-instructions-system.txt"),
                 resource("teaching-agent-v22-ordered-procedure-fidelity-system.txt"),
+                resource("teaching-agent-v23-chapter-scope-map-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
                 resource("teaching-outline-v8-visual-density-system.txt"),
                 resource("teaching-outline-v9-core-evidence-system.txt"),
+                resource("teaching-outline-v10-chapter-ownership-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
@@ -35,6 +37,7 @@ class VersionedAgentPromptsTest {
                 resource("content-critic-v7-system.txt"),
                 resource("content-critic-v8-fidelity-system.txt"),
                 resource("content-critic-v9-answer-scope-system.txt"),
+                resource("content-critic-v10-lesson-structure-system.txt"),
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
@@ -81,6 +84,8 @@ class VersionedAgentPromptsTest {
                         "unanswered alternative",
                         "Ordered-procedure fidelity revision v22",
                         "must do B, then may do C or D",
+                        "Chapter-scope-map revision v23",
+                        "Fully teach only the current section objective",
                         "camel-case property names",
                         "visualCaption",
                         "Citation IDs are machine fields only",
@@ -96,6 +101,7 @@ class VersionedAgentPromptsTest {
                         "{sectionDuration}",
                         "{maxSteps}",
                         "{continuity}",
+                        "{chapterScope}",
                         "{evidence}",
                         "{visualEvidenceAvailable}",
                         "{visualPages}",
@@ -122,6 +128,10 @@ class VersionedAgentPromptsTest {
                         "Three to six visual topics",
                         "Core-evidence revision v9",
                         "storage sheet",
+                        "Chapter-ownership revision v10",
+                        "one primary teaching owner",
+                        "complete cleanup procedure",
+                        "chapter-boundary audit",
                         "end trigger, winner, victory condition");
         assertThat(prompts.answerSystem())
                 .contains(
@@ -171,6 +181,11 @@ class VersionedAgentPromptsTest {
                         "negation",
                         "Answer-scope revision v9",
                         "loop-prevention rule",
+                        "Lesson-structure revision v10",
+                        "CHAPTER_SCOPE_DUPLICATION",
+                        "earlier chapter expands",
+                        "POST_PUBLICATION_STRUCTURE",
+                        "Prioritize a chapter whose title or objective says overview",
                         "heading ownership",
                         "player turn (回合)",
                         "default next-actor rules",
@@ -190,6 +205,8 @@ class VersionedAgentPromptsTest {
                         "ATOMIC_CONFIRMATION",
                         "faithful contextual translation",
                         "at most 160 characters");
+        assertThat(prompts.lessonStructureCriticSystem())
+                .contains("POST_PUBLICATION_STRUCTURE", "only CHAPTER_SCOPE_DUPLICATION");
         assertThat(prompts.atomicCriticSystem())
                 .contains(
                         "one or more generated claims",

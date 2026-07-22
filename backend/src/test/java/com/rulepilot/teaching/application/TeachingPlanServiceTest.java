@@ -125,6 +125,138 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void requestsARevisionWhenAFlowChapterExplainsDetailsOwnedByLaterChapters() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic(
+                                "turn-flow",
+                                "玩家回合流程",
+                                "说明阶段顺序、印记记忆的支付费用、获得EP和手牌上限。"),
+                        detailedTopic(
+                                "imprint-costs",
+                                "印记记忆的费用与奖励",
+                                "说明支付条件、折扣和奖励。"),
+                        detailedTopic(
+                                "cleanup",
+                                "回合结束清理",
+                                "说明手牌上限和弃牌。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("玩家回合流程", "印记记忆的费用与奖励", "回合结束清理", "Keep the bridge"));
+    }
+
+    @Test
+    void doesNotReviseAFlowChapterWhenNoLaterChapterOwnsItsDetails() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic("turn-flow", "玩家回合流程", "说明阶段顺序、额外行动和手牌限制。"),
+                        detailedTopic("end", "游戏结束", "说明结束条件和胜者。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline)).isEmpty();
+    }
+
+    @Test
+    void requestsARevisionWhenAnEarlierRewardChapterExplainsALaterEndTrigger() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic(
+                                "earn-points",
+                                "获得启蒙点",
+                                "说明获得EP后如何移动标记，并在满足条件时触发游戏结束。"),
+                        detailedTopic(
+                                "game-end",
+                                "游戏结束与最终计分",
+                                "说明内心指南针的结束触发、最后一轮与计分。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("获得启蒙点", "游戏结束与最终计分", "game-end trigger"));
+    }
+
+    @Test
+    void requestsARevisionWhenAnEndTriggerIsRepeatedAfterItsOwnerChapter() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic(
+                                "game-end",
+                                "游戏结束与最终计分",
+                                "说明内心指南针的结束触发、最后一轮与计分。"),
+                        detailedTopic(
+                                "value-tokens",
+                                "放置价值标记",
+                                "说明放置价值标记，并在放完两个后再次完成一行时触发游戏结束。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("放置价值标记", "游戏结束与最终计分", "game-end trigger"));
+    }
+
+    @Test
+    void requestsARevisionWhenTurnCleanupIsPlacedAfterTheFinale() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic("turn-flow", "玩家回合流程", "说明移动与行动选择。"),
+                        detailedTopic("game-end", "游戏结束与最终计分", "说明结束触发、最终计分和平局。"),
+                        detailedTopic("cleanup", "回合结束清理", "说明手牌上限、弃牌与补牌。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("回合结束清理", "游戏结束与最终计分", "before game end and final scoring"));
+    }
+
+    @Test
+    void requestsARevisionWhenScoringCriteriaFollowTheFinale() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic("turn-flow", "玩家回合流程", "说明移动与行动选择。"),
+                        detailedTopic("game-end", "游戏结束与最终计分", "说明结束触发、最终计分和平局。"),
+                        detailedTopic("quality-scoring", "品质瓷砖计分", "说明每个品质瓷砖的得分条件。")));
+
+        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("品质瓷砖计分", "游戏结束与最终计分", "scoring detail before the end/final-scoring conclusion"));
+    }
+
+    @Test
+    void requestsARevisionWhenASubstantiveRulebookPageHasNoTeachingOwner() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "setup",
+                        "游戏设置",
+                        "说明标准设置。",
+                        true,
+                        false,
+                        List.of("SETUP"),
+                        List.of("setup"),
+                        List.of(2))));
+
+        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(
+                        outline,
+                        List.of(
+                                new PageInput(1, "INNER COMPASS"),
+                                new PageInput(2, "SETUP Give each player a board."),
+                                new PageInput(3, "ADVANCED RULES: special action icons."))))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("Page 3", "ADVANCED RULES")
+                        .doesNotContain("Page 1"));
+    }
+
+    @Test
     void retainsEveryVisualOnlySourcePageWhenOneVisualCatalogBatchTimesOut() {
         List<PageInput> inputs = TeachingPlanService.visualPageInputs(
                 List.of(page(1, ""), page(2, ""), page(3, "")),
@@ -481,6 +613,18 @@ class TeachingPlanServiceTest {
                 List.of(key),
                 List.of("core_loop"),
                 pages);
+    }
+
+    private TopicDraft detailedTopic(String key, String title, String objective) {
+        return new TopicDraft(
+                key,
+                title,
+                objective,
+                true,
+                false,
+                List.of("rulebook term"),
+                List.of("core_loop"),
+                List.of(1));
     }
 
     private TopicDraft topicWithTags(String key, List<String> tags, List<Integer> pages) {

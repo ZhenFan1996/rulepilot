@@ -1,5 +1,6 @@
 package com.rulepilot.teaching.adapter.out.model;
 
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
@@ -70,18 +71,71 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         return fake.organize(request);
     }
 
+    @Override
+    public OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
+        if (current == null || feedback == null || feedback.isBlank()) return current;
+        Role role = roleFor(request);
+        String owner = request.modelConfigurationOwner();
+        if (usesFake(role, owner)) return current;
+        var call = outlineCalls.submit(() -> organizeWithRepair(
+                request, role, owner, ownershipRefinementInstruction(current, feedback.strip())));
+        try {
+            return call.get(OUTLINE_DEADLINE_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            call.cancel(true);
+            log.warn(
+                    "Teaching-outline ownership refinement exceeded {} seconds; retaining the original plan",
+                    OUTLINE_DEADLINE_SECONDS);
+            return current;
+        } catch (InterruptedException interrupted) {
+            call.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("teaching outline ownership refinement interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
+            log.warn("Teaching-outline ownership refinement failed; retaining the original plan", failed.getCause());
+            return current;
+        }
+    }
+
+    static String ownershipRefinementInstruction(OutlineDraft current, String feedback) {
+        String currentTopics = java.util.stream.IntStream.range(0, current.topics().size())
+                .mapToObj(index -> {
+                    var topic = current.topics().get(index);
+                    String objective = topic.objective().length() <= 360
+                            ? topic.objective()
+                            : topic.objective().substring(0, 359) + "…";
+                    return (index + 1) + ". " + topic.key() + " | " + topic.title() + " | " + objective
+                            + " | queries=" + topic.retrievalQueries()
+                            + " | tags=" + topic.coverageTags()
+                            + " | pages=" + topic.sourcePageNumbers();
+                })
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return feedback + "\nCurrent complete outline (revise this structure; do not start over):\n"
+                + currentTopics
+                + "\nReturn a complete replacement outline. Keep each existing learning outcome, source-page binding, "
+                + "and source-language retrieval query unless moving its nested detail to its named owner. "
+                + "When the feedback identifies an impossible lesson order, reorder whole topics while retaining their "
+                + "coverage and evidence. Do not invent a new action, alternative, or rule relationship while separating chapters.";
+    }
+
     private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner) {
+        return organizeWithRepair(request, role, owner, "");
+    }
+
+    private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner, String initialInstruction) {
         long startedAt = System.nanoTime();
         RuntimeException firstFailure;
         try {
-            return organizeOnce(request, role, owner, "");
+            return organizeOnce(request, role, owner, initialInstruction);
         } catch (RuntimeException failure) {
             if (isTimeout(failure) || System.nanoTime() - startedAt > MAX_REPAIR_ELAPSED_NANOS) throw failure;
             firstFailure = failure;
             log.warn("First teaching-outline model response failed: {}", failure.getMessage());
         }
         try {
-            String correction = "The previous outline failed schema or retrieval-language validation. "
+            String correction = (initialInstruction.isBlank() ? "" : initialInstruction + "\n")
+                    + "The previous outline failed schema or retrieval-language validation. "
                     + "Rebuild the complete outline. Retrieval queries must copy exact terms from the rulebook's "
                     + "source language; player-facing fields remain Simplified Chinese.\n"
                     + prompts.structuredOutputRepair();

@@ -864,6 +864,7 @@ class GroundedTeachingAgentTest {
             assertThat(request.maxSteps()).isEqualTo(6);
             assertThat(request.priorSections()).isEmpty();
             assertThat(request.requiredRuleIntents()).containsExactly("SETUP", "More SETUP");
+            assertThat(request.chapterScope()).contains("完整章节分工", "【当前章节】第1章《SETUP》：Explain SETUP");
             return new TeachingLessonModel.SectionDraft(
                     "三步完成开局",
                     VisualKind.TABLE_LAYOUT,
@@ -941,12 +942,13 @@ class GroundedTeachingAgentTest {
                     .isEqualTo(EvidenceStatus.CITED_DRAFT);
             throw new AgentExecutionStoppedException(StopReason.MODEL_BUDGET);
         };
+        RecordingInvocations invocations = new RecordingInvocations();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(evidence(chunkId, versionId)),
                 model,
                 new PolicyEvidenceVerifier(),
                 unavailableReview,
-                new ImmediateAuditedAgentInvocations(),
+                invocations,
                 4);
 
         IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID(), null, publications::add);
@@ -954,6 +956,10 @@ class GroundedTeachingAgentTest {
         assertThat(modelCalls).hasValue(1);
         assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(lesson.sections().getFirst().steps()).hasSize(1);
+        assertThat(invocations.diagnostics).contains(new Diagnostic(
+                "publishTeachingSection|1",
+                ActivityOutcome.SUCCEEDED,
+                "Teaching section published: POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT"));
     }
 
     @Test
@@ -1709,6 +1715,10 @@ class GroundedTeachingAgentTest {
                 sectionEvidence(TeachingSectionType.SETUP, "Place the board in the center.", versionId));
         AtomicInteger compositions = new AtomicInteger();
         TeachingLessonModel model = request -> {
+            assertThat(request.chapterScope()).contains(
+                    "第1章《OBJECTIVE》：Explain OBJECTIVE",
+                    "第2章《COMPONENTS》：Explain COMPONENTS",
+                    "第3章《SETUP》：Explain SETUP");
             int call = compositions.getAndIncrement();
             if (call == 0) {
                 assertThat(request.priorSections()).isEmpty();
@@ -2319,11 +2329,183 @@ class GroundedTeachingAgentTest {
                 new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
                         "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
                 new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"));
+                "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"));
     }
 
     @Test
-    void boundsWholeLessonCorrectionsWhileKeepingAllCitedChaptersReadable() {
+    void repairsAnInvalidPostPublicationCorrectionOnceBeforeRetainingTheCitedDraft() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return oneStepDraft(chunkId, "玩家可以任意放置棋盘。");
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                if (revisions.getAndIncrement() == 0) {
+                    return new SectionDraft(
+                            "修正开局",
+                            VisualKind.REFERENCE_CARD,
+                            "把主棋盘放在桌面中央。",
+                            List.of(chunkId),
+                            List.of(new StepDraft(
+                                    "摆放主棋盘",
+                                    TeachingMove.DO,
+                                    "把主棋盘放在桌面中央。",
+                                    List.of(UUID.randomUUID()))));
+                }
+                assertThat(feedback).anyMatch(message -> message.contains("structurally invalid"));
+                return oneStepDraft(chunkId, "把主棋盘放在桌面中央。");
+            }
+        };
+        GeneratedContentCritic critic = (request, risk) -> new GeneratedContentCritic.Review(
+                true,
+                List.of(new Issue(
+                        IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
+        RecordingInvocations invocations = new RecordingInvocations();
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                critic,
+                invocations,
+                4);
+
+        IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("桌面中央");
+        assertThat(revisions).hasValue(2);
+    }
+
+    @Test
+    void keepsTheTurnStageWhileRemovingDetailOwnedByALaterChapter() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence source = new RuleEvidence(
+                chunkId,
+                versionId,
+                "ROUND_STRUCTURE",
+                "Turn flow and imprint",
+                "Each turn, a player may imprint one memory. To imprint it, pay 2 emotion and gain 1 EP.",
+                4,
+                4);
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                20,
+                "Game",
+                "Premise",
+                List.of(
+                        new PlannedSection(
+                                1,
+                                "turn-flow",
+                                "Turn flow",
+                                "Teach the optional imprint stage in the turn order without expanding its payment.",
+                                true,
+                                false,
+                                List.of("turn flow", "optional imprint"),
+                                List.of("core_loop")),
+                        new PlannedSection(
+                                2,
+                                "imprint-detail",
+                                "Imprint detail",
+                                "Teach the imprint payment and EP reward.",
+                                true,
+                                false,
+                                List.of("imprint payment", "EP reward"),
+                                List.of("cost", "scoring"))),
+                "player",
+                Instant.now());
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                if (request.topicKey().equals("turn-flow")) {
+                    return new SectionDraft(
+                            "回合顺序",
+                            VisualKind.REFERENCE_CARD,
+                            "回合中的刻印是可选阶段。",
+                            List.of(chunkId),
+                            List.of(new StepDraft(
+                                    "可选刻印",
+                                    TeachingMove.FLOW,
+                                    "本回合可选择刻印一张记忆：支付2点情绪值并获得1 EP。",
+                                    List.of(chunkId))));
+                }
+                return new SectionDraft(
+                        "刻印细节",
+                        VisualKind.REFERENCE_CARD,
+                        "刻印会消耗情绪值并获得 EP。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "支付与得分",
+                                TeachingMove.DO,
+                                "刻印一张记忆时，支付2点情绪值并获得1 EP。",
+                                List.of(chunkId))));
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(request.topicKey()).isEqualTo("turn-flow");
+                assertThat(feedback).singleElement().satisfies(value -> assertThat(value)
+                        .contains("CHAPTER_SCOPE_DUPLICATION", "retain the player-visible stage"));
+                return new SectionDraft(
+                        "回合顺序",
+                        VisualKind.REFERENCE_CARD,
+                        "回合中的刻印是可选阶段。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "可选刻印",
+                                TeachingMove.FLOW,
+                                "本回合可选择刻印一张记忆。",
+                                List.of(chunkId))));
+            }
+        };
+        GeneratedContentCritic critic = (request, risk) -> {
+            assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
+            assertThat(request.taskContext().objective())
+                    .contains("without expanding its payment", "payment and EP reward");
+            int claimPosition = request.claims().stream()
+                    .filter(claim -> claim.text().contains("支付2点情绪值"))
+                    .findFirst()
+                    .orElseThrow()
+                    .position();
+            return new GeneratedContentCritic.Review(
+                    true,
+                    List.of(new Issue(
+                            IssueType.CHAPTER_SCOPE_DUPLICATION,
+                            claimPosition,
+                            List.of(chunkId),
+                            "Keep the optional imprint stage; chapter 2 owns the payment and EP detail.")));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(source),
+                model,
+                new PolicyEvidenceVerifier(),
+                critic,
+                new ImmediateAuditedAgentInvocations(),
+                8);
+
+        IllustratedLesson lesson = agent.create(plan, UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(revisions).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .contains("可选择刻印")
+                .doesNotContain("支付2点", "1 EP");
+        assertThat(lesson.sections().get(1).steps().getFirst().text()).contains("支付2点情绪值", "1 EP");
+    }
+
+    @Test
+    void boundsWholeLessonCorrectionsAtFourWhileKeepingAllCitedChaptersReadable() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         TeachingPlan plan = new TeachingPlan(
@@ -2337,7 +2519,9 @@ class GroundedTeachingAgentTest {
                 List.of(
                         topic(1, TeachingSectionType.SETUP),
                         topic(2, TeachingSectionType.ACTIONS),
-                        topic(3, TeachingSectionType.SCORING)),
+                        topic(3, TeachingSectionType.SCORING),
+                        topic(4, TeachingSectionType.END_CONDITIONS),
+                        topic(5, TeachingSectionType.OBJECTIVE)),
                 "player",
                 Instant.now());
         AtomicInteger modelCalls = new AtomicInteger();
@@ -2360,7 +2544,9 @@ class GroundedTeachingAgentTest {
                     List.of(
                             new Issue(IssueType.CONTRADICTION, 1, List.of(chunkId), "first"),
                             new Issue(IssueType.CONTRADICTION, 3, List.of(chunkId), "second"),
-                            new Issue(IssueType.CONTRADICTION, 5, List.of(chunkId), "third")));
+                            new Issue(IssueType.CONTRADICTION, 5, List.of(chunkId), "third"),
+                            new Issue(IssueType.CONTRADICTION, 7, List.of(chunkId), "fourth"),
+                            new Issue(IssueType.CONTRADICTION, 9, List.of(chunkId), "fifth")));
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(evidence(chunkId, versionId)),
@@ -2374,10 +2560,10 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
         assertThat(lesson.sections()).allMatch(section -> section.evidenceStatus() == EvidenceStatus.CITED_DRAFT);
-        assertThat(modelCalls).hasValue(5);
+        assertThat(modelCalls).hasValue(9);
         assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).contains(new Diagnostic(
-                "publishTeachingSection|3",
+                "publishTeachingSection|5",
                 ActivityOutcome.SUCCEEDED,
                 "Teaching section published: POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW"));
     }

@@ -310,6 +310,37 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
+    void keepsChapterScopeDuplicationFromPostPublicationReview() {
+        List<ReviewMode> observedModes = new ArrayList<>();
+        Issue duplication = new Issue(
+                IssueType.CHAPTER_SCOPE_DUPLICATION,
+                1,
+                List.of(chunkId),
+                "Keep the optional imprint stage; chapter 2 owns its payment detail.");
+        var critic = new ConditionalGeneratedContentCritic(
+                request -> {
+                    observedModes.add(request.reviewMode());
+                    return new CritiqueDraft(List.of(duplication));
+                },
+                new ImmediateAuditedAgentInvocations(),
+                true);
+        ReviewRequest request = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.POST_PUBLICATION,
+                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
+                        "Chapter 1 gives the flow; chapter 2 explains imprint payment.", "core_loop; imprint cost"),
+                List.of(new Claim(1, "Optional imprint: pay two emotion.", List.of(chunkId))),
+                List.of(new Evidence(chunkId, "You may imprint a memory by paying two emotion.")));
+
+        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
+
+        assertThat(review.issues()).containsExactly(duplication);
+        assertThat(observedModes).containsExactly(
+                ReviewMode.POST_PUBLICATION, ReviewMode.POST_PUBLICATION_STRUCTURE);
+    }
+
+    @Test
     void confirmsEachClaimOnlyAgainstItsCombinedCitations() {
         UUID secondCitation = UUID.randomUUID();
         UUID unrelatedEvidence = UUID.randomUUID();

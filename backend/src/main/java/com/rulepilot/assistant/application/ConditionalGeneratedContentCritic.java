@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
@@ -33,6 +34,8 @@ import org.springframework.stereotype.Service;
 public class ConditionalGeneratedContentCritic implements GeneratedContentCritic {
 
     private static final int MAX_ISSUES = 12;
+    private static final int MAX_POST_PUBLICATION_FACTUAL_ISSUES = 8;
+    private static final int MAX_POST_PUBLICATION_STRUCTURE_ISSUES = 4;
     private static final Pattern TERMINAL_NO_DEFECT = Pattern.compile(
             "(?is).*(无问题|没有问题|无缺陷|无新增缺陷|无异议|无矛盾|非规则错误|支持该部分|证据支持|no (?:concrete )?(?:issue|defect)|no contradiction|fully supported|is supported|is consistent)[。.!！）)\\s]*$");
     private final ContentCriticModel model;
@@ -68,18 +71,58 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         String operation = switch (request.reviewMode()) {
             case OBJECTIVE_COVERAGE -> "reviewObjectiveCoverage";
             case POST_PUBLICATION -> "reviewPublishedTeachingLesson";
+            case POST_PUBLICATION_STRUCTURE -> "reviewPublishedTeachingStructure";
             default -> "reviewGeneratedContent";
         };
         String successSummary = switch (request.reviewMode()) {
             case OBJECTIVE_COVERAGE -> "Objective coverage critique completed";
             case POST_PUBLICATION -> "Published teaching lesson review completed";
+            case POST_PUBLICATION_STRUCTURE -> "Published teaching lesson structure review completed";
             default -> "Generated content critique completed";
         };
         List<Issue> candidateIssues = critique(request, operation, successSummary);
+        if (request.reviewMode() == ReviewMode.POST_PUBLICATION && request.contentType() == GeneratedContentCritic.ContentType.LESSON) {
+            return new Review(true, mergePostPublicationIssues(request, candidateIssues));
+        }
         if (candidateIssues.isEmpty() || request.reviewMode() != ReviewMode.DISCOVERY) {
             return new Review(true, candidateIssues);
         }
         return new Review(true, confirmAtomicIssues(request, candidateIssues));
+    }
+
+    private List<Issue> mergePostPublicationIssues(ReviewRequest request, List<Issue> factualIssues) {
+        ReviewRequest structureRequest = new ReviewRequest(
+                request.assistantRunId(),
+                request.contentType(),
+                ReviewMode.POST_PUBLICATION_STRUCTURE,
+                request.taskContext(),
+                request.claims(),
+                request.evidence());
+        List<Issue> structuralIssues;
+        try {
+            structuralIssues = critique(
+                    structureRequest,
+                    "reviewPublishedTeachingStructure",
+                    "Published teaching lesson structure review completed");
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException structureFailure) {
+            return factualIssues;
+        }
+        List<Issue> scopeIssues = structuralIssues.stream()
+                .filter(issue -> issue.type() == IssueType.CHAPTER_SCOPE_DUPLICATION)
+                .limit(MAX_POST_PUBLICATION_STRUCTURE_ISSUES)
+                .toList();
+        if (scopeIssues.isEmpty()) return factualIssues;
+        return java.util.stream.Stream.concat(
+                        factualIssues.stream().limit(MAX_POST_PUBLICATION_FACTUAL_ISSUES),
+                        scopeIssues.stream())
+                .distinct()
+                .sorted(Comparator.comparingInt(Issue::claimPosition)
+                        .thenComparing(Issue::type)
+                        .thenComparing(Issue::summary))
+                .limit(MAX_ISSUES)
+                .toList();
     }
 
     private List<Issue> critique(ReviewRequest request, String operation, String successSummary) {

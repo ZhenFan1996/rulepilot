@@ -42,7 +42,8 @@ public interface TeachingLessonModel {
             List<EvidenceInput> evidence,
             List<PageImageInput> pageImages,
             List<String> requiredRuleIntents,
-            String modelConfigurationOwner) {
+            String modelConfigurationOwner,
+            String chapterScope) {
 
         public SectionRequest(
                 String topicKey,
@@ -70,7 +71,8 @@ public interface TeachingLessonModel {
                     evidence,
                     List.of(),
                     List.of(),
-                    null);
+                    null,
+                    "");
         }
 
         public SectionRequest(
@@ -100,7 +102,8 @@ public interface TeachingLessonModel {
                     evidence,
                     pageImages,
                     List.of(),
-                    null);
+                    null,
+                    "");
         }
 
         public SectionRequest {
@@ -116,7 +119,8 @@ public interface TeachingLessonModel {
                     || pageImages == null || pageImages.size() > 2
                     || requiredRuleIntents == null || requiredRuleIntents.size() > 5
                     || requiredRuleIntents.stream()
-                            .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)) {
+                            .anyMatch(intent -> intent == null || intent.isBlank() || intent.length() > 300)
+                    || chapterScope == null || chapterScope.length() > 4_000) {
                 throw new IllegalArgumentException("teaching model request is invalid");
             }
             coverageTags = List.copyOf(coverageTags);
@@ -124,6 +128,7 @@ public interface TeachingLessonModel {
             evidence = List.copyOf(evidence);
             pageImages = List.copyOf(pageImages);
             requiredRuleIntents = requiredRuleIntents.stream().map(String::strip).distinct().toList();
+            chapterScope = chapterScope.strip();
         }
     }
 

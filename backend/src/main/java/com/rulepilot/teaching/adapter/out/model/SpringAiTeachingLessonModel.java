@@ -142,6 +142,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .param("sectionDuration", request.sectionDurationSeconds())
                             .param("maxSteps", request.maxSteps())
                             .param("continuity", request.priorSections())
+                            .param("chapterScope", request.chapterScope())
                             .param("evidence", modelEvidence(request))
                             .param("visualEvidenceAvailable", role == Role.VISUAL)
                             .param("visualPages", request.pageImages().stream()

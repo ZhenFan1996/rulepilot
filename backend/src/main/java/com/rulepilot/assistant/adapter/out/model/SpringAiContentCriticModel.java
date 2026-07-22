@@ -65,6 +65,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                 && (request.reviewMode() == ReviewMode.DISCOVERY
                         || request.reviewMode() == ReviewMode.OBJECTIVE_COVERAGE
                         || request.reviewMode() == ReviewMode.POST_PUBLICATION
+                        || request.reviewMode() == ReviewMode.POST_PUBLICATION_STRUCTURE
                         || request.contentType() == ContentType.ANSWER)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.model(models.modelNameFor(Role.CRITIC));
@@ -97,6 +98,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     private String systemPrompt(ReviewMode mode) {
         return switch (mode) {
             case DISCOVERY, POST_PUBLICATION -> prompts.criticSystem();
+            case POST_PUBLICATION_STRUCTURE -> prompts.lessonStructureCriticSystem();
             case ATOMIC_CONFIRMATION -> prompts.atomicCriticSystem();
             case OBJECTIVE_COVERAGE -> prompts.objectiveCoverageCriticSystem();
         };

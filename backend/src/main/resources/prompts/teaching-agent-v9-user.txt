@@ -13,6 +13,10 @@
 {continuity}
 </untrusted_prior_section_continuity_data>
 
+<untrusted_lesson_chapter_scope_data>
+{chapterScope}
+</untrusted_lesson_chapter_scope_data>
+
 <untrusted_current_section_evidence_data>
 {evidence}
 </untrusted_current_section_evidence_data>

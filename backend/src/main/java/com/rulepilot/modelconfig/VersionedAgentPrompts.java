@@ -18,6 +18,7 @@ public class VersionedAgentPrompts {
     private final String answerRetrievalRewriteSystem;
     private final String answerRetrievalRewriteUser;
     private final String criticSystem;
+    private final String lessonStructureCriticSystem;
     private final String atomicCriticSystem;
     private final String objectiveCoverageCriticSystem;
     private final String criticUser;
@@ -31,11 +32,13 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v20-visual-output-contract-system.txt") Resource teachingVisualOutput,
             @Value("classpath:prompts/teaching-agent-v21-complete-instructions-system.txt") Resource teachingCompleteInstructions,
             @Value("classpath:prompts/teaching-agent-v22-ordered-procedure-fidelity-system.txt") Resource teachingProcedureFidelity,
+            @Value("classpath:prompts/teaching-agent-v23-chapter-scope-map-system.txt") Resource teachingChapterScope,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
             @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
             @Value("classpath:prompts/teaching-outline-v9-core-evidence-system.txt") Resource teachingOutlineCoreEvidence,
+            @Value("classpath:prompts/teaching-outline-v10-chapter-ownership-system.txt") Resource teachingOutlineChapterOwnership,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
@@ -49,6 +52,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
             @Value("classpath:prompts/content-critic-v9-answer-scope-system.txt") Resource criticAnswerScope,
+            @Value("classpath:prompts/content-critic-v10-lesson-structure-system.txt") Resource criticLessonStructure,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
@@ -61,10 +65,15 @@ public class VersionedAgentPrompts {
                 teachingPlayerLanguage,
                 teachingVisualOutput,
                 teachingCompleteInstructions,
-                teachingProcedureFidelity);
+                teachingProcedureFidelity,
+                teachingChapterScope);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
-                teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity, teachingOutlineCoreEvidence);
+                teachingOutlineSystem,
+                teachingOutlineFidelity,
+                teachingOutlineVisualDensity,
+                teachingOutlineCoreEvidence,
+                teachingOutlineChapterOwnership);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
                 answerSystem,
@@ -76,7 +85,8 @@ public class VersionedAgentPrompts {
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = combined(criticSystem, criticFidelity, criticAnswerScope);
+        this.criticSystem = combined(criticSystem, criticFidelity, criticAnswerScope, criticLessonStructure);
+        this.lessonStructureCriticSystem = read(criticLessonStructure);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);
@@ -117,6 +127,10 @@ public class VersionedAgentPrompts {
 
     public String criticSystem() {
         return criticSystem;
+    }
+
+    public String lessonStructureCriticSystem() {
+        return lessonStructureCriticSystem;
     }
 
     public String atomicCriticSystem() {

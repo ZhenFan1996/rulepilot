@@ -15,6 +15,14 @@ public interface TeachingOutlineModel {
         return organize(request);
     }
 
+    /**
+     * Rebuilds an otherwise usable outline when its broad flow chapter steals detail owned by later chapters.
+     * Implementations must preserve the supplied draft when refinement cannot complete.
+     */
+    default OutlineDraft refineChapterOwnership(OutlineRequest request, OutlineDraft current, String feedback) {
+        return current;
+    }
+
     record OutlineRequest(
             int playerCount,
             int beginnerCount,
