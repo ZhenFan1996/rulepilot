@@ -162,8 +162,8 @@ class VisualLessonEnricherTest {
                                 "一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头",
                                 120,
                                 220,
-                                52,
-                                52,
+                                34,
+                                34,
                                 List.of(chunk))))
                 .enrich(UUID.randomUUID(), lesson(chunk));
 

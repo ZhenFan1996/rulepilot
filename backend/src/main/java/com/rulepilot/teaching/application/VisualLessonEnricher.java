@@ -284,7 +284,7 @@ public class VisualLessonEnricher {
         if (region.width() >= 80 && region.height() >= 60) return true;
         // A focused icon group is intentionally allowed to be smaller: the reader opens the crop at full size.
         // A word-only label is not, because enlarging it adds no rulebook understanding.
-        return region.width() >= 40 && region.height() >= 40 && hasCompactVisualHandle(region);
+        return region.width() >= 32 && region.height() >= 32 && hasCompactVisualHandle(region);
     }
 
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
