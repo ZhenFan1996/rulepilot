@@ -49,6 +49,7 @@ public class TeachingPlanService {
     private static final int MAX_OUTLINE_PAGE_IMAGES = 4;
     private static final int MAX_INTERPRETED_VISUAL_PAGES = 4;
     private static final int VISUAL_CATALOG_BATCH_SIZE = 2;
+    private static final String VISUAL_CATALOG_PREFIX = "[Visual page catalog; verify against page image]";
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
     private static final Pattern LIKELY_MISSING_INLINE_ICON = Pattern.compile(
@@ -142,13 +143,15 @@ public class TeachingPlanService {
                 .toList();
         var outlineRequest = new OutlineRequest(
                 playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
-        var outline = bindIconLegendEvidence(invokeModel(
-                assistantRunId,
-                "organizeTeachingOutline",
-                outlineInputTokens(pages),
-                "Rulebook lesson topics organized",
-                () -> outlines.organize(outlineRequest),
-                this::outlineOutputTokens), documentPages);
+        var outline = preferDocumentTitle(
+                scope.documentTitle(),
+                bindIconLegendEvidence(invokeModel(
+                        assistantRunId,
+                        "organizeTeachingOutline",
+                        outlineInputTokens(pages),
+                        "Rulebook lesson topics organized",
+                        () -> outlines.organize(outlineRequest),
+                        this::outlineOutputTokens), documentPages));
         try {
             plans.validate(outline);
         } catch (IllegalArgumentException invalidOutline) {
@@ -161,8 +164,31 @@ public class TeachingPlanService {
                         ActivityOutcome.REJECTED,
                         "Model outline was incomplete; continuing with a rulebook-derived lesson plan");
             }
-            outline = bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages);
+            outline = preferDocumentTitle(
+                    scope.documentTitle(), bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages));
             plans.validate(outline);
+        }
+        if (visualOnly) {
+            try {
+                validateVisualRulebookCoverage(outline, pages);
+            } catch (IllegalArgumentException incompleteCoverage) {
+                log.warn(
+                        "Teaching outline omitted visual source pages; adding source-derived coverage: {}",
+                        incompleteCoverage.getMessage());
+                if (assistantRunId != null) {
+                    invocations.record(
+                            assistantRunId,
+                            ActivityType.VALIDATION,
+                            "augmentOutlineCoverageFromSource",
+                            ActivityOutcome.REJECTED,
+                            "Model outline omitted source pages; source-derived sections were added");
+                }
+                var sourceOutline = preferDocumentTitle(
+                        scope.documentTitle(), bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages));
+                outline = augmentVisualCoverage(outline, sourceOutline);
+                plans.validate(outline);
+                validateVisualRulebookCoverage(outline, pages);
+            }
         }
         if (visualOnly) validateVisualPageBindings(outline, documentPages);
         if (!visualOnly && visualCatalog.available(createdBy)) {
@@ -174,7 +200,6 @@ public class TeachingPlanService {
                             selectedVisualPages,
                             iconLegendPage(documentPages).orElse(null),
                             createdBy,
-                            false,
                             assistantRunId);
                     if (interpreted.isEmpty()) {
                         log.warn(
@@ -254,16 +279,58 @@ public class TeachingPlanService {
                         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
                 null,
                 owner,
-                true,
                 assistantRunId);
+        if (facts.isEmpty()) {
+            throw new IllegalArgumentException("visual rulebook catalog did not produce any reliable page facts");
+        }
         visualFacts.replace(documentVersionId, facts);
-        return facts.stream()
-                .map(summary -> new PageInput(
-                        summary.pageNumber(),
-                        "[Visual page catalog; verify against page image]\nPrinted terms: " + summary.printedTerms()
-                                + "\nVisible facts: " + summary.factualSummary()
-                                + "\nKeywords: " + String.join(", ", summary.keywords())))
+        int unavailablePages = documentPages.size() - facts.size();
+        if (unavailablePages > 0) {
+            log.warn(
+                    "Visual catalog completed {} of {} pages for document {}; retaining {} source pages without visual claims",
+                    facts.size(), documentPages.size(), documentVersionId, unavailablePages);
+            if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "retainPartialVisualCatalog",
+                        ActivityOutcome.REJECTED,
+                        "Visual catalog was incomplete; completed facts are used and remaining source pages stay in the outline");
+            }
+        }
+        return visualPageInputs(documentPages, facts);
+    }
+
+    static List<PageInput> visualPageInputs(
+            List<DocumentProcessing.PageView> documentPages, List<PageFact> facts) {
+        Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
+                PageFact::pageNumber, java.util.function.Function.identity(), (first, duplicate) -> first));
+        return documentPages.stream()
+                .map(page -> visualPageInput(page.pageNumber(), factsByPage.get(page.pageNumber())))
                 .toList();
+    }
+
+    private static PageInput visualPageInput(int pageNumber, PageFact fact) {
+        if (fact == null) {
+            return new PageInput(
+                    pageNumber,
+                    VISUAL_CATALOG_PREFIX
+                            + "\nPrinted terms: unavailable because visual interpretation did not finish."
+                            + "\nVisible facts: No factual visual claim is available for this page. Keep its source binding"
+                            + " and verify the original page image before teaching any detail."
+                            + "\nKeywords: visual source page "
+                            + pageNumber
+                            + ", incomplete visual catalog");
+        }
+        return new PageInput(
+                pageNumber,
+                VISUAL_CATALOG_PREFIX
+                        + "\nPrinted terms: "
+                        + fact.printedTerms()
+                        + "\nVisible facts: "
+                        + fact.factualSummary()
+                        + "\nKeywords: "
+                        + String.join(", ", fact.keywords()));
     }
 
     private List<PageFact> catalogPageFacts(
@@ -271,7 +338,6 @@ public class TeachingPlanService {
             Set<Integer> pageNumbers,
             Integer iconLegendPage,
             String owner,
-            boolean requireEveryBatch,
             UUID assistantRunId) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         List<List<Integer>> batches = iconLegendPage != null && pageNumbers.contains(iconLegendPage)
@@ -311,14 +377,14 @@ public class TeachingPlanService {
                 try {
                     summaries.addAll(awaitCatalog(futures.get(index), visualCatalogTimeout).pages());
                 } catch (RuntimeException failedBatch) {
+                    String operation = "inspectRulebookVisualBatch|" + (index + 1);
                     if (catalogTimedOut(failedBatch)) {
-                        futures.forEach(work -> work.cancel(true));
                         invocations.stopRunning(
                                 assistantRunId,
+                                operation,
                                 ActivityOutcome.FAILED,
-                                "Visual page interpretation timed out; continuing without optional visual facts");
+                                "Visual page batch timed out; retaining completed page facts");
                     }
-                    if (requireEveryBatch) throw failedBatch;
                     log.warn(
                             "Visual page interpretation skipped failed batch {} for document {}",
                             batches.get(index),
@@ -379,6 +445,65 @@ public class TeachingPlanService {
                 })
                 .toList();
         return new TeachingOutlineModel.OutlineDraft(outline.gameTitle(), outline.premise(), topics);
+    }
+
+    static TeachingOutlineModel.OutlineDraft preferDocumentTitle(
+            String documentTitle, TeachingOutlineModel.OutlineDraft outline) {
+        if (documentTitle == null || documentTitle.isBlank()) return outline;
+        return new TeachingOutlineModel.OutlineDraft(documentTitle.strip(), outline.premise(), outline.topics());
+    }
+
+    static void validateVisualRulebookCoverage(
+            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
+        Set<Integer> expected = visualCatalogPages.stream()
+                .filter(page -> substantiveVisualCatalogPage(page.text()))
+                .map(PageInput::pageNumber)
+                .collect(Collectors.toSet());
+        Set<Integer> covered = outline.topics().stream()
+                .flatMap(topic -> topic.sourcePageNumbers().stream())
+                .collect(Collectors.toSet());
+        expected.removeAll(covered);
+        if (!expected.isEmpty()) {
+            throw new IllegalArgumentException("visual rulebook outline omitted substantive source pages " + expected);
+        }
+    }
+
+    static TeachingOutlineModel.OutlineDraft augmentVisualCoverage(
+            TeachingOutlineModel.OutlineDraft modelOutline, TeachingOutlineModel.OutlineDraft sourceOutline) {
+        Set<Integer> covered = modelOutline.topics().stream()
+                .flatMap(topic -> topic.sourcePageNumbers().stream())
+                .collect(Collectors.toSet());
+        List<TeachingOutlineModel.TopicDraft> topics = new java.util.ArrayList<>(modelOutline.topics());
+        for (TeachingOutlineModel.TopicDraft sourceTopic : sourceOutline.topics()) {
+            List<Integer> missingPages = sourceTopic.sourcePageNumbers().stream()
+                    .filter(page -> !covered.contains(page))
+                    .toList();
+            if (missingPages.isEmpty()) continue;
+            topics.add(new TeachingOutlineModel.TopicDraft(
+                    "source-coverage-" + (topics.size() + 1),
+                    sourceTopic.title(),
+                    sourceTopic.objective(),
+                    sourceTopic.required(),
+                    sourceTopic.visualEvidenceRecommended(),
+                    sourceTopic.retrievalQueries(),
+                    sourceTopic.coverageTags(),
+                    missingPages));
+            covered.addAll(missingPages);
+        }
+        return new TeachingOutlineModel.OutlineDraft(modelOutline.gameTitle(), modelOutline.premise(), topics);
+    }
+
+    private static boolean substantiveVisualCatalogPage(String text) {
+        String normalized = text == null ? "" : text.toLowerCase(java.util.Locale.ROOT);
+        boolean credits = normalized.contains("credits") || normalized.contains("鸣谢");
+        boolean cover = (normalized.contains("cover") || normalized.contains("封面"))
+                && (normalized.contains("no game mechanism")
+                        || normalized.contains("no rule text")
+                        || normalized.contains("visual cover")
+                        || normalized.contains("无游戏机制")
+                        || normalized.contains("无游戏规则")
+                        || normalized.contains("仅作为视觉封面"));
+        return !credits && !cover;
     }
 
     static Set<Integer> selectedVisualPageNumbers(

@@ -24,4 +24,12 @@ public interface AuditedAgentInvocations {
 
     default void stopRunning(
             UUID runId, AgentExecutionControl.ActivityOutcome outcome, String summary) {}
+
+    /**
+     * Settles one bounded invocation without changing unrelated parallel work in the same run.
+     */
+    default void stopRunning(
+            UUID runId, String operation, AgentExecutionControl.ActivityOutcome outcome, String summary) {
+        stopRunning(runId, outcome, summary);
+    }
 }

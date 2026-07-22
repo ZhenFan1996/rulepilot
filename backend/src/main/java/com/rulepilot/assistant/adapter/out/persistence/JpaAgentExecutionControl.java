@@ -154,24 +154,32 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {
+        stopRunning(runId, null, outcome, summary);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void stopRunning(UUID runId, String operation, ActivityOutcome outcome, String summary) {
         if (runId == null || outcome == null || outcome == ActivityOutcome.RUNNING
                 || outcome == ActivityOutcome.SUCCEEDED || summary == null || summary.isBlank()
-                || summary.length() > 240) {
+                || summary.length() > 240 || (operation != null && operation.isBlank())) {
             throw new IllegalArgumentException("running activity stop is invalid");
         }
-        entityManager.createNativeQuery("""
+        String normalizedOperation = operation == null ? null : operation.strip();
+        var query = entityManager.createNativeQuery("""
                         update assistant_run_activity
                         set outcome = :outcome,
                             latency_ms = greatest(0, extract(epoch from (:now - occurred_at)) * 1000)::bigint,
                             summary = :summary
                         where assistant_run_id = :runId
                           and outcome = 'RUNNING'
-                        """)
+                        """ + (normalizedOperation == null ? "" : " and operation_name = :operation"))
                 .setParameter("outcome", outcome.name())
                 .setParameter("now", Instant.now())
                 .setParameter("summary", summary.strip())
-                .setParameter("runId", runId)
-                .executeUpdate();
+                .setParameter("runId", runId);
+        if (normalizedOperation != null) query.setParameter("operation", normalizedOperation);
+        query.executeUpdate();
     }
 
     private void insertActivity(

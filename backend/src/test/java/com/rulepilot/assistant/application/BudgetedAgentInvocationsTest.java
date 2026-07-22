@@ -28,6 +28,23 @@ class BudgetedAgentInvocationsTest {
     }
 
     @Test
+    void stopsOnlyTheNamedBoundedInvocationWhenParallelWorkContinues() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        UUID runId = UUID.randomUUID();
+
+        invocations.stopRunning(
+                runId,
+                "inspectRulebookVisualBatch|4",
+                AgentExecutionControl.ActivityOutcome.FAILED,
+                "Visual page batch timed out");
+
+        assertThat(control.stoppedRunId).isEqualTo(runId);
+        assertThat(control.stoppedOperation).isEqualTo("inspectRulebookVisualBatch|4");
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.FAILED);
+    }
+
+    @Test
     void reservesAndAuditsSuccessfulInvocation() {
         RecordingControl control = new RecordingControl();
         var invocations = new BudgetedAgentInvocations(control);
@@ -103,6 +120,7 @@ class BudgetedAgentInvocationsTest {
         private boolean stopOnReserve;
         private UUID recordedRunId;
         private UUID stoppedRunId;
+        private String stoppedOperation;
         private ActivityType recordedType;
 
         @Override
@@ -143,6 +161,14 @@ class BudgetedAgentInvocationsTest {
         @Override
         public void stopRunning(UUID runId, ActivityOutcome outcome, String summary) {
             this.stoppedRunId = runId;
+            this.outcome = outcome;
+            this.summary = summary;
+        }
+
+        @Override
+        public void stopRunning(UUID runId, String operation, ActivityOutcome outcome, String summary) {
+            this.stoppedRunId = runId;
+            this.stoppedOperation = operation;
             this.outcome = outcome;
             this.summary = summary;
         }

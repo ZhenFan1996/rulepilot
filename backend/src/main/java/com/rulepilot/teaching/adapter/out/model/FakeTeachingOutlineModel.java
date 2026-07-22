@@ -13,6 +13,7 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
 
     @Override
     public OutlineDraft organize(OutlineRequest request) {
+        if (isVisualCatalog(request)) return visualCatalogOutline(request);
         return new OutlineDraft(
                 inferredTitle(request),
                 "先看懂目标与桌面状态，再按实际回合顺序走一遍关键选择，最后说明结束与完整计分。",
@@ -31,6 +32,113 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                                 List.of("example", "example round", "reference", "anatomy", "示例", "范例", "速查", "图示"), List.of("first_round", "examples")),
                         topic(request, "finish-and-score", "结束游戏并算出胜负", "说明结束触发、最后一轮处理、所有计分来源、同分规则与胜者判定。", false,
                                 List.of("end of the game", "game end", "final scoring", "winner", "tie", "游戏结束", "最终计分", "同分"), List.of("end", "scoring", "tie_breaker"))));
+    }
+
+    private OutlineDraft visualCatalogOutline(OutlineRequest request) {
+        List<PageInput> substantive = request.pages().stream().filter(this::isSubstantiveVisualPage).toList();
+        List<PageInput> available = substantive.isEmpty() ? request.pages() : substantive;
+        List<List<PageInput>> pagesByTopic = new ArrayList<>();
+        for (int index = 0; index < 7; index++) pagesByTopic.add(new ArrayList<>());
+        for (PageInput page : available) {
+            addVisualPage(pagesByTopic, visualTopicIndex(page.text()), page);
+        }
+        for (int index = 0; index < pagesByTopic.size(); index++) {
+            if (pagesByTopic.get(index).isEmpty()) {
+                pagesByTopic.get(index).add(available.get(Math.min(index, available.size() - 1)));
+            }
+        }
+        return new OutlineDraft(
+                inferredTitle(request),
+                "先核对目标与桌面，再按实际回合推进主要选择，最后用规则书中的例外和结束条件完成一次可执行的首局准备。",
+                List.of(
+                        visualTopic("goal-and-components", "目标、组件与关键信息", "说明玩家追求的目标，辨认会直接影响选择的组件、卡面或图标。", true,
+                                List.of("objective", "goal", "components", "contents"), List.of("objective", "components"), pagesByTopic.get(0)),
+                        visualTopic("prepare-the-table", "准备桌面与起始资源", "按公共区域、个人区域和起始资源的顺序完成设置，并指出玩家人数或阵营造成的差异。", true,
+                                List.of("setup", "set up", "starting", "player"), List.of("setup"), pagesByTopic.get(1)),
+                        visualTopic("round-and-turn", "一轮怎样开始并推进", "区分整轮与玩家回合，说明开始状态、阶段顺序和何时把行动交给下一位。", false,
+                                List.of("round", "turn", "overview", "draw"), List.of("core_loop", "round_structure"), pagesByTopic.get(2)),
+                        visualTopic("actions-and-costs", "主要行动的选择与执行", "逐项说明主要行动的前置条件、支付或弃置、执行结果，以及不能执行时的处理。", true,
+                                List.of("action", "deploy", "move", "control"), List.of("core_loop", "actions"), pagesByTopic.get(3)),
+                        visualTopic("exceptions-and-restrictions", "限制、FAQ 与常见例外", "讲清会改变通常行动顺序、目标、距离或限制的规则，并把例外和普通规则并列核对。", false,
+                                List.of("attack", "tactic", "frequently", "restriction"), List.of("exceptions"), pagesByTopic.get(4)),
+                        visualTopic("examples-and-reference", "示例、变体与速查", "使用官方示例、变体或速查页核对实际桌面状态，不把示例特例误当成通用规则。", true,
+                                List.of("example", "battle", "summary", "reference"), List.of("first_round", "examples"), pagesByTopic.get(5)),
+                        visualTopic("finish-and-score", "结束、计分与胜者", "说明结束触发、最后处理、胜利或计分判定，并单独指出同分规则是否存在。", false,
+                                List.of("end", "win", "score", "victory"), List.of("end", "scoring", "tie_breaker"), pagesByTopic.get(6))));
+    }
+
+    private TopicDraft visualTopic(
+            String key,
+            String title,
+            String objective,
+            boolean visual,
+            List<String> cues,
+            List<String> tags,
+            List<PageInput> pages) {
+        return new TopicDraft(
+                key,
+                title,
+                objective,
+                true,
+                visual,
+                sourceQueries(pages, cues),
+                tags,
+                pages.stream().map(PageInput::pageNumber).toList());
+    }
+
+    private void addVisualPage(List<List<PageInput>> pagesByTopic, int preferredTopic, PageInput page) {
+        int topic = preferredTopic;
+        if (pagesByTopic.get(topic).size() >= 4) {
+            topic = java.util.stream.IntStream.range(0, pagesByTopic.size())
+                    .filter(index -> pagesByTopic.get(index).size() < 4)
+                    .findFirst()
+                    .orElse(preferredTopic);
+        }
+        if (pagesByTopic.get(topic).size() < 4) pagesByTopic.get(topic).add(page);
+    }
+
+    private boolean isVisualCatalog(OutlineRequest request) {
+        return request.pages().stream().allMatch(page -> page.text().startsWith("[Visual page catalog;"));
+    }
+
+    private boolean isSubstantiveVisualPage(PageInput page) {
+        String text = page.text().toLowerCase(Locale.ROOT);
+        boolean credits = text.contains("credits") || text.contains("鸣谢");
+        boolean cover = (text.contains("cover") || text.contains("封面"))
+                && containsAny(text, List.of(
+                        "no game mechanism",
+                        "no rule text",
+                        "visual cover",
+                        "无游戏机制",
+                        "无游戏规则",
+                        "仅作为视觉封面"));
+        return !credits && !cover;
+    }
+
+    private int visualTopicIndex(String pageText) {
+        String text = pageText.toLowerCase(Locale.ROOT);
+        if (containsAny(text, List.of("frequently", "faq", "common question", "常见问题", "问答"))) return 4;
+        if (containsAny(text, List.of(
+                "example",
+                "battle",
+                "historical",
+                "history",
+                "scenario",
+                "summary",
+                "reference",
+                "variant",
+                "示例",
+                "战役",
+                "历史",
+                "速查",
+                "变体"))) return 5;
+        if (containsAny(text, List.of("component", "contents", "anatomy", "卡牌构成", "组件"))) return 0;
+        if (containsAny(text, List.of("set up", "setup", "starting", "advanced", "team", "设置", "起始"))) return 1;
+        if (containsAny(text, List.of("game overview", "how to play", "draw", "round", "游戏概览", "轮次"))) return 2;
+        if (containsAny(text, List.of("attack", "tactic", "frequently", "faq", "restriction", "攻击", "战术", "常见问题"))) return 4;
+        if (containsAny(text, List.of("action", "deploy", "move", "control", "maneuver", "行动", "部署", "移动", "控制", "机动"))) return 3;
+        if (containsAny(text, List.of("game over", "ending", "how to win", "scoring", "victory", "游戏结束", "胜利", "计分"))) return 6;
+        return 3;
     }
 
     private TopicDraft topic(
@@ -61,6 +169,10 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
     private List<String> sourceQueries(List<PageInput> pages, List<String> cues) {
         LinkedHashSet<String> queries = new LinkedHashSet<>();
         for (PageInput page : pages) {
+            visualPrintedTerms(page.text()).forEach(term -> {
+                if (term.length() >= 3) queries.add(boundedQuery(term));
+            });
+            if (queries.size() >= 2) break;
             Arrays.stream(page.text().split("\\R"))
                     .map(String::strip)
                     .filter(line -> line.length() >= 4)
@@ -81,6 +193,18 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
         return new ArrayList<>(queries).stream().limit(2).toList();
     }
 
+    private List<String> visualPrintedTerms(String text) {
+        if (!text.startsWith("[Visual page catalog;")) return List.of();
+        return Arrays.stream(text.split("\\R"))
+                .filter(line -> line.startsWith("Printed terms:"))
+                .map(line -> line.substring("Printed terms:".length()).strip())
+                .flatMap(line -> Arrays.stream(line.split(";")))
+                .map(String::strip)
+                .filter(term -> !term.isBlank() && !term.toLowerCase(Locale.ROOT).startsWith("unavailable"))
+                .limit(2)
+                .toList();
+    }
+
     private boolean containsAny(String text, List<String> cues) {
         String normalized = text.toLowerCase(Locale.ROOT);
         return cues.stream().anyMatch(cue -> normalized.contains(cue.toLowerCase(Locale.ROOT)));
@@ -93,6 +217,13 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
 
     private String inferredTitle(OutlineRequest request) {
         if (request.pages().isEmpty()) return "Imported rulebook";
+        for (PageInput page : request.pages()) {
+            String title = visualPrintedTerms(page.text()).stream()
+                    .filter(this::isUsableTitle)
+                    .findFirst()
+                    .orElse(null);
+            if (title != null) return title;
+        }
         return Arrays.stream(request.pages().getFirst().text().split("\\R"))
                 .map(String::strip)
                 .filter(line -> line.length() >= 3 && line.length() <= 100)
@@ -101,5 +232,11 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
                         "setup", "setting up", "components", "contents", "rulebook", "rules", "设置", "组件", "规则")))
                 .findFirst()
                 .orElse("Imported rulebook");
+    }
+
+    private boolean isUsableTitle(String value) {
+        String normalized = value.toLowerCase(Locale.ROOT);
+        return value.length() >= 3 && value.length() <= 100
+                && !containsAny(normalized, List.of("rules", "rulebook", "contents", "components", "credits", "cover"));
     }
 }

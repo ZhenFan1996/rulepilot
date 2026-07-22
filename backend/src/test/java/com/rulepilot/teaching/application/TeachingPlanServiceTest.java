@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
+import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.FutureTask;
@@ -103,6 +105,77 @@ class TeachingPlanServiceTest {
         assertThat(TeachingPlanService.bindIconLegendEvidence(outline, pages)
                         .topics().getFirst().sourcePageNumbers())
                 .containsExactly(8, 4);
+    }
+
+    @Test
+    void retainsEveryVisualOnlySourcePageWhenOneVisualCatalogBatchTimesOut() {
+        List<PageInput> inputs = TeachingPlanService.visualPageInputs(
+                List.of(page(1, ""), page(2, ""), page(3, "")),
+                List.of(
+                        new PageFact(1, "WAR CHEST", "盒面显示两方军队。", List.of("WAR CHEST")),
+                        new PageFact(3, "UNIT", "单位圆片有正反两面。", List.of("UNIT"))));
+
+        assertThat(inputs).extracting(PageInput::pageNumber).containsExactly(1, 2, 3);
+        assertThat(inputs.getFirst().text()).contains("WAR CHEST", "两方军队");
+        assertThat(inputs.get(1).text())
+                .startsWith("[Visual page catalog;")
+                .contains("No factual visual claim", "source binding", "page 2");
+        assertThat(inputs.getLast().text()).contains("UNIT", "正反两面");
+    }
+
+    @Test
+    void prefersTheUserProvidedRulebookTitleOverAGenericModelTitle() {
+        OutlineDraft preferred = TeachingPlanService.preferDocumentTitle(
+                "My custom game title",
+                new OutlineDraft("Imported rulebook", "Premise", List.of(topic("setup", false, List.of(1)))));
+
+        assertThat(preferred.gameTitle()).isEqualTo("My custom game title");
+        assertThat(preferred.topics()).hasSize(1);
+    }
+
+    @Test
+    void rejectsAVisualOutlineThatLeavesSubstantiveSourcePagesUnbound() {
+        OutlineDraft incomplete = new OutlineDraft("Game", "Premise", List.of(topic("setup", false, List.of(2))));
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("TEST GAME", "cover; no game mechanism")),
+                new PageInput(2, visualCatalogPage("SET UP", "starting resources")),
+                new PageInput(3, visualCatalogPage("ACTIONS", "action sequence")));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> TeachingPlanService.validateVisualRulebookCoverage(incomplete, pages))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("3");
+    }
+
+    @Test
+    void preservesModelSpecificTopicsWhileAddingOnlyUncoveredVisualPages() {
+        OutlineDraft model = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(topic("specific-actions", false, List.of(2, 5))));
+        OutlineDraft source = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        topic("components", true, List.of(2, 3)),
+                        topic("setup", true, List.of(4, 5))));
+
+        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+
+        assertThat(augmented.topics()).hasSize(3);
+        assertThat(augmented.topics().getFirst().key()).isEqualTo("specific-actions");
+        assertThat(augmented.topics().get(1).sourcePageNumbers()).containsExactly(3);
+        assertThat(augmented.topics().get(2).sourcePageNumbers()).containsExactly(4);
+        assertThat(augmented.topics()).extracting(TopicDraft::key)
+                .contains("source-coverage-2", "source-coverage-3");
+    }
+
+    private String visualCatalogPage(String terms, String facts) {
+        return "[Visual page catalog; verify against page image]\nPrinted terms: "
+                + terms
+                + "\nVisible facts: "
+                + facts
+                + "\nKeywords: test";
     }
 
     private TopicDraft topic(String key, boolean visual, List<Integer> pages) {

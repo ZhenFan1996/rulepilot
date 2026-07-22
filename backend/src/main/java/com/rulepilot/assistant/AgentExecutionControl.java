@@ -69,6 +69,10 @@ public interface AgentExecutionControl {
 
     void stopRunning(UUID runId, ActivityOutcome outcome, String summary);
 
+    default void stopRunning(UUID runId, String operation, ActivityOutcome outcome, String summary) {
+        stopRunning(runId, outcome, summary);
+    }
+
     void requestCancellation(UUID runId, String ownerUsername);
 
     BudgetSnapshot budget(UUID runId);

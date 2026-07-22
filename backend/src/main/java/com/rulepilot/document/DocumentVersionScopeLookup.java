@@ -7,5 +7,11 @@ public interface DocumentVersionScopeLookup {
 
     Optional<VersionScope> findVersion(UUID documentVersionId);
 
-    record VersionScope(UUID documentVersionId, UUID editionId, String processingStatus, String createdBy) {}
+    record VersionScope(
+            UUID documentVersionId, UUID editionId, String processingStatus, String createdBy, String documentTitle) {
+
+        public VersionScope(UUID documentVersionId, UUID editionId, String processingStatus, String createdBy) {
+            this(documentVersionId, editionId, processingStatus, createdBy, null);
+        }
+    }
 }
