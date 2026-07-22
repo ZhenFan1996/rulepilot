@@ -155,7 +155,10 @@ public class TeachingPlanService {
         try {
             if (visualOnly) validateVisualFastBaseline(outline);
             plans.validate(outline);
-            if (visualOnly) validateVisualCoreTopicBindings(outline, pages);
+            if (visualOnly) {
+                outline = bindVisualCoreTopicEvidence(outline, pages);
+                validateVisualCoreTopicBindings(outline, pages);
+            }
         } catch (IllegalArgumentException invalidOutline) {
             log.warn("Teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
             if (assistantRunId != null) {
@@ -169,7 +172,10 @@ public class TeachingPlanService {
             outline = preferDocumentTitle(
                     scope.documentTitle(), bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages));
             plans.validate(outline);
-            if (visualOnly) validateVisualCoreTopicBindings(outline, pages);
+            if (visualOnly) {
+                outline = bindVisualCoreTopicEvidence(outline, pages);
+                validateVisualCoreTopicBindings(outline, pages);
+            }
         }
         if (visualOnly) {
             try {
@@ -207,6 +213,7 @@ public class TeachingPlanService {
                                 .map(topic -> topic.key() + "=" + topic.sourcePageNumbers()
                                         + " tags=" + topic.coverageTags())
                                 .toList());
+                outline = bindVisualCoreTopicEvidence(outline, pages);
                 plans.validate(outline);
                 validateVisualCoreTopicBindings(outline, pages);
                 validateVisualRulebookCoverage(outline, pages);
@@ -549,6 +556,39 @@ public class TeachingPlanService {
                         "visual rulebook outline must bind " + tag + " to a page whose visible facts support it");
             }
         }
+    }
+
+    static TeachingOutlineModel.OutlineDraft bindVisualCoreTopicEvidence(
+            TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
+        Map<String, Integer> supportedPageByTag = new LinkedHashMap<>();
+        for (String tag : List.of("setup", "core_loop", "end", "scoring")) {
+            visualCatalogPages.stream()
+                    .filter(page -> directVisualEvidenceFor(tag, page.text()))
+                    .map(PageInput::pageNumber)
+                    .findFirst()
+                    .ifPresent(pageNumber -> supportedPageByTag.put(tag, pageNumber));
+        }
+        if (supportedPageByTag.isEmpty()) return outline;
+        List<TeachingOutlineModel.TopicDraft> boundTopics = outline.topics().stream()
+                .map(topic -> {
+                    LinkedHashSet<Integer> sourcePages = new LinkedHashSet<>(topic.sourcePageNumbers());
+                    topic.coverageTags().stream()
+                            .map(tag -> tag.toLowerCase(java.util.Locale.ROOT))
+                            .map(supportedPageByTag::get)
+                            .filter(java.util.Objects::nonNull)
+                            .forEach(sourcePages::add);
+                    return new TeachingOutlineModel.TopicDraft(
+                            topic.key(),
+                            topic.title(),
+                            topic.objective(),
+                            topic.required(),
+                            topic.visualEvidenceRecommended(),
+                            topic.retrievalQueries(),
+                            topic.coverageTags(),
+                            List.copyOf(sourcePages));
+                })
+                .toList();
+        return new TeachingOutlineModel.OutlineDraft(outline.gameTitle(), outline.premise(), boundTopics);
     }
 
     static void validateVisualFastBaseline(TeachingOutlineModel.OutlineDraft outline) {

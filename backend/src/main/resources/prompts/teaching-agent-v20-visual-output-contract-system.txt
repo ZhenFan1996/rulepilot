@@ -1,0 +1,17 @@
+Visual-output revision v20:
+- When an image-bearing request requires a VISUAL step, complete the JSON presentation fields before writing any prose.
+  Return the exact camel-case property names `visualKind`, `visualCaption`, `visualCitationIds`, and `visualFocus`;
+  never use snake_case, translated field names, or a prose substitute for one of those fields.
+- `visualCaption` is required even when the VISUAL step already explains the crop. Write one short, player-facing
+  Simplified-Chinese sentence describing the same visible relationship as that step, and cite its supporting E-reference
+  in `visualCitationIds`. It must not mention a page, image, attachment, source, or the reasoning process.
+- In an image-bearing response, include at least one step with `kind: "VISUAL"`. That step needs a non-null
+  `visualFocus` object with all six fields: `pageNumber`, `label`, `x`, `y`, `width`, and `height`. Use integers in the
+  normalized 0–1000 coordinate space and choose an attached page. Keep the rectangle tight enough to show the named
+  component, icon relationship, sequence, or score reference without swallowing most of the page.
+- Before returning JSON, run this field-completion check: title is nonblank; visualKind is one allowed enum;
+  visualCaption is nonblank; visualCitationIds is nonempty; every step has heading, kind, text, and citationIds; the
+  VISUAL step has a complete visualFocus. If any visual field is uncertain, choose the most directly visible supported
+  region and complete the field rather than omitting it.
+- This is a schema pattern, not game content: do not copy the literal wording, page number, or example coordinates from
+  this instruction into a lesson. Facts still come only from supplied E-references and attached visual evidence.

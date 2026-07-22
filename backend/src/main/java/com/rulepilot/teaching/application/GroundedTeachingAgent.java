@@ -65,14 +65,19 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v30-source-bound-outline";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v31-bounded-post-publication-review";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private static final int EVIDENCE_PER_INTENT = 3;
     private static final int MAX_STEPS_PER_SECTION = 6;
     private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
-    private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 2;
+    /*
+     * The cited base lesson is published section by section.  Whole-lesson review improves it,
+     * but must not turn a usable first read into an unbounded rewrite job.
+     */
+    private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
+    private static final int MAX_POST_PUBLICATION_REVIEW_CORRECTIONS = 2;
     private static final int MAX_REVIEW_UNCITED_EVIDENCE_PER_SECTION = 2;
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final String VISUAL_PAGE_PLACEHOLDER =
@@ -99,6 +104,7 @@ public class GroundedTeachingAgent {
             "(?:…+|\\.\\.\\.)\\s*(?:完成(?:了)?|结束(?:了)?|等等|后续|其余)?[。！？!?]?\\s*$");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
             "(?i)(attached|attachment|image|rulebook|page\\s*\\d|图片|附件|规则书|第\\s*\\d+\\s*页|页面)");
+    private static final Pattern VISUAL_LABEL_CONTAINS_LATIN = Pattern.compile("[A-Za-z]");
     private static final Pattern INTERNAL_EVIDENCE_MARKER = Pattern.compile(
             "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
                     + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
@@ -863,15 +869,30 @@ public class GroundedTeachingAgent {
                         maxRepairAttempts,
                         feedback.getFirst());
                 SectionDraft draftToRevise = draft;
-                draft = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.MODEL,
-                        operationName("reviseTeachingSection", planned.position()),
-                        estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
-                                + estimateTokens(feedback.toString()),
-                        "Teaching section revised from validation feedback",
-                        () -> model.revise(modelRequest, draftToRevise, feedback),
-                        result -> estimateTokens(result.toString()));
+                try {
+                    draft = invocations.invoke(
+                            assistantRunId,
+                            ActivityType.MODEL,
+                            operationName("reviseTeachingSection", planned.position()),
+                            estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
+                                    + estimateTokens(feedback.toString()),
+                            "Teaching section revised from validation feedback",
+                            () -> model.revise(modelRequest, draftToRevise, feedback),
+                            result -> estimateTokens(result.toString()));
+                } catch (AgentExecutionStoppedException stopped) {
+                    throw stopped;
+                } catch (RuntimeException visualRepairFailure) {
+                    if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
+                        log.warn(
+                                "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
+                                planned.topicKey(),
+                                visualRepairFailure.getMessage());
+                        recordVisualTextFallback(assistantRunId, planned);
+                        return fallbackToTextDraft(
+                                plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, repair + 1);
+                    }
+                    throw visualRepairFailure;
+                }
                 draft = normalizeDraft(draft, modelRequest);
             }
         }
@@ -931,8 +952,28 @@ public class GroundedTeachingAgent {
                         () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
                         result -> estimateTokens(result.toString()));
                 textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
+                textOnlyDraft = preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
             }
         }
+    }
+
+    static SectionDraft preserveTextOnlyPresentationMetadata(SectionDraft previous, SectionDraft revised) {
+        if (previous == null || revised == null) return revised;
+        String caption = revised.visualCaption();
+        if (caption == null || caption.isBlank() || caption.length() > 240) {
+            caption = previous.visualCaption();
+        }
+        List<UUID> citations = revised.visualCitationIds();
+        if (citations == null || citations.isEmpty()) {
+            citations = previous.visualCitationIds();
+        }
+        VisualKind visualKind = revised.visualKind() == null ? previous.visualKind() : revised.visualKind();
+        if (java.util.Objects.equals(caption, revised.visualCaption())
+                && java.util.Objects.equals(citations, revised.visualCitationIds())
+                && visualKind == revised.visualKind()) {
+            return revised;
+        }
+        return new SectionDraft(revised.title(), visualKind, caption, citations, revised.steps());
     }
 
     private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
@@ -967,6 +1008,7 @@ public class GroundedTeachingAgent {
         normalized = normalizeSectionTitle(normalized, request);
         normalized = normalizePresentationMetadata(normalized, request.pageImages().isEmpty());
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
+        normalized = normalizeVisualFocusLabels(normalized);
         return alignVisualCaptionWithStep(normalized, request.pageImages().isEmpty());
     }
 
@@ -1079,6 +1121,46 @@ public class GroundedTeachingAgent {
         String caption = visualStep.text().length() <= 240 ? visualStep.text() : visualStep.heading();
         return new SectionDraft(
                 draft.title(), draft.visualKind(), caption, visualStep.citationIds(), draft.steps());
+    }
+
+    private SectionDraft normalizeVisualFocusLabels(SectionDraft draft) {
+        if (draft == null || draft.steps() == null) return draft;
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.visualFocus() == null) {
+                steps.add(step);
+                continue;
+            }
+            VisualFocusDraft focus = step.visualFocus();
+            String label = playerFacingVisualLabel(focus.label(), step.heading());
+            if (label.equals(focus.label())) {
+                steps.add(step);
+                continue;
+            }
+            steps.add(new StepDraft(
+                    step.heading(),
+                    step.kind(),
+                    step.text(),
+                    step.citationIds(),
+                    new VisualFocusDraft(focus.pageNumber(), label, focus.x(), focus.y(), focus.width(), focus.height())));
+            changed = true;
+        }
+        return changed
+                ? new SectionDraft(
+                        draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
+    }
+
+    private String playerFacingVisualLabel(String label, String fallbackHeading) {
+        String normalized = playerFacingText(label);
+        if (normalized == null || normalized.isBlank() || VISUAL_LABEL_CONTAINS_LATIN.matcher(normalized).find()) {
+            String fallback = playerFacingText(fallbackHeading);
+            return fallback == null || fallback.isBlank() || VISUAL_LABEL_CONTAINS_LATIN.matcher(fallback).find()
+                    ? "图示重点"
+                    : fallback;
+        }
+        return normalized;
     }
 
     private SectionDraft normalizePresentationMetadata(SectionDraft draft, boolean textOnly) {
@@ -1262,6 +1344,7 @@ public class GroundedTeachingAgent {
                 .collect(Collectors.groupingBy(issue -> batch.claimOwners()
                         .get(issue.claimPosition()).sectionIndex()));
         List<DraftCandidate> correctedCandidates = new ArrayList<>();
+        int correctionsStarted = 0;
         for (DraftCandidate candidate : candidates) {
             List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
                     candidate.sectionIndex(), List.of());
@@ -1271,6 +1354,18 @@ public class GroundedTeachingAgent {
                     0,
                     issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
                     issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(issues));
+            if (!issues.isEmpty() && correctionsStarted >= MAX_POST_PUBLICATION_REVIEW_CORRECTIONS) {
+                log.info(
+                        "Whole-lesson review defers correction for topic {} after {} immediate corrections",
+                        candidate.planned().topicKey(),
+                        MAX_POST_PUBLICATION_REVIEW_CORRECTIONS);
+                recordPublication(
+                        assistantRunId,
+                        candidate.planned(),
+                        ActivityOutcome.SUCCEEDED,
+                        "POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW");
+                continue;
+            }
             try {
                 DraftCandidate reviewed = issues.isEmpty()
                         ? new DraftCandidate(
@@ -1287,6 +1382,7 @@ public class GroundedTeachingAgent {
                                 candidate.draft(),
                                 EvidenceStatus.SUPPORTED))
                         : correctedPublishedDraft(plan, candidate, issues, assistantRunId);
+                if (!issues.isEmpty()) correctionsStarted++;
                 sections.set(candidate.sectionIndex(), reviewed.section());
                 if (!issues.isEmpty()) correctedCandidates.add(reviewed);
                 recordPublication(
@@ -1419,13 +1515,16 @@ public class GroundedTeachingAgent {
                 () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
                 result -> estimateTokens(result.toString()));
         corrected = normalizeDraft(corrected, candidate.modelRequest());
+        EvidenceStatus correctionStatus = corrected.equals(candidate.draft())
+                ? EvidenceStatus.CITED_DRAFT
+                : EvidenceStatus.SUPPORTED;
         LessonSection correctedSection = validatedSection(
                 plan,
                 candidate.planned(),
                 candidate.evidence(),
                 candidate.modelRequest(),
                 corrected,
-                EvidenceStatus.CITED_DRAFT);
+                correctionStatus);
         recordValidation(
                 assistantRunId,
                 candidate.planned(),

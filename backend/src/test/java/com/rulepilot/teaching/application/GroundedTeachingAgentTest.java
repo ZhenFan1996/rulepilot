@@ -211,6 +211,53 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void replacesAnEnglishVisualCropLabelWithTheChineseStepHeading() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Place the board in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1}, 1_086, 1_511)));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return new SectionDraft(
+                        "照图完成开局",
+                        VisualKind.TABLE_LAYOUT,
+                        "找到桌面中央的主棋盘。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "找到主棋盘",
+                                TeachingMove.VISUAL,
+                                "在图中找到主棋盘，再把它放在桌面中央。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(4, "Gameplay Overview Diagram", 160, 180, 500, 420))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().label()).isEqualTo("找到主棋盘");
+    }
+
+    @Test
     void turnsPersistedVisualPageFactsIntoCitedLessonEvidence() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -968,7 +1015,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
         assertThat(revisions).hasValue(1);
-        assertThat(reviewCalls).hasValue(2);
+        assertThat(reviewCalls).hasValue(1);
         assertThat(retrievalQueries).anyMatch(query -> query.contains("tunnel route"));
         assertThat(lesson.sections().getFirst().steps())
                 .extracting(LessonStep::text)
@@ -1165,6 +1212,99 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
         assertThat(visualCompositions).hasValue(1);
         assertThat(textCompositions).hasValue(1);
+    }
+
+    @Test
+    void fallsBackToCitedTextWhenVisualRepairIsUnavailable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Assemble the main board and place it in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AtomicInteger visualCompositions = new AtomicInteger();
+        AtomicInteger textCompositions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                if (!request.pageImages().isEmpty()) {
+                    visualCompositions.incrementAndGet();
+                    return new SectionDraft(
+                            "照图拼好主棋盘",
+                            VisualKind.TABLE_LAYOUT,
+                            "主棋盘放在桌面中央。",
+                            List.of(chunkId),
+                            List.of(new StepDraft(
+                                    "找到主棋盘",
+                                    TeachingMove.VISUAL,
+                                    "在图中找到主棋盘。",
+                                    List.of(chunkId),
+                                    new VisualFocusDraft(3, "主棋盘", 900, 990, 300, 120))));
+                }
+                textCompositions.incrementAndGet();
+                return new SectionDraft(
+                        "照着文字完成开局",
+                        VisualKind.REFERENCE_CARD,
+                        "把主棋盘放到桌面中央。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "摆放主棋盘",
+                                TeachingMove.DO,
+                                "把主棋盘放到桌面中央。",
+                                List.of(chunkId))));
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                throw new IllegalStateException("vision provider unavailable");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+        assertThat(visualCompositions).hasValue(1);
+        assertThat(textCompositions).hasValue(1);
+    }
+
+    @Test
+    void preservesValidatedTextFallbackPresentationMetadataWhenARevisionDropsIt() {
+        UUID chunkId = UUID.randomUUID();
+        SectionDraft previous = new SectionDraft(
+                "原章节",
+                VisualKind.REFERENCE_CARD,
+                "按引用完成这一节。",
+                List.of(chunkId),
+                List.of(new StepDraft("原步骤", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
+        StepDraft revisedStep = new StepDraft(
+                "修订步骤", TeachingMove.DO, "修订后的规则文字。", List.of(chunkId));
+        SectionDraft revised = new SectionDraft(
+                "修订章节", null, "", List.of(), List.of(revisedStep));
+
+        SectionDraft preserved = GroundedTeachingAgent.preserveTextOnlyPresentationMetadata(previous, revised);
+
+        assertThat(preserved.visualKind()).isEqualTo(VisualKind.REFERENCE_CARD);
+        assertThat(preserved.visualCaption()).isEqualTo("按引用完成这一节。");
+        assertThat(preserved.visualCitationIds()).containsExactly(chunkId);
+        assertThat(preserved.steps()).containsExactly(revisedStep);
     }
 
     @Test
@@ -2078,7 +2218,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void degradesSectionRejectedByEvaluationCritic() {
+    void retainsACitedSectionAfterOneBoundedPostPublicationCorrection() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools retrieval = request -> List.of(evidence(chunkId, versionId));
@@ -2112,8 +2252,8 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.CITED_DRAFT);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("任意放置");
-        assertThat(modelCalls).hasValue(3);
-        assertThat(criticCalls).hasValue(2);
+        assertThat(modelCalls).hasValue(2);
+        assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).containsExactly(
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
                         "Teaching draft accepted: CITED_DRAFT_ACCEPTED"),
@@ -2124,13 +2264,67 @@ class GroundedTeachingAgentTest {
                 new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
                         "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
                 new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"),
-                new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
-                        "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
-                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
-                new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
                         "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"));
+    }
+
+    @Test
+    void boundsWholeLessonCorrectionsWhileKeepingAllCitedChaptersReadable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                25,
+                "Game",
+                "Premise",
+                List.of(
+                        topic(1, TeachingSectionType.SETUP),
+                        topic(2, TeachingSectionType.ACTIONS),
+                        topic(3, TeachingSectionType.SCORING)),
+                "player",
+                Instant.now());
+        AtomicInteger modelCalls = new AtomicInteger();
+        AtomicInteger criticCalls = new AtomicInteger();
+        RecordingInvocations invocations = new RecordingInvocations();
+        TeachingLessonModel model = request -> {
+            modelCalls.incrementAndGet();
+            return new SectionDraft(
+                    "可照着完成的一节",
+                    VisualKind.REFERENCE_CARD,
+                    "把主棋盘放在桌面中央。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "放置主棋盘", TeachingMove.DO, "把主棋盘放在桌面中央。", List.of(chunkId))));
+        };
+        GeneratedContentCritic critic = (request, risk) -> {
+            criticCalls.incrementAndGet();
+            return new GeneratedContentCritic.Review(
+                    true,
+                    List.of(
+                            new Issue(IssueType.CONTRADICTION, 1, List.of(chunkId), "first"),
+                            new Issue(IssueType.CONTRADICTION, 3, List.of(chunkId), "second"),
+                            new Issue(IssueType.CONTRADICTION, 5, List.of(chunkId), "third")));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                critic,
+                invocations,
+                12);
+
+        IllustratedLesson lesson = agent.create(plan, UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.DRAFT_READY);
+        assertThat(lesson.sections()).allMatch(section -> section.evidenceStatus() == EvidenceStatus.CITED_DRAFT);
+        assertThat(modelCalls).hasValue(5);
+        assertThat(criticCalls).hasValue(1);
+        assertThat(invocations.diagnostics).contains(new Diagnostic(
+                "publishTeachingSection|3",
+                ActivityOutcome.SUCCEEDED,
+                "Teaching section published: POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW"));
     }
 
     @Test

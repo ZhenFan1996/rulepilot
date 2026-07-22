@@ -176,6 +176,25 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void bindsAVisualCoreTopicToExistingDirectPageFactsBeforeRejectingThePlan() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
+                new PageInput(3, visualCatalogPage("END", "Players repeat the flow until the game ends.")),
+                new PageInput(4, visualCatalogPage("END OF GAME", "When a runner reaches the finish space, determine the winner.")));
+        OutlineDraft misplacedEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
+
+        OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(misplacedEnding, pages);
+
+        assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(3, 4);
+        TeachingPlanService.validateVisualCoreTopicBindings(repaired, pages);
+    }
+
+    @Test
     void doesNotTreatAFlowPageThatMentionsGameEndAsCompleteEndingEvidence() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
