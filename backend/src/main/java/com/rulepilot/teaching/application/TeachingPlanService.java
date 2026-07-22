@@ -14,6 +14,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
+import java.time.Duration;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,13 +23,17 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -67,6 +72,7 @@ public class TeachingPlanService {
     private final AuditedAgentInvocations invocations;
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
+    private final Duration visualCatalogTimeout;
 
     public TeachingPlanService(
             DocumentProcessing documents,
@@ -78,7 +84,8 @@ public class TeachingPlanService {
             TeachingOutlineModel outlines,
             AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
-            TeachingPlanRepository repository) {
+            TeachingPlanRepository repository,
+            @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout) {
         this.documents = documents;
         this.pageImages = pageImages;
         this.documentScopes = documentScopes;
@@ -89,6 +96,10 @@ public class TeachingPlanService {
         this.invocations = invocations;
         this.plans = plans;
         this.repository = repository;
+        if (visualCatalogTimeout == null || visualCatalogTimeout.isZero() || visualCatalogTimeout.isNegative()) {
+            throw new IllegalArgumentException("visual catalog timeout must be positive");
+        }
+        this.visualCatalogTimeout = visualCatalogTimeout;
     }
 
     @Transactional
@@ -259,7 +270,8 @@ public class TeachingPlanService {
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new java.util.ArrayList<>();
         int parallelism = Math.min(2, batches.size());
-        try (var executor = Executors.newFixedThreadPool(parallelism)) {
+        ExecutorService executor = Executors.newFixedThreadPool(parallelism);
+        try {
             List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream
                     .range(0, batches.size())
                     .mapToObj(batchIndex -> executor.submit(() -> {
@@ -281,7 +293,7 @@ public class TeachingPlanService {
                     .toList();
             for (int index = 0; index < futures.size(); index++) {
                 try {
-                    summaries.addAll(awaitCatalog(futures.get(index)).pages());
+                    summaries.addAll(awaitCatalog(futures.get(index), visualCatalogTimeout).pages());
                 } catch (RuntimeException failedBatch) {
                     if (requireEveryBatch) throw failedBatch;
                     log.warn(
@@ -291,6 +303,8 @@ public class TeachingPlanService {
                             failedBatch);
                 }
             }
+        } finally {
+            executor.shutdownNow();
         }
         return summaries.stream()
                 .sorted(java.util.Comparator.comparingInt(VisualRulebookPageCatalogModel.PageSummary::pageNumber))
@@ -409,11 +423,16 @@ public class TeachingPlanService {
         return count;
     }
 
-    private VisualRulebookPageCatalogModel.CatalogDraft awaitCatalog(
-            Future<VisualRulebookPageCatalogModel.CatalogDraft> future) {
+    static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalog(
+            Future<VisualRulebookPageCatalogModel.CatalogDraft> future, Duration timeout) {
         try {
-            return future.get();
+            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException slowProvider) {
+            future.cancel(true);
+            throw new IllegalStateException(
+                    "visual rulebook catalog timed out after " + timeout.toSeconds() + " seconds", slowProvider);
         } catch (InterruptedException interrupted) {
+            future.cancel(true);
             Thread.currentThread().interrupt();
             throw new IllegalStateException("visual rulebook catalog was interrupted", interrupted);
         } catch (ExecutionException failed) {

@@ -131,6 +131,7 @@ rulepilot:
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
     max-sections: ${VISUAL_MAX_SECTIONS:3}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
+    catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT45S}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:

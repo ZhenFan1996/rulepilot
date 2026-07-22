@@ -5,10 +5,31 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.FutureTask;
 import org.junit.jupiter.api.Test;
 
 class TeachingPlanServiceTest {
+
+    @Test
+    void cancelsASlowVisualCatalogBatchInsteadOfWaitingForTheProviderTimeout() throws InterruptedException {
+        FutureTask<VisualRulebookPageCatalogModel.CatalogDraft> slowCatalog = new FutureTask<>(() -> {
+            Thread.sleep(5_000);
+            return new VisualRulebookPageCatalogModel.CatalogDraft(List.of());
+        });
+        Thread worker = new Thread(slowCatalog, "slow-visual-catalog-test");
+        worker.start();
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> TeachingPlanService.awaitCatalog(slowCatalog, Duration.ofMillis(20)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("timed out");
+        worker.join(250);
+        assertThat(slowCatalog.isCancelled()).isTrue();
+        assertThat(worker.isAlive()).isFalse();
+    }
 
     @Test
     void selectsOnlyBoundedPlannerRequestedPagesForVisualInterpretation() {
