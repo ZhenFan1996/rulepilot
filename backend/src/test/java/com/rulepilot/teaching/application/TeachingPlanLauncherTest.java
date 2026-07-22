@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -125,6 +126,35 @@ class TeachingPlanLauncherTest {
 
         verify(runs).fail(
                 received.id(), 3, "TEACHING_PREPARATION_INVALID_PLAN", "Teaching preparation failed safely");
+    }
+
+    @Test
+    void recordsAFailureBeforeRethrowingAFatalBackgroundWorkerError() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
+                .thenThrow(new AssertionError("simulated worker fault"));
+        when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
+        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+
+        assertThatThrownBy(() -> launcher.launch(documentVersionId, 4, 4, 25, "alice"))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("simulated worker fault");
+
+        verify(runs).fail(
+                received.id(), 3, "TEACHING_PREPARATION_FAILED", "Teaching preparation failed safely");
+        verify(lessons, never()).launch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
     private RunSnapshot run(AssistantRunState state, long revision) {

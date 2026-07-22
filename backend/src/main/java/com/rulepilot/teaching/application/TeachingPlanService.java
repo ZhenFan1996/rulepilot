@@ -104,6 +104,7 @@ public class TeachingPlanService {
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
     private final Duration visualCatalogTimeout;
+    private final int visualCoverageProbePages;
 
     public TeachingPlanService(
             DocumentProcessing documents,
@@ -116,7 +117,8 @@ public class TeachingPlanService {
             AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository,
-            @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout) {
+            @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
+            @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages) {
         this.documents = documents;
         this.pageImages = pageImages;
         this.documentScopes = documentScopes;
@@ -130,7 +132,12 @@ public class TeachingPlanService {
         if (visualCatalogTimeout == null || visualCatalogTimeout.isZero() || visualCatalogTimeout.isNegative()) {
             throw new IllegalArgumentException("visual catalog timeout must be positive");
         }
+        if (visualCoverageProbePages < 1 || visualCoverageProbePages > MAX_INTERPRETED_VISUAL_PAGES) {
+            throw new IllegalArgumentException("visual coverage probe pages must be between one and "
+                    + MAX_INTERPRETED_VISUAL_PAGES);
+        }
         this.visualCatalogTimeout = visualCatalogTimeout;
+        this.visualCoverageProbePages = visualCoverageProbePages;
     }
 
     @Transactional
@@ -170,7 +177,7 @@ public class TeachingPlanService {
                 .map(image -> new PageImageInput(
                         image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
-        var outlineRequest = new OutlineRequest(
+        var initialOutlineRequest = new OutlineRequest(
                 playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
         var outline = preferDocumentTitle(
                 scope.documentTitle(),
@@ -179,10 +186,22 @@ public class TeachingPlanService {
                         "organizeTeachingOutline",
                         outlineInputTokens(pages),
                         "Rulebook lesson topics organized",
-                        () -> outlines.organize(outlineRequest),
+                        () -> outlines.organize(initialOutlineRequest),
                         this::outlineOutputTokens), documentPages));
-        outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+        outline = refineChapterOwnership(
+                initialOutlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+        OutlineRequest outlineRequest = initialOutlineRequest;
+        if (!visualOnly && visualCatalog.available(createdBy)) {
+            List<PageFact> coverageFacts = inspectUnownedSparseVisualPages(
+                    documentVersionId, outline, documentPages, scope.documentTitle(), createdBy, assistantRunId);
+            if (!coverageFacts.isEmpty()) {
+                pages = mergeVisualFactsIntoPageInputs(pages, coverageFacts);
+                outlineRequest = new OutlineRequest(
+                        playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
+            }
+        }
         outline = refineSourcePageCoverage(outlineRequest, outline, pages, assistantRunId, documentPages, scope.documentTitle());
+        outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
         try {
             if (visualOnly) validateVisualFastBaseline(outline);
             plans.validate(outline);
@@ -258,24 +277,37 @@ public class TeachingPlanService {
             Set<Integer> selectedVisualPages = selectedVisualPageNumbers(outline, documentPages);
             if (!selectedVisualPages.isEmpty()) {
                 try {
-                    List<PageFact> interpreted = catalogPageFacts(
-                            documentVersionId,
-                            selectedVisualPages,
-                            iconLegendPage(documentPages).orElse(null),
-                            scope.documentTitle(),
-                            createdBy,
-                            assistantRunId);
-                    if (interpreted.isEmpty()) {
-                        log.warn(
-                                "Visual page interpretation produced no usable facts for document {} pages {}",
+                    Set<Integer> cachedPages = visualFacts.find(documentVersionId, selectedVisualPages).stream()
+                            .map(PageFact::pageNumber)
+                            .collect(Collectors.toSet());
+                    Set<Integer> uncatalogedPages = selectedVisualPages.stream()
+                            .filter(page -> !cachedPages.contains(page))
+                            .collect(Collectors.toCollection(LinkedHashSet::new));
+                    if (uncatalogedPages.isEmpty()) {
+                        log.info(
+                                "Visual page interpretation reused existing facts for document {} pages {}",
                                 documentVersionId,
                                 selectedVisualPages);
                     } else {
-                        visualFacts.merge(documentVersionId, interpreted);
-                        log.info(
-                                "Visual page interpretation stored document {} pages {}",
+                        List<PageFact> interpreted = catalogPageFacts(
                                 documentVersionId,
-                                interpreted.stream().map(PageFact::pageNumber).toList());
+                                uncatalogedPages,
+                                iconLegendPage(documentPages).orElse(null),
+                                scope.documentTitle(),
+                                createdBy,
+                                assistantRunId);
+                        if (interpreted.isEmpty()) {
+                            log.warn(
+                                    "Visual page interpretation produced no usable facts for document {} pages {}",
+                                    documentVersionId,
+                                    uncatalogedPages);
+                        } else {
+                            visualFacts.merge(documentVersionId, interpreted);
+                            log.info(
+                                    "Visual page interpretation stored document {} pages {}",
+                                    documentVersionId,
+                                    interpreted.stream().map(PageFact::pageNumber).toList());
+                        }
                     }
                 } catch (RuntimeException visualFailure) {
                     log.warn(
@@ -302,6 +334,48 @@ public class TeachingPlanService {
                 durationMinutes,
                 createdBy,
                 outline));
+    }
+
+    /**
+     * Reads only the currently unowned pages whose extracted text is too sparse for the normal coverage ledger.
+     * A page enters a later plan revision only if the vision catalog returns a concrete page-local observation; a
+     * missing, unreadable, cover, or non-gameplay page remains unbound rather than becoming a made-up chapter.
+     */
+    private List<PageFact> inspectUnownedSparseVisualPages(
+            UUID documentVersionId,
+            TeachingOutlineModel.OutlineDraft outline,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId) {
+        Set<Integer> selected = unownedSparseVisualCoveragePageNumbers(outline, documentPages, visualCoverageProbePages);
+        if (selected.isEmpty()) return List.of();
+        List<PageFact> cached = visualFacts.find(documentVersionId, selected);
+        Set<Integer> cachedPages = cached.stream().map(PageFact::pageNumber).collect(Collectors.toSet());
+        Set<Integer> missing = selected.stream()
+                .filter(page -> !cachedPages.contains(page))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<PageFact> fresh;
+        try {
+            fresh = missing.isEmpty()
+                    ? List.of()
+                    : catalogPageFacts(documentVersionId, missing, null, rulebookTitle, owner, assistantRunId);
+        } catch (RuntimeException visualFailure) {
+            log.warn(
+                    "Sparse-page visual coverage probe skipped for document {} pages {}",
+                    documentVersionId,
+                    missing,
+                    visualFailure);
+            return cached;
+        }
+        if (!fresh.isEmpty()) {
+            visualFacts.merge(documentVersionId, fresh);
+            log.info(
+                    "Sparse-page visual coverage probe stored document {} pages {}",
+                    documentVersionId,
+                    fresh.stream().map(PageFact::pageNumber).toList());
+        }
+        return mergeVisualPageFacts(cached, fresh);
     }
 
     private TeachingOutlineModel.OutlineDraft refineChapterOwnership(
@@ -527,6 +601,28 @@ public class TeachingPlanService {
                 PageFact::pageNumber, java.util.function.Function.identity(), (first, duplicate) -> first));
         return documentPages.stream()
                 .map(page -> visualPageInput(page.pageNumber(), factsByPage.get(page.pageNumber())))
+                .toList();
+    }
+
+    /**
+     * Preserves the extracted text used by ordinary outline planning while appending a verified page-local visual
+     * ledger for an otherwise sparse source page. The catalog is deliberately marked as navigation data: a later
+     * teaching step still has to retrieve and cite immutable source evidence from that exact page.
+    */
+    static List<PageInput> mergeVisualFactsIntoPageInputs(List<PageInput> pages, List<PageFact> facts) {
+        if (pages == null || pages.isEmpty() || facts == null || facts.isEmpty()) {
+            return pages == null ? List.of() : List.copyOf(pages);
+        }
+        Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
+                PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
+        return pages.stream()
+                .map(page -> {
+                    PageFact fact = factsByPage.get(page.pageNumber());
+                    if (fact == null) return page;
+                    return new PageInput(
+                            page.pageNumber(),
+                            page.text() + "\n\n" + visualPageInput(page.pageNumber(), fact).text());
+                })
                 .toList();
     }
 
@@ -938,6 +1034,56 @@ public class TeachingPlanService {
         return java.util.Collections.unmodifiableSet(selected);
     }
 
+    /**
+     * Samples only unowned pages that have too little extractable text for the normal coverage detector. Sampling is
+     * spread across the rulebook rather than always choosing the first few pages, which are commonly a cover or
+     * contents. The vision catalog decides whether a sampled page is gameplay material before it can trigger an
+     * outline revision.
+     */
+    static Set<Integer> unownedSparseVisualCoveragePageNumbers(
+            TeachingOutlineModel.OutlineDraft outline,
+            List<DocumentProcessing.PageView> pages,
+            int maximumPages) {
+        if (outline == null || pages == null || pages.isEmpty() || maximumPages < 1) return Set.of();
+        Set<Integer> owned = outline.topics().stream()
+                .flatMap(topic -> topic.sourcePageNumbers().stream())
+                .collect(Collectors.toSet());
+        List<Integer> candidates = pages.stream()
+                // Page one is normally the cover. If it contains an actual printed rule, ordinary text coverage
+                // already handles it; otherwise a cover must not spend the sparse-page visual budget.
+                .filter(page -> page.pageNumber() > 1)
+                .filter(page -> !owned.contains(page.pageNumber()))
+                .filter(TeachingPlanService::hasSparseExtractedText)
+                .filter(page -> !isSubstantiveRulebookText(page.text()))
+                .map(DocumentProcessing.PageView::pageNumber)
+                .toList();
+        if (candidates.isEmpty()) return Set.of();
+        int slots = Math.min(maximumPages, candidates.size());
+        LinkedHashSet<Integer> selected = new LinkedHashSet<>();
+        if (slots == 1) {
+            selected.add(candidates.get(candidates.size() / 2));
+        } else {
+            for (int slot = 0; slot < slots; slot++) {
+                int index = (int) Math.round((double) slot * (candidates.size() - 1) / (slots - 1));
+                selected.add(candidates.get(index));
+            }
+        }
+        return java.util.Collections.unmodifiableSet(selected);
+    }
+
+    private static boolean hasSparseExtractedText(DocumentProcessing.PageView page) {
+        String text = page.text() == null ? "" : page.text();
+        long meaningfulCharacters = text.codePoints()
+                .filter(codePoint -> Character.isLetterOrDigit(codePoint))
+                .count();
+        return meaningfulCharacters <= 280;
+    }
+
+    private static boolean isSubstantiveRulebookText(String text) {
+        if (text == null || text.isBlank()) return false;
+        return isSubstantiveRulebookPage(new PageInput(1, text));
+    }
+
     static Optional<String> chapterOwnershipRevisionFeedback(TeachingOutlineModel.OutlineDraft outline) {
         if (outline == null || outline.topics().size() < 2) return Optional.empty();
         List<String> conflicts = new java.util.ArrayList<>();
@@ -993,19 +1139,40 @@ public class TeachingPlanService {
                 for the actual rule, variant, icon, exception, example, or procedure on that page. Preserve the current
                 lesson's covered rules, source-language retrieval queries, and chapter order; do not hide an omitted page
                 by attaching it to an unrelated topic.
+                A `[Visual page catalog]` entry is a page-local observation to navigate the original page image, not a
+                free-standing rule conclusion. Use it only to decide whether the page needs a teaching owner. Keep the
+                source page binding and do not invent an action, condition, or icon meaning that is not visibly stated.
                 Unowned substantive source pages:
                 """ + pageCatalog);
     }
 
     private static boolean isSubstantiveRulebookPage(PageInput page) {
         String text = page.text() == null ? "" : page.text().toLowerCase(Locale.ROOT);
+        if (text.contains(VISUAL_CATALOG_PREFIX.toLowerCase(Locale.ROOT))) {
+            return hasConcreteVisualGameplayEvidence(text);
+        }
         return text.matches("(?s).*\\b(?:setup|turn|action|round|gameplay|game end|score|rule|component|"
                 + "card|token|player|must|may|place|move|discard|variant|advanced)\\b.*")
                 || text.matches("(?s).*(?:设置|回合|行动|结束|计分|规则|组件|卡牌|令牌|玩家|必须|可以|放置|移动|弃牌|变体|高级).*" );
     }
 
+    private static boolean hasConcreteVisualGameplayEvidence(String normalizedText) {
+        if (!substantiveVisualCatalogPage(normalizedText)) return false;
+        return !normalizedText.contains("no factual visual claim is available")
+                && !normalizedText.contains("unreadable")
+                && !normalizedText.contains("不可可靠转写")
+                && !normalizedText.contains("no legible printed term")
+                && !normalizedText.contains("visual cover")
+                && !normalizedText.contains("盒面")
+                && !normalizedText.contains("封面")
+                && !normalizedText.contains("contents")
+                && !normalizedText.contains("目录");
+    }
+
     private static String boundedCoveragePageText(String text) {
         String value = text == null ? "" : text.strip().replaceAll("\\s+", " ");
+        int visualCatalog = value.indexOf(VISUAL_CATALOG_PREFIX);
+        if (visualCatalog >= 0) value = value.substring(visualCatalog);
         return value.length() <= 420 ? value : value.substring(0, 419) + "…";
     }
 

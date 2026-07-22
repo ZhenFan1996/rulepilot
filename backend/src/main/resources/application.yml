@@ -136,6 +136,9 @@ rulepilot:
     # A published section has at most six rule steps. Try every grounded step for a distinct local visual; the
     # enricher still declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
     max-steps-per-section: ${VISUAL_MAX_STEPS_PER_SECTION:6}
+    # Inspect only a small distributed sample of unowned sparse-text pages before coverage refinement. A cataloged
+    # page still needs a concrete gameplay observation before it can create a teaching topic.
+    coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
     catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT45S}
   game-session:

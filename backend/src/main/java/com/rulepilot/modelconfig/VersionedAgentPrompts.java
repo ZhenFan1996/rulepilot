@@ -39,6 +39,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
             @Value("classpath:prompts/teaching-outline-v9-core-evidence-system.txt") Resource teachingOutlineCoreEvidence,
             @Value("classpath:prompts/teaching-outline-v10-chapter-ownership-system.txt") Resource teachingOutlineChapterOwnership,
+            @Value("classpath:prompts/teaching-outline-v11-visual-coverage-system.txt") Resource teachingOutlineVisualCoverage,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
@@ -73,7 +74,8 @@ public class VersionedAgentPrompts {
                 teachingOutlineFidelity,
                 teachingOutlineVisualDensity,
                 teachingOutlineCoreEvidence,
-                teachingOutlineChapterOwnership);
+                teachingOutlineChapterOwnership,
+                teachingOutlineVisualCoverage);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
                 answerSystem,

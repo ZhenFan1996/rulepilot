@@ -93,10 +93,17 @@ public class TeachingPlanLauncher {
         } catch (RuntimeException failure) {
             failIfActive(current, ownerUsername, failure);
             LOGGER.warn("Teaching preparation failed for document version {}", documentVersionId, failure);
+        } catch (Error fatalFailure) {
+            // A background worker must never disappear while its persisted run still says “organizing”. Record a
+            // recoverable state for the player first, then rethrow so the executor and process diagnostics still see
+            // a genuinely fatal JVM failure.
+            failIfActive(current, ownerUsername, fatalFailure);
+            LOGGER.error("Teaching preparation stopped by a fatal worker error for document version {}", documentVersionId, fatalFailure);
+            throw fatalFailure;
         }
     }
 
-    private void failIfActive(RunSnapshot lastKnown, String ownerUsername, RuntimeException failure) {
+    private void failIfActive(RunSnapshot lastKnown, String ownerUsername, Throwable failure) {
         runs.findOwned(lastKnown.id(), ownerUsername)
                 .map(AssistantRuns.RunDetails::run)
                 .filter(run -> !run.state().terminal())
@@ -104,7 +111,7 @@ public class TeachingPlanLauncher {
                         run.id(), run.revision(), failureCode(failure), "Teaching preparation failed safely"));
     }
 
-    private String failureCode(RuntimeException failure) {
+    private String failureCode(Throwable failure) {
         return failure instanceof IllegalArgumentException
                 ? "TEACHING_PREPARATION_INVALID_PLAN"
                 : "TEACHING_PREPARATION_FAILED";

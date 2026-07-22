@@ -24,6 +24,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-outline-v8-visual-density-system.txt"),
                 resource("teaching-outline-v9-core-evidence-system.txt"),
                 resource("teaching-outline-v10-chapter-ownership-system.txt"),
+                resource("teaching-outline-v11-visual-coverage-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
@@ -132,6 +133,9 @@ class VersionedAgentPromptsTest {
                         "one primary teaching owner",
                         "complete cleanup procedure",
                         "chapter-boundary audit",
+                        "Visual-coverage revision v11",
+                        "untrusted navigation context",
+                        "missing visual catalog",
                         "end trigger, winner, victory condition");
         assertThat(prompts.answerSystem())
                 .contains(

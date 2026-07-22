@@ -257,6 +257,56 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void samplesOnlyUnownedSparsePagesThatTheTextCoverageCannotAlreadyExplain() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(topic("setup", false, List.of(2))));
+        List<PageView> pages = List.of(
+                page(1, "GAME TITLE"),
+                page(2, "SETUP Give each player a board."),
+                page(3, "◆ ◆"),
+                page(4, "ADVANCED RULES: special action icons."),
+                page(5, "◇"),
+                page(6, "◉ ◉"),
+                page(7, "△"));
+
+        assertThat(TeachingPlanService.unownedSparseVisualCoveragePageNumbers(outline, pages, 4))
+                .containsExactly(3, 5, 6, 7)
+                .doesNotContain(1, 2, 4);
+    }
+
+    @Test
+    void letsAConcreteVisualLedgerRequestCoverageWithoutDiscardingTheExtractedText() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(topic("setup", false, List.of(2))));
+        List<PageInput> merged = TeachingPlanService.mergeVisualFactsIntoPageInputs(
+                List.of(
+                        new PageInput(2, "SETUP Give each player a board."),
+                        new PageInput(3, "◆ ◆")),
+                List.of(new PageFact(
+                        3,
+                        "ACTION ICONS",
+                        "页面显示两个带箭头的行动图标，并在旁边印有对应标签。",
+                        List.of("ACTION", "ICONS"))));
+
+        assertThat(merged.getLast().text()).contains("◆ ◆", "[Visual page catalog;", "ACTION ICONS");
+        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(outline, merged))
+                .hasValueSatisfying(feedback -> assertThat(feedback)
+                        .contains("Page 3", "ACTION ICONS", "Visual page catalog")
+                        .doesNotContain("◆ ◆"));
+    }
+
+    @Test
+    void doesNotCreateCoverageWorkFromAnUncatalogedSparseVisualPage() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(topic("setup", false, List.of(2))));
+        List<PageInput> pages = TeachingPlanService.visualPageInputs(
+                List.of(page(2, "SETUP Give each player a board."), page(3, "")),
+                List.of());
+
+        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(outline, pages)).isEmpty();
+    }
+
+    @Test
     void retainsEveryVisualOnlySourcePageWhenOneVisualCatalogBatchTimesOut() {
         List<PageInput> inputs = TeachingPlanService.visualPageInputs(
                 List.of(page(1, ""), page(2, ""), page(3, "")),
