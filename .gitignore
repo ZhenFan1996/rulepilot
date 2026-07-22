@@ -41,6 +41,7 @@ backend/tmp/
 Thumbs.db
 
 # Temporary files
+/tmp/
 *.swp
 *.swo
 *.tmp

@@ -2,8 +2,15 @@ SHELL := /bin/sh
 
 PRODUCT_EVAL_DATASET ?= examples/evaluation/lantern-relay/product-evaluation.json
 PRODUCT_EVAL_OUTPUT ?= .local/product-evaluation/latest-report.json
+CORPUS_TEACHING ?= deepseek
+CORPUS_VISUAL ?= qwen
+CORPUS_ANSWER ?= deepseek
+CORPUS_CRITIC ?= deepseek
+CORPUS_TIMEOUT_MINUTES ?= 20
+CORPUS_RESTART ?=
+CORPUS_REFRESH_PLAN ?=
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -31,6 +38,13 @@ corpus-preflight: ## Validate one local publisher rulebook before public-corpus 
 	@test -n "$(SOURCE)" || (echo "SOURCE is required"; exit 2)
 	@test -n "$(COVER)$(BGG_ID)" || (echo "COVER or BGG_ID is required"; exit 2)
 	@node scripts/preflight-public-rulebook.mjs --pdf "$(PDF)" --source "$(SOURCE)" $(if $(COVER),--cover "$(COVER)") $(if $(BGG_ID),--bgg-id "$(BGG_ID)")
+
+corpus-generate: ## Generate one resumable public lesson from the ignored corpus manifest (TITLE=)
+	@test -n "$(TITLE)" || (echo "TITLE is required"; exit 2)
+	@node scripts/generate-public-corpus-entry.mjs --title "$(TITLE)" \
+		--timeout-minutes "$(CORPUS_TIMEOUT_MINUTES)" $(if $(CORPUS_RESTART),--restart) $(if $(CORPUS_REFRESH_PLAN),--refresh-plan) \
+		--teaching "$(CORPUS_TEACHING)" --visual "$(CORPUS_VISUAL)" \
+		--answer "$(CORPUS_ANSWER)" --critic "$(CORPUS_CRITIC)"
 
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
@@ -76,6 +90,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-architecture.sh
 	@node --test scripts/evaluate-product.test.mjs
 	@node --test scripts/preflight-public-rulebook.test.mjs
+	@node --test scripts/generate-public-corpus-entry.test.mjs
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \
