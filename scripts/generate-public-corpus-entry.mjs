@@ -58,6 +58,10 @@ export function selectEntry(manifest, title) {
   return matches[0]
 }
 
+export function needsBggCatalog(entry) {
+  return !entry?.publisherCover && Number.isInteger(entry?.bggId) && entry.bggId > 0
+}
+
 export function slugify(value) {
   const slug = value.normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
   return slug || 'rulebook'
@@ -357,7 +361,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     }
   }
 
-  if (!state.catalog && entry.bggId) {
+  if (!state.catalog && needsBggCatalog(entry)) {
     const status = await client.request('/api/v1/bgg/status')
     if (!status.configured) {
       throw new Error(`${entry.title} requires BGG cover metadata, but the local BGG token is not configured`)

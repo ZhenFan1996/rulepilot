@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   parseArguments,
+  needsBggCatalog,
   selectEntry,
   selectReusableDocument,
   slugify,
@@ -18,6 +19,12 @@ test('selects one qualified title without accepting excluded or fuzzy entries', 
   assert.equal(selectEntry(manifest, 'point salad').file, 'point-salad.pdf')
   assert.throws(() => selectEntry(manifest, 'Point'), /not found/)
   assert.throws(() => selectEntry(manifest, 'Point Salad FAQ'), /not found/)
+})
+
+test('uses BGG catalog metadata only when an official publisher cover is unavailable', () => {
+  assert.equal(needsBggCatalog({ publisherCover: 'https://publisher.example/cover.png', bggId: 123 }), false)
+  assert.equal(needsBggCatalog({ publisherCover: null, bggId: 123 }), true)
+  assert.equal(needsBggCatalog({ publisherCover: null, bggId: null }), false)
 })
 
 test('parses bounded local-run options and creates stable report slugs', () => {

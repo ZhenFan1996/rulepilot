@@ -10,7 +10,7 @@ CORPUS_TIMEOUT_MINUTES ?= 20
 CORPUS_RESTART ?=
 CORPUS_REFRESH_PLAN ?=
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -38,6 +38,11 @@ corpus-preflight: ## Validate one local publisher rulebook before public-corpus 
 	@test -n "$(SOURCE)" || (echo "SOURCE is required"; exit 2)
 	@test -n "$(COVER)$(BGG_ID)" || (echo "COVER or BGG_ID is required"; exit 2)
 	@node scripts/preflight-public-rulebook.mjs --pdf "$(PDF)" --source "$(SOURCE)" $(if $(COVER),--cover "$(COVER)") $(if $(BGG_ID),--bgg-id "$(BGG_ID)")
+
+corpus-cover-discover: ## Find a title-matching cover on an official publisher page (SOURCE= TITLE=)
+	@test -n "$(SOURCE)" || (echo "SOURCE is required"; exit 2)
+	@test -n "$(TITLE)" || (echo "TITLE is required"; exit 2)
+	@node scripts/discover-publisher-cover.mjs --source "$(SOURCE)" --title "$(TITLE)"
 
 corpus-generate: ## Generate one resumable public lesson from the ignored corpus manifest (TITLE=)
 	@test -n "$(TITLE)" || (echo "TITLE is required"; exit 2)
