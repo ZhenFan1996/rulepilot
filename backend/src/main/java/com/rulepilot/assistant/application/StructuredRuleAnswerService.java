@@ -128,6 +128,14 @@ public class StructuredRuleAnswerService {
     private static final Pattern EXHAUSTED_SOURCE_QUESTION = Pattern.compile(
             "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
                     + "(?=.*(?:not\\s+enough|insufficient|empty|runs\\s+out|不足|不够|用完|没有骰子)).*");
+    private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
+            "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
+                    + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
+    private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
+            "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
+                    + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
+    private static final String END_TURN_PROCEDURE_INTENT_MARKER =
+            "completed turn draw reveal resolve event alert card effect next player procedure";
     private static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
@@ -317,9 +325,9 @@ public class StructuredRuleAnswerService {
             return fromConfirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
-        AnswerCacheKey cacheKey = cacheKey(understood, context, gameSessionId);
-        if (useCache) {
-            var cached = findCached(cacheKey);
+        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(understood, context, gameSessionId) : Optional.empty();
+        if (cacheKey.isPresent()) {
+            var cached = findCached(cacheKey.get());
             if (cached.isPresent()) {
                 cacheHits.increment();
                 return cached.get();
@@ -431,6 +439,9 @@ public class StructuredRuleAnswerService {
                 return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "图标对应的规则资源无法从现有证据中可靠确定。");
             }
         }
+        if (requiresEndTurnProcedureCitation(modelRequest) && !citesEndTurnProcedure(modelRequest, draft)) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用回合结束处理的直接规则依据。");
+        }
         draft = includeResolvedVisualReferenceCitations(modelRequest, draft);
         StructuredRuleAnswer answer;
         try {
@@ -472,8 +483,8 @@ public class StructuredRuleAnswerService {
                     exception.getClass().getSimpleName());
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
         }
-        if (useCache) {
-            saveCached(cacheKey, answer);
+        if (cacheKey.isPresent()) {
+            saveCached(cacheKey.get(), answer);
         }
         return answer;
     }
@@ -593,6 +604,12 @@ public class StructuredRuleAnswerService {
 
     private List<String> playerFacingRepairFeedback(ModelRequest request, ModelDraft draft) {
         List<String> feedback = new ArrayList<>();
+        if (requiresEndTurnProcedureCitation(request) && !citesEndTurnProcedure(request, draft)) {
+            feedback.add("END_TURN_PROCEDURE_CITATION: The question asks what happens after a player finishes a turn. "
+                    + "Cite the supplied excerpt that explicitly connects turn end to drawing, revealing, reading, "
+                    + "resolving, or executing the event/card effect. Setup instructions that only place that deck "
+                    + "or card area are not sufficient evidence for the end-of-turn procedure.");
+        }
         if (requiresVisualIdentityReconciliation(request, draft)) {
             feedback.add("VISUAL_IDENTITY: The draft relies on an unresolved icon, color, shape, emoji, or guessed "
                     + "resource name. Reconcile every supplied page before answering. Do not reject an entire visual "
@@ -638,6 +655,35 @@ public class StructuredRuleAnswerService {
                     + "if the evidence does not resolve the successor, set answerable to false.");
         }
         return List.copyOf(feedback);
+    }
+
+    private boolean requiresEndTurnProcedureCitation(ModelRequest request) {
+        return END_TURN_PROCEDURE_QUESTION.matcher(request.question()).matches()
+                && request.evidence().stream()
+                        .anyMatch(this::hasEvidencedEndTurnProcedure);
+    }
+
+    private boolean citesEndTurnProcedure(ModelRequest request, ModelDraft draft) {
+        Set<UUID> citations = Set.copyOf(draft.citationIds());
+        return request.evidence().stream()
+                .filter(source -> citations.contains(source.chunkId()))
+                .anyMatch(this::hasEvidencedEndTurnProcedure);
+    }
+
+    private boolean isEndTurnProcedureIntent(String query) {
+        return query != null && query.contains(END_TURN_PROCEDURE_INTENT_MARKER);
+    }
+
+    private boolean hasEvidencedEndTurnProcedure(HybridEvidenceHit hit) {
+        return hit != null && hasEvidencedEndTurnProcedure(hit.evidence().excerpt());
+    }
+
+    private boolean hasEvidencedEndTurnProcedure(EvidenceInput evidence) {
+        return evidence != null && hasEvidencedEndTurnProcedure(evidence.excerpt());
+    }
+
+    private boolean hasEvidencedEndTurnProcedure(String excerpt) {
+        return excerpt != null && EVIDENCED_END_TURN_PROCEDURE.matcher(excerpt).find();
     }
 
     private ModelDraft revisePlayerFacingDraft(
@@ -900,7 +946,7 @@ public class StructuredRuleAnswerService {
         }
     }
 
-    private AnswerCacheKey cacheKey(
+    private Optional<AnswerCacheKey> cacheKey(
             UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
         String conversationScopedQuestion = context.previousQuestion() == null
                 ? question.normalizedQuestion()
@@ -912,10 +958,17 @@ public class StructuredRuleAnswerService {
         if (context.learningIntent() != null) {
             conversationScopedQuestion = context.learningIntent().name() + ":" + conversationScopedQuestion;
         }
-        return new AnswerCacheKey(
-                context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
-                conversationScopedQuestion, context.currentLessonSection(),
-                context.gamePhase(), context.playerCount(), context.activeExpansions());
+        try {
+            return Optional.of(new AnswerCacheKey(
+                    context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
+                    conversationScopedQuestion, context.currentLessonSection(),
+                    context.gamePhase(), context.playerCount(), context.activeExpansions()));
+        } catch (IllegalArgumentException unavailableRuleDataVersion) {
+            LOGGER.warn(
+                    "Rule data version is unavailable for document version {}; bypassing answer cache",
+                    context.documentVersionId());
+            return Optional.empty();
+        }
     }
 
     private RetrievalResult retrieveEvidence(
@@ -960,6 +1013,12 @@ public class StructuredRuleAnswerService {
                 boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
                 if (!retrieved.isEmpty() && !supplementaryIntent && isSuccessorTransitionIntent(intent.query())) {
                     retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
+                } else if (!retrieved.isEmpty() && !supplementaryIntent && isEndTurnProcedureIntent(intent.query())) {
+                    HybridEvidenceHit directProcedure = retrieved.stream()
+                            .filter(this::hasEvidencedEndTurnProcedure)
+                            .findFirst()
+                            .orElse(retrieved.getFirst());
+                    intentAnchors.putIfAbsent(directProcedure.evidence().chunkId(), directProcedure);
                 } else if (!retrieved.isEmpty() && !supplementaryIntent) {
                     HybridEvidenceHit diverseAnchor = retrieved.stream()
                             .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))

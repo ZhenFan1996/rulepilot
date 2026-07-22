@@ -788,14 +788,30 @@ public class GroundedTeachingAgent {
                 pageImages,
                 planned.retrievalQueries(),
                 plan.createdBy());
-        SectionDraft draft = invocations.invoke(
-                assistantRunId,
-                ActivityType.MODEL,
-                operationName("composeTeachingSection", planned.position()),
-                estimateTokens(modelRequest.toString()),
-                "Teaching section model output received",
-                () -> model.compose(modelRequest),
-                result -> estimateTokens(result.toString()));
+        SectionDraft draft;
+        try {
+            draft = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    operationName("composeTeachingSection", planned.position()),
+                    estimateTokens(modelRequest.toString()),
+                    "Teaching section model output received",
+                    () -> model.compose(modelRequest),
+                    result -> estimateTokens(result.toString()));
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException visualCompositionFailure) {
+            if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
+                log.warn(
+                        "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
+                        planned.topicKey(),
+                        visualCompositionFailure.getMessage());
+                recordVisualTextFallback(assistantRunId, planned);
+                return fallbackToTextDraft(
+                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0);
+            }
+            throw visualCompositionFailure;
+        }
         draft = normalizeDraft(draft, modelRequest);
         int maxRepairAttempts = modelRequest.pageImages().isEmpty() ? MAX_DRAFT_REPAIR_ATTEMPTS : 1;
         for (int repair = 0; ; repair++) {
@@ -1698,6 +1714,15 @@ public class GroundedTeachingAgent {
                 "validateTeachingSection|" + section.position() + "|" + revision,
                 outcome,
                 "Teaching draft " + (outcome == ActivityOutcome.SUCCEEDED ? "accepted: " : "rejected: ") + category);
+    }
+
+    private void recordVisualTextFallback(UUID runId, TeachingPlan.PlannedSection section) {
+        invocations.record(
+                runId,
+                ActivityType.VALIDATION,
+                "fallbackVisualTeachingSection|" + section.position(),
+                ActivityOutcome.SUCCEEDED,
+                "Visual composition unavailable; continuing with cited text");
     }
 
     private void recordPublication(

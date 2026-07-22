@@ -47,6 +47,10 @@ public final class AnswerRetrievalPlanner {
         if (exhaustedSourceQuery != null) {
             intents.add(new RetrievalIntent(exhaustedSourceQuery, Set.of(), null));
         }
+        String endTurnProcedureQuery = endTurnProcedureQuery(question.normalizedQuestion());
+        if (endTurnProcedureQuery != null) {
+            intents.add(new RetrievalIntent(endTurnProcedureQuery, Set.of(), null));
+        }
         String stateTransitionQuery = stateTransitionQuery(question.normalizedQuestion());
         if (stateTransitionQuery != null) {
             intents.add(new RetrievalIntent(stateTransitionQuery, Set.of(), null));
@@ -273,6 +277,40 @@ public final class AnswerRetrievalPlanner {
         if (!asksAboutSourceArea || !asksAboutShortage) return null;
         return bounded(question + " source area supply pile deck depleted empty insufficient discard return recycle "
                 + "refill reshuffle continue procedure 资源区 牌堆 供应区 耗尽 为空 弃置 回收 移回 补充 洗混 继续");
+    }
+
+    private static String endTurnProcedureQuery(String question) {
+        boolean asksAfterTurn = containsAny(
+                question,
+                "end turn",
+                "ends turn",
+                "finish turn",
+                "after turn",
+                "after my turn",
+                "结束回合",
+                "结束自己的回合",
+                "结束本回合",
+                "完成回合",
+                "回合结束");
+        boolean asksForEventProcedure = containsAny(
+                question,
+                "draw",
+                "reveal",
+                "resolve",
+                "alert",
+                "event",
+                "card",
+                "抽",
+                "翻",
+                "结算",
+                "执行",
+                "警报",
+                "事件",
+                "牌");
+        if (!asksAfterTurn || !asksForEventProcedure) return null;
+        return bounded("completed turn draw reveal resolve event alert card effect next player procedure "
+                + "完成回合后 从牌堆抽取事件或警报 执行并结算卡牌效果 然后下一位玩家 回合结束 警报 结算 "
+                + question);
     }
 
     private static String roundResetQuery(String question) {

@@ -1705,6 +1705,99 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void bypassesTheCacheWhenRuleDataVersionIsUnavailableButEvidenceIsReadable() {
+        RuleEvidenceHit source = evidence("SCORING");
+        InMemoryAnswerCache cache = new InMemoryAnswerCache();
+        AtomicInteger modelCalls = new AtomicInteger();
+        RuleDataVersion unavailableVersion = new RuleDataVersion() {
+            @Override
+            public long current(UUID documentVersionId) {
+                throw new IllegalArgumentException("document version does not exist");
+            }
+
+            @Override
+            public long increment(UUID documentVersionId) {
+                throw new UnsupportedOperationException("rule data is unavailable");
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new ModelDraft(
+                            "Coins score one point.", "Each coin contributes one point.",
+                            List.of(source.chunkId()), List.of(), "HIGH");
+                },
+                cache,
+                new RecordingRateLimiter(),
+                unavailableVersion,
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+        QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
+
+        StructuredRuleAnswer first = service.answer("How are coins scored?", context);
+        StructuredRuleAnswer second = service.answer("How are coins scored?", context);
+
+        assertThat(first.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(second.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(modelCalls).hasValue(2);
+        assertThat(cache.values).isEmpty();
+    }
+
+    @Test
+    void repairsAnEndOfTurnAnswerUntilItCitesTheDirectProcedure() {
+        RuleEvidenceHit setupOnly = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Event deck", "Put the event deck beside the board.", 3, 3, 0.9);
+        RuleEvidenceHit turnProcedure = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Turn end", "At the end of your turn, draw an event card and resolve its effect.", 6, 6, 0.8);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Draw an event card.",
+                        "After ending your turn, draw and resolve the event.",
+                        List.of(setupOnly.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                assertThat(feedback).anyMatch(item -> item.startsWith("END_TURN_PROCEDURE_CITATION"));
+                revisions.incrementAndGet();
+                return new ModelDraft(
+                        "Draw an event card and resolve it.",
+                        "After ending your turn, draw the event card and carry out its effect.",
+                        List.of(turnProcedure.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> query.startsWith("completed turn draw reveal")
+                        ? List.of(
+                                new HybridEvidenceHit(setupOnly, 0.04, 1, null, false),
+                                new HybridEvidenceHit(turnProcedure, 0.03, 2, null, false))
+                        : List.of(new HybridEvidenceHit(setupOnly, 0.04, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "我结束自己的回合后，事件牌要怎样处理？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "TURN", 3, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(turnProcedure.chunkId());
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void stopsBeforeRetrievalWhenRateLimitStorageIsUnavailable() {
         AtomicBoolean retrievalCalled = new AtomicBoolean();
         RuleAnswerRateLimiter unavailableLimiter = new RuleAnswerRateLimiter() {

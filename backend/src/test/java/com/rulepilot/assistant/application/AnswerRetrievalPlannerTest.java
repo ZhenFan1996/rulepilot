@@ -32,6 +32,24 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
+    void plansAProcedureIntentForAnEndOfTurnEventQuestion() {
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                UUID.randomUUID(),
+                "我结束自己的回合后，事件牌要怎样处理？",
+                "我结束自己的回合后，事件牌要怎样处理？",
+                QuestionType.RULE_QUERY,
+                List.of("回合", "事件牌"),
+                Set.of(),
+                "ROUND_STRUCTURE");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "TURN", 4, Set.of()));
+
+        assertThat(intents.getFirst().query()).contains(
+                "completed turn", "draw", "resolve", "完成回合后", "结算", "事件牌");
+    }
+
+    @Test
     void putsBoundedModelProvidedQueriesFirstWithoutAddingSectionFilters() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),

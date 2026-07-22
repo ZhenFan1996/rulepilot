@@ -1112,6 +1112,62 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void fallsBackToCitedTextWhenVisualCompositionIsUnavailable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence visualEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Assemble the main board and place it in the middle of the table.",
+                4,
+                4,
+                List.of(new RulePageImage(4, "image/jpeg", new byte[] {1, 2, 3}, 1_086, 1_511)));
+        AtomicInteger visualCompositions = new AtomicInteger();
+        AtomicInteger textCompositions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                if (!request.pageImages().isEmpty()) {
+                    visualCompositions.incrementAndGet();
+                    throw new IllegalStateException("vision provider unavailable");
+                }
+                textCompositions.incrementAndGet();
+                return new SectionDraft(
+                        "照着文字完成开局",
+                        VisualKind.REFERENCE_CARD,
+                        "把主棋盘放到桌面中央。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "摆放主棋盘",
+                                TeachingMove.DO,
+                                "把主棋盘放到桌面中央。",
+                                List.of(chunkId))));
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(visualEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+        assertThat(visualCompositions).hasValue(1);
+        assertThat(textCompositions).hasValue(1);
+    }
+
+    @Test
     void withholdsStoredPageImagesFromATextOnlyTeachingModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
