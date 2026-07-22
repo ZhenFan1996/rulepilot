@@ -150,7 +150,7 @@ public class VisualLessonEnricher {
             return result(section, outcomeFor(location.diagnostic()));
         }
         if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
-        if (!isLargeEnoughForPlayer(located.get())) return result(section, Outcome.REJECTED_TOO_SMALL);
+        if (!isReadableForPlayer(located.get())) return result(section, Outcome.REJECTED_TOO_SMALL);
         if (located.get().visibleDescription().isBlank()) return result(section, Outcome.REJECTED_MISSING_OBSERVATION);
         if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
         if (!intersectsCandidate(located.get(), attachedCandidates)) return result(section, Outcome.REJECTED_OUTSIDE_CANDIDATE);
@@ -280,8 +280,11 @@ public class VisualLessonEnricher {
         return region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000;
     }
 
-    private boolean isLargeEnoughForPlayer(VisualRegionLocator.LocatedRegion region) {
-        return region.width() >= 80 && region.height() >= 60;
+    private boolean isReadableForPlayer(VisualRegionLocator.LocatedRegion region) {
+        if (region.width() >= 80 && region.height() >= 60) return true;
+        // A focused icon group is intentionally allowed to be smaller: the reader opens the crop at full size.
+        // A word-only label is not, because enlarging it adds no rulebook understanding.
+        return region.width() >= 40 && region.height() >= 40 && isIconCluster(region);
     }
 
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
@@ -302,6 +305,19 @@ public class VisualLessonEnricher {
                 && !label.matches(".*\\b(text|header|paragraph)\\b.*");
     }
 
+    private boolean isIconCluster(VisualRegionLocator.LocatedRegion region) {
+        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        return observation.contains("图标")
+                || observation.contains("符号")
+                || observation.contains("令牌")
+                || observation.contains("标记")
+                || observation.contains("骰子")
+                || observation.contains("箭头")
+                || observation.contains("指示物")
+                || observation.contains("花色")
+                || observation.matches(".*\\b(icon|symbol|token|marker|die|dice|meeple)\\b.*");
+    }
+
     private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {
         return candidate.x() < x + width && x < candidate.x() + candidate.width()
                 && candidate.y() < y + height && y < candidate.y() + candidate.height();
@@ -317,7 +333,7 @@ public class VisualLessonEnricher {
                 .orElse(0);
         LessonStep supportedStep = steps.get(supportedStepIndex);
         String observation = stripTrailingPunctuation(region.visibleDescription());
-        String visualText = visualText(observation, supportedStep.text());
+        String visualText = visualText(observation, supportedStep.text(), isIconCluster(region));
         String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
         steps.set(supportedStepIndex, new LessonStep(
                 supportedStep.position(),
@@ -334,8 +350,10 @@ public class VisualLessonEnricher {
                 distinct(section.visualSourceChunkIds(), region.supportedEvidenceIds()), steps);
     }
 
-    private String visualText(String observation, String ruleText) {
-        String prefix = "图中可见" + observation + "。结合图片完成这一步：";
+    private String visualText(String observation, String ruleText, boolean iconCluster) {
+        String prefix = iconCluster
+                ? "图中图标提示：" + observation + "。先认出这组图标，再按规则处理："
+                : "图中可见" + observation + "。结合图片完成这一步：";
         String combined = prefix + ruleText;
         return combined.length() <= 600 ? combined : ruleText;
     }

@@ -44,7 +44,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
             aid. When several crops are relevant, prefer a compact icon, component, flow, or worked state that a new
             player can identify at the table. A diagram or icon group is useful even if its meaning is explained by the
-            cited text rather than printed inside the crop.
+            cited text rather than printed inside the crop. For an icon rule, prefer one compact crop containing the
+            complete icon or icon group and its adjacent printed label, legend, arrow, or state when present. Small icon
+            crops are welcome when the icons remain visually distinct; never return a word-only label as an icon crop.
+            In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
+            "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
+            game effect.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. label and visibleDescription must both name a literal visible item, not repeat the lesson claim.

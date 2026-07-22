@@ -59,7 +59,7 @@ class VisualLessonEnricherTest {
                 .enrich(version, lesson(chunk));
 
         assertThat(enriched.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("图中可见圆形标记位于一条弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。");
+                .isEqualTo("图中图标提示：圆形标记位于一条弧形刻度旁，箭头指向前进方向。先认出这组图标，再按规则处理：把探测器放到轨道上。");
     }
 
     @Test
@@ -146,6 +146,32 @@ class VisualLessonEnricherTest {
                 .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL);
         assertThat(paragraph.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
                 .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+    }
+
+    @Test
+    void accepts_a_compact_icon_group_and_explains_how_to_read_it_with_the_rule() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "行动图标组",
+                                "一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头",
+                                120,
+                                220,
+                                52,
+                                52,
+                                List.of(chunk))))
+                .enrich(UUID.randomUUID(), lesson(chunk));
+
+        var step = enriched.sections().getFirst().steps().getFirst();
+        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(step.text()).isEqualTo(
+                "图中图标提示：一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头。先认出这组图标，再按规则处理：把探测器放到轨道上。");
+        assertThat(step.visualFocus()).isNotNull();
     }
 
     @Test
