@@ -54,6 +54,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
             "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
             game effect.
+            Each supplied claim lists sourcePages. Choose a supportedClaimRef whose sourcePages includes the crop page;
+            this keeps the printed rule and the pictured object together. Do not use a similarly named component from a
+            different page as a substitute.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. label and visibleDescription must both name a literal visible item, not repeat the lesson claim.
@@ -112,7 +115,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())
-                                    .mapToObj(index -> Map.of("ref", "C" + (index + 1), "text", request.claims().get(index).text()))
+                                    .mapToObj(index -> Map.of(
+                                            "ref", "C" + (index + 1),
+                                            "text", request.claims().get(index).text(),
+                                            "sourcePages", request.claims().get(index).sourcePages()))
                                     .toList())
                             .param("candidates", request.candidates())
                             .param("correction", correction);
@@ -137,12 +143,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 rejected = Rejection.NON_CHINESE_OBSERVATION;
                 continue;
             }
-            List<UUID> supported = response.supportedClaimRefs().stream()
-                    .map(ref -> claimId(ref, request))
+            List<VisualRegionLocator.Claim> supportedClaims = response.supportedClaimRefs().stream()
+                    .map(ref -> claim(ref, request))
                     .filter(java.util.Objects::nonNull)
                     .distinct()
                     .toList();
-            if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
+            List<UUID> supported = supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).toList();
+            boolean hasSamePageEvidence = supportedClaims.stream()
+                    .anyMatch(claim -> claim.sourcePages().isEmpty() || claim.sourcePages().contains(response.pageNumber()));
+            if (supported.isEmpty()
+                    || !hasSamePageEvidence
+                    || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
                 rejected = Rejection.UNSUPPORTED_SCOPE;
                 continue;
             }
@@ -196,10 +207,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 region.supportedClaimRefs());
     }
 
-    private UUID claimId(String reference, VisualLocationRequest request) {
+    private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
         if (reference == null || !reference.matches("C[1-9][0-9]*")) return null;
         int index = Integer.parseInt(reference.substring(1)) - 1;
-        return index >= 0 && index < request.claims().size() ? request.claims().get(index).evidenceId() : null;
+        return index >= 0 && index < request.claims().size() ? request.claims().get(index) : null;
     }
 
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {

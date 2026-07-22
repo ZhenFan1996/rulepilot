@@ -292,10 +292,12 @@ public class VisualLessonEnricher {
     }
 
     private List<Claim> claims(LessonSection section) {
-        Map<UUID, String> claims = new LinkedHashMap<>();
-        section.steps().forEach(step -> step.sourceChunkIds()
-                .forEach(id -> claims.putIfAbsent(id, step.text())));
-        return claims.entrySet().stream().map(entry -> new Claim(entry.getKey(), entry.getValue())).toList();
+        Map<UUID, Claim> claims = new LinkedHashMap<>();
+        section.steps().forEach(step -> step.sourceChunkIds().forEach(id -> claims.merge(
+                id,
+                new Claim(id, step.text(), step.sourcePages()),
+                (first, next) -> new Claim(first.evidenceId(), first.text(), distinct(first.sourcePages(), next.sourcePages())))));
+        return List.copyOf(claims.values());
     }
 
     private boolean intersectsCandidate(

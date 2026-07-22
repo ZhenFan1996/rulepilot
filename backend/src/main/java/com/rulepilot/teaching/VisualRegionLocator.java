@@ -121,12 +121,20 @@ public interface VisualRegionLocator {
         }
     }
 
-    record Claim(UUID evidenceId, String text) {
+    record Claim(UUID evidenceId, String text, List<Integer> sourcePages) {
         public Claim {
             if (evidenceId == null || text == null || text.isBlank() || text.length() > 600) {
                 throw new IllegalArgumentException("visual claim is invalid");
             }
             text = text.strip();
+            sourcePages = sourcePages == null ? List.of() : List.copyOf(sourcePages);
+            if (sourcePages.stream().anyMatch(page -> page == null || page < 1)) {
+                throw new IllegalArgumentException("visual claim pages are invalid");
+            }
+        }
+
+        public Claim(UUID evidenceId, String text) {
+            this(evidenceId, text, List.of());
         }
     }
 
