@@ -147,6 +147,32 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void accepts_a_compact_score_reference_even_when_it_contains_printed_labels() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "最终计分表",
+                                "一个四列计分表，把野生动物、栖息地走廊和自然标记分数排在同一行",
+                                120,
+                                220,
+                                420,
+                                260,
+                                List.of(chunk),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
+    }
+
+    @Test
     void rejects_a_contents_list_even_when_it_names_real_game_components() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
@@ -284,6 +310,38 @@ class VisualLessonEnricherTest {
             assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
             assertThat(outcome.summary()).contains("2 处");
         });
+    }
+
+    @Test
+    void attempts_a_distinct_visual_for_every_published_rule_step_in_a_section() {
+        UUID sharedEvidence = UUID.randomUUID();
+        java.util.List<Integer> requestedSteps = new java.util.ArrayList<>();
+        VisualRegionLocator locator = request -> {
+            int stepPosition = request.claims().getFirst().stepPosition();
+            requestedSteps.add(stepPosition);
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    2,
+                    "规则图例 " + stepPosition,
+                    "一个彩色行动图标组，旁边有指向下一步的箭头",
+                    100 + stepPosition * 120,
+                    180,
+                    100,
+                    100,
+                    List.of(sharedEvidence),
+                    List.of(stepPosition)));
+        };
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        locator)
+                .enrich(UUID.randomUUID(), sixRuleLesson(sharedEvidence));
+
+        assertThat(requestedSteps).containsExactly(1, 2, 3, 4, 5, 6);
+        assertThat(enriched.sections().getFirst().steps())
+                .allSatisfy(step -> assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL));
     }
 
     @Test
@@ -604,6 +662,26 @@ class VisualLessonEnricherTest {
                 1, "turn", List.of("turn"), "轮到你时", true,
                 IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
                 "完成一次行动", List.of(), List.of(), List.of(first, second));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson sixRuleLesson(UUID evidence) {
+        var steps = new java.util.ArrayList<IllustratedLesson.LessonStep>();
+        for (int position = 1; position <= 6; position++) {
+            steps.add(new IllustratedLesson.LessonStep(
+                    position,
+                    "规则 " + position,
+                    IllustratedLesson.TeachingMove.DO,
+                    "按顺序完成第 " + position + " 个行动。",
+                    List.of(2),
+                    List.of(evidence)));
+        }
+        var section = new IllustratedLesson.LessonSection(
+                1, "turn", List.of("turn"), "完整回合", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                "完成完整回合", List.of(), List.of(), steps);
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

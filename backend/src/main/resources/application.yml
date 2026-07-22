@@ -129,7 +129,10 @@ rulepilot:
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}
-    max-sections: ${VISUAL_MAX_SECTIONS:5}
+    max-sections: ${VISUAL_MAX_SECTIONS:12}
+    # A published section has at most six rule steps. Try every grounded step for a distinct local visual; the
+    # enricher still declines duplicate, text-only, or unrelated crops instead of decorating prose with page images.
+    max-steps-per-section: ${VISUAL_MAX_STEPS_PER_SECTION:6}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
     catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT45S}
   game-session:

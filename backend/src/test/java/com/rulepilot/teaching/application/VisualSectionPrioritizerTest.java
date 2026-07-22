@@ -36,6 +36,24 @@ class VisualSectionPrioritizerTest {
         assertThat(selected).containsExactly(1);
     }
 
+    @Test
+    void supports_a_higher_visual_density_when_the_published_lesson_requests_it() {
+        var selected = new VisualSectionPrioritizer().positions(List.of(
+                sectionWithVisualSteps(1, 3),
+                sectionWithVisualSteps(2, 4)), 2, 4);
+
+        assertThat(selected).containsExactly(1);
+    }
+
+    @Test
+    void keeps_a_section_eligible_until_every_published_rule_step_has_been_considered() {
+        var selected = new VisualSectionPrioritizer().positions(List.of(
+                sectionWithVisualSteps(1, 5),
+                sectionWithVisualSteps(2, 6)), 2, 6);
+
+        assertThat(selected).containsExactly(1);
+    }
+
     private LessonSection section(int position, VisualKind kind, boolean required, EvidenceStatus evidence) {
         return new LessonSection(
                 position, "section-" + position, List.of(), "Section " + position, required, evidence, kind,

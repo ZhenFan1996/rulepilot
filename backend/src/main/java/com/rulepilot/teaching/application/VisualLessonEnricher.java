@@ -32,7 +32,6 @@ import org.springframework.stereotype.Service;
 public class VisualLessonEnricher {
 
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
-    private static final int MAX_VISUAL_STEPS_PER_SECTION = 2;
     private static final int MIN_READER_VIEWPORT_WIDTH = 180;
     private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
 
@@ -42,6 +41,7 @@ public class VisualLessonEnricher {
     private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
     private final int maxSections;
+    private final int maxVisualStepsPerSection;
 
     @Autowired
     public VisualLessonEnricher(
@@ -50,16 +50,21 @@ public class VisualLessonEnricher {
             VisualRegionCandidateSelector candidates,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
-            @Value("${rulepilot.visual.max-sections:5}") int maxSections) {
+            @Value("${rulepilot.visual.max-sections:12}") int maxSections,
+            @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection) {
         this.understanding = understanding;
         this.pageImages = pageImages;
         this.candidates = candidates;
         this.locator = locator;
         this.prioritizer = prioritizer;
-        if (maxSections < 1 || maxSections > 6) {
-            throw new IllegalArgumentException("visual section limit must be between one and six");
+        if (maxSections < 1 || maxSections > 20) {
+            throw new IllegalArgumentException("visual section limit must be between one and twenty");
+        }
+        if (maxVisualStepsPerSection < 1 || maxVisualStepsPerSection > 6) {
+            throw new IllegalArgumentException("visual step limit must be between one and six");
         }
         this.maxSections = maxSections;
+        this.maxVisualStepsPerSection = maxVisualStepsPerSection;
     }
 
     public VisualLessonEnricher(
@@ -67,7 +72,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 5);
+        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -85,7 +90,8 @@ public class VisualLessonEnricher {
     public EnrichmentResult enrichWithReport(
             UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
         var map = understanding.understanding(documentVersionId);
-        Set<Integer> selectedPositions = prioritizer.positions(lesson.sections(), maxSections);
+        Set<Integer> selectedPositions = prioritizer.positions(
+                lesson.sections(), maxSections, maxVisualStepsPerSection);
         List<VisualFocus> acceptedVisuals = lesson.sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .map(LessonStep::visualFocus)
@@ -117,13 +123,13 @@ public class VisualLessonEnricher {
         int existingVisualSteps = (int) section.steps().stream()
                 .filter(step -> step.kind() == TeachingMove.VISUAL)
                 .count();
-        if (existingVisualSteps >= MAX_VISUAL_STEPS_PER_SECTION) {
+        if (existingVisualSteps >= maxVisualStepsPerSection) {
             return result(section, Outcome.ALREADY_PRESENT);
         }
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         Outcome rejected = null;
         int availableStepSlots = (int) section.steps().stream().filter(step -> step.kind() != TeachingMove.VISUAL).count();
-        int limit = Math.min(MAX_VISUAL_STEPS_PER_SECTION - existingVisualSteps, availableStepSlots);
+        int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
         for (LessonStep step : visualTargets(section, limit)) {
             StepLocation location = locateForStep(
                     understanding, documentVersionId, section, step, modelConfigurationOwner);
@@ -479,6 +485,7 @@ public class VisualLessonEnricher {
 
     private boolean isTextOnlyFocus(VisualRegionLocator.LocatedRegion region) {
         String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        if (isStructuredPlayerReference(observation)) return false;
         return observation.contains("文字")
                 || observation.contains("文本")
                 || observation.contains("规则框")
@@ -487,6 +494,21 @@ public class VisualLessonEnricher {
                 || observation.contains("组件列表")
                 || observation.contains("配件清单")
                 || observation.matches(".*\\b(word|text|printed label|label only|text box|rule box|contents|table of contents|component list|parts list)\\b.*");
+    }
+
+    /**
+     * A scorepad, turn-order table, or icon legend is a visual reference even when it contains printed labels.
+     * It gives a player a compact relationship to inspect; a prose rule box still does not.
+     */
+    private boolean isStructuredPlayerReference(String observation) {
+        return observation.contains("计分表")
+                || observation.contains("分数表")
+                || observation.contains("对照表")
+                || observation.contains("流程图")
+                || observation.contains("顺序表")
+                || observation.contains("阶段表")
+                || observation.contains("表格")
+                || observation.matches(".*\\b(scorepad|score table|scoring table|reference table|flowchart|sequence chart)\\b.*");
     }
 
     private boolean isIconFocused(VisualRegionLocator.LocatedRegion region) {
