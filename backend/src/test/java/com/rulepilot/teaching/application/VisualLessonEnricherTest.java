@@ -59,7 +59,7 @@ class VisualLessonEnricherTest {
                 .enrich(version, lesson(chunk));
 
         assertThat(enriched.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("图中图标提示：圆形标记位于一条弧形刻度旁，箭头指向前进方向。先认出这组图标，再按规则处理：把探测器放到轨道上。");
+                .isEqualTo("图中可见圆形标记位于一条弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。");
     }
 
     @Test

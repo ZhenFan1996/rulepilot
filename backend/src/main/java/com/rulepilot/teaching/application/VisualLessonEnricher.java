@@ -284,7 +284,7 @@ public class VisualLessonEnricher {
         if (region.width() >= 80 && region.height() >= 60) return true;
         // A focused icon group is intentionally allowed to be smaller: the reader opens the crop at full size.
         // A word-only label is not, because enlarging it adds no rulebook understanding.
-        return region.width() >= 40 && region.height() >= 40 && isIconCluster(region);
+        return region.width() >= 40 && region.height() >= 40 && hasCompactVisualHandle(region);
     }
 
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
@@ -305,7 +305,7 @@ public class VisualLessonEnricher {
                 && !label.matches(".*\\b(text|header|paragraph)\\b.*");
     }
 
-    private boolean isIconCluster(VisualRegionLocator.LocatedRegion region) {
+    private boolean hasCompactVisualHandle(VisualRegionLocator.LocatedRegion region) {
         String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
         return observation.contains("图标")
                 || observation.contains("符号")
@@ -316,6 +316,14 @@ public class VisualLessonEnricher {
                 || observation.contains("指示物")
                 || observation.contains("花色")
                 || observation.matches(".*\\b(icon|symbol|token|marker|die|dice|meeple)\\b.*");
+    }
+
+    private boolean isIconFocused(VisualRegionLocator.LocatedRegion region) {
+        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        return observation.contains("图标")
+                || observation.contains("符号")
+                || observation.contains("图例")
+                || observation.matches(".*\\b(icon|symbol|legend)\\b.*");
     }
 
     private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {
@@ -333,7 +341,7 @@ public class VisualLessonEnricher {
                 .orElse(0);
         LessonStep supportedStep = steps.get(supportedStepIndex);
         String observation = stripTrailingPunctuation(region.visibleDescription());
-        String visualText = visualText(observation, supportedStep.text(), isIconCluster(region));
+        String visualText = visualText(observation, supportedStep.text(), isIconFocused(region));
         String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
         steps.set(supportedStepIndex, new LessonStep(
                 supportedStep.position(),
