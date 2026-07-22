@@ -121,6 +121,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         Map<String, Object> providerOptions = providerOptions(role, owner);
         if (!providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.model(models.modelNameFor(role, owner));
             options.extraBody(providerOptions);
             if (usesQwen(role, owner)) {
                 options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());

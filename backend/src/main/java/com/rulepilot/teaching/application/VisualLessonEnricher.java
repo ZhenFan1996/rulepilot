@@ -142,11 +142,12 @@ public class VisualLessonEnricher {
                 .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
                 .toList();
         List<Claim> claims = claims(section);
-        var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
+        var location = locator.locateWithResult(new VisualRegionLocator.VisualLocationRequest(
                 section.title(), claims, attachedCandidates, pages, modelConfigurationOwner));
+        var located = location.region();
         if (located.isEmpty()) {
             log.info("No cited visual region accepted for section {}", section.title());
-            return result(section, Outcome.LOCATOR_RETURNED_NONE);
+            return result(section, outcomeFor(location.diagnostic()));
         }
         if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
         if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
@@ -164,6 +165,22 @@ public class VisualLessonEnricher {
         return new SectionResult(section, new SectionOutcome(section.position(), outcome, outcomeSummary(section.position(), outcome)));
     }
 
+    private Outcome outcomeFor(VisualRegionLocator.Diagnostic diagnostic) {
+        return switch (diagnostic) {
+            case NO_REGION -> Outcome.LOCATOR_RETURNED_NONE;
+            case MODEL_UNAVAILABLE -> Outcome.MODEL_UNAVAILABLE;
+            case EXPLICIT_NO_REGION -> Outcome.MODEL_EXPLICIT_NO_REGION;
+            case MALFORMED_RESPONSE -> Outcome.MODEL_MALFORMED_RESPONSE;
+            case UNSUPPORTED_SCOPE -> Outcome.MODEL_UNSUPPORTED_SCOPE;
+            case INVALID_GEOMETRY -> Outcome.MODEL_INVALID_GEOMETRY;
+            case TIMEOUT -> Outcome.MODEL_TIMEOUT;
+            case INTERRUPTED -> Outcome.MODEL_INTERRUPTED;
+            case EXECUTOR_BUSY -> Outcome.MODEL_BUSY;
+            case PROVIDER_FAILURE -> Outcome.MODEL_PROVIDER_FAILURE;
+            case FOUND -> throw new IllegalArgumentException("found visual location cannot be rejected");
+        };
+    }
+
     private String outcomeSummary(int sectionPosition, Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "第 " + sectionPosition + " 节已加入可核对的局部规则书截图";
@@ -171,6 +188,15 @@ public class VisualLessonEnricher {
             case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
             case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
             case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节的视觉模型未找到可靠局部图示";
+            case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型";
+            case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉模型确认没有合适局部图示";
+            case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回可用坐标";
+            case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉模型引用了未提供的页面或依据";
+            case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的视觉模型返回了无效截图坐标";
+            case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的视觉模型响应超时";
+            case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
+            case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
+            case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉模型调用失败，已保留正文";
             case REJECTED_WHOLE_PAGE -> "第 " + sectionPosition + " 节返回整页，未把它误作局部讲解";
             case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
             case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节返回区域不在可引用范围内，已跳过";
@@ -200,6 +226,15 @@ public class VisualLessonEnricher {
         NO_CITED_CANDIDATE,
         NO_PAGE_IMAGE,
         LOCATOR_RETURNED_NONE,
+        MODEL_UNAVAILABLE,
+        MODEL_EXPLICIT_NO_REGION,
+        MODEL_MALFORMED_RESPONSE,
+        MODEL_UNSUPPORTED_SCOPE,
+        MODEL_INVALID_GEOMETRY,
+        MODEL_TIMEOUT,
+        MODEL_INTERRUPTED,
+        MODEL_BUSY,
+        MODEL_PROVIDER_FAILURE,
         REJECTED_WHOLE_PAGE,
         REJECTED_NON_VISUAL,
         REJECTED_OUTSIDE_CANDIDATE,

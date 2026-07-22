@@ -67,6 +67,7 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                         || request.reviewMode() == ReviewMode.POST_PUBLICATION
                         || request.contentType() == ContentType.ANSWER)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.model(models.modelNameFor(Role.CRITIC));
             options.temperature(0.0);
             options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             prompt = prompt.options(options);

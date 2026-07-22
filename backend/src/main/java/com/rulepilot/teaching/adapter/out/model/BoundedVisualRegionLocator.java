@@ -1,7 +1,9 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import java.time.Duration;
 import java.util.Optional;
@@ -45,26 +47,31 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public Optional<LocatedRegion> locate(VisualLocationRequest request) {
-        Future<Optional<LocatedRegion>> work;
+        return locateWithResult(request).region();
+    }
+
+    @Override
+    public LocateResult locateWithResult(VisualLocationRequest request) {
+        Future<LocateResult> work;
         try {
-            work = executor.submit(() -> delegate.locate(request));
+            work = executor.submit(() -> delegate.locateWithResult(request));
         } catch (RejectedExecutionException busy) {
             log.info("Skipped visual enrichment because another visual request is still running");
-            return Optional.empty();
+            return LocateResult.unavailable(Diagnostic.EXECUTOR_BUSY);
         }
         try {
             return work.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException slowProvider) {
             work.cancel(true);
             log.info("Skipped visual enrichment after {} ms", timeout.toMillis());
-            return Optional.empty();
+            return LocateResult.unavailable(Diagnostic.TIMEOUT);
         } catch (InterruptedException interrupted) {
             work.cancel(true);
             Thread.currentThread().interrupt();
-            return Optional.empty();
+            return LocateResult.unavailable(Diagnostic.INTERRUPTED);
         } catch (ExecutionException failed) {
             log.info("Skipped visual enrichment after provider failure: {}", rootMessage(failed));
-            return Optional.empty();
+            return LocateResult.unavailable(Diagnostic.PROVIDER_FAILURE);
         }
     }
 

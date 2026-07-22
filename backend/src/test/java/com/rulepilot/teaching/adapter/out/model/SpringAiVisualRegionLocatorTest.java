@@ -58,8 +58,9 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void requests_qwen_json_mode_without_enabling_thinking() {
-        var options = SpringAiVisualRegionLocator.qwenJsonOptions().build();
+        var options = SpringAiVisualRegionLocator.qwenJsonOptions("qwen3-vl-plus").build();
 
+        assertThat(options.getModel()).isEqualTo("qwen3-vl-plus");
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
     }
@@ -68,6 +69,16 @@ class SpringAiVisualRegionLocatorTest {
     void treats_an_explicit_null_as_a_terminal_no_region_response() {
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" null ")).isTrue();
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion("not valid JSON")).isFalse();
+    }
+
+    @Test
+    void exposes_the_reason_when_a_visual_response_is_not_parseable() {
+        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
+                        SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
+                .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.MALFORMED_RESPONSE);
+        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
+                        SpringAiVisualRegionLocator.Rejection.EXPLICIT_NO_REGION))
+                .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
     }
 
     @Test

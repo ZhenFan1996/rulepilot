@@ -96,6 +96,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(OpenAiChatOptions.builder()
+                    .model(models.modelNameFor(Role.VISUAL, owner))
                     .extraBody(Map.of("enable_thinking", false))
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
         }

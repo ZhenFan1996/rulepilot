@@ -114,6 +114,23 @@ public class RuntimeModelConfiguration {
         return stateForOrStartup(username).assignments().forRole(role);
     }
 
+    /** Returns the concrete model selected for a role, including a user's private configuration when present. */
+    public String modelNameFor(Role role) {
+        return modelNameFor(role, currentState());
+    }
+
+    public String modelNameFor(Role role, String username) {
+        return modelNameFor(role, stateForOrStartup(username));
+    }
+
+    private String modelNameFor(Role role, State state) {
+        ConfiguredProvider configured = state.providers().get(state.assignments().forRole(role));
+        if (configured == null) {
+            throw new IllegalStateException("model provider '" + state.assignments().forRole(role) + "' is not configured");
+        }
+        return configured.modelName();
+    }
+
     public boolean supportsVision(Role role) {
         State current = currentState();
         ConfiguredProvider configured = current.providers().get(current.assignments().forRole(role));

@@ -10,6 +10,54 @@ public interface VisualRegionLocator {
 
     Optional<LocatedRegion> locate(VisualLocationRequest request);
 
+    /**
+     * Keeps optional visual work observable without asking the lesson writer to infer why no crop was attached.
+     * Existing lightweight adapters only need to implement {@link #locate(VisualLocationRequest)}.
+     */
+    default LocateResult locateWithResult(VisualLocationRequest request) {
+        Optional<LocatedRegion> region = locate(request);
+        return region.map(LocateResult::found).orElseGet(LocateResult::noRegion);
+    }
+
+    enum Diagnostic {
+        FOUND,
+        NO_REGION,
+        MODEL_UNAVAILABLE,
+        EXPLICIT_NO_REGION,
+        MALFORMED_RESPONSE,
+        UNSUPPORTED_SCOPE,
+        INVALID_GEOMETRY,
+        TIMEOUT,
+        INTERRUPTED,
+        EXECUTOR_BUSY,
+        PROVIDER_FAILURE
+    }
+
+    record LocateResult(Optional<LocatedRegion> region, Diagnostic diagnostic) {
+        public LocateResult {
+            if (region == null || diagnostic == null
+                    || (region.isPresent() && diagnostic != Diagnostic.FOUND)
+                    || (region.isEmpty() && diagnostic == Diagnostic.FOUND)) {
+                throw new IllegalArgumentException("visual location result is invalid");
+            }
+        }
+
+        public static LocateResult found(LocatedRegion region) {
+            return new LocateResult(Optional.ofNullable(region), Diagnostic.FOUND);
+        }
+
+        public static LocateResult noRegion() {
+            return new LocateResult(Optional.empty(), Diagnostic.NO_REGION);
+        }
+
+        public static LocateResult unavailable(Diagnostic diagnostic) {
+            if (diagnostic == null || diagnostic == Diagnostic.FOUND || diagnostic == Diagnostic.NO_REGION) {
+                throw new IllegalArgumentException("visual location diagnostic is invalid");
+            }
+            return new LocateResult(Optional.empty(), diagnostic);
+        }
+    }
+
     record VisualLocationRequest(
             String sectionTitle,
             List<Claim> claims,

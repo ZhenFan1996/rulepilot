@@ -103,6 +103,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
             if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
                 OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+                options.model(models.modelNameFor(Role.ANSWER));
                 if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
                     options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
                 } else {
@@ -143,6 +144,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
         if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            options.model(models.modelNameFor(Role.ANSWER));
             if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else {

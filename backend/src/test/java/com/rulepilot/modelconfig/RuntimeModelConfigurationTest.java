@@ -124,12 +124,16 @@ class RuntimeModelConfigurationTest {
                 configuration.assign("player", "qwen", "qwen", "qwen", "qwen");
 
         assertThat(assigned.assignments().visual()).isEqualTo("qwen");
+        assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.VISUAL, "player"))
+                .isEqualTo("qwen3-vl-plus");
         try {
             SecurityContextHolder.getContext()
                     .setAuthentication(
                             UsernamePasswordAuthenticationToken.authenticated("player", "", java.util.List.of()));
             assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.VISUAL)).isTrue();
             assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.VISUAL)).isSameAs(qwenModel);
+            assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.VISUAL))
+                    .isEqualTo("qwen3-vl-plus");
         } finally {
             SecurityContextHolder.clearContext();
         }

@@ -101,7 +101,10 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private OutlineDraft organizeOnce(OutlineRequest request, Role role, String owner, String repair) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(role, owner)).prompt();
         OpenAiChatOptions.Builder options = providerOptions(role, owner);
-        if (options != null) prompt = prompt.options(options);
+        if (options != null) {
+            options.model(models.modelNameFor(role, owner));
+            prompt = prompt.options(options);
+        }
         OutlineDraft outline = prompt
                 .system(prompts.teachingOutlineSystem())
                 .user(user -> {
