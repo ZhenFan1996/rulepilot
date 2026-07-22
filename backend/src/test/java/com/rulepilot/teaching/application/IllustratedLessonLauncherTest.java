@@ -5,8 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AssistantRunMode;
@@ -56,13 +56,15 @@ class IllustratedLessonLauncherTest {
         when(lessons.begin(planId, "alice")).thenReturn(run);
         var outcome = new GenerationOutcome(run, LessonStatus.DRAFT_READY);
         when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
+                UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
         var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
 
         launcher.launch(planId, "alice");
 
-        var order = inOrder(lessons, visuals);
-        order.verify(lessons).finish(outcome);
-        order.verify(visuals).enrichLatest(planId);
+        verify(lessons).finish(outcome);
+        verify(visuals).launch(planId, "alice");
+        verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }
 
     @Test

@@ -120,6 +120,24 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void reports_when_a_visual_model_cannot_find_a_reliable_region() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.empty())
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.outcomes()).singleElement().satisfies(outcome -> {
+            assertThat(outcome.sectionPosition()).isEqualTo(1);
+            assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.LOCATOR_RETURNED_NONE);
+            assertThat(outcome.summary()).contains("视觉模型未找到可靠局部图示");
+        });
+    }
+
+    @Test
     void accepts_a_vision_crop_from_a_cited_page_when_translation_has_no_text_anchor() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();

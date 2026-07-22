@@ -54,7 +54,7 @@ public class IllustratedLessonLauncher {
                 var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
                 lessons.finish(outcome);
                 if (visuals != null && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
-                    visuals.enrichLatest(teachingPlanId);
+                    enrichLatest(teachingPlanId, ownerUsername);
                 }
             });
         } catch (RuntimeException schedulingFailure) {
@@ -64,10 +64,27 @@ public class IllustratedLessonLauncher {
         return new LessonLaunch(run.id(), run.state(), false);
     }
 
-    public boolean enrichLatest(UUID teachingPlanId) {
-        if (visuals == null) return false;
-        executor.execute(() -> visuals.enrichLatest(teachingPlanId));
-        return true;
+    public VisualLessonEnrichmentService.VisualEnrichmentLaunch enrichLatest(UUID teachingPlanId, String ownerUsername) {
+        if (visuals == null) throw new IllegalStateException("visual enrichment is unavailable");
+        var launch = visuals.launch(teachingPlanId, ownerUsername);
+        if (launch.reused()) return launch;
+        try {
+            executor.execute(() -> visuals.enrichLatest(teachingPlanId, new RunSnapshot(
+                    launch.assistantRunId(),
+                    AssistantRunMode.VISUAL_ENRICHMENT,
+                    teachingPlanId,
+                    ownerUsername,
+                    launch.state(),
+                    launch.revision(),
+                    java.time.Instant.now(),
+                    java.time.Instant.now(),
+                    null,
+                    null)));
+        } catch (RuntimeException schedulingFailure) {
+            visuals.failScheduling(launch);
+            throw schedulingFailure;
+        }
+        return launch;
     }
 
     public record LessonLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}

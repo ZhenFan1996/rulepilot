@@ -283,6 +283,7 @@ const cardOcrOpen = ref(false)
 const failedComprehensionImages = ref<number[]>([])
 const resumingLesson = ref(false)
 const teachingRun = ref<TeachingRunProgress | null>(null)
+const visualEnrichmentRun = ref<TeachingRunProgress | null>(null)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
@@ -290,6 +291,7 @@ const waitingForNextChapter = ref(false)
 const generationNow = ref(Date.now())
 let generationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
+let visualRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let lessonViewDisposed = false
 
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -326,6 +328,18 @@ const currentVisualPageNumber = computed(() =>
 const generationActive = computed(
   () => generationStatusUnknown.value || teachingRunIsActive(teachingRun.value?.run.state),
 )
+const visualEnrichmentActive = computed(() => teachingRunIsActive(visualEnrichmentRun.value?.run.state))
+const visualEnrichmentActivities = computed(() => (visualEnrichmentRun.value?.activities ?? [])
+  .filter((activity) => activity.operation.startsWith('visualSection|')))
+const visualEnrichmentSummary = computed(() => {
+  const latest = visualEnrichmentActivities.value.at(-1)
+  if (visualEnrichmentActive.value) return latest?.summary ?? '正在从规则书中挑选能帮助上桌的局部图示。'
+  if (!visualEnrichmentRun.value || visualEnrichmentActivities.value.length === 0) return ''
+  const added = visualEnrichmentActivities.value.filter((activity) => activity.outcome === 'SUCCEEDED').length
+  return added > 0
+    ? `已为 ${added} 节补入可核对的局部截图；其余章节只保留有可靠依据的配图。`
+    : '这次没有找到可靠的局部图示，因此没有用整页规则书充数。'
+})
 const draftReady = computed(() => lesson.value?.status === 'DRAFT_READY')
 const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
 const readingCurrentLastChapter = computed(
@@ -552,9 +566,11 @@ async function loadSupportingContent(targetPlanId: string) {
 
 async function loadLesson() {
   clearGenerationRefresh()
+  clearVisualRefresh()
   loading.value = true
   errorMessage.value = ''
   teachingRun.value = null
+  visualEnrichmentRun.value = null
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
   generationFinishedMessage.value = ''
@@ -568,12 +584,13 @@ async function loadLesson() {
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
-    const [planResponse, lessonResponse, runResponse] = await Promise.all([
+    const [planResponse, lessonResponse, runResponse, visualRunResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
+      optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
     ])
-    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401) {
+    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
       await router.push({ name: 'login' })
       return
     }
@@ -583,6 +600,7 @@ async function loadLesson() {
     plan.value = (await planResponse.json()) as TeachingPlan
     lesson.value = (await lessonResponse.json()) as IllustratedLesson
     teachingRun.value = runResponse?.ok ? await runResponse.json() as TeachingRunProgress : null
+    visualEnrichmentRun.value = visualRunResponse?.ok ? await visualRunResponse.json() as TeachingRunProgress : null
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = '暂时无法确认后台生成状态。'
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
@@ -595,6 +613,7 @@ async function loadLesson() {
     }
     if (generationActive.value) scheduleGenerationRefresh()
     else await loadSupportingContent(targetPlanId)
+    if (visualEnrichmentActive.value) scheduleVisualRefresh()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
   } finally {
@@ -605,6 +624,35 @@ async function loadLesson() {
 function clearGenerationRefresh() {
   if (generationRefreshTimer) clearTimeout(generationRefreshTimer)
   generationRefreshTimer = undefined
+}
+
+function clearVisualRefresh() {
+  if (visualRefreshTimer) clearTimeout(visualRefreshTimer)
+  visualRefreshTimer = undefined
+}
+
+function scheduleVisualRefresh(delay = 2500) {
+  clearVisualRefresh()
+  if (lessonViewDisposed || !online.value || !visualEnrichmentActive.value) return
+  visualRefreshTimer = setTimeout(() => {
+    visualRefreshTimer = undefined
+    void refreshVisualEnrichment()
+  }, delay)
+}
+
+async function refreshVisualEnrichment() {
+  if (!online.value || lessonViewDisposed) return
+  try {
+    const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(planId.value)}`)
+    if (response?.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (response?.ok) visualEnrichmentRun.value = await response.json() as TeachingRunProgress
+    scheduleVisualRefresh()
+  } catch {
+    scheduleVisualRefresh(5000)
+  }
 }
 
 function scheduleGenerationRefresh(delay = 1500) {
@@ -672,6 +720,7 @@ async function refreshGeneration() {
     if (wasActive && !generationActive.value) {
       generationFinishedMessage.value = terminalGenerationMessage(acceptedRun?.run.state ?? '')
       await loadSupportingContent(planId.value)
+      await refreshVisualEnrichment()
     }
   } catch (error) {
     generationRefreshError.value = error instanceof Error ? error.message : '暂时没有取得最新章节。'
@@ -1184,6 +1233,8 @@ function updateOnlineStatus() {
   if (!online.value) refreshOfflineKnowledge()
   if (online.value && generationActive.value) scheduleGenerationRefresh(0)
   else if (!online.value) clearGenerationRefresh()
+  if (online.value && visualEnrichmentActive.value) scheduleVisualRefresh(0)
+  else if (!online.value) clearVisualRefresh()
 }
 
 onMounted(() => {
@@ -1198,6 +1249,7 @@ onMounted(() => {
 onUnmounted(() => {
   lessonViewDisposed = true
   clearGenerationRefresh()
+  clearVisualRefresh()
   if (generationClockTimer) clearInterval(generationClockTimer)
   generationClockTimer = undefined
   window.removeEventListener('online', updateOnlineStatus)
@@ -1347,6 +1399,10 @@ onUnmounted(() => {
             >
               {{ resumingLesson ? '正在继续…' : '继续核对细节' }}
             </button>
+          </div>
+          <div v-if="visualEnrichmentSummary" class="mt-3 hidden rounded-2xl border border-indigo/15 bg-paper/70 p-3 text-sm lg:block" :class="visualEnrichmentActive ? 'text-indigo' : 'text-ink/65'">
+            <p class="font-semibold">{{ visualEnrichmentActive ? '正在补入局部图示' : '局部图示处理完成' }}</p>
+            <p class="mt-1 text-xs leading-5 text-ink/60">{{ visualEnrichmentSummary }}</p>
           </div>
           <div v-if="lesson.status === 'INCOMPLETE' && !generationActive" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
             <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ lesson.sections.length }} 节</p>

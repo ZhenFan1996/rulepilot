@@ -23,6 +23,20 @@ class AssistantRunTest {
         assertThat(run.completedAt()).isEqualTo(STARTED.plusSeconds(3));
     }
 
+    @Test
+    void visualEnrichmentTracksCandidateSelectionBeforePublishingCrops() {
+        AssistantRun run = AssistantRun.start(AssistantRunMode.VISUAL_ENRICHMENT, UUID.randomUUID(), "teacher", STARTED);
+
+        run = advance(run, AssistantRunState.DOCUMENT_READINESS, 1);
+        run = advance(run, AssistantRunState.RETRIEVING, 2);
+        run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, 3);
+        run = advance(run, AssistantRunState.MEDIA_PACKAGING, 4);
+        run = advance(run, AssistantRunState.COMPLETED, 5);
+
+        assertThat(run.state()).isEqualTo(AssistantRunState.COMPLETED);
+        assertThat(run.completedAt()).isEqualTo(STARTED.plusSeconds(5));
+    }
+
     private static final Instant STARTED = Instant.parse("2026-07-18T00:00:00Z");
 
     @Test

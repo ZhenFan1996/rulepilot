@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.in.web;
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
+import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.security.Principal;
 import java.util.UUID;
@@ -45,7 +46,7 @@ public class IllustratedLessonController {
         owners.requireOwned(planId, principal.getName());
         lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
-        return new VisualEnrichmentLaunch(launcher.enrichLatest(planId));
+        return launcher.enrichLatest(planId, principal.getName());
     }
 
     @GetMapping("/latest")
@@ -54,6 +55,4 @@ public class IllustratedLessonController {
         return lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
     }
-
-    record VisualEnrichmentLaunch(boolean accepted) {}
 }

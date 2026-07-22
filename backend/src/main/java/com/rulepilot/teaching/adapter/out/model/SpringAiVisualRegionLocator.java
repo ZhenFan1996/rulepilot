@@ -29,16 +29,18 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
-            Return one compact region only when it visibly supports one or more supplied claims. Alongside it, provide a
-            short Chinese visibleDescription of only what a player can literally see inside that crop: components,
-            printed labels, icons, arrows, quantities, or their spatial relationship. This is an image observation, not
-            a rule explanation: do not infer an icon's game effect, paraphrase a rule, add facts, or alter claims. If
-            no candidate is useful, return null.
+            Return one compact region when it gives a player a useful visual handle on this section or its supplied
+            claims. It need not independently prove every procedural sentence: the cited text remains the only source
+            for a rule's effect. Alongside it, provide a short Chinese visibleDescription of only what a player can
+            literally see inside that crop: components, printed labels, icons, arrows, quantities, or their spatial
+            relationship. This is an image observation, not a rule explanation: do not infer an icon's game effect,
+            paraphrase a rule, add facts, or alter claims.
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
-            aid: return null rather than selecting one. When several crops support the claim, prefer a compact icon,
-            component, flow, or worked state that a new player can identify at the table.
+            aid. When several crops are relevant, prefer a compact icon, component, flow, or worked state that a new
+            player can identify at the table. A diagram or icon group is useful even if its meaning is explained by the
+            cited text rather than printed inside the crop.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. visibleDescription is at most 240 characters. supportedClaimRefs must contain only C1, C2, etc.
@@ -76,8 +78,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Claims: {claims}
                                     Candidate rectangles: {candidates}
                                     {correction}
-                                    Return JSON with pageNumber, label, visibleDescription, x, y, width, height and
-                                    supportedClaimRefs; or null.
+                                    Return one JSON object only with pageNumber, label, visibleDescription, x, y,
+                                    width, height and supportedClaimRefs. If no useful crop exists, return {}.
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())

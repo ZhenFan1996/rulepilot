@@ -73,23 +73,41 @@ public class VisualLessonEnricher {
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
-        var map = understanding.understanding(documentVersionId);
-        Set<Integer> selectedPositions = prioritizer.positions(lesson.sections(), maxSections);
-        List<LessonSection> sections = lesson.sections().stream()
-                .map(section -> selectedPositions.contains(section.position())
-                        ? enrichSection(map, documentVersionId, section, modelConfigurationOwner)
-                        : section)
-                .toList();
-        return new IllustratedLesson(
-                lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
+        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner).lesson();
     }
 
-    private LessonSection enrichSection(
+    /**
+     * Returns bounded per-section observations so optional visual work can be inspected without changing the lesson
+     * when a crop is unavailable.
+     */
+    public EnrichmentResult enrichWithReport(
+            UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
+        var map = understanding.understanding(documentVersionId);
+        Set<Integer> selectedPositions = prioritizer.positions(lesson.sections(), maxSections);
+        List<SectionResult> sectionResults = lesson.sections().stream()
+                .filter(section -> selectedPositions.contains(section.position()))
+                .map(section -> enrichSection(map, documentVersionId, section, modelConfigurationOwner))
+                .toList();
+        Map<Integer, SectionResult> byPosition = sectionResults.stream()
+                .collect(Collectors.toMap(result -> result.section().position(), result -> result));
+        List<LessonSection> sections = lesson.sections().stream()
+                .map(section -> byPosition.getOrDefault(section.position(), new SectionResult(section, null)).section())
+                .toList();
+        IllustratedLesson enriched = new IllustratedLesson(
+                lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
+        return new EnrichmentResult(
+                enriched,
+                sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
+    }
+
+    private SectionResult enrichSection(
             com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
             String modelConfigurationOwner) {
-        if (section.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) return section;
+        if (section.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) {
+            return result(section, Outcome.ALREADY_PRESENT);
+        }
         Set<Integer> citedPages = section.steps().stream()
                 .flatMap(step -> step.sourcePages().stream())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -97,7 +115,7 @@ public class VisualLessonEnricher {
                 understanding, citedPages, terms(section));
         if (selected.isEmpty()) {
             log.info("No cited visual candidates for section {}", section.title());
-            return section;
+            return result(section, Outcome.NO_CITED_CANDIDATE);
         }
         List<Integer> candidatePageOrder = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
                 .distinct()
@@ -115,7 +133,7 @@ public class VisualLessonEnricher {
                 .toList();
         if (pages.isEmpty()) {
             log.info("No page image available for visual section {}", section.title());
-            return section;
+            return result(section, Outcome.NO_PAGE_IMAGE);
         }
         Set<Integer> attachedPages = pages.stream()
                 .map(PageImage::pageNumber)
@@ -125,21 +143,70 @@ public class VisualLessonEnricher {
                 .toList();
         List<Claim> claims = claims(section);
         var located = locator.locate(new VisualRegionLocator.VisualLocationRequest(
-                        section.title(), claims, attachedCandidates, pages, modelConfigurationOwner))
-                .filter(this::isCompactReaderCrop)
-                .filter(this::isUsefulPlayerVisual)
-                .filter(region -> intersectsCandidate(region, attachedCandidates));
+                section.title(), claims, attachedCandidates, pages, modelConfigurationOwner));
         if (located.isEmpty()) {
             log.info("No cited visual region accepted for section {}", section.title());
-            return section;
+            return result(section, Outcome.LOCATOR_RETURNED_NONE);
         }
+        if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
+        if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
+        if (!intersectsCandidate(located.get(), attachedCandidates)) return result(section, Outcome.REJECTED_OUTSIDE_CANDIDATE);
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
         if (!evidenceIds.containsAll(located.get().supportedEvidenceIds())) {
             log.info("Visual region cited an unknown claim for section {}", section.title());
-            return section;
+            return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
         }
-        return mergeVisualIntoSupportedStep(section, located.get());
+        return new SectionResult(mergeVisualIntoSupportedStep(section, located.get()), new SectionOutcome(
+                section.position(), Outcome.ADDED, outcomeSummary(section.position(), Outcome.ADDED)));
     }
+
+    private SectionResult result(LessonSection section, Outcome outcome) {
+        return new SectionResult(section, new SectionOutcome(section.position(), outcome, outcomeSummary(section.position(), outcome)));
+    }
+
+    private String outcomeSummary(int sectionPosition, Outcome outcome) {
+        return switch (outcome) {
+            case ADDED -> "第 " + sectionPosition + " 节已加入可核对的局部规则书截图";
+            case ALREADY_PRESENT -> "第 " + sectionPosition + " 节已有局部规则书截图，无需重复处理";
+            case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
+            case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
+            case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节的视觉模型未找到可靠局部图示";
+            case REJECTED_WHOLE_PAGE -> "第 " + sectionPosition + " 节返回整页，未把它误作局部讲解";
+            case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
+            case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节返回区域不在可引用范围内，已跳过";
+            case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据，已跳过";
+        };
+    }
+
+    public record EnrichmentResult(IllustratedLesson lesson, List<SectionOutcome> outcomes) {
+        public EnrichmentResult {
+            if (lesson == null || outcomes == null) throw new IllegalArgumentException("visual enrichment result is invalid");
+            outcomes = List.copyOf(outcomes);
+        }
+    }
+
+    public record SectionOutcome(int sectionPosition, Outcome outcome, String summary) {
+        public SectionOutcome {
+            if (sectionPosition < 1 || outcome == null || summary == null || summary.isBlank() || summary.length() > 240) {
+                throw new IllegalArgumentException("visual enrichment section outcome is invalid");
+            }
+            summary = summary.strip();
+        }
+    }
+
+    public enum Outcome {
+        ADDED,
+        ALREADY_PRESENT,
+        NO_CITED_CANDIDATE,
+        NO_PAGE_IMAGE,
+        LOCATOR_RETURNED_NONE,
+        REJECTED_WHOLE_PAGE,
+        REJECTED_NON_VISUAL,
+        REJECTED_OUTSIDE_CANDIDATE,
+        REJECTED_UNKNOWN_EVIDENCE
+    }
+
+    private record SectionResult(LessonSection section, SectionOutcome outcome) {}
 
     private List<String> terms(LessonSection section) {
         List<String> result = new ArrayList<>();

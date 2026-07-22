@@ -32,6 +32,7 @@ describe('LessonView progressive reading', () => {
           ],
         })
       }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
         runReads++
         if (runReads === 1) throw new TypeError('temporary run status failure')
@@ -155,7 +156,7 @@ describe('LessonView progressive reading', () => {
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/v1/teaching-plans/plan-1/comprehension/visual-aids/s2-v3')
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
-      .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
+      .filter((path) => path.includes('mode=TEACHING'))
     expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
     wrapper.unmount()
   })
@@ -170,6 +171,7 @@ describe('LessonView progressive reading', () => {
           sections: [{ position: 1, title: '先摆主板', visualEvidenceRecommended: true }],
         })
       }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
         return Response.json({
           run: {

@@ -50,6 +50,13 @@ public record AssistantRun(
             AssistantRunState.DOCUMENT_READINESS, Set.of(AssistantRunState.LESSON_PLANNING),
             AssistantRunState.LESSON_PLANNING, Set.of(AssistantRunState.COMPLETED));
 
+    private static final Map<AssistantRunState, Set<AssistantRunState>> VISUAL_ENRICHMENT_TRANSITIONS = Map.ofEntries(
+            Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.DOCUMENT_READINESS)),
+            Map.entry(AssistantRunState.DOCUMENT_READINESS, Set.of(AssistantRunState.RETRIEVING)),
+            Map.entry(AssistantRunState.RETRIEVING, Set.of(AssistantRunState.VERIFYING_EVIDENCE)),
+            Map.entry(AssistantRunState.VERIFYING_EVIDENCE, Set.of(AssistantRunState.MEDIA_PACKAGING)),
+            Map.entry(AssistantRunState.MEDIA_PACKAGING, Set.of(AssistantRunState.COMPLETED, AssistantRunState.DEGRADED)));
+
     private static final Map<AssistantRunState, Set<AssistantRunState>> QUESTION_TRANSITIONS = Map.ofEntries(
             Map.entry(AssistantRunState.RECEIVED, Set.of(AssistantRunState.QUESTION_UNDERSTANDING)),
             Map.entry(
@@ -132,6 +139,7 @@ public record AssistantRun(
         return switch (mode) {
             case TEACHING_PREPARATION -> TEACHING_PREPARATION_TRANSITIONS;
             case TEACHING -> TEACHING_TRANSITIONS;
+            case VISUAL_ENRICHMENT -> VISUAL_ENRICHMENT_TRANSITIONS;
             case QUESTION_ANSWER -> QUESTION_TRANSITIONS;
         };
     }
