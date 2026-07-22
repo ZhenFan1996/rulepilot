@@ -12,6 +12,7 @@ class VersionedAgentPromptsTest {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
                 resource("teaching-agent-v16-system.txt"),
                 resource("teaching-agent-v17-fidelity-system.txt"),
+                resource("teaching-agent-v18-visual-fit-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
@@ -61,6 +62,10 @@ class VersionedAgentPromptsTest {
                         "indispensable visual relationships for the objective",
                         "printed order exactly",
                         "complete objective coverage",
+                        "crop earns its place",
+                        "block of example prose",
+                        "natural Simplified Chinese",
+                        "rest of the page hidden",
                         "Do not output analysis");
         assertThat(prompts.teachingUser())
                 .contains(

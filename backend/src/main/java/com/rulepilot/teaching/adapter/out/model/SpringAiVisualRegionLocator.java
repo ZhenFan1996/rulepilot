@@ -112,6 +112,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     Optional.empty(), true, Rejection.MALFORMED_JSON);
         }
         ModelRegion response = parsed.get();
+        if (!containsChinese(response.label()) || !containsChinese(response.visibleDescription())) {
+            log.info("Visual locator returned a non-Chinese observation for section {}", request.sectionTitle());
+            return new LocateAttempt(Optional.empty(), true, Rejection.NON_CHINESE_OBSERVATION);
+        }
         List<UUID> supported = response.supportedClaimRefs().stream()
                 .map(ref -> claimId(ref, request))
                 .filter(java.util.Objects::nonNull)
@@ -178,8 +182,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or an empty JSON object when no crop is useful.";
             case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references.";
             case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
+            case NON_CHINESE_OBSERVATION -> "The previous label or visibleDescription was not natural Simplified Chinese. Reinspect the page and return Chinese names for literal visible objects only. Verify that the crop itself visibly contains the object or relationship needed for the claim; otherwise return an empty JSON object.";
             case NONE -> "";
         };
+    }
+
+    static boolean containsChinese(String value) {
+        return value != null && value.codePoints().anyMatch(codePoint ->
+                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
     }
 
     static Optional<ModelRegion> parseModelRegion(String content) {
@@ -226,6 +236,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
             case INVALID_GEOMETRY -> Diagnostic.INVALID_GEOMETRY;
+            case NON_CHINESE_OBSERVATION -> Diagnostic.NON_CHINESE_OBSERVATION;
         };
     }
 
@@ -234,7 +245,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         EXPLICIT_NO_REGION,
         MALFORMED_JSON,
         UNSUPPORTED_SCOPE,
-        INVALID_GEOMETRY
+        INVALID_GEOMETRY,
+        NON_CHINESE_OBSERVATION
     }
 
     private record LocateAttempt(Optional<LocatedRegion> region, boolean retryable, Rejection rejection) {

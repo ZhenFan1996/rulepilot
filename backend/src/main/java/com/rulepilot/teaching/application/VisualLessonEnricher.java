@@ -150,6 +150,7 @@ public class VisualLessonEnricher {
             return result(section, outcomeFor(location.diagnostic()));
         }
         if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
+        if (!isLargeEnoughForPlayer(located.get())) return result(section, Outcome.REJECTED_TOO_SMALL);
         if (located.get().visibleDescription().isBlank()) return result(section, Outcome.REJECTED_MISSING_OBSERVATION);
         if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
         if (!intersectsCandidate(located.get(), attachedCandidates)) return result(section, Outcome.REJECTED_OUTSIDE_CANDIDATE);
@@ -174,6 +175,7 @@ public class VisualLessonEnricher {
             case MALFORMED_RESPONSE -> Outcome.MODEL_MALFORMED_RESPONSE;
             case UNSUPPORTED_SCOPE -> Outcome.MODEL_UNSUPPORTED_SCOPE;
             case INVALID_GEOMETRY -> Outcome.MODEL_INVALID_GEOMETRY;
+            case NON_CHINESE_OBSERVATION -> Outcome.MODEL_NON_CHINESE_OBSERVATION;
             case TIMEOUT -> Outcome.MODEL_TIMEOUT;
             case INTERRUPTED -> Outcome.MODEL_INTERRUPTED;
             case EXECUTOR_BUSY -> Outcome.MODEL_BUSY;
@@ -194,11 +196,13 @@ public class VisualLessonEnricher {
             case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回可用坐标";
             case MODEL_UNSUPPORTED_SCOPE -> "第 " + sectionPosition + " 节的视觉模型引用了未提供的页面或依据";
             case MODEL_INVALID_GEOMETRY -> "第 " + sectionPosition + " 节的视觉模型返回了无效截图坐标";
+            case MODEL_NON_CHINESE_OBSERVATION -> "第 " + sectionPosition + " 节的视觉模型没有给出可读的中文图中说明，已跳过";
             case MODEL_TIMEOUT -> "第 " + sectionPosition + " 节的视觉模型响应超时";
             case MODEL_INTERRUPTED -> "第 " + sectionPosition + " 节的视觉模型工作被安全中断";
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
             case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉模型调用失败，已保留正文";
             case REJECTED_WHOLE_PAGE -> "第 " + sectionPosition + " 节返回整页，未把它误作局部讲解";
+            case REJECTED_TOO_SMALL -> "第 " + sectionPosition + " 节的截图太小，无法辅助玩家理解，已跳过";
             case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明，已跳过";
             case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
             case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节返回区域不在可引用范围内，已跳过";
@@ -233,11 +237,13 @@ public class VisualLessonEnricher {
         MODEL_MALFORMED_RESPONSE,
         MODEL_UNSUPPORTED_SCOPE,
         MODEL_INVALID_GEOMETRY,
+        MODEL_NON_CHINESE_OBSERVATION,
         MODEL_TIMEOUT,
         MODEL_INTERRUPTED,
         MODEL_BUSY,
         MODEL_PROVIDER_FAILURE,
         REJECTED_WHOLE_PAGE,
+        REJECTED_TOO_SMALL,
         REJECTED_MISSING_OBSERVATION,
         REJECTED_NON_VISUAL,
         REJECTED_OUTSIDE_CANDIDATE,
@@ -274,6 +280,10 @@ public class VisualLessonEnricher {
         return region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000;
     }
 
+    private boolean isLargeEnoughForPlayer(VisualRegionLocator.LocatedRegion region) {
+        return region.width() >= 80 && region.height() >= 60;
+    }
+
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
         String description = region.visibleDescription().toLowerCase(java.util.Locale.ROOT);
         String label = region.label().toLowerCase(java.util.Locale.ROOT);
@@ -282,10 +292,13 @@ public class VisualLessonEnricher {
                 && !description.contains("introduction paragraph")
                 && !description.contains("text for")
                 && !description.contains("list of")
+                && !description.contains("段落")
+                && !description.contains("文字描述")
                 && !description.contains("介绍性段落")
                 && !description.contains("章节标题")
                 && !description.contains("页面标题")
                 && !label.contains("section header")
+                && !label.contains("段落")
                 && !label.matches(".*\\b(text|header|paragraph)\\b.*");
     }
 

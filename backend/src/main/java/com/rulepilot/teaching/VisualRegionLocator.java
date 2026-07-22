@@ -27,6 +27,7 @@ public interface VisualRegionLocator {
         MALFORMED_RESPONSE,
         UNSUPPORTED_SCOPE,
         INVALID_GEOMETRY,
+        NON_CHINESE_OBSERVATION,
         TIMEOUT,
         INTERRUPTED,
         EXECUTOR_BUSY,

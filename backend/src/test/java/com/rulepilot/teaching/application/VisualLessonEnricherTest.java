@@ -123,6 +123,32 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void rejects_a_tiny_label_and_a_prose_paragraph_even_when_the_model_calls_them_visuals() {
+        UUID chunk = UUID.randomUUID();
+        var tiny = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "首任大师标记", "一个印有文字的小标记", 38, 259, 76, 20, List.of(chunk))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+        var paragraph = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "示例段落", "一段文字描述三名玩家的行动顺序", 120, 220, 180, 120, List.of(chunk))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(tiny.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL);
+        assertThat(paragraph.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+    }
+
+    @Test
     void leaves_the_section_unchanged_when_the_locator_misses_every_candidate() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lesson(chunk);

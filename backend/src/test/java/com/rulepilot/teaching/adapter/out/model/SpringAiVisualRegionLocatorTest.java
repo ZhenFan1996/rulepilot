@@ -80,6 +80,9 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(SpringAiVisualRegionLocator.diagnosticFor(
                         SpringAiVisualRegionLocator.Rejection.EXPLICIT_NO_REGION))
                 .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
+        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
+                        SpringAiVisualRegionLocator.Rejection.NON_CHINESE_OBSERVATION))
+                .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.NON_CHINESE_OBSERVATION);
     }
 
     @Test
@@ -90,6 +93,15 @@ class SpringAiVisualRegionLocatorTest {
                 .contains("x + width", "y + height");
         assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
                 .contains("JSON");
+        assertThat(SpringAiVisualRegionLocator.retryInstruction(
+                        SpringAiVisualRegionLocator.Rejection.NON_CHINESE_OBSERVATION))
+                .contains("Simplified Chinese", "crop itself visibly contains");
+    }
+
+    @Test
+    void recognizesWhetherAVisionObservationUsesChinese() {
+        assertThat(SpringAiVisualRegionLocator.containsChinese("骰子行动区")).isTrue();
+        assertThat(SpringAiVisualRegionLocator.containsChinese("Dice Actions")).isFalse();
     }
 
     @Test
