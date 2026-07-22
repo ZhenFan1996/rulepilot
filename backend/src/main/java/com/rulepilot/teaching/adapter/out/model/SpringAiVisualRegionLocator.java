@@ -41,7 +41,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             see inside that crop. This is an image observation, not a rule explanation: do not infer an icon's game
             effect, paraphrase a rule, add facts, or alter claims. Never select a generic setup, board, card, or
             decorative illustration merely because it shares a cited page with a timing, tie-break, or other text-only
-            claim. If the required connection is not visibly identifiable, return an empty JSON object.
+            claim. A crop may still be useful when it gives the player a recognition handle for the cited text: a card
+            anatomy, named component, icon group, board area, or worked state. It need not depict the full procedure
+            or print the rule effect itself. Return an empty JSON object only when the cited page has no such concrete
+            player-facing visual handle.
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
@@ -50,7 +53,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             what to do. A diagram or icon group is useful even if its meaning is explained by the cited text rather
             than printed inside the crop. For an icon rule, prefer one compact crop containing the complete icon or
             icon group and its adjacent printed label, legend, arrow, or state when present. Small icon crops are
-            welcome when the icons remain visually distinct; never return a word-only label as an icon crop.
+            welcome when the icons remain visually distinct; never return a word-only label as an icon crop. Return the
+            player-facing viewport, not a microscopic detection box: normally include enough surrounding card, legend,
+            arrow, board state, or diagram for the object to be recognisable. A tight icon may be small only when its
+            nearby visual context is genuinely absent; never return a word-only label.
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
             "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
             game effect.
@@ -143,16 +149,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 rejected = Rejection.NON_CHINESE_OBSERVATION;
                 continue;
             }
-            List<VisualRegionLocator.Claim> supportedClaims = response.supportedClaimRefs().stream()
+            List<VisualRegionLocator.Claim> referencedClaims = response.supportedClaimRefs().stream()
                     .map(ref -> claim(ref, request))
                     .filter(java.util.Objects::nonNull)
                     .distinct()
                     .toList();
+            List<VisualRegionLocator.Claim> supportedClaims = pageScopedClaims(
+                    response.pageNumber(), referencedClaims, request.claims());
             List<UUID> supported = supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).toList();
-            boolean hasSamePageEvidence = supportedClaims.stream()
-                    .anyMatch(claim -> claim.sourcePages().isEmpty() || claim.sourcePages().contains(response.pageNumber()));
             if (supported.isEmpty()
-                    || !hasSamePageEvidence
                     || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
                 rejected = Rejection.UNSUPPORTED_SCOPE;
                 continue;
@@ -213,6 +218,28 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return index >= 0 && index < request.claims().size() ? request.claims().get(index) : null;
     }
 
+    /**
+     * Claim references from a visual model are a relevance hint, not an authority to attach a crop across pages.
+     * A crop can only enhance a rule whose source page contains that crop. When the model names a neighbouring claim
+     * in the same section, recover the matching page-scoped evidence deterministically instead of discarding a useful
+     * component or icon observation.
+     */
+    static List<VisualRegionLocator.Claim> pageScopedClaims(
+            int pageNumber,
+            List<VisualRegionLocator.Claim> referencedClaims,
+            List<VisualRegionLocator.Claim> availableClaims) {
+        List<VisualRegionLocator.Claim> samePageReferences = referencedClaims.stream()
+                .filter(claim -> sourceIncludes(claim, pageNumber))
+                .toList();
+        if (!samePageReferences.isEmpty()) return samePageReferences;
+        if (referencedClaims.isEmpty()) return List.of();
+        return availableClaims.stream().filter(claim -> sourceIncludes(claim, pageNumber)).toList();
+    }
+
+    private static boolean sourceIncludes(VisualRegionLocator.Claim claim, int pageNumber) {
+        return claim.sourcePages().isEmpty() || claim.sourcePages().contains(pageNumber);
+    }
+
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
@@ -228,7 +255,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return switch (rejection) {
             case EXPLICIT_NO_REGION -> "";
             case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or an empty JSON object when no crop is useful.";
-            case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references.";
+            case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references; the crop page must be a sourcePage for the cited claim.";
             case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
             case NON_CHINESE_OBSERVATION -> "The previous label or visibleDescription was not natural Simplified Chinese. Reinspect the page and return Chinese names for literal visible objects only. Verify that the crop itself visibly contains the object or relationship needed for the claim; otherwise return an empty JSON object.";
             case NONE -> "";

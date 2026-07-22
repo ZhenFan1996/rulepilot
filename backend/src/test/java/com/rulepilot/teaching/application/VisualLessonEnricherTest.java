@@ -175,6 +175,29 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void expands_a_tight_visual_focus_into_a_player_readable_contextual_viewport() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "卡牌行动图标",
+                                "卡牌中央的金色圆形图标紧挨着向右箭头",
+                                300,
+                                400,
+                                34,
+                                34,
+                                List.of(chunk))))
+                .enrich(UUID.randomUUID(), lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus())
+                .isEqualTo(new IllustratedLesson.VisualFocus(2, "卡牌行动图标", 227, 357, 180, 120));
+    }
+
+    @Test
     void turns_two_grounded_visual_anchors_into_two_different_rule_steps() {
         UUID iconEvidence = UUID.randomUUID();
         UUID stateEvidence = UUID.randomUUID();
@@ -213,6 +236,35 @@ class VisualLessonEnricherTest {
             assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
             assertThat(outcome.summary()).contains("2 处");
         });
+    }
+
+    @Test
+    void binds_a_visual_crop_to_its_source_page_even_when_one_evidence_chunk_spans_two_steps() {
+        UUID sharedEvidence = UUID.randomUUID();
+        RulebookUnderstanding crossPageUnderstanding = new RulebookUnderstanding(
+                List.of(block(2, "Game goal", 100, 200), block(3, "Artifact cards", 100, 200)),
+                List.of(), List.of(), List.of());
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> crossPageUnderstanding,
+                        (ignored, pages) -> List.of(
+                                new DocumentPageImages.PageImage(2, "image/png", new byte[] {2}, 1_000, 1_000),
+                                new DocumentPageImages.PageImage(3, "image/png", new byte[] {3}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                3,
+                                "文物卡字段",
+                                "两张卡牌上有编号圆圈，指向不同字段",
+                                60,
+                                40,
+                                860,
+                                520,
+                                List.of(sharedEvidence))))
+                .enrich(UUID.randomUUID(), sameEvidenceAcrossPagesLesson(sharedEvidence));
+
+        var steps = enriched.sections().getFirst().steps();
+        assertThat(steps.get(0).kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(steps.get(1).kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(steps.get(1).visualFocus().pageNumber()).isEqualTo(3);
     }
 
     @Test
@@ -354,6 +406,20 @@ class VisualLessonEnricherTest {
                 1, "launch", List.of("launch"), "Launch a probe", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                 "Launch a probe.", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson sameEvidenceAcrossPagesLesson(UUID sharedEvidence) {
+        var overview = new IllustratedLesson.LessonStep(
+                1, "游戏目标", IllustratedLesson.TeachingMove.DO, "收集最有价值的文物。", List.of(2), List.of(sharedEvidence));
+        var cardAnatomy = new IllustratedLesson.LessonStep(
+                2, "文物卡字段", IllustratedLesson.TeachingMove.DO, "对照卡牌上的字段。", List.of(3), List.of(sharedEvidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "overview", List.of("overview"), "先认识游戏", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "知道目标和卡牌字段", List.of(), List.of(), List.of(overview, cardAnatomy));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

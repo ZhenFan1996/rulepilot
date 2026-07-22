@@ -2,6 +2,9 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.teaching.VisualRegionLocator.Claim;
+import java.util.List;
+import java.util.UUID;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.junit.jupiter.api.Test;
 
@@ -131,5 +134,16 @@ class SpringAiVisualRegionLocatorTest {
                         SpringAiVisualRegionLocator.ModelRegion::width,
                         SpringAiVisualRegionLocator.ModelRegion::height)
                 .containsExactly(960, 970, 40, 30);
+    }
+
+    @Test
+    void rebinds_a_visual_crop_to_the_matching_source_page_when_the_model_numbers_a_neighbouring_claim() {
+        Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2));
+        Claim cardAnatomy = new Claim(UUID.randomUUID(), "文物卡的构成", List.of(3));
+
+        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(
+                3, List.of(overview), List.of(overview, cardAnatomy));
+
+        assertThat(rebound).containsExactly(cardAnatomy);
     }
 }

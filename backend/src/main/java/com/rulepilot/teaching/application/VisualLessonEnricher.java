@@ -34,6 +34,8 @@ public class VisualLessonEnricher {
 
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
     private static final int MAX_VISUAL_STEPS_PER_SECTION = 2;
+    private static final int MIN_READER_VIEWPORT_WIDTH = 180;
+    private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
@@ -156,6 +158,13 @@ public class VisualLessonEnricher {
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         Outcome rejected = null;
         for (VisualRegionLocator.LocatedRegion region : guide.regions()) {
+            if (needsReaderViewport(region)) {
+                if (!canExpandIntoReaderViewport(region)) {
+                    rejected = Outcome.REJECTED_TOO_SMALL;
+                    continue;
+                }
+                region = expandIntoReaderViewport(region);
+            }
             Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
             if (rejection != null) {
                 rejected = rejection;
@@ -168,6 +177,7 @@ public class VisualLessonEnricher {
         List<VisualRegionLocator.LocatedRegion> bounded = accepted.stream().limit(limit).toList();
         if (bounded.isEmpty()) return result(section, rejected == null ? Outcome.LOCATOR_RETURNED_NONE : rejected);
         MergedVisualSection merged = mergeVisualIntoSupportedSteps(section, bounded);
+        if (merged.addedCount() == 0) return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
         return new SectionResult(merged.section(), new SectionOutcome(
                 section.position(), Outcome.ADDED, addedSummary(section.position(), merged.addedCount())));
     }
@@ -312,9 +322,41 @@ public class VisualLessonEnricher {
 
     private boolean isReadableForPlayer(VisualRegionLocator.LocatedRegion region) {
         if (region.width() >= 80 && region.height() >= 60) return true;
-        // A focused icon group is intentionally allowed to be smaller: the reader opens the crop at full size.
-        // A word-only label is not, because enlarging it adds no rulebook understanding.
+        // A focused icon group may be small only before it is expanded into a reader-sized viewport.
         return region.width() >= 32 && region.height() >= 32 && hasCompactVisualHandle(region);
+    }
+
+    private boolean needsReaderViewport(VisualRegionLocator.LocatedRegion region) {
+        return region.width() < 80 || region.height() < 60;
+    }
+
+    private boolean canExpandIntoReaderViewport(VisualRegionLocator.LocatedRegion region) {
+        return !isTextOnlyFocus(region) && hasCompactVisualHandle(region);
+    }
+
+    /**
+     * Vision commonly finds the exact icon first. Keep that literal observation, but show players enough surrounding
+     * card, legend, arrow, or board state to recognise it without having to cross-reference a microscopic crop.
+     */
+    private VisualRegionLocator.LocatedRegion expandIntoReaderViewport(VisualRegionLocator.LocatedRegion region) {
+        int width = Math.max(MIN_READER_VIEWPORT_WIDTH, region.width());
+        int height = Math.max(MIN_READER_VIEWPORT_HEIGHT, region.height());
+        int x = centeredAndBounded(region.x(), region.width(), width);
+        int y = centeredAndBounded(region.y(), region.height(), height);
+        return new VisualRegionLocator.LocatedRegion(
+                region.pageNumber(),
+                region.label(),
+                region.visibleDescription(),
+                x,
+                y,
+                width,
+                height,
+                region.supportedEvidenceIds());
+    }
+
+    private int centeredAndBounded(int origin, int focusSize, int viewportSize) {
+        int centered = origin + (focusSize - viewportSize) / 2;
+        return Math.max(0, Math.min(1_000 - viewportSize, centered));
     }
 
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
@@ -345,7 +387,21 @@ public class VisualLessonEnricher {
                 || observation.contains("箭头")
                 || observation.contains("指示物")
                 || observation.contains("花色")
-                || observation.matches(".*\\b(icon|symbol|token|marker|die|dice|meeple)\\b.*");
+                || observation.contains("卡牌")
+                || observation.contains("棋子")
+                || observation.contains("板块")
+                || observation.contains("轨道")
+                || observation.contains("地图")
+                || observation.matches(".*\\b(icon|symbol|token|marker|die|dice|meeple|card|board|track|map|component)\\b.*");
+    }
+
+    private boolean isTextOnlyFocus(VisualRegionLocator.LocatedRegion region) {
+        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        return observation.contains("文字")
+                || observation.contains("文本")
+                || observation.contains("词语")
+                || observation.contains("标签文字")
+                || observation.matches(".*\\b(word|text|printed label|label only)\\b.*");
     }
 
     private boolean isIconFocused(VisualRegionLocator.LocatedRegion region) {
@@ -374,15 +430,19 @@ public class VisualLessonEnricher {
         for (VisualRegionLocator.LocatedRegion region : regions) {
             if (availableIndexes.isEmpty()) break;
             Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
-            int supportedStepIndex = availableIndexes.stream()
+            java.util.Optional<Integer> supportedStepIndex = availableIndexes.stream()
+                    .filter(index -> steps.get(index).sourcePages().contains(region.pageNumber()))
                     .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
-                    .findFirst()
-                    .orElse(availableIndexes.iterator().next());
-            LessonStep supportedStep = steps.get(supportedStepIndex);
+                    .findFirst();
+            if (supportedStepIndex.isEmpty()) {
+                log.info("Skipped visual region because no rule step shares its cited page {}", region.pageNumber());
+                continue;
+            }
+            LessonStep supportedStep = steps.get(supportedStepIndex.get());
             String observation = stripTrailingPunctuation(region.visibleDescription());
             String visualText = visualText(observation, supportedStep.text(), isIconFocused(region));
             String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
-            steps.set(supportedStepIndex, new LessonStep(
+            steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
                     supportedStep.heading(),
                     TeachingMove.VISUAL,
@@ -392,7 +452,7 @@ public class VisualLessonEnricher {
                     new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
             sourcePages = distinct(sourcePages, region.pageNumber());
             sourceChunkIds = distinct(sourceChunkIds, region.supportedEvidenceIds());
-            availableIndexes.remove(supportedStepIndex);
+            availableIndexes.remove(supportedStepIndex.get());
             added++;
         }
         LessonSection enriched = new LessonSection(
