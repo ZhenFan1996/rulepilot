@@ -48,6 +48,7 @@ public class TeachingPlanService {
     private static final int MAX_PAGE_CATALOG_CHARACTERS = 3_200;
     private static final int MAX_OUTLINE_PAGE_IMAGES = 4;
     private static final int MAX_INTERPRETED_VISUAL_PAGES = 4;
+    private static final int MAX_TOPIC_SOURCE_PAGES = 4;
     private static final int VISUAL_CATALOG_BATCH_SIZE = 2;
     private static final String VISUAL_CATALOG_PREFIX = "[Visual page catalog; verify against page image]";
     private static final String VISUAL_PAGE_CATALOG =
@@ -500,9 +501,12 @@ public class TeachingPlanService {
                     boolean needsLegend = topic.sourcePageNumbers().stream()
                             .map(pagesByNumber::get)
                             .filter(java.util.Objects::nonNull)
-                            .anyMatch(page -> missingInlineIconScore(page.text()) > 0);
+                    .anyMatch(page -> missingInlineIconScore(page.text()) > 0);
                     if (!needsLegend || topic.sourcePageNumbers().contains(legend.get())) return topic;
                     List<Integer> sourcePages = new java.util.ArrayList<>(topic.sourcePageNumbers());
+                    if (sourcePages.size() == MAX_TOPIC_SOURCE_PAGES) {
+                        sourcePages.removeLast();
+                    }
                     sourcePages.add(legend.get());
                     return new TeachingOutlineModel.TopicDraft(
                             topic.key(),
@@ -579,7 +583,7 @@ public class TeachingPlanService {
                             .forEach(directCorePages::add);
                     LinkedHashSet<Integer> sourcePages = new LinkedHashSet<>(directCorePages);
                     sourcePages.addAll(topic.sourcePageNumbers());
-                    List<Integer> boundedPages = sourcePages.stream().limit(4).toList();
+                    List<Integer> boundedPages = sourcePages.stream().limit(MAX_TOPIC_SOURCE_PAGES).toList();
                     return new TeachingOutlineModel.TopicDraft(
                             topic.key(),
                             topic.title(),

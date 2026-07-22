@@ -90,6 +90,22 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void prioritizesTheIconLegendWithoutExceedingTheFourPageTopicLimit() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(topic("wager", false, List.of(14, 15, 16, 17))));
+        List<PageView> pages = List.of(
+                page(3, "Components: 36 energy markers, 76 score tokens, 12 map tiles, and 40 cards."),
+                page(7, "Setting up: Give each player energy markers placed behind the screen and one score token placed in front."),
+                page(14, "Use this wager only if you have at least 2  . Place 2  on it."));
+
+        OutlineDraft bound = TeachingPlanService.bindIconLegendEvidence(outline, pages);
+
+        assertThat(bound.topics().getFirst().sourcePageNumbers()).containsExactly(14, 15, 16, 7);
+    }
+
+    @Test
     void detectsAChineseComponentReferenceWithoutKnowingAnyGameSpecificNames() {
         OutlineDraft outline = new OutlineDraft(
                 "Game",
