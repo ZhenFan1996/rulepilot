@@ -91,17 +91,23 @@ public class TeachingPlanLauncher {
                         plan.id(), launchFailure.getClass().getSimpleName());
             }
         } catch (RuntimeException failure) {
-            failIfActive(current, ownerUsername);
+            failIfActive(current, ownerUsername, failure);
             LOGGER.warn("Teaching preparation failed for document version {}", documentVersionId, failure);
         }
     }
 
-    private void failIfActive(RunSnapshot lastKnown, String ownerUsername) {
+    private void failIfActive(RunSnapshot lastKnown, String ownerUsername, RuntimeException failure) {
         runs.findOwned(lastKnown.id(), ownerUsername)
                 .map(AssistantRuns.RunDetails::run)
                 .filter(run -> !run.state().terminal())
                 .ifPresent(run -> runs.fail(
-                        run.id(), run.revision(), "TEACHING_PREPARATION_FAILED", "Teaching preparation failed safely"));
+                        run.id(), run.revision(), failureCode(failure), "Teaching preparation failed safely"));
+    }
+
+    private String failureCode(RuntimeException failure) {
+        return failure instanceof IllegalArgumentException
+                ? "TEACHING_PREPARATION_INVALID_PLAN"
+                : "TEACHING_PREPARATION_FAILED";
     }
 
     private void validate(int playerCount, int beginnerCount, int durationMinutes) {

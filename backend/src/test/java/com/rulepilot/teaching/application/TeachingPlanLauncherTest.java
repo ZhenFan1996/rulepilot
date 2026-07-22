@@ -101,6 +101,32 @@ class TeachingPlanLauncherTest {
         verify(lessons, never()).launch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 
+    @Test
+    void labelsAnInvalidModelPlanSoTheClientCanOfferASpecificRetry() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
+                .thenThrow(new IllegalArgumentException("outline omitted scoring"));
+        when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
+        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+
+        launcher.launch(documentVersionId, 4, 4, 25, "alice");
+
+        verify(runs).fail(
+                received.id(), 3, "TEACHING_PREPARATION_INVALID_PLAN", "Teaching preparation failed safely");
+    }
+
     private RunSnapshot run(AssistantRunState state, long revision) {
         return run(UUID.randomUUID(), state, revision);
     }
