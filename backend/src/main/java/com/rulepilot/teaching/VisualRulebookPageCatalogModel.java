@@ -11,6 +11,10 @@ public interface VisualRulebookPageCatalogModel {
 
     CatalogDraft summarize(CatalogRequest request);
 
+    default boolean available(String modelConfigurationOwner) {
+        return true;
+    }
+
     record CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
         public CatalogRequest {
             if (pages == null || pages.isEmpty() || pages.size() > 4) {

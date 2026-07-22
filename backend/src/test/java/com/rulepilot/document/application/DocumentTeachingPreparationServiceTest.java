@@ -33,11 +33,31 @@ class DocumentTeachingPreparationServiceTest {
         when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
         when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
         when(catalog.provisionDefaultEdition("SETI")).thenReturn(editionId);
+        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
+                .thenReturn(Optional.empty());
 
         var scope = preparation.prepare(version.id(), "alice", "SETI");
 
         assertThat(scope.editionId()).isEqualTo(editionId);
         verify(documents).update(document.assignTo(editionId));
+    }
+
+    @Test
+    void leavesANewUploadUnassignedWhenAutomaticAssociationWouldDuplicateAnExistingRulebook() {
+        RuleDocument document = rulebook(null, "alice");
+        DocumentVersion version = version(document.id(), ProcessingStatus.READY);
+        UUID editionId = UUID.randomUUID();
+        RuleDocument existing = rulebook(editionId, "alice");
+        when(documents.findVersion(version.id())).thenReturn(Optional.of(version));
+        when(documents.findDocument(document.id())).thenReturn(Optional.of(document));
+        when(catalog.provisionDefaultEdition("SETI")).thenReturn(editionId);
+        when(documents.findDocument(editionId, "alice", document.title(), document.sourceType()))
+                .thenReturn(Optional.of(existing));
+
+        var scope = preparation.prepare(version.id(), "alice", "SETI");
+
+        assertThat(scope.editionId()).isNull();
+        verify(documents, never()).update(document.assignTo(editionId));
     }
 
     @Test

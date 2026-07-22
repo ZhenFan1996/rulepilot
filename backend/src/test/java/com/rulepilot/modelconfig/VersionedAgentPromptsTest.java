@@ -12,7 +12,7 @@ class VersionedAgentPromptsTest {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
                 resource("teaching-agent-v16-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
-                resource("teaching-outline-v5-system.txt"),
+                resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
@@ -80,6 +80,8 @@ class VersionedAgentPromptsTest {
                         "visualEvidenceRecommended",
                         "page artwork",
                         "page prose is sufficient",
+                        "page-by-page coverage audit",
+                        "later pages",
                         "asymmetric factions",
                         "walkthrough");
         assertThat(prompts.answerSystem())
@@ -94,6 +96,8 @@ class VersionedAgentPromptsTest {
                         "main column",
                         "player turn",
                         "Pass/跳过",
+                        "default next-actor rule",
+                        "unable to act",
                         "empty exceptions list",
                         "Every explanatory sentence",
                         "matching",
@@ -116,6 +120,8 @@ class VersionedAgentPromptsTest {
                         "negation",
                         "heading ownership",
                         "player turn (回合)",
+                        "default next-actor rules",
+                        "left active play",
                         "invented baseline",
                         "Never emit an issue as an audit note",
                         "semantic rule meaning",

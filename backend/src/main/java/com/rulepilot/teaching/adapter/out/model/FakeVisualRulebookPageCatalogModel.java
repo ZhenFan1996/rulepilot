@@ -8,6 +8,11 @@ import org.springframework.stereotype.Component;
 public class FakeVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
     @Override
+    public boolean available(String modelConfigurationOwner) {
+        return false;
+    }
+
+    @Override
     public CatalogDraft summarize(CatalogRequest request) {
         return new CatalogDraft(request.pages().stream()
                 .map(page -> new PageSummary(

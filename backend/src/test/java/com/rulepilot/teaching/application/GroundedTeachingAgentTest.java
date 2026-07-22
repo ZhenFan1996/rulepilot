@@ -141,6 +141,73 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void keepsTextBackedBaseGenerationIndependentFromSlowRawPageVision() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "COMPONENTS",
+                "Card anatomy",
+                "The cost and effect are printed beside their icons.",
+                5,
+                5,
+                List.of(new RulePageImage(5, "image/jpeg", new byte[] {1, 2}, 1_086, 1_511)));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).isEmpty();
+                return new SectionDraft(
+                        "看懂卡牌图标",
+                        VisualKind.REFERENCE_CARD,
+                        "对照卡牌上的费用与效果。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "找到费用与效果",
+                                TeachingMove.WATCH,
+                                "先找到费用图标，再看旁边的效果。",
+                                List.of(chunkId))));
+            }
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "card-anatomy",
+                        "卡牌结构",
+                        "看懂卡牌费用与效果图标。",
+                        true,
+                        true,
+                        List.of("Card anatomy"),
+                        List.of("components"),
+                        List.of(5))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+    }
+
+    @Test
     void turnsPersistedVisualPageFactsIntoCitedLessonEvidence() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -227,6 +294,81 @@ class GroundedTeachingAgentTest {
 
         assertThat(lesson.sections()).singleElement().satisfies(section -> assertThat(section.evidenceStatus())
                 .isEqualTo(EvidenceStatus.SUPPORTED));
+    }
+
+    @Test
+    void addsCrossPageVisualFactsToTextEvidenceWithMissingInlineIcons() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence textEvidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SPECIAL_RULE",
+                "KODORA",
+                "Use KODORA only if you have at least 2  . Place 2  on it.",
+                14,
+                14);
+        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID documentVersionId, List<PageFact> pages) {}
+
+            @Override
+            public List<PageFact> find(UUID documentVersionId, java.util.Set<Integer> pages) {
+                return List.of(new PageFact(
+                        14,
+                        "KODORA; victory point token",
+                        "第7页图例标明红色图标是胜利点；第14页KODORA要求放置2个胜利点。",
+                        List.of("KODORA", "victory point token")));
+            }
+        };
+        TeachingLessonModel model = request -> {
+            assertThat(request.pageImages()).isEmpty();
+            assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
+                    .asString().contains("KODORA要求放置2个胜利点");
+            return new SectionDraft(
+                    "KODORA下注",
+                    VisualKind.REFERENCE_CARD,
+                    "KODORA使用胜利点下注。",
+                    List.of(chunkId),
+                    List.of(new StepDraft(
+                            "放置胜利点",
+                            TeachingMove.DO,
+                            "把KODORA放在屏风前，并在上面放2个胜利点。",
+                            List.of(chunkId))));
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "kodora",
+                        "KODORA",
+                        "Teach the KODORA wager.",
+                        true,
+                        false,
+                        List.of("KODORA"),
+                        List.of("exceptions"),
+                        List.of(14))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(textEvidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                facts,
+                4,
+                1);
+
+        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("2个胜利点");
     }
 
     @Test
@@ -499,7 +641,7 @@ class GroundedTeachingAgentTest {
 
         var resumed = agent.create(plan, UUID.randomUUID(), previous);
 
-        assertThat(compositions).hasValue(2);
+        assertThat(compositions).hasValue(1);
         assertThat(resumed.sections().getFirst().title()).isEqualTo("照图完成开局");
         assertThat(resumed.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
     }
@@ -1069,7 +1211,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(compositions).hasValue(6);
+        assertThat(compositions).hasValue(5);
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }

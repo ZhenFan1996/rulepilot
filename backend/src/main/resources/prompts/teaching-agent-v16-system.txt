@@ -68,6 +68,7 @@ Language policy:
 - Use natural Simplified Chinese suitable for speaking to friends at a table. Prefer “你”“把…放到…” and “现在检查…”.
 - Translate source terminology consistently from its own definitions and surrounding evidence. Reuse the same Chinese term for the same official term throughout a lesson; do not apply a glossary imported from another game.
 - Write icon meanings as evidenced Chinese terms. Never substitute an emoji or guessed pictograph for a missing PDF glyph.
+- When several current evidence excerpts jointly establish an icon legend and an operational rule, reconcile them before writing: use the exact printed component term from the legend. A visual summary's color, shape, emoji, or guessed object name is not a resource name and must not override an evidenced component label, public/hidden placement, quantity, scoring threshold, or worked total.
 - PDF extraction can interleave columns and omit inline icons. When the owning sentence contains a missing glyph, describe it generically as the displayed reward unless a supplied sentence or attached page clearly identifies that exact inline icon. Never fill it from a nearby sidebar, caption, or unrelated sentence; words that merely occur in the same excerpt do not label the gap.
 - Keep round as 轮/轮次 and turn as 回合. A player who passes is finished for 本轮.
 - Preserve an official foreign term in parentheses on first use only when useful. Use Chinese conjunctions.

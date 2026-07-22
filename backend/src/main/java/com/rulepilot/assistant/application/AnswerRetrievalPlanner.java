@@ -43,6 +43,10 @@ public final class AnswerRetrievalPlanner {
         }
         String currentSection = knownSection(context.currentLessonSection());
         List<RetrievalIntent> intents = new ArrayList<>();
+        String stateTransitionQuery = stateTransitionQuery(question.normalizedQuestion());
+        if (stateTransitionQuery != null) {
+            intents.add(new RetrievalIntent(stateTransitionQuery, Set.of(), null));
+        }
         if (rewrittenQueries != null) {
             rewrittenQueries.stream()
                     .map(AnswerRetrievalPlanner::bounded)
@@ -147,8 +151,9 @@ public final class AnswerRetrievalPlanner {
         addWhenContains(sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数");
         addWhenContains(sections, text, "END_CONDITIONS", "game end", "ending", "结束条件", "游戏结束");
         addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
-        addWhenContains(sections, text, "PHASES", "phase", "阶段");
-        addWhenContains(sections, text, "ROUND_STRUCTURE", "round", "turn order", "轮次", "回合顺序");
+        addWhenContains(sections, text, "PHASES", "phase", "trick", "阶段", "墩");
+        addWhenContains(
+                sections, text, "ROUND_STRUCTURE", "round", "turn order", "next trick", "lead", "轮次", "回合顺序", "下一墩", "领出");
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
         addWhenContains(sections, text, "OBJECTIVE", "objective", "win", "目标", "获胜", "胜利");
         return sections.stream().limit(MAX_SECTION_FILTERS).collect(Collectors.toUnmodifiableSet());
@@ -176,10 +181,10 @@ public final class AnswerRetrievalPlanner {
         if (containsAny(normalized, "SETUP", "设置", "布置")) return "SETUP";
         if (containsAny(normalized, "SCOR", "计分", "得分")) return "SCORING";
         if (containsAny(normalized, "TIE", "同分", "平局")) return "TIE_BREAKERS";
-        if (containsAny(normalized, "END", "结束")) return "END_CONDITIONS";
         if (containsAny(normalized, "TURN", "ROUND", "PASS", "FIRST_ROUND", "回合", "轮次")) {
             return "ROUND_STRUCTURE";
         }
+        if (containsAny(normalized, "END", "结束")) return "END_CONDITIONS";
         if (containsAny(
                 normalized, "ACTION", "CARD", "CORE_LOOP", "行动")) {
             return "ACTIONS";
@@ -193,6 +198,16 @@ public final class AnswerRetrievalPlanner {
         if (value != null && !value.isBlank() && target.indexOf(value) < 0) {
             target.append(' ').append(value.strip());
         }
+    }
+
+    private static String stateTransitionQuery(String question) {
+        boolean actorExits = containsAny(
+                question, "out of cards", "empty hand", "no cards", "runs out of cards", "出完", "无牌", "没有手牌", "手牌为零");
+        boolean asksNextActor = containsAny(
+                question, "next trick", "who leads", "who starts", "下一墩", "谁领出", "谁开始", "由谁");
+        if (!actorExits || !asksNextActor) return null;
+        return bounded(question + " state transition successor actor replacement active player skipped "
+                + "after hand empty next trick lead exception 状态变化 后继行动者 替代玩家 无牌 跳过 下一墩 领出 例外");
     }
 
     private static String bounded(String value) {

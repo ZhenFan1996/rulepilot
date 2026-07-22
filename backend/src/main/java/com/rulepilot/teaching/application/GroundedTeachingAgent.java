@@ -64,7 +64,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v23-reviewed-visual";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v24-fast-multimodal";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -664,7 +664,7 @@ public class GroundedTeachingAgent {
                 pacing.durationSeconds(),
                 pacing.maxSteps(),
                 priorSections,
-                evidence.stream().map(this::toModelEvidence).toList(),
+                modelEvidence(plan.documentVersionId(), evidence),
                 pageImages,
                 planned.retrievalQueries(),
                 plan.createdBy());
@@ -677,26 +677,7 @@ public class GroundedTeachingAgent {
                 () -> model.compose(modelRequest),
                 result -> estimateTokens(result.toString()));
         draft = normalizeDraft(draft, modelRequest);
-        if (!modelRequest.pageImages().isEmpty()) {
-            List<String> visualAudit = List.of(
-                    "Reinspect the complete attached pages and audit the VISUAL step only. Treat the current focus "
-                            + "coordinates and description as untrusted. Mentally crop from the full page using a "
-                            + "top-left 0-1000 origin. Every object and relationship named by the VISUAL text and "
-                            + "label must literally remain inside that crop. If not, move the rectangle or replace "
-                            + "the VISUAL step with a real worked diagram or rule callout on an attached page. "
-                            + "Preserve complete non-visual rule coverage and the maximum step count.");
-            SectionDraft draftToAudit = draft;
-            draft = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    operationName("refineTeachingVisual", planned.position()),
-                    estimateTokens(modelRequest.toString()) + estimateTokens(draftToAudit.toString())
-                            + estimateTokens(visualAudit.toString()),
-                    "Teaching visual focus reinspected against the complete page",
-                    () -> model.revise(modelRequest, draftToAudit, visualAudit),
-                    result -> estimateTokens(result.toString()));
-            draft = normalizeDraft(draft, modelRequest);
-        }
+        int maxRepairAttempts = modelRequest.pageImages().isEmpty() ? MAX_DRAFT_REPAIR_ATTEMPTS : 1;
         for (int repair = 0; ; repair++) {
             try {
                 LessonSection accepted = validatedSection(
@@ -715,7 +696,7 @@ public class GroundedTeachingAgent {
                         repair,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS || isVisualLocalizationFailure(rejectedDraft)) {
+                if (repair == maxRepairAttempts || isVisualLocalizationFailure(rejectedDraft)) {
                     if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
                         return fallbackToTextDraft(
                                 plan,
@@ -727,7 +708,7 @@ public class GroundedTeachingAgent {
                                 sectionIndex,
                                 repair + 1);
                     }
-                    if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) throw rejectedDraft;
+                    if (repair == maxRepairAttempts) throw rejectedDraft;
                 }
                 List<String> feedback = List.of(rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
@@ -736,7 +717,7 @@ public class GroundedTeachingAgent {
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
                         repair + 1,
-                        MAX_DRAFT_REPAIR_ATTEMPTS,
+                        maxRepairAttempts,
                         feedback.getFirst());
                 SectionDraft draftToRevise = draft;
                 draft = invocations.invoke(
@@ -1182,6 +1163,13 @@ public class GroundedTeachingAgent {
                 .map(candidate -> "第" + candidate.planned().position() + "章："
                         + requiredCoverage(candidate.planned()))
                 .collect(Collectors.joining("\n"));
+        Map<UUID, String> reviewExcerpts = candidates.stream()
+                .flatMap(candidate -> candidate.modelRequest().evidence().stream())
+                .collect(Collectors.toMap(
+                        EvidenceInput::chunkId,
+                        EvidenceInput::excerpt,
+                        (first, duplicate) -> first,
+                        LinkedHashMap::new));
         ReviewRequest request = new ReviewRequest(
                 assistantRunId,
                 ContentType.LESSON,
@@ -1189,7 +1177,8 @@ public class GroundedTeachingAgent {
                 new TaskContext(objective, requiredCoverage),
                 claims,
                 evidence.values().stream()
-                        .map(source -> new GeneratedContentCritic.Evidence(source.chunkId(), source.excerpt()))
+                        .map(source -> new GeneratedContentCritic.Evidence(
+                                source.chunkId(), reviewExcerpts.getOrDefault(source.chunkId(), source.excerpt())))
                         .toList());
         return new LessonReviewBatch(request, Map.copyOf(claimOwners));
     }
@@ -1553,12 +1542,26 @@ public class GroundedTeachingAgent {
             ReviewRequest request,
             Map<Integer, DraftCandidate> claimOwners) {}
 
-    private EvidenceInput toModelEvidence(RuleEvidence evidence) {
+    private List<EvidenceInput> modelEvidence(UUID documentVersionId, List<RuleEvidence> evidence) {
+        Set<Integer> pages = evidence.stream()
+                .filter(source -> source.pageFrom() == source.pageTo())
+                .map(RuleEvidence::pageFrom)
+                .collect(Collectors.toSet());
+        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
+                .collect(Collectors.toMap(
+                        VisualRulebookPageFacts.PageFact::pageNumber,
+                        VisualRulebookPageFacts.PageFact::evidenceText));
+        return evidence.stream().map(source -> toModelEvidence(source, factsByPage)).toList();
+    }
+
+    private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
+        String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
+        String excerpt = visualFact == null ? evidence.excerpt() : evidence.excerpt() + "\n\n" + visualFact;
         return new EvidenceInput(
                 evidence.chunkId(),
                 evidence.sectionType(),
                 evidence.heading(),
-                evidence.excerpt(),
+                excerpt,
                 evidence.pageFrom(),
                 evidence.pageTo());
     }

@@ -21,8 +21,8 @@ final class TeachingOutlineImagePreparer {
 
     // Rulebook pages often encode the decisive exception in small callouts. Keep those labels readable for the
     // rule-writing pass; each chapter sends at most two pages, so this does not widen the request unboundedly.
-    private static final int MAX_EDGE_PIXELS = 1_200;
-    private static final float JPEG_QUALITY = 0.86f;
+    private static final int MAX_EDGE_PIXELS = 1_600;
+    private static final float JPEG_QUALITY = 0.90f;
 
     PageImageInput prepare(PageImageInput input) {
         try {

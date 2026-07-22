@@ -216,4 +216,31 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents).allSatisfy(intent ->
                 assertThat(intent.sectionTypes()).containsExactly("ROUND_STRUCTURE"));
     }
+
+    @Test
+    void addsAnUnfilteredExceptionQueryWhenAnExitingPlayerWouldNormallyActNext() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "我出完所有手牌后，下一墩由谁领出？",
+                "我出完所有手牌后，下一墩由谁领出？",
+                QuestionType.SITUATION_QUERY,
+                List.of("手牌", "下一墩"),
+                Set.of(),
+                "ROUND_STRUCTURE");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId, "ROUND_END", null, 4, Set.of()));
+
+        assertThat(intents.getFirst().query())
+                .contains("state transition", "successor actor", "我出完所有手牌")
+                .doesNotContain("next player to the left");
+        assertThat(intents).anySatisfy(intent -> {
+            assertThat(intent.query()).contains("state transition", "successor actor", "例外");
+            assertThat(intent.sectionTypes()).isEmpty();
+            assertThat(intent.currentSectionType()).isNull();
+        });
+        assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE", "PHASES");
+        assertThat(intents.getLast().currentSectionType()).isEqualTo("ROUND_STRUCTURE");
+    }
 }

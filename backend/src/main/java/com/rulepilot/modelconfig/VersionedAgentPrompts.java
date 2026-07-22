@@ -26,7 +26,7 @@ public class VersionedAgentPrompts {
     public VersionedAgentPrompts(
             @Value("classpath:prompts/teaching-agent-v16-system.txt") Resource teachingSystem,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
-            @Value("classpath:prompts/teaching-outline-v5-system.txt") Resource teachingOutlineSystem,
+            @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,

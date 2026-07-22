@@ -36,8 +36,15 @@ class DocumentTeachingPreparationService implements DocumentTeachingPreparation 
             String gameName = suggestedGameName == null || suggestedGameName.isBlank()
                     ? document.title()
                     : suggestedGameName;
-            document = document.assignTo(catalog.provisionDefaultEdition(gameName));
-            documents.update(document);
+            UUID editionId = catalog.provisionDefaultEdition(gameName);
+            boolean assignmentWouldDuplicate = documents.findDocument(
+                            editionId, ownerUsername, document.title(), document.sourceType())
+                    .filter(existing -> !existing.id().equals(version.documentId()))
+                    .isPresent();
+            if (!assignmentWouldDuplicate) {
+                document = document.assignTo(editionId);
+                documents.update(document);
+            }
         }
         return new VersionScope(version.id(), document.gameEditionId(), version.status().name(), document.createdBy());
     }

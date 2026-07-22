@@ -24,8 +24,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class PdfBoxPageImageRenderer implements PdfPageImageRenderer {
 
-    private static final float RENDER_DPI = 120;
-    private static final float JPEG_QUALITY = 0.84f;
+    // Small inline resource icons are rule-bearing evidence. At 120 DPI they can collapse into nearby bullet marks
+    // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
+    private static final float RENDER_DPI = 200;
+    private static final float JPEG_QUALITY = 0.90f;
 
     private final int maxPages;
 

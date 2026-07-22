@@ -92,9 +92,7 @@ public class TeachingPlanLauncher {
             }
         } catch (RuntimeException failure) {
             failIfActive(current, ownerUsername);
-            LOGGER.warn(
-                    "Teaching preparation failed for document version {}: {}",
-                    documentVersionId, failure.getClass().getSimpleName());
+            LOGGER.warn("Teaching preparation failed for document version {}", documentVersionId, failure);
         }
     }
 

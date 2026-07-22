@@ -61,6 +61,38 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void removesShortInternalEvidenceIdentifiersFromPlayerFacingText() {
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "可以执行该行动[322c770b]。",
+                        "满足规则所列条件后即可执行。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("PLAYER_FACING_OUTPUT"));
+                return previousDraft;
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.8, 1, null, false)),
+                model);
+
+        var answer = service.answer(
+                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).doesNotContain("322c770b");
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void answersImageOnlyRulesFromSearchedVisualPageFactsInsteadOfRandomPlaceholderPages() {
         RuleEvidenceHit randomPlaceholder = new RuleEvidenceHit(
                 UUID.randomUUID(),
@@ -131,6 +163,511 @@ class StructuredRuleAnswerServiceTest {
             assertThat(citation.chunkId()).isEqualTo(pageSixChunkId);
             assertThat(citation.pageFrom()).isEqualTo(6);
         });
+    }
+
+    @Test
+    void enrichesExtractedTextWithSamePageVisualFactsWhenInlineIconsAreMissing() {
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidenceHit textSource = new RuleEvidenceHit(
+                chunkId,
+                versionId,
+                "SPECIAL_RULE",
+                "Wager",
+                "Use the wager only if you have at least 2  . Place 2  on it.",
+                14,
+                14,
+                0.8);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(14, "victory point token", "The missing icon is a victory point token.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(textSource);
+            }
+        };
+        RuleAnswerModel model = request -> {
+            assertThat(request.evidence()).singleElement().satisfies(source -> assertThat(source.excerpt())
+                    .contains("at least 2", "victory point token"));
+            return new ModelDraft(
+                    "支付2个胜利点。",
+                    "把2个胜利点放在赌注卡上。",
+                    List.of(chunkId),
+                    List.of(),
+                    "HIGH");
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(textSource, 0.8, 1, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "What token pays for the wager?",
+                new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.shortVerdict()).contains("胜利点");
+    }
+
+    @Test
+    void repairsAnUnresolvedCrossPageIconIdentityBeforePublishingTheAnswer() {
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "SETUP",
+                "Player setup",
+                "Give each player 1 score token in public and 2 energy tokens hidden behind the screen.",
+                3,
+                3,
+                0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "SPECIAL_RULE",
+                "Wager",
+                "To make the wager, place 2  on the card. If you win, keep the 2  and gain 2 additional  .",
+                9,
+                9,
+                0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token; energy token", "The red icon labels score token; the green icon labels energy token.", 80),
+                visualFact(9, "Wager; 2 🔴", "Place 2 🔴 on the wager; the icon is likely an energy token.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "下注支付2个能量令牌（🔴）。",
+                        "获胜后保留2个🔴并额外获得2个🔴。",
+                        List.of(wager.chunkId(), setup.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString()
+                        .contains("VISUAL_IDENTITY", "worked arithmetic", "set answerable to false");
+                return new ModelDraft(
+                        "下注放置2个得分令牌（score token）。",
+                        "获胜时保留已经放置的2个得分令牌，再获得2个得分令牌；净增加2个。",
+                        List.of(wager.chunkId(), setup.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(wager, 0.9, 1, null, false),
+                        new HybridEvidenceHit(setup, 0.8, 2, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "下注支付哪一种令牌，获胜后怎么结算？",
+                new QuestionContext(versionId, "SPECIAL_RULE", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("得分令牌").doesNotContain("🔴", "能量令牌");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(9, 3);
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void refusesAnAnswerWhenVisualIdentityRepairStillUsesAnUnresolvedIcon() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Payment", "Pay 2  to activate.", 5, 5, 0.8);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) ->
+                List.of(visualFact(5, "2 🔴", "The payment shows 2 🔴; the resource name is uncertain.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(source);
+            }
+        };
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return unresolvedDraft(source.chunkId());
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                return unresolvedDraft(source.chunkId());
+            }
+
+            private ModelDraft unresolvedDraft(UUID citationId) {
+                return new ModelDraft(
+                        "支付2个🔴。", "现有页面只显示🔴图标。", List.of(citationId), List.of(), "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(source, 0.8, 1, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "激活时支付哪一种资源？",
+                new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.shortVerdict()).contains("无法从现有证据中可靠确定");
+        assertThat(answer.citations()).isEmpty();
+    }
+
+    @Test
+    void usesAnExplicitCrossPageIconMappingWithoutAStochasticSecondModelPass() {
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Give each player 1 score token in public and 2 energy tokens hidden.", 3, 3, 0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Wager",
+                "Place 2  on the wager. If you win, keep the 2  and gain 2 additional  .", 9, 9, 0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token; energy token", "The reference page labels both components.", 80),
+                visualFact(9, "Wager; score token", "The operational icon is visually identical to the one labeled 'score token' on page 3 and is used as that component name.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "下注放置2个得分令牌（score token）。",
+                        "获胜后保留下注，并额外获得2个得分令牌。",
+                        List.of(wager.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return previousDraft;
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(wager, 0.9, 1, null, false),
+                        new HybridEvidenceHit(setup, 0.8, 2, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "下注支付哪一种令牌？", new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("得分令牌", "score token");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(9, 3);
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void ignoresAnUncitedSupplementaryIconMappingForAnUnrelatedRoundQuestion() {
+        RuleEvidenceHit round = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ROUND_END", "Going out",
+                "The first player to empty their hand takes first place. Others continue until one player remains.",
+                4, 4, 0.9);
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Give each player 1 score token.", 3, 3, 0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Wager", "Place 2 on the wager.", 9, 9, 0.7);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token", "The component is labeled 'score token'.", 80),
+                visualFact(9, "Wager; score token", "The operational icon is visually identical to the one labeled 'score token' on page 3 and is used as that component name.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "不会立刻结束，其他玩家继续决定后续名次。",
+                        "你出完手牌后取得第一名并退出本轮，其余玩家继续。",
+                        List.of(round.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return previousDraft;
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(round, 0.9, 1, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "我第一个出完手牌后，其他玩家继续吗？",
+                new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).doesNotContain("score token");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(4);
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void repairsAContinuationThatAssignsTheNextActionToAPlayerWhoIsOut() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ROUND_STRUCTURE", "Next eligible player",
+                "The trick winner leads next. If that winner is out of cards, the next player to the left starts instead.",
+                8, 8, 0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "你出完所有手牌后，下一墩由你领出。",
+                        "你已经无牌并退出本轮，但默认仍由你开始下一墩。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                int revision = revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("INACTIVE_ACTOR", "successor"));
+                if (revision == 1) {
+                    return new ModelDraft(false, "uncertain successor", null, null, List.of(), List.of(), "LOW");
+                }
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("EVIDENCED_SUCCESSOR_RULE"));
+                return new ModelDraft(
+                        "你出完所有手牌后，由你左手边的下一位玩家领出下一墩。",
+                        "你退出本轮；下一墩不由你领出，改由左手边下一位仍在本轮中的玩家开始。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                model);
+
+        var answer = service.answer(
+                "我出完手牌后，下一墩由谁领出？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("左手边的下一位玩家");
+        assertThat(revisions).hasValue(2);
+    }
+
+    @Test
+    void repairsAResourceIconThatTheDraftAlsoMisstatesAsAHandSizeRequirement() {
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Give each player 1 score token in public and 2 energy tokens hidden.", 3, 3, 0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Wager",
+                "Use the wager only if you have at least 2  . Place 2  on it; it is not used as a card this round.",
+                9, 9, 0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token; energy token", "The reference page labels both components.", 80),
+                visualFact(9, "Wager; score token", "The operational icon is visually identical to the one labeled 'score token' on page 3 and is used as that component name.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "放置2个得分令牌（score token）。",
+                        "至少需要2张基础牌才能发动；图标对应基础牌数量。",
+                        List.of(wager.chunkId(), setup.chunkId()),
+                        List.of("手牌不足2张时不能发动。"),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().asString()
+                        .contains("RESOURCE_CARD_CONFLATION", "fewer cards", "named token");
+                return new ModelDraft(
+                        "放置2个得分令牌（score token）。",
+                        "至少拥有2个得分令牌时才能发动；放置后，该牌本轮不再作为手牌使用。",
+                        List.of(wager.chunkId(), setup.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(wager, 0.9, 1, null, false),
+                        new HybridEvidenceHit(setup, 0.8, 2, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "发动时支付哪一种资源？", new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.explanation()).contains("2个得分令牌").doesNotContain("2张基础牌", "手牌不足");
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void allowsAnExplicitDenialOfAHandSizeRequirementAfterVisualReconciliation() {
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Give each player 1 score token and 2 energy tokens.", 3, 3, 0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Wager",
+                "Use the wager only if you have at least 2 . Place 2 on it.", 9, 9, 0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token", "The component is labeled 'score token'.", 80),
+                visualFact(9, "Wager; score token", "The operational icon is visually identical to the one labeled 'score token' on page 3 and is used as that component name.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "需要2个得分令牌（score token），不需要至少2张手牌。",
+                        "发动前检查并放置得分令牌；这张牌本轮不参与出牌，所以使用后你的手牌会更少。",
+                        List.of(wager.chunkId(), setup.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return previousDraft;
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(wager, 0.9, 1, null, false),
+                        new HybridEvidenceHit(setup, 0.8, 2, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "需要至少2张手牌才能发动吗？", new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("不需要至少2张手牌", "score token");
+        assertThat(answer.explanation()).contains("使用后你的手牌会更少");
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void replacesAnImprovisedGlyphWithTheResolvedPrintedComponentName() {
+        RuleEvidenceHit setup = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Player setup",
+                "Give each player 1 score token.", 3, 3, 0.8);
+        RuleEvidenceHit wager = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SPECIAL_RULE", "Wager",
+                "Place 2 on the wager.", 9, 9, 0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(3, "score token", "The component is labeled 'score token'.", 80),
+                visualFact(9, "Wager; score token", "The operational icon is visually identical to the one labeled 'score token' on page 3 and is used as that component name.", 90));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(setup, wager);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "放置2个得分令牌（score token，🔴）。",
+                        "获胜后保留2个🔴。",
+                        List.of(wager.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("MAPPED_COMPONENT_GLYPH"));
+                return previousDraft;
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(
+                        new HybridEvidenceHit(wager, 0.9, 1, null, false),
+                        new HybridEvidenceHit(setup, 0.8, 2, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "下注支付哪一种令牌？", new QuestionContext(versionId, null, null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("score token").doesNotContain("🔴");
+        assertThat(answer.explanation()).contains("score token").doesNotContain("🔴");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(9, 3);
+        assertThat(revisions).hasValue(1);
     }
 
     @Test
