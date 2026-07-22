@@ -24,7 +24,7 @@ class VisualLessonEnricherTest {
                 ? List.of(new DocumentPageImages.PageImage(2, "image/png", new byte[] {1}, 1_000, 1_000))
                 : List.of();
         VisualRegionLocator locator = request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                2, "轨道", 120, 220, 180, 120, List.of(chunk)));
+                2, "轨道", "一个探测器标记位于弧形刻度轨道上", 120, 220, 180, 120, List.of(chunk)));
         IllustratedLesson source = lesson(chunk);
 
         IllustratedLesson enriched = new VisualLessonEnricher(
@@ -82,6 +82,22 @@ class VisualLessonEnricherTest {
                 .enrich(UUID.randomUUID(), lesson(chunk));
 
         assertThat(enriched.sections().getFirst().steps()).hasSize(1);
+    }
+
+    @Test
+    void rejects_a_crop_without_a_literal_visual_observation() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "轨道", 120, 220, 180, 120, List.of(chunk))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_MISSING_OBSERVATION);
     }
 
     @Test
@@ -154,7 +170,7 @@ class VisualLessonEnricherTest {
                 assertThat(candidate.sourceText()).isEqualTo("Cited page 2 visual context");
             });
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    2, "Orbit track", 640, 700, 180, 120, List.of(chunk)));
+                    2, "Orbit track", "一枚探测器标记位于弧形轨道上", 640, 700, 180, 120, List.of(chunk)));
         };
 
         IllustratedLesson enriched = new VisualLessonEnricher(
@@ -201,7 +217,7 @@ class VisualLessonEnricherTest {
                     .containsExactly(3, 2, 3);
             assertThat(request.candidates().getLast().sourceText()).isEqualTo("Cited page 3 visual context");
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
-                    3, "Launch", 100, 200, 300, 160, List.of(chunk)));
+                    3, "Launch", "发射台旁有一枚探测器和指向轨道的箭头", 100, 200, 300, 160, List.of(chunk)));
         };
 
         var enriched = new VisualLessonEnricher(

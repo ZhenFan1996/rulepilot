@@ -31,12 +31,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
-            Return one compact region when it gives a player a useful visual handle on this section or its supplied
-            claims. It need not independently prove every procedural sentence: the cited text remains the only source
-            for a rule's effect. Alongside it, provide a short Chinese visibleDescription of only what a player can
-            literally see inside that crop: components, printed labels, icons, arrows, quantities, or their spatial
-            relationship. This is an image observation, not a rule explanation: do not infer an icon's game effect,
-            paraphrase a rule, add facts, or alter claims.
+            Return one compact region only when it gives a player a direct visual handle on this section or its supplied
+            claims: a named component, printed condition, icon, arrow, quantity, spatial setup, or worked state. It
+            need not independently prove every procedural sentence: the cited text remains the only source for a
+            rule's effect. Alongside it, provide a short Chinese visibleDescription of only what a player can literally
+            see inside that crop. This is an image observation, not a rule explanation: do not infer an icon's game
+            effect, paraphrase a rule, add facts, or alter claims. Never select a generic setup, board, card, or
+            decorative illustration merely because it shares a cited page with a timing, tie-break, or other text-only
+            claim. If the required connection is not visibly identifiable, return an empty JSON object.
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
@@ -45,7 +47,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             cited text rather than printed inside the crop.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
-            characters. visibleDescription is at most 240 characters. supportedClaimRefs must contain only C1, C2, etc.
+            characters. label and visibleDescription must both name a literal visible item, not repeat the lesson claim.
+            visibleDescription is required and at most 240 characters. supportedClaimRefs must contain only C1, C2, etc.
             """;
 
     private final RuntimeModelConfiguration models;
@@ -86,7 +89,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Candidate rectangles: {candidates}
                                     {correction}
                                     Return one JSON object only with pageNumber, label, visibleDescription, x, y,
-                                    width, height and supportedClaimRefs. If no useful crop exists, return {}.
+                                    width, height and supportedClaimRefs. If no useful crop exists, return an empty JSON object.
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())
@@ -99,12 +102,14 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 })
                 .call()
                 .content();
+        if (isExplicitNoRegion(content)) {
+            return new LocateAttempt(Optional.empty(), false, Rejection.EXPLICIT_NO_REGION);
+        }
         Optional<ModelRegion> parsed = parseModelRegion(content);
         if (parsed.isEmpty()) {
             log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
             return new LocateAttempt(
-                    Optional.empty(), !isExplicitNoRegion(content),
-                    isExplicitNoRegion(content) ? Rejection.EXPLICIT_NO_REGION : Rejection.MALFORMED_JSON);
+                    Optional.empty(), true, Rejection.MALFORMED_JSON);
         }
         ModelRegion response = parsed.get();
         List<UUID> supported = response.supportedClaimRefs().stream()
@@ -117,10 +122,16 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return new LocateAttempt(Optional.empty(), true, Rejection.UNSUPPORTED_SCOPE);
         }
         try {
-            response = normalizedGeometry(response);
+            ModelRegion normalizedResponse = normalizedGeometry(response);
             return new LocateAttempt(Optional.of(new LocatedRegion(
-                    response.pageNumber(), response.label(), response.visibleDescription(), response.x(), response.y(),
-                    response.width(), response.height(), supported)), false,
+                    normalizedResponse.pageNumber(),
+                    normalizedResponse.label(),
+                    normalizedResponse.visibleDescription(),
+                    normalizedResponse.x(),
+                    normalizedResponse.y(),
+                    normalizedResponse.width(),
+                    normalizedResponse.height(),
+                    supported)), false,
                     Rejection.NONE);
         } catch (IllegalArgumentException invalidModelOutput) {
             log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
@@ -158,13 +169,13 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     static boolean isExplicitNoRegion(String content) {
-        return content != null && content.strip().equals("null");
+        return content != null && (content.strip().equals("null") || content.strip().equals("{}"));
     }
 
     static String retryInstruction(Rejection rejection) {
         return switch (rejection) {
             case EXPLICIT_NO_REGION -> "";
-            case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or {} when no crop is useful.";
+            case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or an empty JSON object when no crop is useful.";
             case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references.";
             case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
             case NONE -> "";

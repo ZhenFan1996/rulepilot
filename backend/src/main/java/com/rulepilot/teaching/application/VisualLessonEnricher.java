@@ -150,6 +150,7 @@ public class VisualLessonEnricher {
             return result(section, outcomeFor(location.diagnostic()));
         }
         if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
+        if (located.get().visibleDescription().isBlank()) return result(section, Outcome.REJECTED_MISSING_OBSERVATION);
         if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
         if (!intersectsCandidate(located.get(), attachedCandidates)) return result(section, Outcome.REJECTED_OUTSIDE_CANDIDATE);
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
@@ -198,6 +199,7 @@ public class VisualLessonEnricher {
             case MODEL_BUSY -> "第 " + sectionPosition + " 节的视觉模型正在处理其他任务";
             case MODEL_PROVIDER_FAILURE -> "第 " + sectionPosition + " 节的视觉模型调用失败，已保留正文";
             case REJECTED_WHOLE_PAGE -> "第 " + sectionPosition + " 节返回整页，未把它误作局部讲解";
+            case REJECTED_MISSING_OBSERVATION -> "第 " + sectionPosition + " 节的截图没有可核对的图中说明，已跳过";
             case REJECTED_NON_VISUAL -> "第 " + sectionPosition + " 节返回的区域只有文字或标题，已跳过";
             case REJECTED_OUTSIDE_CANDIDATE -> "第 " + sectionPosition + " 节返回区域不在可引用范围内，已跳过";
             case REJECTED_UNKNOWN_EVIDENCE -> "第 " + sectionPosition + " 节的截图没有对应规则依据，已跳过";
@@ -236,6 +238,7 @@ public class VisualLessonEnricher {
         MODEL_BUSY,
         MODEL_PROVIDER_FAILURE,
         REJECTED_WHOLE_PAGE,
+        REJECTED_MISSING_OBSERVATION,
         REJECTED_NON_VISUAL,
         REJECTED_OUTSIDE_CANDIDATE,
         REJECTED_UNKNOWN_EVIDENCE
@@ -274,7 +277,6 @@ public class VisualLessonEnricher {
     private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
         String description = region.visibleDescription().toLowerCase(java.util.Locale.ROOT);
         String label = region.label().toLowerCase(java.util.Locale.ROOT);
-        if (description.isBlank()) return true;
         return !description.contains("section header")
                 && !description.contains("page title")
                 && !description.contains("introduction paragraph")
@@ -320,9 +322,7 @@ public class VisualLessonEnricher {
     }
 
     private String visualText(String observation, String ruleText) {
-        String prefix = observation.isBlank() || !containsHan(observation)
-                ? "结合旁边的规则图示完成这一步："
-                : "图中可见" + observation + "。结合图片完成这一步：";
+        String prefix = "图中可见" + observation + "。结合图片完成这一步：";
         String combined = prefix + ruleText;
         return combined.length() <= 600 ? combined : ruleText;
     }

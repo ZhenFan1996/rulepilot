@@ -68,6 +68,7 @@ class SpringAiVisualRegionLocatorTest {
     @Test
     void treats_an_explicit_null_as_a_terminal_no_region_response() {
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" null ")).isTrue();
+        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" {} ")).isTrue();
         assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion("not valid JSON")).isFalse();
     }
 
