@@ -16,6 +16,20 @@ test('selects a title-matching publisher box image and rejects generic or third-
   assert.equal(discoverCoverCandidates(page, 'https://www.publisher.example/calico/', 'Calico').length, 1)
 })
 
+test('uses a publisher product page Open Graph cover only when its title identifies the game', () => {
+  const productPage = `
+    <meta property="og:title" content="Fort Card Game | Leder Games">
+    <meta property="og:image" content="https://cdn.shopify.com/s/files/1/0000/fort-box.png?v=1">
+  `
+
+  assert.deepEqual(selectPublisherCover(productPage, 'https://ledergames.com/products/fort', 'Fort'), {
+    url: 'https://cdn.shopify.com/s/files/1/0000/fort-box.png?v=1', score: 91, tokenMatches: 1,
+  })
+
+  const unrelatedPage = productPage.replace('Fort Card Game', 'Root Card Game')
+  assert.equal(selectPublisherCover(unrelatedPage, 'https://ledergames.com/products/fort', 'Fort'), null)
+})
+
 test('parses the bounded command interface', () => {
   assert.deepEqual(parseArguments(['--source', 'https://www.publisher.example/calico/', '--title', 'Calico']), {
     source: 'https://www.publisher.example/calico/', title: 'Calico',

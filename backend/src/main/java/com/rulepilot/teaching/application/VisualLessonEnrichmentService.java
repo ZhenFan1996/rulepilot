@@ -235,6 +235,14 @@ public class VisualLessonEnrichmentService {
                         activityOutcome(section.outcome().outcome()),
                         brief("正在查看“" + section.sectionTitle() + "”：" + section.outcome().summary()));
             }
+
+            @Override
+            public void sectionUpdated(
+                    VisualLessonEnricher.SectionProgress section,
+                    com.rulepilot.teaching.domain.IllustratedLesson lesson) {
+                if (!runIsActive(runId, ownerUsername)) throw new VisualEnrichmentCancelled();
+                publisher.publish(lesson);
+            }
         };
     }
 

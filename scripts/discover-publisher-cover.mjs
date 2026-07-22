@@ -41,7 +41,7 @@ function titleTokens(title) {
     .replace(/[^a-z0-9]+/g, ' ').split(' ').filter(token => token.length >= 3))]
 }
 
-function candidateUrl(value, source) {
+function candidateUrl(value, source, allowExternal = false) {
   if (!value || value.startsWith('data:')) return null
   let url
   try {
@@ -50,9 +50,35 @@ function candidateUrl(value, source) {
     return null
   }
   if (url.protocol !== 'https:' || url.username || url.password) return null
-  if (url.hostname !== source.hostname && !url.hostname.endsWith(`.${source.hostname}`)) return null
+  if (!allowExternal && url.hostname !== source.hostname && !url.hostname.endsWith(`.${source.hostname}`)) return null
   if (!/\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])/i.test(url.pathname)) return null
   return url.toString()
+}
+
+function metaValue(html, name) {
+  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const values = attributes(match[0])
+    if (values.get('property')?.toLowerCase() === name || values.get('name')?.toLowerCase() === name) {
+      return values.get('content') ?? ''
+    }
+  }
+  return ''
+}
+
+function titleMatchCount(value, tokens) {
+  const descriptor = value.normalize('NFKD').toLowerCase()
+  return tokens.filter(token => descriptor.includes(token)).length
+}
+
+function selectOpenGraphCover(html, source, tokens) {
+  const pageTitle = metaValue(html, 'og:title')
+  const requiredMatches = Math.max(1, Math.ceil(tokens.length * 0.6))
+  const tokenMatches = titleMatchCount(pageTitle, tokens)
+  if (tokenMatches < requiredMatches) return null
+
+  const url = candidateUrl(metaValue(html, 'og:image'), source, true)
+  if (!url) return null
+  return { url, score: 90 + tokenMatches, tokenMatches }
 }
 
 export function discoverCoverCandidates(html, sourceUrl, title) {
@@ -77,7 +103,11 @@ export function discoverCoverCandidates(html, sourceUrl, title) {
 }
 
 export function selectPublisherCover(html, sourceUrl, title) {
-  return discoverCoverCandidates(html, sourceUrl, title).at(0) ?? null
+  const source = httpsUrl(sourceUrl, '--source')
+  const tokens = titleTokens(title)
+  if (!tokens.length) throw new Error('--title must contain searchable letters or numbers')
+  return discoverCoverCandidates(html, sourceUrl, title).at(0)
+    ?? selectOpenGraphCover(html, source, tokens)
 }
 
 export async function discoverPublisherCover(sourceUrl, title, fetchImpl = fetch) {

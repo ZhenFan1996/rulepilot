@@ -44,6 +44,7 @@ class VisualLessonEnricherTest {
     void reports_each_visual_section_immediately_after_its_bounded_work_finishes() {
         UUID chunk = UUID.randomUUID();
         List<VisualLessonEnricher.SectionProgress> progress = new java.util.ArrayList<>();
+        List<IllustratedLesson> published = new java.util.ArrayList<>();
 
         new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -52,13 +53,26 @@ class VisualLessonEnricherTest {
                         new VisualRegionCandidateSelector(),
                         request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
                                 2, "轨道", "一枚探测器标记位于弧形刻度轨道上", 120, 220, 180, 120, List.of(chunk))))
-                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner", progress::add);
+                .enrichWithProgress(UUID.randomUUID(), lesson(chunk), "owner", new VisualLessonEnricher.VisualProgressListener() {
+                    @Override
+                    public void sectionFinished(VisualLessonEnricher.SectionProgress update) {
+                        progress.add(update);
+                    }
+
+                    @Override
+                    public void sectionUpdated(VisualLessonEnricher.SectionProgress update, IllustratedLesson lesson) {
+                        published.add(lesson);
+                    }
+                });
 
         assertThat(progress).singleElement().satisfies(update -> {
             assertThat(update.sectionPosition()).isEqualTo(1);
             assertThat(update.sectionTitle()).isEqualTo("开局设置");
             assertThat(update.outcome().outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
         });
+        assertThat(published).singleElement().satisfies(lesson ->
+                assertThat(lesson.sections().getFirst().steps().getFirst().kind())
+                        .isEqualTo(IllustratedLesson.TeachingMove.VISUAL));
     }
 
     @Test

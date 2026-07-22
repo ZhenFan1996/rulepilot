@@ -145,26 +145,32 @@ public class VisualLessonEnricher {
                 .filter(focus -> !needsTighterReaderCrop(focus))
                 .collect(Collectors.toCollection(ArrayList::new));
         List<SectionResult> sectionResults = new ArrayList<>();
-        for (LessonSection section : readerReadyLesson.sections()) {
+        List<LessonSection> currentSections = new ArrayList<>(readerReadyLesson.sections());
+        for (int sectionIndex = 0; sectionIndex < readerReadyLesson.sections().size(); sectionIndex++) {
+            LessonSection section = readerReadyLesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
             SectionResult enriched = enrichSection(map, documentVersionId, section, modelConfigurationOwner, progress);
             SectionResult distinct = keepDistinctVisuals(section, enriched, acceptedVisuals);
             sectionResults.add(distinct);
+            currentSections.set(sectionIndex, distinct.section());
             if (distinct.outcome() != null) {
-                progress.sectionFinished(new SectionProgress(section.position(), section.title(), distinct.outcome()));
+                SectionProgress update = new SectionProgress(section.position(), section.title(), distinct.outcome());
+                progress.sectionFinished(update);
+                if (distinct.outcome().outcome() == Outcome.ADDED) {
+                    progress.sectionUpdated(update, lessonWithSections(readerReadyLesson, currentSections));
+                }
             }
         }
-        Map<Integer, SectionResult> byPosition = sectionResults.stream()
-                .collect(Collectors.toMap(result -> result.section().position(), result -> result));
-        List<LessonSection> sections = readerReadyLesson.sections().stream()
-                .map(section -> byPosition.getOrDefault(section.position(), new SectionResult(section, null)).section())
-                .toList();
-        IllustratedLesson enriched = new IllustratedLesson(
-                readerReadyLesson.id(), readerReadyLesson.teachingPlanId(), readerReadyLesson.status(), sections,
-                readerReadyLesson.generatorVersion(), readerReadyLesson.createdAt());
+        IllustratedLesson enriched = lessonWithSections(readerReadyLesson, currentSections);
         return new EnrichmentResult(
                 enriched,
                 sectionResults.stream().map(SectionResult::outcome).filter(java.util.Objects::nonNull).toList());
+    }
+
+    private IllustratedLesson lessonWithSections(IllustratedLesson original, List<LessonSection> sections) {
+        return new IllustratedLesson(
+                original.id(), original.teachingPlanId(), original.status(), List.copyOf(sections),
+                original.generatorVersion(), original.createdAt());
     }
 
     private SectionResult enrichSection(
@@ -421,6 +427,9 @@ public class VisualLessonEnricher {
         default void targetFinished(VisualTarget target, Outcome outcome) {}
 
         default void sectionFinished(SectionProgress section) {}
+
+        /** A verified crop is safe to show immediately; later sections may still be processing. */
+        default void sectionUpdated(SectionProgress section, IllustratedLesson lesson) {}
     }
 
     public record SectionOutcome(int sectionPosition, Outcome outcome, String summary) {
