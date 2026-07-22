@@ -330,12 +330,14 @@ const generationActive = computed(
 )
 const visualEnrichmentActive = computed(() => teachingRunIsActive(visualEnrichmentRun.value?.run.state))
 const visualEnrichmentActivities = computed(() => (visualEnrichmentRun.value?.activities ?? [])
+  .filter((activity) => activity.operation.startsWith('visualStep|') || activity.operation.startsWith('visualSection|')))
+const visualEnrichmentSectionResults = computed(() => visualEnrichmentActivities.value
   .filter((activity) => activity.operation.startsWith('visualSection|')))
 const visualEnrichmentSummary = computed(() => {
   const latest = visualEnrichmentActivities.value.at(-1)
   if (visualEnrichmentActive.value) return latest?.summary ?? '正在从规则书中挑选能帮助上桌的局部图示。'
-  if (!visualEnrichmentRun.value || visualEnrichmentActivities.value.length === 0) return ''
-  const added = visualEnrichmentActivities.value.filter((activity) => activity.outcome === 'SUCCEEDED').length
+  if (!visualEnrichmentRun.value || visualEnrichmentSectionResults.value.length === 0) return ''
+  const added = visualEnrichmentSectionResults.value.filter((activity) => activity.outcome === 'SUCCEEDED').length
   return added > 0
     ? `已为 ${added} 节补入可核对的局部截图；其余章节只保留有可靠依据的配图。`
     : '这次没有找到可靠的局部图示，因此没有用整页规则书充数。'
@@ -1400,7 +1402,7 @@ onUnmounted(() => {
               {{ resumingLesson ? '正在继续…' : '继续核对细节' }}
             </button>
           </div>
-          <div v-if="visualEnrichmentSummary" class="mt-3 hidden rounded-2xl border border-indigo/15 bg-paper/70 p-3 text-sm lg:block" :class="visualEnrichmentActive ? 'text-indigo' : 'text-ink/65'">
+          <div v-if="visualEnrichmentSummary" class="mt-3 block rounded-2xl border border-indigo/15 bg-paper/70 p-3 text-sm" :class="visualEnrichmentActive ? 'text-indigo' : 'text-ink/65'">
             <p class="font-semibold">{{ visualEnrichmentActive ? '正在补入局部图示' : '局部图示处理完成' }}</p>
             <p class="mt-1 text-xs leading-5 text-ink/60">{{ visualEnrichmentSummary }}</p>
           </div>

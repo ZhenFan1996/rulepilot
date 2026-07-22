@@ -135,18 +135,24 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(
             UUID runId, ActivityType type, String operation, ActivityOutcome outcome, String summary) {
-        if (type != ActivityType.VALIDATION || outcome == ActivityOutcome.RUNNING) {
+        if (type != ActivityType.VALIDATION) {
             throw new IllegalArgumentException("diagnostic activity type is invalid");
         }
         validateInvocation(type, operation, 0);
         InvocationReservation diagnostic =
                 new InvocationReservation(UUID.randomUUID(), runId, type, operation.strip(), 0);
-        validateCompletion(
-                diagnostic,
-                outcome,
-                0,
-                0,
-                summary);
+        if (outcome == ActivityOutcome.RUNNING) {
+            if (summary == null || summary.isBlank() || summary.length() > 240) {
+                throw new IllegalArgumentException("running diagnostic summary is invalid");
+            }
+        } else {
+            validateCompletion(
+                    diagnostic,
+                    outcome,
+                    0,
+                    0,
+                    summary);
+        }
         lockBudget(runId);
         insertActivity(diagnostic.id(), runId, type, diagnostic.operation(), outcome, 0, 0, 0, summary);
     }
@@ -161,7 +167,7 @@ public class JpaAgentExecutionControl implements AgentExecutionControl {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void stopRunning(UUID runId, String operation, ActivityOutcome outcome, String summary) {
         if (runId == null || outcome == null || outcome == ActivityOutcome.RUNNING
-                || outcome == ActivityOutcome.SUCCEEDED || summary == null || summary.isBlank()
+                || summary == null || summary.isBlank()
                 || summary.length() > 240 || (operation != null && operation.isBlank())) {
             throw new IllegalArgumentException("running activity stop is invalid");
         }

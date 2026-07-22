@@ -730,11 +730,25 @@ public class TeachingPlanService {
         for (int index = 0; index < topics.size(); index++) {
             TeachingOutlineModel.TopicDraft candidate = topics.get(index);
             if (candidate.key().equalsIgnoreCase(sourceTopic.key())
-                    || canonicalTopicTitle(candidate.title()).equals(canonicalTopicTitle(sourceTopic.title()))) {
+                    || canonicalTopicTitle(candidate.title()).equals(canonicalTopicTitle(sourceTopic.title()))
+                    || sameCompoundCoverage(candidate.coverageTags(), sourceTopic.coverageTags())) {
                 return index;
             }
         }
         return -1;
+    }
+
+    /**
+     * A model and the source fallback can name the same compound rule differently (for example, "game end and
+     * scoring" versus "end, scoring, and winner"). Merge that one concept instead of creating a second required
+     * chapter that competes for the same evidence. A lone broad tag such as {@code core_loop} is intentionally not
+     * enough: it would collapse unrelated setup, action, and reference material.
+     */
+    private static boolean sameCompoundCoverage(List<String> candidateTags, List<String> sourceTags) {
+        Set<String> candidate = new LinkedHashSet<>(candidateTags);
+        Set<String> source = new LinkedHashSet<>(sourceTags);
+        return (candidate.size() >= 2 && source.containsAll(candidate))
+                || (source.size() >= 2 && candidate.containsAll(source));
     }
 
     private static TeachingOutlineModel.TopicDraft mergeCoveragePages(

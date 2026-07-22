@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,6 +106,34 @@ public class VisualLessonEnricher {
      */
     public EnrichmentResult enrichWithReport(
             UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
+        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, ignored -> {});
+    }
+
+    /**
+     * Reports each completed visual section as soon as its bounded image work finishes. The base lesson stays intact
+     * throughout, while callers can show a player which chapter is currently being checked instead of a silent wait.
+     */
+    public EnrichmentResult enrichWithReport(
+            UUID documentVersionId,
+            IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            Consumer<SectionProgress> progress) {
+        if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
+        return enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, new VisualProgressListener() {
+            @Override
+            public void sectionFinished(SectionProgress section) {
+                progress.accept(section);
+            }
+        });
+    }
+
+    /** Emits the currently inspected rule step as well as completed-section results for the player-facing run log. */
+    public EnrichmentResult enrichWithProgress(
+            UUID documentVersionId,
+            IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            VisualProgressListener progress) {
+        if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
         IllustratedLesson readerReadyLesson = discardOverlyBroadVisuals(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(
@@ -118,8 +147,12 @@ public class VisualLessonEnricher {
         List<SectionResult> sectionResults = new ArrayList<>();
         for (LessonSection section : readerReadyLesson.sections()) {
             if (!selectedPositions.contains(section.position())) continue;
-            SectionResult enriched = enrichSection(map, documentVersionId, section, modelConfigurationOwner);
-            sectionResults.add(keepDistinctVisuals(section, enriched, acceptedVisuals));
+            SectionResult enriched = enrichSection(map, documentVersionId, section, modelConfigurationOwner, progress);
+            SectionResult distinct = keepDistinctVisuals(section, enriched, acceptedVisuals);
+            sectionResults.add(distinct);
+            if (distinct.outcome() != null) {
+                progress.sectionFinished(new SectionProgress(section.position(), section.title(), distinct.outcome()));
+            }
         }
         Map<Integer, SectionResult> byPosition = sectionResults.stream()
                 .collect(Collectors.toMap(result -> result.section().position(), result -> result));
@@ -138,7 +171,8 @@ public class VisualLessonEnricher {
             com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
-            String modelConfigurationOwner) {
+            String modelConfigurationOwner,
+            VisualProgressListener progress) {
         int existingVisualSteps = (int) section.steps().stream()
                 .filter(step -> step.kind() == TeachingMove.VISUAL && !needsTighterReaderCrop(step.visualFocus()))
                 .count();
@@ -152,8 +186,13 @@ public class VisualLessonEnricher {
                 .count();
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
         for (LessonStep step : visualTargets(section, limit)) {
+            VisualTarget target = new VisualTarget(section.position(), section.title(), step.position(), step.heading());
+            progress.targetStarted(target);
             StepLocation location = locateForStep(
                     understanding, documentVersionId, section, step, modelConfigurationOwner);
+            progress.targetFinished(target, location.region() == null
+                    ? location.rejection() == null ? Outcome.LOCATOR_RETURNED_NONE : location.rejection()
+                    : Outcome.ADDED);
             if (location.region() != null) accepted.add(location.region());
             else if (location.rejection() != null) rejected = location.rejection();
         }
@@ -354,6 +393,34 @@ public class VisualLessonEnricher {
             if (lesson == null || outcomes == null) throw new IllegalArgumentException("visual enrichment result is invalid");
             outcomes = List.copyOf(outcomes);
         }
+    }
+
+    public record SectionProgress(int sectionPosition, String sectionTitle, SectionOutcome outcome) {
+        public SectionProgress {
+            if (sectionPosition < 1 || sectionTitle == null || sectionTitle.isBlank() || outcome == null) {
+                throw new IllegalArgumentException("visual section progress is invalid");
+            }
+            sectionTitle = sectionTitle.strip();
+        }
+    }
+
+    public record VisualTarget(int sectionPosition, String sectionTitle, int stepPosition, String stepHeading) {
+        public VisualTarget {
+            if (sectionPosition < 1 || stepPosition < 1 || sectionTitle == null || sectionTitle.isBlank()
+                    || stepHeading == null || stepHeading.isBlank()) {
+                throw new IllegalArgumentException("visual target progress is invalid");
+            }
+            sectionTitle = sectionTitle.strip();
+            stepHeading = stepHeading.strip();
+        }
+    }
+
+    public interface VisualProgressListener {
+        default void targetStarted(VisualTarget target) {}
+
+        default void targetFinished(VisualTarget target, Outcome outcome) {}
+
+        default void sectionFinished(SectionProgress section) {}
     }
 
     public record SectionOutcome(int sectionPosition, Outcome outcome, String summary) {

@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Best-effort post-publication visual work. A failure never changes the base lesson. */
 @Service
@@ -114,12 +115,13 @@ public class VisualLessonEnrichmentService {
                 runs.advance(current.id(), current.revision(), AssistantRunState.COMPLETED, "Visual enrichment finished");
                 return;
             }
-            VisualLessonEnricher.EnrichmentResult result = enrichWithReport(
-                    plan.documentVersionId(), lesson, plan.createdBy());
             UUID runId = current.id();
-            result.outcomes().forEach(outcome -> activities.record(
-                    runId, ActivityType.VALIDATION, "visualSection|" + outcome.sectionPosition(),
-                    activityOutcome(outcome.outcome()), outcome.summary()));
+            VisualLessonEnricher.EnrichmentResult result = enrichWithReport(
+                    plan.documentVersionId(), lesson, plan.createdBy(), visualProgress(runId, plan.createdBy()));
+            if (!runIsActive(runId, plan.createdBy())) {
+                log.info("Stopped visual enrichment run {} after cancellation", runId);
+                return;
+            }
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
                     "Checking that every selected crop has cited rule evidence");
@@ -128,6 +130,8 @@ public class VisualLessonEnrichmentService {
                     current.id(), current.revision(), AssistantRunState.MEDIA_PACKAGING,
                     "Publishing accepted local rulebook crops");
             runs.advance(current.id(), current.revision(), AssistantRunState.COMPLETED, "Visual enrichment finished");
+        } catch (VisualEnrichmentCancelled cancelled) {
+            log.info("Stopped visual enrichment run {} after cancellation", current.id());
         } catch (RuntimeException failure) {
             log.warn(
                     "Observable visual lesson enrichment failed for plan {} ({}): {}",
@@ -167,17 +171,99 @@ public class VisualLessonEnrichmentService {
 
     private VisualLessonEnricher.EnrichmentResult enrichWithReport(
             UUID documentVersionId, com.rulepilot.teaching.domain.IllustratedLesson lesson, String modelConfigurationOwner) {
+        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, ignored -> {});
+    }
+
+    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
+            UUID documentVersionId,
+            com.rulepilot.teaching.domain.IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            Consumer<VisualLessonEnricher.SectionProgress> progress) {
+        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, new VisualLessonEnricher.VisualProgressListener() {
+            @Override
+            public void sectionFinished(VisualLessonEnricher.SectionProgress section) {
+                progress.accept(section);
+            }
+        });
+    }
+
+    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
+            UUID documentVersionId,
+            com.rulepilot.teaching.domain.IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            VisualLessonEnricher.VisualProgressListener progress) {
         try {
-            return enricher.enrichWithReport(documentVersionId, lesson, modelConfigurationOwner);
+            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, progress);
         } catch (IllegalArgumentException missingUnderstanding) {
             if (!"rulebook understanding does not exist".equals(missingUnderstanding.getMessage())) {
                 throw missingUnderstanding;
             }
             log.info("Rebuilding layout evidence for legacy document {} before visual enrichment", documentVersionId);
             understandingRebuilder.rebuild(documentVersionId);
-            return enricher.enrichWithReport(documentVersionId, lesson, modelConfigurationOwner);
+            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, progress);
         }
     }
+
+    private VisualLessonEnricher.VisualProgressListener visualProgress(UUID runId, String ownerUsername) {
+        return new VisualLessonEnricher.VisualProgressListener() {
+            @Override
+            public void targetStarted(VisualLessonEnricher.VisualTarget target) {
+                if (!runIsActive(runId, ownerUsername)) throw new VisualEnrichmentCancelled();
+                activities.record(
+                        runId,
+                        ActivityType.VALIDATION,
+                        visualStepOperation(target),
+                        ActivityOutcome.RUNNING,
+                        brief("正在查看“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”规则图示"));
+            }
+
+            @Override
+            public void targetFinished(VisualLessonEnricher.VisualTarget target, VisualLessonEnricher.Outcome outcome) {
+                activities.stopRunning(
+                        runId,
+                        visualStepOperation(target),
+                        activityOutcome(outcome),
+                        brief("“" + target.sectionTitle() + "”中的“" + target.stepHeading() + "”：" + outcomeSummary(outcome)));
+            }
+
+            @Override
+            public void sectionFinished(VisualLessonEnricher.SectionProgress section) {
+                activities.record(
+                        runId,
+                        ActivityType.VALIDATION,
+                        "visualSection|" + section.sectionPosition(),
+                        activityOutcome(section.outcome().outcome()),
+                        brief("正在查看“" + section.sectionTitle() + "”：" + section.outcome().summary()));
+            }
+        };
+    }
+
+    private String visualStepOperation(VisualLessonEnricher.VisualTarget target) {
+        return "visualStep|" + target.sectionPosition() + "|" + target.stepPosition();
+    }
+
+    private String outcomeSummary(VisualLessonEnricher.Outcome outcome) {
+        return switch (outcome) {
+            case ADDED -> "已找到可核对的局部图示";
+            case MODEL_BUSY -> "视觉模型正在处理其他图片；此步可稍后重试";
+            case MODEL_TIMEOUT -> "查看图片超时；此步可稍后重试";
+            case MODEL_UNAVAILABLE -> "当前没有可用的视觉模型";
+            case MODEL_PROVIDER_FAILURE, MODEL_INTERRUPTED -> "视觉模型暂时不可用；已保留文字讲解";
+            default -> "没有采用不够可靠的局部图示";
+        };
+    }
+
+    private String brief(String value) {
+        return value.length() <= 240 ? value : value.substring(0, 239) + "…";
+    }
+
+    private boolean runIsActive(UUID runId, String ownerUsername) {
+        return runs.findOwned(runId, ownerUsername)
+                .map(details -> !details.run().state().terminal())
+                .orElse(false);
+    }
+
+    private static final class VisualEnrichmentCancelled extends RuntimeException {}
 
     private ActivityOutcome activityOutcome(VisualLessonEnricher.Outcome outcome) {
         return outcome == VisualLessonEnricher.Outcome.ADDED || outcome == VisualLessonEnricher.Outcome.ALREADY_PRESENT

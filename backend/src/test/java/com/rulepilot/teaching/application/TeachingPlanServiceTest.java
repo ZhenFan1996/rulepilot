@@ -426,6 +426,43 @@ class TeachingPlanServiceTest {
         assertThat(augmented.topics().getFirst().coverageTags()).containsExactly("core_loop", "actions");
     }
 
+    @Test
+    void mergesDifferentlyNamedCompoundEndgameCoverageIntoTheExistingChapter() {
+        OutlineDraft model = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "end-game-and-scoring",
+                        "游戏结束与计分",
+                        "Explain when the game ends and how to score it.",
+                        true,
+                        true,
+                        List.of("end game", "scoring"),
+                        List.of("end", "scoring"),
+                        List.of(12))));
+        OutlineDraft source = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "winner-and-tiebreaker",
+                        "结束、计分与胜者",
+                        "Cover final scoring and ties.",
+                        true,
+                        true,
+                        List.of("winner", "tie"),
+                        List.of("end", "scoring", "tie_breaker"),
+                        List.of(13, 14))));
+
+        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+
+        assertThat(augmented.topics()).singleElement().satisfies(topic -> {
+            assertThat(topic.key()).isEqualTo("end-game-and-scoring");
+            assertThat(topic.sourcePageNumbers()).containsExactly(12, 13, 14);
+            assertThat(topic.retrievalQueries()).containsExactly("end game", "scoring", "winner", "tie");
+            assertThat(topic.coverageTags()).containsExactly("end", "scoring", "tie_breaker");
+        });
+    }
+
     private String visualCatalogPage(String terms, String facts) {
         return "[Visual page catalog; verify against page image]\nPrinted terms: "
                 + terms

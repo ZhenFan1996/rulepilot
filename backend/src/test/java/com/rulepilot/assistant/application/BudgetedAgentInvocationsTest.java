@@ -112,6 +112,28 @@ class BudgetedAgentInvocationsTest {
         assertThat(control.summary).isEqualTo("Teaching draft rejected: STEP_COUNT_INVALID");
     }
 
+    @Test
+    void allows_a_running_validation_activity_to_be_settled_as_a_player_visible_success() {
+        RecordingControl control = new RecordingControl();
+        var invocations = new BudgetedAgentInvocations(control);
+        UUID runId = UUID.randomUUID();
+
+        invocations.record(
+                runId,
+                AgentExecutionControl.ActivityType.VALIDATION,
+                "visualStep|2|3",
+                AgentExecutionControl.ActivityOutcome.RUNNING,
+                "正在查看“选择行动”中的“拿两张牌”规则图示");
+        invocations.stopRunning(
+                runId,
+                "visualStep|2|3",
+                AgentExecutionControl.ActivityOutcome.SUCCEEDED,
+                "“选择行动”中的“拿两张牌”：已找到可核对的局部图示");
+
+        assertThat(control.stoppedOperation).isEqualTo("visualStep|2|3");
+        assertThat(control.outcome).isEqualTo(AgentExecutionControl.ActivityOutcome.SUCCEEDED);
+    }
+
     private static final class RecordingControl implements AgentExecutionControl {
         private InvocationReservation reservation;
         private ActivityOutcome outcome;

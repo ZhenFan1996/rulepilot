@@ -2,9 +2,20 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
+import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import javax.imageio.ImageIO;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.junit.jupiter.api.Test;
 
@@ -231,5 +242,79 @@ class SpringAiVisualRegionLocatorTest {
                 3, List.of(overview), List.of(overview, playerBoard, supply));
 
         assertThat(rebound).isEmpty();
+    }
+
+    @Test
+    void binds_a_crop_without_a_claim_reference_when_one_step_unambiguously_cites_its_page() {
+        Claim setup = new Claim(UUID.randomUUID(), "发给每位玩家玩家板", List.of(3), 2);
+
+        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(3, List.of(), List.of(setup));
+
+        assertThat(rebound).containsExactly(setup);
+    }
+
+    @Test
+    void parses_only_offered_exact_crop_references_from_the_second_visual_check() {
+        assertThat(SpringAiVisualRegionLocator.acceptedCropReferences(
+                        "{\"acceptedCropRefs\":[\"R1\"]}", Set.of("R1", "R2")))
+                .contains(Set.of("R1"));
+        assertThat(SpringAiVisualRegionLocator.acceptedCropReferences(
+                        "{\"acceptedCropRefs\":[\"R3\"]}", Set.of("R1", "R2")))
+                .isEmpty();
+    }
+
+    @Test
+    void fallback_signal_rejects_a_label_only_crop_but_keeps_a_card_group_when_the_second_visual_check_is_unavailable() {
+        LocatedRegion crop = new LocatedRegion(
+                1, "抽牌区", "三组卡牌", 0, 0, 1_000, 1_000, List.of(UUID.randomUUID()));
+
+        assertThat(SpringAiVisualRegionLocator.hasEnoughRenderedVisualSignal(request(labelOnlyImage()), crop)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.hasEnoughRenderedVisualSignal(request(cardGroupImage()), crop)).isTrue();
+    }
+
+    private VisualLocationRequest request(byte[] page) {
+        UUID evidence = UUID.randomUUID();
+        return new VisualLocationRequest(
+                "选择行动",
+                List.of(new Claim(evidence, "选择一组卡牌", List.of(1), 1)),
+                List.of(new Candidate(1, new Rectangle(0, 0, 1_000, 1_000), "Cataloged visual anchor: labeled legend")),
+                List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(1, "image/png", page)));
+    }
+
+    private byte[] labelOnlyImage() {
+        BufferedImage image = new BufferedImage(400, 400, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(new Color(238, 250, 220));
+        graphics.fillRect(0, 0, 400, 400);
+        graphics.setColor(new Color(80, 160, 50));
+        graphics.fillRoundRect(50, 30, 220, 80, 18, 18);
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(70, 55, 160, 16);
+        graphics.dispose();
+        return png(image);
+    }
+
+    private byte[] cardGroupImage() {
+        BufferedImage image = new BufferedImage(400, 400, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(new Color(238, 250, 220));
+        graphics.fillRect(0, 0, 400, 400);
+        for (int index = 0; index < 3; index++) {
+            graphics.setColor(List.of(new Color(65, 150, 75), new Color(220, 115, 55), new Color(200, 75, 70)).get(index));
+            graphics.fillRoundRect(35 + index * 120, 65, 95, 250, 12, 12);
+            graphics.setColor(Color.WHITE);
+            graphics.fillOval(60 + index * 120, 145, 45, 45);
+        }
+        graphics.dispose();
+        return png(image);
+    }
+
+    private byte[] png(BufferedImage image) {
+        try (var output = new ByteArrayOutputStream()) {
+            ImageIO.write(image, "png", output);
+            return output.toByteArray();
+        } catch (java.io.IOException failure) {
+            throw new IllegalStateException(failure);
+        }
     }
 }

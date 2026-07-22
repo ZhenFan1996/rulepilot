@@ -11,11 +11,22 @@ import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
+import java.awt.Color;
+import java.awt.image.RasterFormatException;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.IntStream;
+import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -31,6 +42,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final long MAX_READER_CROP_AREA = 600_000L;
+    private static final int CROP_SAMPLE_EDGE = 160;
+    private static final int CROP_FOREGROUND_DISTANCE = 40;
+    private static final double MIN_CATALOGED_LEGEND_SIGNAL = 0.22;
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
@@ -73,8 +87,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             category's examples, even partially above or below the target group; return no crop rather than a mixed
             scoring column.
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
-            "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
-            game effect.
+            "a dice icon beside a paint icon with a right arrow"), preferably in natural Simplified Chinese and without
+            explaining its game effect. If the page's own labels are in another language, a concise literal observation
+            in that language is acceptable; never invent a translation or an effect.
             Each supplied claim lists sourcePages. Choose a supportedClaimRef whose sourcePages includes the crop page;
             this keeps the printed rule and the pictured object together. The claim text begins with its exact step
             heading. Each C reference is one exact lesson step, even if several steps share a page or source chunk.
@@ -120,19 +135,232 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (!first.guide().regions().isEmpty()) {
             List<LocatedRegion> compactFirst = withoutOversizedReaderViewports(first.guide().regions());
             if (!compactFirst.isEmpty()) {
-                return LocateGuideResult.found(compactFirst);
+                return confirmedCatalogedLegendCrops(request, compactFirst, owner);
             }
             log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
             GuideAttempt tightened = locateGuideOnce(request, owner, tightReaderViewportInstruction());
             List<LocatedRegion> compactTightened = withoutOversizedReaderViewports(tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
-                return LocateGuideResult.found(compactTightened);
+                return confirmedCatalogedLegendCrops(request, compactTightened, owner);
             }
             return LocateGuideResult.unavailable(Diagnostic.NO_REGION);
         }
         if (!first.retryable()) return first.guide();
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
-        return locateGuideOnce(request, owner, retryInstruction(first.rejection())).guide();
+        GuideAttempt retried = locateGuideOnce(request, owner, retryInstruction(first.rejection()));
+        if (retried.guide().regions().isEmpty()) return retried.guide();
+        return confirmedCatalogedLegendCrops(request, retried.guide().regions(), owner);
+    }
+
+    /**
+     * Coordinates proposed while viewing a whole page can land on a nearby printed label instead of the card group it
+     * names. For cataloged legends only, inspect the exact server-rendered crop once before publishing it. This keeps
+     * direct visual grounding rather than trusting either OCR or the first whole-page description.
+     */
+    private LocateGuideResult confirmedCatalogedLegendCrops(
+            VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
+        List<LocatedRegion> ambiguous = regions.stream()
+                .filter(region -> overlapsAmbiguousCatalogedLegend(region, request.candidates()))
+                .toList();
+        if (ambiguous.isEmpty()) return LocateGuideResult.found(regions);
+        Optional<Set<String>> confirmed = confirmExactCrops(request, ambiguous, owner);
+        if (confirmed.isPresent()) {
+            List<LocatedRegion> retained = new java.util.ArrayList<>();
+            for (int index = 0; index < regions.size(); index++) {
+                LocatedRegion region = regions.get(index);
+                int ambiguousIndex = ambiguous.indexOf(region);
+                if (ambiguousIndex < 0 || confirmed.get().contains("R" + (ambiguousIndex + 1))) {
+                    retained.add(region);
+                }
+            }
+            return retained.isEmpty()
+                    ? LocateGuideResult.unavailable(Diagnostic.NO_REGION)
+                    : LocateGuideResult.found(retained);
+        }
+        // Provider trouble must not make a genuine diagram disappear. The fallback only rejects a nearly blank
+        // label-like crop; dense line art, cards, and monochrome diagrams remain eligible for the normal evidence gate.
+        List<LocatedRegion> retained = regions.stream()
+                .filter(region -> !ambiguous.contains(region) || hasEnoughRenderedVisualSignal(request, region))
+                .toList();
+        return retained.isEmpty() ? LocateGuideResult.unavailable(Diagnostic.NO_REGION) : LocateGuideResult.found(retained);
+    }
+
+    private boolean overlapsAmbiguousCatalogedLegend(LocatedRegion region, List<Candidate> candidates) {
+        return candidates.stream()
+                .filter(candidate -> candidate.pageNumber() == region.pageNumber())
+                .filter(candidate -> intersects(candidate, region))
+                .map(Candidate::sourceText)
+                .map(text -> text.toLowerCase(java.util.Locale.ROOT))
+                .anyMatch(text -> text.startsWith("cataloged visual anchor")
+                        && (text.contains("legend") || text.contains("label") || text.contains("标签")
+                                || text.contains("instruction") || text.contains("说明") || text.contains("title")
+                                || text.contains("标题")));
+    }
+
+    private boolean intersects(Candidate candidate, LocatedRegion region) {
+        int left = Math.max(candidate.rectangle().x(), region.x());
+        int top = Math.max(candidate.rectangle().y(), region.y());
+        int right = Math.min(candidate.rectangle().x() + candidate.rectangle().width(), region.x() + region.width());
+        int bottom = Math.min(candidate.rectangle().y() + candidate.rectangle().height(), region.y() + region.height());
+        return right > left && bottom > top;
+    }
+
+    private Optional<Set<String>> confirmExactCrops(
+            VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
+        Map<String, CropImage> crops = croppedImages(request, regions);
+        if (crops.size() != regions.size()) return Optional.empty();
+        try {
+            var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+            if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+                prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
+            }
+            String content = prompt
+                    .system("""
+                            You verify whether an exact rulebook crop is worth showing beside a game rule. Inspect only
+                            the supplied crop images. Accept a crop only if the crop itself visibly contains a
+                            recognisable game component, card face, icon group, board area, arrow/flow, spatial state,
+                            or worked score/example. A word-only title, printed label, prose box, dotted boundary, or
+                            empty background is never enough, even if it names a card or component that exists elsewhere
+                            on the source page. Do not infer missing cards or icons from the crop label. Return one JSON
+                            object with acceptedCropRefs as an array containing only the accepted R references.
+                            """)
+                    .user(user -> {
+                        user.text("Crop references: {crops}. Return only the JSON object.")
+                                .param("crops", crops.entrySet().stream()
+                                        .map(entry -> Map.of(
+                                                "ref", entry.getKey(),
+                                                "pageNumber", entry.getValue().pageNumber(),
+                                                "label", entry.getValue().label()))
+                                        .toList());
+                        crops.values().forEach(crop -> user.media(
+                                MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(crop.content())));
+                    })
+                    .call()
+                    .content();
+            return acceptedCropReferences(content, crops.keySet());
+        } catch (RuntimeException failure) {
+            log.info("Exact visual crop verification was unavailable: {}", failure.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+
+    private Map<String, CropImage> croppedImages(VisualLocationRequest request, List<LocatedRegion> regions) {
+        Map<Integer, VisualRegionLocator.PageImage> pages = request.pages().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        VisualRegionLocator.PageImage::pageNumber, page -> page, (first, ignored) -> first));
+        Map<String, CropImage> crops = new LinkedHashMap<>();
+        for (int index = 0; index < regions.size(); index++) {
+            LocatedRegion region = regions.get(index);
+            VisualRegionLocator.PageImage page = pages.get(region.pageNumber());
+            byte[] content = croppedPng(page, region);
+            if (content == null) return Map.of();
+            crops.put("R" + (index + 1), new CropImage(region.pageNumber(), region.label(), content));
+        }
+        return Map.copyOf(crops);
+    }
+
+    private static byte[] croppedPng(VisualRegionLocator.PageImage page, LocatedRegion region) {
+        if (page == null) return null;
+        try (var input = new ByteArrayInputStream(page.content()); var output = new ByteArrayOutputStream()) {
+            BufferedImage source = ImageIO.read(input);
+            if (source == null) return null;
+            int x = region.x() * source.getWidth() / 1_000;
+            int y = region.y() * source.getHeight() / 1_000;
+            int right = Math.min(source.getWidth(), Math.max(x + 1, (region.x() + region.width()) * source.getWidth() / 1_000));
+            int bottom = Math.min(source.getHeight(), Math.max(y + 1, (region.y() + region.height()) * source.getHeight() / 1_000));
+            BufferedImage crop = source.getSubimage(x, y, right - x, bottom - y);
+            if (!ImageIO.write(crop, "png", output)) return null;
+            return output.toByteArray();
+        } catch (IOException | RasterFormatException unreadable) {
+            return null;
+        }
+    }
+
+    static Optional<Set<String>> acceptedCropReferences(String content, Set<String> offeredReferences) {
+        if (content == null || content.isBlank() || offeredReferences == null || offeredReferences.isEmpty()) {
+            return Optional.empty();
+        }
+        String json = content.strip();
+        int objectStart = json.indexOf('{');
+        int objectEnd = json.lastIndexOf('}');
+        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
+        try {
+            JsonNode accepted = JSON.readTree(json.substring(objectStart, objectEnd + 1)).path("acceptedCropRefs");
+            if (!accepted.isArray()) return Optional.empty();
+            Set<String> references = new LinkedHashSet<>();
+            for (JsonNode reference : accepted) {
+                if (!reference.isTextual() || !offeredReferences.contains(reference.asText())) return Optional.empty();
+                references.add(reference.asText());
+            }
+            return Optional.of(Set.copyOf(references));
+        } catch (JsonProcessingException invalidJson) {
+            return Optional.empty();
+        }
+    }
+
+    static boolean hasEnoughRenderedVisualSignal(VisualLocationRequest request, LocatedRegion region) {
+        VisualRegionLocator.PageImage page = request.pages().stream()
+                .filter(candidate -> candidate.pageNumber() == region.pageNumber())
+                .findFirst()
+                .orElse(null);
+        byte[] content = croppedPng(page, region);
+        if (content == null) return true;
+        try (var input = new ByteArrayInputStream(content)) {
+            BufferedImage image = ImageIO.read(input);
+            if (image == null) return true;
+            return foregroundShare(image) >= MIN_CATALOGED_LEGEND_SIGNAL;
+        } catch (IOException unreadable) {
+            return true;
+        }
+    }
+
+    private static double foregroundShare(BufferedImage image) {
+        int stepX = Math.max(1, image.getWidth() / CROP_SAMPLE_EDGE);
+        int stepY = Math.max(1, image.getHeight() / CROP_SAMPLE_EDGE);
+        int[] histogram = new int[16 * 16 * 16];
+        int samples = 0;
+        for (int y = 0; y < image.getHeight(); y += stepY) {
+            for (int x = 0; x < image.getWidth(); x += stepX) {
+                histogram[quantizedRgb(image.getRGB(x, y))]++;
+                samples++;
+            }
+        }
+        if (samples == 0) return 1.0;
+        int dominant = 0;
+        for (int index = 1; index < histogram.length; index++) {
+            if (histogram[index] > histogram[dominant]) dominant = index;
+        }
+        int red = ((dominant >> 8) & 15) * 16;
+        int green = ((dominant >> 4) & 15) * 16;
+        int blue = (dominant & 15) * 16;
+        int foreground = 0;
+        int threshold = CROP_FOREGROUND_DISTANCE * CROP_FOREGROUND_DISTANCE;
+        for (int y = 0; y < image.getHeight(); y += stepY) {
+            for (int x = 0; x < image.getWidth(); x += stepX) {
+                Color color = new Color(image.getRGB(x, y));
+                int distance = (color.getRed() - red) * (color.getRed() - red)
+                        + (color.getGreen() - green) * (color.getGreen() - green)
+                        + (color.getBlue() - blue) * (color.getBlue() - blue);
+                if (distance > threshold) foreground++;
+            }
+        }
+        return (double) foreground / samples;
+    }
+
+    private static int quantizedRgb(int rgb) {
+        Color color = new Color(rgb);
+        return (color.getRed() >> 4) * 256 + (color.getGreen() >> 4) * 16 + (color.getBlue() >> 4);
+    }
+
+    private record CropImage(int pageNumber, String label, byte[] content) {
+        private CropImage {
+            content = content.clone();
+        }
+
+        @Override
+        public byte[] content() {
+            return content.clone();
+        }
     }
 
     /**
@@ -230,10 +458,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         List<LocatedRegion> accepted = new java.util.ArrayList<>();
         Rejection rejected = Rejection.NONE;
         for (ModelRegion response : parsed.get().regions()) {
-            if (!containsChinese(response.label()) || !containsChinese(response.visibleDescription())) {
-                rejected = Rejection.NON_CHINESE_OBSERVATION;
-                continue;
-            }
             List<VisualRegionLocator.Claim> referencedClaims = response.supportedClaimRefs().stream()
                     .map(ref -> claim(ref, request))
                     .filter(java.util.Objects::nonNull)
@@ -323,10 +547,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .filter(claim -> sourceIncludes(claim, pageNumber))
                 .toList();
         if (!samePageReferences.isEmpty()) return samePageReferences;
-        if (referencedClaims.isEmpty()) return List.of();
         List<VisualRegionLocator.Claim> pageClaims = availableClaims.stream()
                 .filter(claim -> sourceIncludes(claim, pageNumber))
                 .toList();
+        // A single-step request has one unambiguous page-scoped claim. Some vision providers omit C1 even while
+        // returning a correct literal crop, so recover that safe association instead of spending another full image
+        // request on formatting. Never make this inference when two neighbouring lesson steps share a page.
         return pageClaims.size() == 1 ? pageClaims : List.of();
     }
 

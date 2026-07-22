@@ -41,6 +41,53 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void reports_each_visual_section_immediately_after_its_bounded_work_finishes() {
+        UUID chunk = UUID.randomUUID();
+        List<VisualLessonEnricher.SectionProgress> progress = new java.util.ArrayList<>();
+
+        new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2, "轨道", "一枚探测器标记位于弧形刻度轨道上", 120, 220, 180, 120, List.of(chunk))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner", progress::add);
+
+        assertThat(progress).singleElement().satisfies(update -> {
+            assertThat(update.sectionPosition()).isEqualTo(1);
+            assertThat(update.sectionTitle()).isEqualTo("开局设置");
+            assertThat(update.outcome().outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
+        });
+    }
+
+    @Test
+    void announces_the_exact_rule_step_before_the_visual_model_is_called() {
+        UUID chunk = UUID.randomUUID();
+        List<String> events = new java.util.ArrayList<>();
+
+        new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.empty())
+                .enrichWithProgress(UUID.randomUUID(), lesson(chunk), "owner", new VisualLessonEnricher.VisualProgressListener() {
+                    @Override
+                    public void targetStarted(VisualLessonEnricher.VisualTarget target) {
+                        events.add("started:" + target.sectionTitle() + ":" + target.stepHeading());
+                    }
+
+                    @Override
+                    public void targetFinished(VisualLessonEnricher.VisualTarget target, VisualLessonEnricher.Outcome outcome) {
+                        events.add("finished:" + outcome);
+                    }
+                });
+
+        assertThat(events).containsExactly("started:开局设置:放置探测器", "finished:LOCATOR_RETURNED_NONE");
+    }
+
+    @Test
     void turns_a_vision_observation_into_a_player_facing_crop_explanation() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();
