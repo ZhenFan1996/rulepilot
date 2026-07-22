@@ -137,6 +137,24 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void requests_a_tighter_retry_for_a_tall_icon_legend_but_not_for_a_worked_diagram_or_vertical_card() {
+        var tallLegend = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                2, "资源图标图例", "五种资源名称下方分别是彩色立方体图标", 45, 510, 300, 483, List.of(UUID.randomUUID()));
+        var workedDiagram = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                4, "建造示例", "建筑卡、资源方块和箭头展示建造前后状态", 350, 420, 650, 580, List.of(UUID.randomUUID()));
+        var verticalCard = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                3, "纪念碑卡牌解剖图", "一张竖版卡牌标出标题、插画、资源图案和能力区域", 650, 308, 350, 692, List.of(UUID.randomUUID()));
+
+        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(tallLegend)).isTrue();
+        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(workedDiagram)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(verticalCard)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.withoutOversizedIconLegends(List.of(tallLegend, workedDiagram)))
+                .containsExactly(workedDiagram);
+        assertThat(SpringAiVisualRegionLocator.tightIconViewportInstruction())
+                .contains("tighter rectangle", "numbered prose");
+    }
+
+    @Test
     void rebinds_a_visual_crop_to_the_matching_source_page_when_the_model_numbers_a_neighbouring_claim() {
         Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2));
         Claim cardAnatomy = new Claim(UUID.randomUUID(), "文物卡的构成", List.of(3));
@@ -145,5 +163,17 @@ class SpringAiVisualRegionLocatorTest {
                 3, List.of(overview), List.of(overview, cardAnatomy));
 
         assertThat(rebound).containsExactly(cardAnatomy);
+    }
+
+    @Test
+    void rejects_an_ambiguous_page_fallback_instead_of_binding_a_crop_to_the_first_step() {
+        Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2), 1);
+        Claim playerBoard = new Claim(UUID.randomUUID(), "发给每位玩家玩家板", List.of(3), 2);
+        Claim supply = new Claim(UUID.randomUUID(), "创建公共供应区", List.of(3), 3);
+
+        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(
+                3, List.of(overview), List.of(overview, playerBoard, supply));
+
+        assertThat(rebound).isEmpty();
     }
 }

@@ -121,9 +121,13 @@ public interface VisualRegionLocator {
         }
     }
 
-    record Claim(UUID evidenceId, String text, List<Integer> sourcePages) {
+    /**
+     * A claim belongs to one concrete lesson step. Several steps may cite the same evidence chunk, so evidence alone
+     * is intentionally not enough to decide where a visual aid is attached.
+     */
+    record Claim(UUID evidenceId, String text, List<Integer> sourcePages, int stepPosition) {
         public Claim {
-            if (evidenceId == null || text == null || text.isBlank() || text.length() > 600) {
+            if (evidenceId == null || text == null || text.isBlank() || text.length() > 600 || stepPosition < 0) {
                 throw new IllegalArgumentException("visual claim is invalid");
             }
             text = text.strip();
@@ -133,8 +137,12 @@ public interface VisualRegionLocator {
             }
         }
 
+        public Claim(UUID evidenceId, String text, List<Integer> sourcePages) {
+            this(evidenceId, text, sourcePages, 0);
+        }
+
         public Claim(UUID evidenceId, String text) {
-            this(evidenceId, text, List.of());
+            this(evidenceId, text, List.of(), 0);
         }
     }
 
@@ -161,18 +169,34 @@ public interface VisualRegionLocator {
             int y,
             int width,
             int height,
-            List<UUID> supportedEvidenceIds) {
+            List<UUID> supportedEvidenceIds,
+            List<Integer> supportedStepPositions) {
         public LocatedRegion {
             if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
                     || (visibleDescription != null && visibleDescription.length() > 240)
                     || x < 0 || y < 0 || width < 20 || height < 20 || x + width > 1_000 || y + height > 1_000
                     || supportedEvidenceIds == null || supportedEvidenceIds.isEmpty()
-                    || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+                    || supportedEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
+                    || supportedStepPositions == null
+                    || supportedStepPositions.stream().anyMatch(position -> position == null || position < 1)) {
                 throw new IllegalArgumentException("located visual region is invalid");
             }
             label = label.strip();
             visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
             supportedEvidenceIds = List.copyOf(supportedEvidenceIds);
+            supportedStepPositions = List.copyOf(supportedStepPositions);
+        }
+
+        public LocatedRegion(
+                int pageNumber,
+                String label,
+                String visibleDescription,
+                int x,
+                int y,
+                int width,
+                int height,
+                List<UUID> supportedEvidenceIds) {
+            this(pageNumber, label, visibleDescription, x, y, width, height, supportedEvidenceIds, List.of());
         }
 
         public LocatedRegion(
@@ -183,7 +207,7 @@ public interface VisualRegionLocator {
                 int width,
                 int height,
                 List<UUID> supportedEvidenceIds) {
-            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds);
+            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds, List.of());
         }
     }
 }

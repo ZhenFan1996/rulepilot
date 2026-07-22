@@ -123,6 +123,54 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void rejects_a_structured_rule_text_box_that_has_no_player_facing_visual_handle() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "RESOURCE PLACEMENT 规则框",
+                                "一个白色边框文本框，内含四条资源放置规则",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+    }
+
+    @Test
+    void rejects_a_contents_list_even_when_it_names_real_game_components() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "CONTENTS 组件列表",
+                                "规则书中的文字清单，列出玩家板、建筑卡和资源方块数量",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
+
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+    }
+
+    @Test
     void rejects_a_tiny_label_and_a_prose_paragraph_even_when_the_model_calls_them_visuals() {
         UUID chunk = UUID.randomUUID();
         var tiny = new VisualLessonEnricher(
@@ -265,6 +313,128 @@ class VisualLessonEnricherTest {
         assertThat(steps.get(0).kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
         assertThat(steps.get(1).kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(steps.get(1).visualFocus().pageNumber()).isEqualTo(3);
+    }
+
+    @Test
+    void binds_a_visual_crop_to_the_exact_step_when_multiple_steps_share_a_page_and_evidence_chunk() {
+        UUID sharedEvidence = UUID.randomUUID();
+        IllustratedLesson source = twoSamePageRulesLesson(sharedEvidence);
+        List<Integer> requestedSteps = new java.util.ArrayList<>();
+        VisualRegionLocator locator = request -> {
+            assertThat(request.claims()).hasSize(1);
+            requestedSteps.add(request.claims().getFirst().stepPosition());
+            assertThat(request.claims()).extracting(VisualRegionLocator.Claim::text)
+                    .allSatisfy(text -> assertThat(text).startsWith("步骤 "));
+            if (request.claims().getFirst().stepPosition() != 2) return java.util.Optional.empty();
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    2,
+                    "资源图例",
+                    "五种彩色木方旁分别印有对应资源名称",
+                    45,
+                    510,
+                    310,
+                    490,
+                    List.of(sharedEvidence),
+                    List.of(2)));
+        };
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        locator)
+                .enrich(UUID.randomUUID(), source);
+
+        var steps = enriched.sections().getFirst().steps();
+        assertThat(steps.get(0).kind()).isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(steps.get(1).kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(steps.get(1).heading()).isEqualTo("创建公共供应区");
+        assertThat(steps.get(1).text()).contains("资源木方放入公共供应区");
+        assertThat(requestedSteps).containsExactly(1, 2);
+    }
+
+    @Test
+    void retains_the_original_step_when_a_later_section_returns_the_same_reader_viewport() {
+        UUID firstEvidence = UUID.randomUUID();
+        UUID secondEvidence = UUID.randomUUID();
+        VisualRegionLocator locator = request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                2,
+                "建造示例",
+                "蓝色资源方块被移除后替换成木制建筑模型，旁边有箭头",
+                350,
+                420,
+                650,
+                580,
+                List.of(request.claims().getFirst().evidenceId()),
+                List.of(request.claims().getFirst().stepPosition())));
+
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        locator)
+                .enrichWithReport(UUID.randomUUID(), twoSectionsWithOverlappingVisuals(firstEvidence, secondEvidence), "owner");
+
+        assertThat(result.lesson().sections().get(0).steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(result.lesson().sections().get(1).steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(result.outcomes()).extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .containsExactly(VisualLessonEnricher.Outcome.ADDED, VisualLessonEnricher.Outcome.REJECTED_DUPLICATE);
+    }
+
+    @Test
+    void rejects_a_resource_legend_when_the_exact_step_is_about_a_player_board() {
+        UUID evidence = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "资源图标与名称对照表",
+                                "五种资源名称下方分别对应一个彩色立方体图标",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(evidence),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), playerBoardLesson(evidence), "owner");
+
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
+    }
+
+    @Test
+    void rejects_a_setup_overview_when_the_step_requires_an_actual_placement() {
+        UUID evidence = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "桌面初始布局",
+                                "桌面上展示玩家板、资源堆和卡牌的初始设置状态",
+                                120,
+                                220,
+                                400,
+                                300,
+                                List.of(evidence),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), lesson(evidence), "owner");
+
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
     }
 
     @Test
@@ -434,6 +604,50 @@ class VisualLessonEnricherTest {
                 1, "turn", List.of("turn"), "轮到你时", true,
                 IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
                 "完成一次行动", List.of(), List.of(), List.of(first, second));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson twoSamePageRulesLesson(UUID sharedEvidence) {
+        var playerBoard = new IllustratedLesson.LessonStep(
+                1, "每位玩家拿取玩家板", IllustratedLesson.TeachingMove.DO, "给每位玩家一块玩家板。", List.of(2), List.of(sharedEvidence));
+        var supply = new IllustratedLesson.LessonStep(
+                2, "创建公共供应区", IllustratedLesson.TeachingMove.DO, "把五种资源木方放入公共供应区。", List.of(2), List.of(sharedEvidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "setup", List.of("setup"), "标准游戏设置流程", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "完成开局设置", List.of(), List.of(), List.of(playerBoard, supply));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson twoSectionsWithOverlappingVisuals(UUID firstEvidence, UUID secondEvidence) {
+        var firstStep = new IllustratedLesson.LessonStep(
+                1, "建造建筑", IllustratedLesson.TeachingMove.DO, "移除资源方块并放上建筑模型。", List.of(2), List.of(firstEvidence));
+        var secondStep = new IllustratedLesson.LessonStep(
+                1, "跟随示例", IllustratedLesson.TeachingMove.DO, "按照示例完成一次建造。", List.of(2), List.of(secondEvidence));
+        var first = new IllustratedLesson.LessonSection(
+                1, "build", List.of("core_loop"), "建造建筑", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                "建造", List.of(), List.of(), List.of(firstStep));
+        var second = new IllustratedLesson.LessonSection(
+                2, "example", List.of("examples"), "跟随示例", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                "示例", List.of(), List.of(), List.of(secondStep));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(first, second), "test", Instant.now());
+    }
+
+    private IllustratedLesson playerBoardLesson(UUID evidence) {
+        var step = new IllustratedLesson.LessonStep(
+                1, "每位玩家拿取玩家板", IllustratedLesson.TeachingMove.DO, "给每位玩家一块玩家板，作为个人城镇的4x4网格。", List.of(2), List.of(evidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "setup", List.of("setup"), "设置", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "设置", List.of(), List.of(), List.of(step));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

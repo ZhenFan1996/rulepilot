@@ -57,12 +57,22 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             player-facing viewport, not a microscopic detection box: normally include enough surrounding card, legend,
             arrow, board state, or diagram for the object to be recognisable. A tight icon may be small only when its
             nearby visual context is genuinely absent; never return a word-only label.
+            Crop tightly around that visual handle and its direct labels. Exclude surrounding numbered prose, separate
+            rules, contents/component-count lists, and empty page area. Text may remain only when it labels the pictured
+            icon, card, or diagram. Do not call an overview photograph a worked action state: when a claim says a player
+            places, moves, removes, or transforms a piece, the crop must literally show that piece in the relevant board
+            area, an arrow, or a before-and-after state.
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
             "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
             game effect.
             Each supplied claim lists sourcePages. Choose a supportedClaimRef whose sourcePages includes the crop page;
-            this keeps the printed rule and the pictured object together. Do not use a similarly named component from a
-            different page as a substitute.
+            this keeps the printed rule and the pictured object together. The claim text begins with its exact step
+            heading. Each C reference is one exact lesson step, even if several steps share a page or source chunk.
+            Choose the C whose step is directly helped by the crop; a crop must visibly distinguish that step from its
+            adjacent steps, not merely depict a later or earlier part of the same overall procedure. Do not attach a
+            resource legend to a player-board step, a construction example to a resource-naming step, or a scoring
+            example to an end-condition step. If the crop helps another supplied step, cite that step's C reference
+            instead. Do not use a similarly named component from a different page as a substitute.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. label and visibleDescription must both name a literal visible item, not repeat the lesson claim.
@@ -97,9 +107,44 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
         GuideAttempt first = locateGuideOnce(request, owner, "");
-        if (!first.guide().regions().isEmpty() || !first.retryable()) return first.guide();
+        if (!first.guide().regions().isEmpty()) {
+            List<LocatedRegion> compactFirst = withoutOversizedIconLegends(first.guide().regions());
+            if (!compactFirst.isEmpty()) {
+                return LocateGuideResult.found(compactFirst);
+            }
+            log.info("Retrying visual locator to tighten an icon crop for section {}", request.sectionTitle());
+            GuideAttempt tightened = locateGuideOnce(request, owner, tightIconViewportInstruction());
+            List<LocatedRegion> compactTightened = withoutOversizedIconLegends(tightened.guide().regions());
+            if (!compactTightened.isEmpty()) {
+                return LocateGuideResult.found(compactTightened);
+            }
+            return LocateGuideResult.unavailable(Diagnostic.NO_REGION);
+        }
+        if (!first.retryable()) return first.guide();
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
         return locateGuideOnce(request, owner, retryInstruction(first.rejection())).guide();
+    }
+
+    /**
+     * A tall icon crop normally means the model included an adjacent numbered rule paragraph below a horizontal legend.
+     * Asking once for a tighter retry is cheaper and safer than trimming coordinates heuristically and cutting off a
+     * diagram whose visual content happens to be vertical.
+     */
+    static List<LocatedRegion> withoutOversizedIconLegends(List<LocatedRegion> regions) {
+        return regions.stream().filter(region -> !requiresTighterIconViewport(region)).toList();
+    }
+
+    static boolean requiresTighterIconViewport(LocatedRegion region) {
+        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        boolean iconLegend = observation.contains("图例")
+                || observation.contains("对照")
+                || (observation.contains("图标") && observation.contains("名称"))
+                || observation.matches(".*\\b(legend|icon group)\\b.*");
+        return iconLegend && region.height() * 10 > region.width() * 14;
+    }
+
+    static String tightIconViewportInstruction() {
+        return "The previous icon crop was too tall and likely included unrelated numbered prose. Return a tighter rectangle around only the literal icons and their direct labels. Do not include adjacent steps, paragraphs, component counts, or a page footer. If that tight icon crop is not available, return an empty regions array.";
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
@@ -123,6 +168,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             .param("claims", IntStream.range(0, request.claims().size())
                                     .mapToObj(index -> Map.of(
                                             "ref", "C" + (index + 1),
+                                            "stepPosition", request.claims().get(index).stepPosition(),
                                             "text", request.claims().get(index).text(),
                                             "sourcePages", request.claims().get(index).sourcePages()))
                                     .toList())
@@ -157,6 +203,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             List<VisualRegionLocator.Claim> supportedClaims = pageScopedClaims(
                     response.pageNumber(), referencedClaims, request.claims());
             List<UUID> supported = supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).toList();
+            List<Integer> supportedStepPositions = supportedClaims.stream()
+                    .map(VisualRegionLocator.Claim::stepPosition)
+                    .filter(position -> position > 0)
+                    .distinct()
+                    .toList();
             if (supported.isEmpty()
                     || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
                 rejected = Rejection.UNSUPPORTED_SCOPE;
@@ -172,7 +223,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                         normalizedResponse.y(),
                         normalizedResponse.width(),
                         normalizedResponse.height(),
-                        supported);
+                        supported,
+                        supportedStepPositions);
                 if (accepted.stream().noneMatch(existing -> sameRegion(existing, region))) accepted.add(region);
             } catch (IllegalArgumentException invalidModelOutput) {
                 log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
@@ -220,9 +272,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     /**
      * Claim references from a visual model are a relevance hint, not an authority to attach a crop across pages.
-     * A crop can only enhance a rule whose source page contains that crop. When the model names a neighbouring claim
-     * in the same section, recover the matching page-scoped evidence deterministically instead of discarding a useful
-     * component or icon observation.
+     * A crop can only enhance a rule whose source page contains that crop. If the model names a neighbouring claim,
+     * recovery is safe only when exactly one supplied lesson step belongs to the crop page; otherwise attaching the
+     * crop would silently turn a useful image into an explanation for the wrong rule.
      */
     static List<VisualRegionLocator.Claim> pageScopedClaims(
             int pageNumber,
@@ -233,7 +285,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .toList();
         if (!samePageReferences.isEmpty()) return samePageReferences;
         if (referencedClaims.isEmpty()) return List.of();
-        return availableClaims.stream().filter(claim -> sourceIncludes(claim, pageNumber)).toList();
+        List<VisualRegionLocator.Claim> pageClaims = availableClaims.stream()
+                .filter(claim -> sourceIncludes(claim, pageNumber))
+                .toList();
+        return pageClaims.size() == 1 ? pageClaims : List.of();
     }
 
     private static boolean sourceIncludes(VisualRegionLocator.Claim claim, int pageNumber) {
