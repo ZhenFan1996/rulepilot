@@ -76,7 +76,7 @@ public class GroundedTeachingAgent {
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
-    private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[[A-Za-z][A-Za-z _-]{0,30}]");
+    private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[([A-Za-z][A-Za-z _-]{0,30})]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Pattern TRAILING_INCOMPLETE_THOUGHT = Pattern.compile(
             "(?:…+|\\.\\.\\.)\\s*(?:完成(?:了)?|结束(?:了)?|等等|后续|其余)?[。！？!?]?\\s*$");
@@ -86,6 +86,11 @@ public class GroundedTeachingAgent {
             "(?i)(已提供的证据|提供的证据|当前证据|现有证据|证据中(?:没有|未|并未|不)|检索(?:结果|内容|证据)|"
                     + "retriev(?:al|ed)|(?:provided|supplied|current) evidence|evidence (?:does not|doesn't|did not))");
     private static final Pattern INTERNAL_SHORT_EVIDENCE_REFERENCE = Pattern.compile("(?<![\\p{L}\\p{N}])E\\d{1,2}(?![\\p{L}\\p{N}])");
+    private static final Pattern LEADING_INTERNAL_EVIDENCE_LANGUAGE = Pattern.compile(
+            "(?i)(?:(?:根据|依据|基于|从)\\s*)?"
+                    + "(?:(?:已提供的|当前|现有)\\s*(?:检索(?:结果|内容|证据)|证据)|检索(?:结果|内容|证据))"
+                    + "(?!\\s*(?:中|里)?\\s*(?:没有|未|并未))\\s*(?:中|里)?\\s*"
+                    + "(?:显示|表明|说明|可知|可见|来看)?\\s*[，,:：]*");
     private static final Pattern DRAW_FROM_BAG = Pattern.compile(
             "(?i)(?:从.{0,12}(?:布袋|袋中|bag).{0,24}(?:抽|取|draw)|(?:抽|取|draw).{0,24}(?:布袋|袋中|bag))");
     private static final Pattern FINAL_CHECK_CLAIMS_ALL_IN_BAG = Pattern.compile(
@@ -833,9 +838,55 @@ public class GroundedTeachingAgent {
     }
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        SectionDraft normalized = normalizePresentationMetadata(draft, request.pageImages().isEmpty());
+        SectionDraft normalized = normalizePdfIconMarkers(draft);
+        normalized = normalizeSectionTitle(normalized, request);
+        normalized = normalizePresentationMetadata(normalized, request.pageImages().isEmpty());
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
         return alignVisualCaptionWithStep(normalized, request.pageImages().isEmpty());
+    }
+
+    private SectionDraft normalizePdfIconMarkers(SectionDraft draft) {
+        if (draft == null || draft.steps() == null) return draft;
+        List<StepDraft> normalizedSteps = draft.steps().stream()
+                .map(step -> step == null
+                        ? null
+                        : new StepDraft(
+                                playerFacingText(step.heading()),
+                                step.kind(),
+                                playerFacingText(step.text()),
+                                step.citationIds(),
+                                step.visualFocus()))
+                .toList();
+        String title = playerFacingText(draft.title());
+        String caption = playerFacingText(draft.visualCaption());
+        if (java.util.Objects.equals(title, draft.title())
+                && java.util.Objects.equals(caption, draft.visualCaption())
+                && normalizedSteps.equals(draft.steps())) return draft;
+        return new SectionDraft(title, draft.visualKind(), caption, draft.visualCitationIds(), normalizedSteps);
+    }
+
+    private SectionDraft normalizeSectionTitle(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
+        if (draft == null || draft.title() == null || draft.title().isBlank() || draft.title().length() > 160) {
+            if (draft == null) return null;
+            return new SectionDraft(
+                    request.title().strip(),
+                    draft.visualKind(),
+                    draft.visualCaption(),
+                    draft.visualCitationIds(),
+                    draft.steps());
+        }
+        return draft;
+    }
+
+    private String naturalLanguageIconMarker(String value) {
+        if (value == null || value.isBlank()) return value;
+        return UNRESOLVED_PDF_MARKER.matcher(value).replaceAll("“$1”图标");
+    }
+
+    private String playerFacingText(String value) {
+        String normalized = naturalLanguageIconMarker(value);
+        if (normalized == null || normalized.isBlank()) return normalized;
+        return LEADING_INTERNAL_EVIDENCE_LANGUAGE.matcher(normalized).replaceAll("").strip();
     }
 
     private SectionDraft alignVisualStepsWithPageEvidence(

@@ -1065,6 +1065,120 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void normalizesUnresolvedPdfIconMarkersBeforeTextFallbackValidation() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Starting dice",
+                "Place the [BOOST] die beside your player board.",
+                3,
+                3,
+                List.of());
+        TeachingLessonModel textOnlyModel = request -> new TeachingLessonModel.SectionDraft(
+                "准备 [BOOST] 骰子",
+                VisualKind.REFERENCE_CARD,
+                "把 [BOOST] 骰子放在玩家板旁。",
+                List.of(chunkId),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "摆放 [BOOST] 骰子",
+                        TeachingMove.DO,
+                        "把 [BOOST] 骰子放在玩家板旁。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                textOnlyModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().title()).isEqualTo("准备 “BOOST”图标 骰子");
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("把 “BOOST”图标 骰子放在玩家板旁。");
+    }
+
+    @Test
+    void removesLeadingInternalEvidenceLanguageBeforeTeachingValidation() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Starting dice",
+                "Place the boost die beside your player board.",
+                3,
+                3,
+                List.of());
+        TeachingLessonModel textOnlyModel = request -> new TeachingLessonModel.SectionDraft(
+                "起始骰子",
+                VisualKind.REFERENCE_CARD,
+                "当前证据显示：把加速骰子放在玩家板旁。",
+                List.of(chunkId),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "摆放加速骰子",
+                        TeachingMove.DO,
+                        "根据已提供的证据，把加速骰子放在玩家板旁。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                textOnlyModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().visualCaption()).isEqualTo("把加速骰子放在玩家板旁。");
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).isEqualTo("把加速骰子放在玩家板旁。");
+    }
+
+    @Test
+    void restoresThePlannedTitleWhenTheModelReturnsAnInvalidSectionTitle() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "SETUP",
+                "Setup",
+                "Place the board in the center of the table.",
+                3,
+                3,
+                List.of());
+        TeachingLessonModel textOnlyModel = request -> new TeachingLessonModel.SectionDraft(
+                " ",
+                VisualKind.REFERENCE_CARD,
+                "把主棋盘放到桌面中央。",
+                List.of(chunkId),
+                List.of(new TeachingLessonModel.StepDraft(
+                        "摆放主棋盘",
+                        TeachingMove.DO,
+                        "把主棋盘放到桌面中央。",
+                        List.of(chunkId))));
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                textOnlyModel,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        var lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().title()).isEqualTo("SETUP");
+    }
+
+    @Test
     void withholdsPageImagesWhenTheOutlineAgentSaysProseIsSufficient() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
