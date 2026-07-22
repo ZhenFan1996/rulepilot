@@ -15,6 +15,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
+                resource("teaching-outline-v8-visual-density-system.txt"),
                 resource("teaching-outline-v3-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
@@ -91,7 +92,9 @@ class VersionedAgentPromptsTest {
                         "either A or B",
                         "Every explicit walkthrough or Example Round",
                         "asymmetric factions",
-                        "walkthrough");
+                        "walkthrough",
+                        "several distinct player needs",
+                        "Three to six visual topics");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",

@@ -1491,6 +1491,12 @@ onUnmounted(() => {
                   <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">先记住这一件事</p>
                   <h3 id="chapter-core-title" class="mt-2 font-display text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">{{ chapterLeadStep.heading || currentSection.title }}</h3>
                   <p class="mt-3 text-sm leading-6 text-panel-text/80 sm:text-base sm:leading-8">{{ chapterLeadStep.text }}</p>
+                  <figure v-if="chapterLeadStep.visualFocus" class="mt-5 overflow-hidden rounded-xl border border-panel-text/15 bg-canvas text-ink sm:max-w-2xl">
+                    <a :href="pageImageUrl(chapterLeadStep.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开完整规则书页面">
+                      <img :src="focusedPageImageUrl(chapterLeadStep.visualFocus)" :alt="`${chapterLeadStep.visualFocus.label}，截自规则书第 ${chapterLeadStep.visualFocus.pageNumber} 页`" class="block max-h-[30rem] w-full object-contain" loading="lazy">
+                    </a>
+                    <figcaption class="border-t border-ink/10 px-3 py-2 text-xs font-semibold text-copper">{{ chapterLeadStep.visualFocus.label }} · 直接对应这一条核心规则</figcaption>
+                  </figure>
                   <a v-if="stepSourceLabel(chapterLeadStep)" :href="pageImageUrl(chapterLeadStep.sourcePages[0])" target="_blank" rel="noopener" class="mt-4 inline-flex text-xs font-semibold text-panel-text/60 hover:text-panel-text">
                     {{ stepSourceLabel(chapterLeadStep) }} ↗
                   </a>
@@ -1518,14 +1524,14 @@ onUnmounted(() => {
                           <h4 class="font-display text-xl font-semibold leading-7">{{ step.heading || `要点 ${index + 1}` }}</h4>
                           <span class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</span>
                         </div>
-                        <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-3 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_15rem]">
+                        <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,26rem)]">
                           <div>
                             <p class="text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
                             <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">查看第 {{ step.visualFocus.pageNumber }} 页上下文 ↗</a>
                           </div>
                           <figure class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
                             <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开完整规则书页面">
-                              <img :src="focusedPageImageUrl(step.visualFocus)" :alt="`${step.visualFocus.label}，截自规则书第 ${step.visualFocus.pageNumber} 页`" class="block max-h-72 w-full object-contain" loading="lazy">
+                              <img :src="focusedPageImageUrl(step.visualFocus)" :alt="`${step.visualFocus.label}，截自规则书第 ${step.visualFocus.pageNumber} 页`" class="block max-h-[30rem] w-full object-contain" loading="lazy">
                             </a>
                             <figcaption class="border-t border-indigo/10 px-3 py-2 text-xs font-semibold text-copper">{{ step.visualFocus.label }} · 第 {{ step.visualFocus.pageNumber }} 页局部</figcaption>
                             <div v-if="visualAidFor(currentSection.position, step.position)" class="border-t border-indigo/10 px-3 py-2">

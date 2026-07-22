@@ -64,7 +64,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v26-ordered-state";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v28-repaired-inline-visuals";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -196,7 +196,7 @@ public class GroundedTeachingAgent {
                 reusable,
                 assistantRunId,
                 queriesPerTopic,
-                false);
+                first.visualEvidenceRecommended());
         sections.add(firstOutcome.section());
         if (firstOutcome.reviewCandidate() != null) reviewCandidates.add(firstOutcome.reviewCandidate());
         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
@@ -215,7 +215,7 @@ public class GroundedTeachingAgent {
                                 reusable,
                                 assistantRunId,
                                 queriesPerTopic,
-                                false)))
+                                planned.visualEvidenceRecommended())))
                         .toList();
                 for (Future<SectionOutcome> future : futures) {
                     SectionOutcome outcome = await(future);
@@ -696,7 +696,7 @@ public class GroundedTeachingAgent {
                         repair,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
-                if (repair == maxRepairAttempts || isVisualLocalizationFailure(rejectedDraft)) {
+                if (repair == maxRepairAttempts) {
                     if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
                         return fallbackToTextDraft(
                                 plan,
@@ -710,9 +710,17 @@ public class GroundedTeachingAgent {
                     }
                     if (repair == maxRepairAttempts) throw rejectedDraft;
                 }
-                List<String> feedback = List.of(rejectedDraft.getMessage() == null
+                String diagnostic = rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
-                        : rejectedDraft.getMessage());
+                        : rejectedDraft.getMessage();
+                List<String> feedback = modelRequest.pageImages().isEmpty() || !isVisualLocalizationFailure(rejectedDraft)
+                        ? List.of(diagnostic)
+                        : List.of(
+                                diagnostic,
+                                "The attached page images are usable visual evidence. Keep the grounded text, but repair "
+                                        + "one VISUAL step: cite an attached-page E-reference and return a compact "
+                                        + "0-1000 focus rectangle that contains the icon, component group, board area, "
+                                        + "flow, or worked state named in that step. Do not fall back to text-only.");
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),

@@ -29,6 +29,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
+            @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
             @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
@@ -44,7 +45,7 @@ public class VersionedAgentPrompts {
             throws IOException {
         this.teachingSystem = combined(teachingSystem, teachingFidelity);
         this.teachingUser = read(teachingUser);
-        this.teachingOutlineSystem = combined(teachingOutlineSystem, teachingOutlineFidelity);
+        this.teachingOutlineSystem = combined(teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(answerSystem, answerFidelity);
         this.answerUser = read(answerUser);
@@ -117,7 +118,11 @@ public class VersionedAgentPrompts {
         return content;
     }
 
-    private static String combined(Resource base, Resource revision) throws IOException {
-        return read(base) + "\n\n" + read(revision);
+    private static String combined(Resource base, Resource... revisions) throws IOException {
+        StringBuilder combined = new StringBuilder(read(base));
+        for (Resource revision : revisions) {
+            combined.append("\n\n").append(read(revision));
+        }
+        return combined.toString();
     }
 }

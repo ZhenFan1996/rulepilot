@@ -141,7 +141,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void keepsTextBackedBaseGenerationIndependentFromSlowRawPageVision() {
+    void writesAnInlineVisualStepForATopicThePlanMarksAsVisuallyNecessary() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -161,17 +161,18 @@ class GroundedTeachingAgentTest {
 
             @Override
             public SectionDraft compose(SectionRequest request) {
-                assertThat(request.pageImages()).isEmpty();
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(5);
                 return new SectionDraft(
                         "看懂卡牌图标",
-                        VisualKind.REFERENCE_CARD,
+                        VisualKind.TABLE_LAYOUT,
                         "对照卡牌上的费用与效果。",
                         List.of(chunkId),
                         List.of(new StepDraft(
                                 "找到费用与效果",
-                                TeachingMove.WATCH,
+                                TeachingMove.VISUAL,
                                 "先找到费用图标，再看旁边的效果。",
-                                List.of(chunkId))));
+                                List.of(chunkId),
+                                new VisualFocusDraft(5, "费用与效果图标", 120, 180, 520, 260))));
             }
         };
         TeachingPlan plan = new TeachingPlan(
@@ -204,7 +205,8 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
+                .isEqualTo(new IllustratedLesson.VisualFocus(5, "费用与效果图标", 120, 180, 520, 260));
     }
 
     @Test
@@ -1211,7 +1213,7 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(compositions).hasValue(5);
+        assertThat(compositions).hasValue(6);
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
