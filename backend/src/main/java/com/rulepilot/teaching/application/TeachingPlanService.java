@@ -565,6 +565,8 @@ public class TeachingPlanService {
     static TeachingOutlineModel.OutlineDraft bindVisualCoreTopicEvidence(
             TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
         Map<String, Integer> supportedPageByTag = new LinkedHashMap<>();
+        Map<Integer, String> pageFacts = visualCatalogPages.stream().collect(Collectors.toMap(
+                PageInput::pageNumber, PageInput::text, (first, duplicate) -> first, LinkedHashMap::new));
         for (String tag : List.of("setup", "core_loop", "end", "scoring")) {
             visualCatalogPages.stream()
                     .filter(page -> directVisualEvidenceFor(tag, page.text()))
@@ -578,9 +580,13 @@ public class TeachingPlanService {
                     LinkedHashSet<Integer> directCorePages = new LinkedHashSet<>();
                     topic.coverageTags().stream()
                             .map(tag -> tag.toLowerCase(java.util.Locale.ROOT))
+                            .filter(supportedPageByTag::containsKey)
+                            .filter(tag -> topic.sourcePageNumbers().stream()
+                                    .map(pageFacts::get)
+                                    .noneMatch(page -> page != null && directVisualEvidenceFor(tag, page)))
                             .map(supportedPageByTag::get)
-                            .filter(java.util.Objects::nonNull)
                             .forEach(directCorePages::add);
+                    if (directCorePages.isEmpty()) return topic;
                     LinkedHashSet<Integer> sourcePages = new LinkedHashSet<>(directCorePages);
                     sourcePages.addAll(topic.sourcePageNumbers());
                     List<Integer> boundedPages = sourcePages.stream().limit(MAX_TOPIC_SOURCE_PAGES).toList();

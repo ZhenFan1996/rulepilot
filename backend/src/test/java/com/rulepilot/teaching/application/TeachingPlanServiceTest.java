@@ -229,6 +229,23 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void retainsAllSourcePagesWhenTheCoreTopicAlreadyHasDirectVisualEvidence() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
+                new PageInput(3, visualCatalogPage("PLAYER AID", "A reference table.")),
+                new PageInput(4, visualCatalogPage("EXAMPLE", "An annotated round example.")));
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2, 3, 4, 5))));
+
+        OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(outline, pages);
+
+        assertThat(repaired.topics().get(1).sourcePageNumbers()).containsExactly(2, 3, 4, 5);
+    }
+
+    @Test
     void doesNotTreatAFlowPageThatMentionsGameEndAsCompleteEndingEvidence() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
