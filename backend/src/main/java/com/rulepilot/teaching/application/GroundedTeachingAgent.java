@@ -236,8 +236,9 @@ public class GroundedTeachingAgent {
     }
 
     /**
-     * Publishes the lesson incrementally. Text-backed sections stay fast; image-only rulebooks
-     * use their cited pages as primary evidence instead of guessing from placeholder text.
+     * Publishes the cited text lesson incrementally before optional visual enrichment begins.
+     * Image-only rulebooks still use their cited pages as primary evidence instead of guessing
+     * from placeholder text.
      */
     public IllustratedLesson createBase(
             TeachingPlan plan,
@@ -260,8 +261,7 @@ public class GroundedTeachingAgent {
                 List.of(),
                 reusable,
                 assistantRunId,
-                queriesPerTopic,
-                first.visualEvidenceRecommended());
+                queriesPerTopic);
         sections.add(firstOutcome.section());
         if (firstOutcome.reviewCandidate() != null) reviewCandidates.add(firstOutcome.reviewCandidate());
         publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
@@ -279,8 +279,7 @@ public class GroundedTeachingAgent {
                                 sharedContext,
                                 reusable,
                                 assistantRunId,
-                                queriesPerTopic,
-                                planned.visualEvidenceRecommended())))
+                                queriesPerTopic)))
                         .toList();
                 for (Future<SectionOutcome> future : futures) {
                     SectionOutcome outcome = await(future);
@@ -315,8 +314,7 @@ public class GroundedTeachingAgent {
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
-            int queriesPerTopic,
-            boolean includeVisualEvidence) {
+            int queriesPerTopic) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
@@ -367,7 +365,7 @@ public class GroundedTeachingAgent {
                     evidence,
                     assistantRunId,
                     planned.position() - 1,
-                    includeVisualEvidence);
+                    false);
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_BASE_SECTION_PUBLISHED");
             return new SectionOutcome(planned.position(), composed.section(), composed);
         } catch (AgentExecutionStoppedException stopped) {

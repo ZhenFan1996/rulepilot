@@ -142,7 +142,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void writesAnInlineVisualStepForATopicThePlanMarksAsVisuallyNecessary() {
+    void keepsPlanRecommendedVisualStepsAvailableForTheDedicatedVisualTeachingPath() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -204,10 +204,75 @@ class GroundedTeachingAgentTest {
                 new ImmediateAuditedAgentInvocations(),
                 4);
 
-        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+        IllustratedLesson lesson = agent.create(plan, UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus())
                 .isEqualTo(new IllustratedLesson.VisualFocus(5, "费用与效果图标", 120, 180, 520, 260));
+    }
+
+    @Test
+    void defersPlanRecommendedVisualEvidenceUntilAfterTheTextFirstBaseLesson() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence evidence = new RuleEvidence(
+                chunkId,
+                versionId,
+                "COMPONENTS",
+                "Card anatomy",
+                "The cost and effect are printed beside their icons.",
+                5,
+                5,
+                List.of(new RulePageImage(5, "image/jpeg", new byte[] {1, 2}, 1_086, 1_511)));
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public boolean supportsVisualEvidence() {
+                return true;
+            }
+
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                assertThat(request.pageImages()).isEmpty();
+                return new SectionDraft(
+                        "看懂卡牌图标",
+                        VisualKind.REFERENCE_CARD,
+                        "先认出费用与效果的位置。",
+                        List.of(chunkId),
+                        List.of(new StepDraft(
+                                "先看费用", TeachingMove.DO, "先看费用图标，再阅读旁边的效果。", List.of(chunkId))));
+            }
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                4,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "card-anatomy",
+                        "卡牌结构",
+                        "看懂卡牌费用与效果图标。",
+                        true,
+                        true,
+                        List.of("Card anatomy"),
+                        List.of("components"),
+                        List.of(5))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
     }
 
     @Test
@@ -252,7 +317,7 @@ class GroundedTeachingAgentTest {
                 new ImmediateAuditedAgentInvocations(),
                 4);
 
-        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+        IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().label()).isEqualTo("找到主棋盘");
     }
