@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.out.model;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import java.time.Duration;
@@ -52,26 +53,35 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateResult locateWithResult(VisualLocationRequest request) {
-        Future<LocateResult> work;
+        LocateGuideResult guide = locateGuideWithResult(request);
+        return guide.regions().stream()
+                .findFirst()
+                .map(LocateResult::found)
+                .orElseGet(() -> LocateResult.unavailable(guide.diagnostic()));
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        Future<LocateGuideResult> work;
         try {
-            work = executor.submit(() -> delegate.locateWithResult(request));
+            work = executor.submit(() -> delegate.locateGuideWithResult(request));
         } catch (RejectedExecutionException busy) {
             log.info("Skipped visual enrichment because another visual request is still running");
-            return LocateResult.unavailable(Diagnostic.EXECUTOR_BUSY);
+            return LocateGuideResult.unavailable(Diagnostic.EXECUTOR_BUSY);
         }
         try {
             return work.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException slowProvider) {
             work.cancel(true);
             log.info("Skipped visual enrichment after {} ms", timeout.toMillis());
-            return LocateResult.unavailable(Diagnostic.TIMEOUT);
+            return LocateGuideResult.unavailable(Diagnostic.TIMEOUT);
         } catch (InterruptedException interrupted) {
             work.cancel(true);
             Thread.currentThread().interrupt();
-            return LocateResult.unavailable(Diagnostic.INTERRUPTED);
+            return LocateGuideResult.unavailable(Diagnostic.INTERRUPTED);
         } catch (ExecutionException failed) {
             log.info("Skipped visual enrichment after provider failure: {}", rootMessage(failed));
-            return LocateResult.unavailable(Diagnostic.PROVIDER_FAILURE);
+            return LocateGuideResult.unavailable(Diagnostic.PROVIDER_FAILURE);
         }
     }
 

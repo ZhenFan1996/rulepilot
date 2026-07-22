@@ -45,8 +45,25 @@ class VisualRegionCandidateSelectorTest {
                 understanding, Set.of(2), List.of("move the probe on its orbit"));
 
         assertThat(candidates).extracting(VisualRegionCandidateSelector.Candidate::sourceText)
-                .containsExactly("Place the probe on its orbit track", "Probe movement", "Cited page 2 visual context");
+                .containsExactly("Cited page 2 visual context", "Place the probe on its orbit track", "Probe movement");
         assertThat(candidates).allSatisfy(candidate -> assertThat(candidate.pageNumber()).isEqualTo(2));
+    }
+
+    @Test
+    void reserves_both_relevant_cited_pages_as_visual_search_boundaries() {
+        var understanding = new RulebookUnderstanding(
+                List.of(
+                        block(2, 0, BlockRole.BODY, "Move the probe on its orbit", 100, 200, 300, 160),
+                        block(3, 0, BlockRole.BODY, "Use the launch icon", 100, 200, 300, 160)),
+                List.of(), List.of(), List.of());
+
+        var candidates = new VisualRegionCandidateSelector().select(
+                understanding, new LinkedHashSet<>(List.of(2, 3)), List.of("launch the probe icon"));
+
+        assertThat(candidates).extracting(VisualRegionCandidateSelector.Candidate::sourceText)
+                .contains("Cited page 2 visual context", "Cited page 3 visual context");
+        assertThat(candidates).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
+                .containsExactly(3, 2, 3, 2);
     }
 
     @Test

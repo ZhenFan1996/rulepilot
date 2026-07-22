@@ -19,6 +19,17 @@ public interface VisualRegionLocator {
         return region.map(LocateResult::found).orElseGet(LocateResult::noRegion);
     }
 
+    /**
+     * A visual walkthrough may need a small icon legend and a separate worked state. The default keeps legacy
+     * locators compatible while vision-capable adapters can return both independently grounded anchors in one call.
+     */
+    default LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
+        LocateResult result = locateWithResult(request);
+        return result.region()
+                .map(region -> LocateGuideResult.found(List.of(region)))
+                .orElseGet(() -> LocateGuideResult.unavailable(result.diagnostic()));
+    }
+
     enum Diagnostic {
         FOUND,
         NO_REGION,
@@ -56,6 +67,31 @@ public interface VisualRegionLocator {
                 throw new IllegalArgumentException("visual location diagnostic is invalid");
             }
             return new LocateResult(Optional.empty(), diagnostic);
+        }
+    }
+
+    record LocateGuideResult(List<LocatedRegion> regions, Diagnostic diagnostic) {
+        public LocateGuideResult {
+            if (regions == null || diagnostic == null || regions.size() > 2
+                    || (regions.isEmpty() && diagnostic == Diagnostic.FOUND)
+                    || (!regions.isEmpty() && diagnostic != Diagnostic.FOUND)) {
+                throw new IllegalArgumentException("visual guide result is invalid");
+            }
+            regions = List.copyOf(regions);
+        }
+
+        public static LocateGuideResult found(List<LocatedRegion> regions) {
+            if (regions == null || regions.isEmpty()) {
+                throw new IllegalArgumentException("a found visual guide needs at least one region");
+            }
+            return new LocateGuideResult(regions, Diagnostic.FOUND);
+        }
+
+        public static LocateGuideResult unavailable(Diagnostic diagnostic) {
+            if (diagnostic == null || diagnostic == Diagnostic.FOUND) {
+                throw new IllegalArgumentException("visual guide diagnostic is invalid");
+            }
+            return new LocateGuideResult(List.of(), diagnostic);
         }
     }
 

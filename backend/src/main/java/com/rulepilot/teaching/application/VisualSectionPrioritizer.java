@@ -14,13 +14,16 @@ import org.springframework.stereotype.Component;
 @Component
 public final class VisualSectionPrioritizer {
 
+    private static final int MAX_VISUAL_STEPS_PER_SECTION = 2;
+
     public Set<Integer> positions(List<LessonSection> sections, int limit) {
         if (sections == null || limit < 1) {
             throw new IllegalArgumentException("visual section priority input is invalid");
         }
         return sections.stream()
                 .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
-                .filter(section -> section.steps().stream().noneMatch(step -> step.kind() == TeachingMove.VISUAL))
+                .filter(section -> section.steps().stream().filter(step -> step.kind() == TeachingMove.VISUAL).count()
+                        < MAX_VISUAL_STEPS_PER_SECTION)
                 .filter(section -> section.steps().stream().anyMatch(step -> !step.sourcePages().isEmpty()))
                 .sorted(Comparator.comparingInt(this::score).reversed()
                         .thenComparingInt(LessonSection::position))

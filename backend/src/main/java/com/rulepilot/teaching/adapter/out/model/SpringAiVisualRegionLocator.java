@@ -1,12 +1,14 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Diagnostic;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import java.util.List;
@@ -31,8 +33,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
-            Return one compact region only when it gives a player a direct visual handle on this section or its supplied
-            claims: a named component, printed condition, icon, arrow, quantity, spatial setup, or worked state. It
+            Return one or two compact regions only when each gives a player a direct visual handle on this section or
+            its supplied claims: a named component, printed condition, icon, arrow, quantity, spatial setup, or worked
+            state. It
             need not independently prove every procedural sentence: the cited text remains the only source for a
             rule's effect. Alongside it, provide a short Chinese visibleDescription of only what a player can literally
             see inside that crop. This is an image observation, not a rule explanation: do not infer an icon's game
@@ -42,11 +45,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
-            aid. When several crops are relevant, prefer a compact icon, component, flow, or worked state that a new
-            player can identify at the table. A diagram or icon group is useful even if its meaning is explained by the
-            cited text rather than printed inside the crop. For an icon rule, prefer one compact crop containing the
-            complete icon or icon group and its adjacent printed label, legend, arrow, or state when present. Small icon
-            crops are welcome when the icons remain visually distinct; never return a word-only label as an icon crop.
+            aid. When several crops are relevant, return at most two distinct anchors that work together: prefer an
+            icon or component group with its printed legend, then a worked state, flow, or layout that shows the player
+            what to do. A diagram or icon group is useful even if its meaning is explained by the cited text rather
+            than printed inside the crop. For an icon rule, prefer one compact crop containing the complete icon or
+            icon group and its adjacent printed label, legend, arrow, or state when present. Small icon crops are
+            welcome when the icons remain visually distinct; never return a word-only label as an icon crop.
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
             "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
             game effect.
@@ -69,18 +73,27 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     @Override
     public LocateResult locateWithResult(VisualLocationRequest request) {
+        LocateGuideResult guide = locateGuideWithResult(request);
+        return guide.regions().stream()
+                .findFirst()
+                .map(LocateResult::found)
+                .orElseGet(() -> LocateResult.unavailable(guide.diagnostic()));
+    }
+
+    @Override
+    public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
         String owner = request.modelConfigurationOwner();
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             log.info("Visual locator is unavailable for section {}", request.sectionTitle());
-            return LocateResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
+            return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
-        LocateAttempt first = locateOnce(request, owner, "");
-        if (first.region().isPresent() || !first.retryable()) return first.result();
+        GuideAttempt first = locateGuideOnce(request, owner, "");
+        if (!first.guide().regions().isEmpty() || !first.retryable()) return first.guide();
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
-        return locateOnce(request, owner, retryInstruction(first.rejection())).result();
+        return locateGuideOnce(request, owner, retryInstruction(first.rejection())).guide();
     }
 
-    private LocateAttempt locateOnce(VisualLocationRequest request, String owner, String correction) {
+    private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
@@ -93,8 +106,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     Claims: {claims}
                                     Candidate rectangles: {candidates}
                                     {correction}
-                                    Return one JSON object only with pageNumber, label, visibleDescription, x, y,
-                                    width, height and supportedClaimRefs. If no useful crop exists, return an empty JSON object.
+                                    Return one JSON object only with a regions array containing one or two objects. Each object
+                                    needs pageNumber, label, visibleDescription, x, y, width, height and supportedClaimRefs.
+                                    If no useful crop exists, return a JSON object whose regions array is empty.
                                     """)
                             .param("section", request.sectionTitle())
                             .param("claims", IntStream.range(0, request.claims().size())
@@ -108,44 +122,62 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .call()
                 .content();
         if (isExplicitNoRegion(content)) {
-            return new LocateAttempt(Optional.empty(), false, Rejection.EXPLICIT_NO_REGION);
+            return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
         }
-        Optional<ModelRegion> parsed = parseModelRegion(content);
+        Optional<ModelGuide> parsed = parseModelGuide(content);
         if (parsed.isEmpty()) {
             log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
-            return new LocateAttempt(
-                    Optional.empty(), true, Rejection.MALFORMED_JSON);
+            return unavailableGuide(Rejection.MALFORMED_JSON, true);
         }
-        ModelRegion response = parsed.get();
-        if (!containsChinese(response.label()) || !containsChinese(response.visibleDescription())) {
-            log.info("Visual locator returned a non-Chinese observation for section {}", request.sectionTitle());
-            return new LocateAttempt(Optional.empty(), true, Rejection.NON_CHINESE_OBSERVATION);
+        if (parsed.get().regions().isEmpty()) return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
+        List<LocatedRegion> accepted = new java.util.ArrayList<>();
+        Rejection rejected = Rejection.NONE;
+        for (ModelRegion response : parsed.get().regions()) {
+            if (!containsChinese(response.label()) || !containsChinese(response.visibleDescription())) {
+                rejected = Rejection.NON_CHINESE_OBSERVATION;
+                continue;
+            }
+            List<UUID> supported = response.supportedClaimRefs().stream()
+                    .map(ref -> claimId(ref, request))
+                    .filter(java.util.Objects::nonNull)
+                    .distinct()
+                    .toList();
+            if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
+                rejected = Rejection.UNSUPPORTED_SCOPE;
+                continue;
+            }
+            try {
+                ModelRegion normalizedResponse = normalizedGeometry(response);
+                LocatedRegion region = new LocatedRegion(
+                        normalizedResponse.pageNumber(),
+                        normalizedResponse.label(),
+                        normalizedResponse.visibleDescription(),
+                        normalizedResponse.x(),
+                        normalizedResponse.y(),
+                        normalizedResponse.width(),
+                        normalizedResponse.height(),
+                        supported);
+                if (accepted.stream().noneMatch(existing -> sameRegion(existing, region))) accepted.add(region);
+            } catch (IllegalArgumentException invalidModelOutput) {
+                log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
+                rejected = Rejection.INVALID_GEOMETRY;
+            }
         }
-        List<UUID> supported = response.supportedClaimRefs().stream()
-                .map(ref -> claimId(ref, request))
-                .filter(java.util.Objects::nonNull)
-                .distinct()
-                .toList();
-        if (supported.isEmpty() || request.pages().stream().noneMatch(page -> page.pageNumber() == response.pageNumber())) {
-            log.info("Visual locator returned an unsupported claim or page for section {}", request.sectionTitle());
-            return new LocateAttempt(Optional.empty(), true, Rejection.UNSUPPORTED_SCOPE);
-        }
-        try {
-            ModelRegion normalizedResponse = normalizedGeometry(response);
-            return new LocateAttempt(Optional.of(new LocatedRegion(
-                    normalizedResponse.pageNumber(),
-                    normalizedResponse.label(),
-                    normalizedResponse.visibleDescription(),
-                    normalizedResponse.x(),
-                    normalizedResponse.y(),
-                    normalizedResponse.width(),
-                    normalizedResponse.height(),
-                    supported)), false,
-                    Rejection.NONE);
-        } catch (IllegalArgumentException invalidModelOutput) {
-            log.info("Rejected invalid visual locator output for section {}: {}", request.sectionTitle(), invalidModelOutput.getMessage());
-            return new LocateAttempt(Optional.empty(), true, Rejection.INVALID_GEOMETRY);
-        }
+        if (!accepted.isEmpty()) return new GuideAttempt(LocateGuideResult.found(accepted), false, Rejection.NONE);
+        log.info("Visual locator returned no supported visual regions for section {}", request.sectionTitle());
+        return unavailableGuide(rejected == Rejection.NONE ? Rejection.UNSUPPORTED_SCOPE : rejected, true);
+    }
+
+    private GuideAttempt unavailableGuide(Rejection rejection, boolean retryable) {
+        return new GuideAttempt(LocateGuideResult.unavailable(diagnosticFor(rejection)), retryable, rejection);
+    }
+
+    private boolean sameRegion(LocatedRegion first, LocatedRegion second) {
+        return first.pageNumber() == second.pageNumber()
+                && first.x() == second.x()
+                && first.y() == second.y()
+                && first.width() == second.width()
+                && first.height() == second.height();
     }
 
     static ModelRegion normalizedGeometry(ModelRegion region) {
@@ -198,6 +230,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     static Optional<ModelRegion> parseModelRegion(String content) {
+        return parseModelGuide(content).flatMap(guide -> guide.regions().stream().findFirst());
+    }
+
+    static Optional<ModelGuide> parseModelGuide(String content) {
         if (content == null || content.isBlank()) return Optional.empty();
         String json = content.strip();
         if (json.startsWith("```")) {
@@ -212,7 +248,20 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
         json = json.substring(objectStart, objectEnd + 1);
         try {
-            return Optional.ofNullable(JSON.readValue(json, ModelRegion.class));
+            JsonNode root = JSON.readTree(json);
+            if (!root.isObject()) return Optional.empty();
+            JsonNode regions = root.get("regions");
+            if (regions == null) {
+                return Optional.ofNullable(JSON.treeToValue(root, ModelRegion.class))
+                        .map(region -> new ModelGuide(List.of(region)));
+            }
+            if (!regions.isArray()) return Optional.empty();
+            List<ModelRegion> parsed = new java.util.ArrayList<>();
+            for (JsonNode region : regions) {
+                ModelRegion parsedRegion = JSON.treeToValue(region, ModelRegion.class);
+                if (parsedRegion != null) parsed.add(parsedRegion);
+            }
+            return Optional.of(new ModelGuide(parsed));
         } catch (JsonProcessingException invalidJson) {
             log.debug("Rejected non-JSON visual locator output");
             return Optional.empty();
@@ -231,6 +280,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         ModelRegion {
             visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
             supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
+        }
+    }
+
+    record ModelGuide(List<ModelRegion> regions) {
+        ModelGuide {
+            regions = regions == null ? List.of() : List.copyOf(regions.stream().limit(2).toList());
         }
     }
 
@@ -254,9 +309,5 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         NON_CHINESE_OBSERVATION
     }
 
-    private record LocateAttempt(Optional<LocatedRegion> region, boolean retryable, Rejection rejection) {
-        LocateResult result() {
-            return region.map(LocateResult::found).orElseGet(() -> LocateResult.unavailable(diagnosticFor(rejection)));
-        }
-    }
+    private record GuideAttempt(LocateGuideResult guide, boolean retryable, Rejection rejection) {}
 }

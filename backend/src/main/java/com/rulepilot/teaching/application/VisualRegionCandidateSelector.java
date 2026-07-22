@@ -40,18 +40,31 @@ public final class VisualRegionCandidateSelector {
         if (lexicalMatches.isEmpty()) {
             return citedPageCandidates(citedPages);
         }
-        List<Candidate> selected = lexicalMatches.stream()
-                // Keep one slot for visual context. A text block can name a rule that a nearby diagram shows,
-                // so making the block the only allowed boundary would hide the diagram from the locator.
-                .limit(MAX_CANDIDATES - 1)
-                .map(candidate -> Candidate.from(candidate.block()))
+        List<Integer> visualPages = rankedPages(citedPages, lexicalMatches);
+        List<Candidate> selected = visualPages.stream()
+                // A full cited page is a search boundary, not a crop that will be shown to the player. It lets the
+                // visual walkthrough find a legend, icon group, or worked state that the neighbouring text names.
+                .map(this::citedPageCandidate)
                 .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
-        selected.stream()
-                .map(Candidate::pageNumber)
-                .distinct()
-                .findFirst()
-                .ifPresent(pageNumber -> selected.add(citedPageCandidate(pageNumber)));
+        lexicalMatches.stream()
+                .filter(candidate -> visualPages.contains(candidate.block().pageNumber()))
+                .limit(MAX_CANDIDATES - selected.size())
+                .map(candidate -> Candidate.from(candidate.block()))
+                .forEach(selected::add);
         return List.copyOf(selected);
+    }
+
+    private List<Integer> rankedPages(Set<Integer> citedPages, List<ScoredBlock> lexicalMatches) {
+        return citedPages.stream()
+                .sorted(Comparator
+                        .comparingInt((Integer page) -> lexicalMatches.stream()
+                                .filter(match -> match.block().pageNumber() == page)
+                                .mapToInt(ScoredBlock::score)
+                                .sum())
+                        .reversed()
+                        .thenComparingInt(Integer::intValue))
+                .limit(2)
+                .toList();
     }
 
     private List<Candidate> citedPageCandidates(Set<Integer> citedPages) {

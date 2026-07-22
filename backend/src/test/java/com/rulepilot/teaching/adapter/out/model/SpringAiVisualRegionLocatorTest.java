@@ -48,6 +48,20 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void parses_two_distinct_visual_walkthrough_anchors_from_one_model_response() {
+        var guide = SpringAiVisualRegionLocator.parseModelGuide("""
+                {"regions":[
+                  {"pageNumber":2,"label":"行动图标","visibleDescription":"骰子图标旁有向右箭头","x":100,"y":100,"width":60,"height":60,"supportedClaimRefs":["C1"]},
+                  {"pageNumber":2,"label":"示例状态","visibleDescription":"棋子位于行动轨道的第三格","x":300,"y":500,"width":240,"height":160,"supportedClaimRefs":["C2"]}
+                ]}
+                """);
+
+        assertThat(guide).isPresent();
+        assertThat(guide.orElseThrow().regions()).extracting(SpringAiVisualRegionLocator.ModelRegion::label)
+                .containsExactly("行动图标", "示例状态");
+    }
+
+    @Test
     void accepts_a_single_json_object_after_brief_model_prose() {
         assertThat(SpringAiVisualRegionLocator.parseModelRegion("""
                 I found a matching rule reference.

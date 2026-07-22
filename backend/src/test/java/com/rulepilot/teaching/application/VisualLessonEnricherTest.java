@@ -175,6 +175,47 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void turns_two_grounded_visual_anchors_into_two_different_rule_steps() {
+        UUID iconEvidence = UUID.randomUUID();
+        UUID stateEvidence = UUID.randomUUID();
+        VisualRegionLocator locator = new VisualRegionLocator() {
+            @Override
+            public java.util.Optional<VisualRegionLocator.LocatedRegion> locate(
+                    VisualRegionLocator.VisualLocationRequest ignored) {
+                return java.util.Optional.empty();
+            }
+
+            @Override
+            public VisualRegionLocator.LocateGuideResult locateGuideWithResult(
+                    VisualRegionLocator.VisualLocationRequest ignored) {
+                return VisualRegionLocator.LocateGuideResult.found(List.of(
+                        new VisualRegionLocator.LocatedRegion(
+                                2, "行动图标", "一个六点骰子图标紧挨着向右箭头", 120, 220, 34, 34, List.of(iconEvidence)),
+                        new VisualRegionLocator.LocatedRegion(
+                                2, "棋子状态", "一枚探测器标记位于轨道的第三格", 440, 420, 180, 120, List.of(stateEvidence))));
+            }
+        };
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        locator)
+                .enrichWithReport(UUID.randomUUID(), twoRuleLesson(iconEvidence, stateEvidence), "owner");
+
+        var steps = result.lesson().sections().getFirst().steps();
+        assertThat(steps).extracting(IllustratedLesson.LessonStep::kind)
+                .containsExactly(IllustratedLesson.TeachingMove.VISUAL, IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(steps.get(0).text()).contains("图中图标提示", "掷骰后执行行动。");
+        assertThat(steps.get(1).text()).contains("图中可见", "把探测器移到轨道上。");
+        assertThat(steps).extracting(step -> step.visualFocus().label()).containsExactly("行动图标", "棋子状态");
+        assertThat(result.outcomes()).singleElement().satisfies(outcome -> {
+            assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
+            assertThat(outcome.summary()).contains("2 处");
+        });
+    }
+
+    @Test
     void leaves_the_section_unchanged_when_the_locator_misses_every_candidate() {
         UUID chunk = UUID.randomUUID();
         IllustratedLesson source = lesson(chunk);
@@ -266,8 +307,8 @@ class VisualLessonEnricherTest {
         VisualRegionLocator locator = request -> {
             assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
             assertThat(request.candidates()).extracting(VisualRegionCandidateSelector.Candidate::pageNumber)
-                    .containsExactly(3, 2, 3);
-            assertThat(request.candidates().getLast().sourceText()).isEqualTo("Cited page 3 visual context");
+                    .containsExactly(3, 2, 3, 2);
+            assertThat(request.candidates().getFirst().sourceText()).isEqualTo("Cited page 3 visual context");
             return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
                     3, "Launch", "发射台旁有一枚探测器和指向轨道的箭头", 100, 200, 300, 160, List.of(chunk)));
         };
@@ -313,6 +354,20 @@ class VisualLessonEnricherTest {
                 1, "launch", List.of("launch"), "Launch a probe", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                 "Launch a probe.", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson twoRuleLesson(UUID iconEvidence, UUID stateEvidence) {
+        var first = new IllustratedLesson.LessonStep(
+                1, "掷骰并行动", IllustratedLesson.TeachingMove.DO, "掷骰后执行行动。", List.of(2), List.of(iconEvidence));
+        var second = new IllustratedLesson.LessonStep(
+                2, "移动探测器", IllustratedLesson.TeachingMove.DO, "把探测器移到轨道上。", List.of(2), List.of(stateEvidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "turn", List.of("turn"), "轮到你时", true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                "完成一次行动", List.of(), List.of(), List.of(first, second));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

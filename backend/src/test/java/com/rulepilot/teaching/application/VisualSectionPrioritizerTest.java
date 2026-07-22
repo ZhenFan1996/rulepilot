@@ -27,10 +27,42 @@ class VisualSectionPrioritizerTest {
         assertThat(selected).isEqualTo(Set.of(2, 3, 4));
     }
 
+    @Test
+    void allows_a_second_visual_anchor_but_does_not_revisit_a_section_that_already_has_two() {
+        var selected = new VisualSectionPrioritizer().positions(List.of(
+                sectionWithVisualSteps(1, 1),
+                sectionWithVisualSteps(2, 2)), 2);
+
+        assertThat(selected).containsExactly(1);
+    }
+
     private LessonSection section(int position, VisualKind kind, boolean required, EvidenceStatus evidence) {
         return new LessonSection(
                 position, "section-" + position, List.of(), "Section " + position, required, evidence, kind,
                 "caption", List.of(), List.of(), List.of(new LessonStep(
                         1, "Do", TeachingMove.DO, "Follow this cited step.", List.of(1), List.of(UUID.randomUUID()))));
+    }
+
+    private LessonSection sectionWithVisualSteps(int position, int visualSteps) {
+        var steps = new java.util.ArrayList<LessonStep>();
+        for (int index = 0; index < visualSteps; index++) {
+            steps.add(new LessonStep(
+                    index + 1,
+                    "Look " + index,
+                    TeachingMove.VISUAL,
+                    "Read this grounded visual aid.",
+                    List.of(1),
+                    List.of(UUID.randomUUID())));
+        }
+        steps.add(new LessonStep(
+                visualSteps + 1,
+                "Do",
+                TeachingMove.DO,
+                "Follow this cited step.",
+                List.of(1),
+                List.of(UUID.randomUUID())));
+        return new LessonSection(
+                position, "section-" + position, List.of(), "Section " + position, true,
+                EvidenceStatus.SUPPORTED, VisualKind.TABLE_LAYOUT, "caption", List.of(), List.of(), steps);
     }
 }

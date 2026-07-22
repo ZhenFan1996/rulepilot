@@ -33,6 +33,7 @@ import org.springframework.stereotype.Service;
 public class VisualLessonEnricher {
 
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
+    private static final int MAX_VISUAL_STEPS_PER_SECTION = 2;
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
@@ -48,7 +49,7 @@ public class VisualLessonEnricher {
             VisualRegionCandidateSelector candidates,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
-            @Value("${rulepilot.visual.max-sections:3}") int maxSections) {
+            @Value("${rulepilot.visual.max-sections:5}") int maxSections) {
         this.understanding = understanding;
         this.pageImages = pageImages;
         this.candidates = candidates;
@@ -65,7 +66,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 3);
+        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 5);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -105,7 +106,10 @@ public class VisualLessonEnricher {
             UUID documentVersionId,
             LessonSection section,
             String modelConfigurationOwner) {
-        if (section.steps().stream().anyMatch(step -> step.kind() == TeachingMove.VISUAL)) {
+        int existingVisualSteps = (int) section.steps().stream()
+                .filter(step -> step.kind() == TeachingMove.VISUAL)
+                .count();
+        if (existingVisualSteps >= MAX_VISUAL_STEPS_PER_SECTION) {
             return result(section, Outcome.ALREADY_PRESENT);
         }
         Set<Integer> citedPages = section.steps().stream()
@@ -142,29 +146,53 @@ public class VisualLessonEnricher {
                 .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
                 .toList();
         List<Claim> claims = claims(section);
-        var location = locator.locateWithResult(new VisualRegionLocator.VisualLocationRequest(
+        var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
                 section.title(), claims, attachedCandidates, pages, modelConfigurationOwner));
-        var located = location.region();
-        if (located.isEmpty()) {
-            log.info("No cited visual region accepted for section {}", section.title());
-            return result(section, outcomeFor(location.diagnostic()));
+        if (guide.regions().isEmpty()) {
+            log.info("No cited visual guide accepted for section {}", section.title());
+            return result(section, outcomeFor(guide.diagnostic()));
         }
-        if (!isCompactReaderCrop(located.get())) return result(section, Outcome.REJECTED_WHOLE_PAGE);
-        if (!isReadableForPlayer(located.get())) return result(section, Outcome.REJECTED_TOO_SMALL);
-        if (located.get().visibleDescription().isBlank()) return result(section, Outcome.REJECTED_MISSING_OBSERVATION);
-        if (!isUsefulPlayerVisual(located.get())) return result(section, Outcome.REJECTED_NON_VISUAL);
-        if (!intersectsCandidate(located.get(), attachedCandidates)) return result(section, Outcome.REJECTED_OUTSIDE_CANDIDATE);
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
-        if (!evidenceIds.containsAll(located.get().supportedEvidenceIds())) {
-            log.info("Visual region cited an unknown claim for section {}", section.title());
-            return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
+        List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
+        Outcome rejected = null;
+        for (VisualRegionLocator.LocatedRegion region : guide.regions()) {
+            Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
+            if (rejection != null) {
+                rejected = rejection;
+                continue;
+            }
+            accepted.add(region);
         }
-        return new SectionResult(mergeVisualIntoSupportedStep(section, located.get()), new SectionOutcome(
-                section.position(), Outcome.ADDED, outcomeSummary(section.position(), Outcome.ADDED)));
+        int availableStepSlots = (int) section.steps().stream().filter(step -> step.kind() != TeachingMove.VISUAL).count();
+        int limit = Math.min(MAX_VISUAL_STEPS_PER_SECTION - existingVisualSteps, availableStepSlots);
+        List<VisualRegionLocator.LocatedRegion> bounded = accepted.stream().limit(limit).toList();
+        if (bounded.isEmpty()) return result(section, rejected == null ? Outcome.LOCATOR_RETURNED_NONE : rejected);
+        MergedVisualSection merged = mergeVisualIntoSupportedSteps(section, bounded);
+        return new SectionResult(merged.section(), new SectionOutcome(
+                section.position(), Outcome.ADDED, addedSummary(section.position(), merged.addedCount())));
+    }
+
+    private Outcome rejectionFor(
+            VisualRegionLocator.LocatedRegion region,
+            List<VisualRegionCandidateSelector.Candidate> attachedCandidates,
+            Set<UUID> evidenceIds) {
+        if (!isCompactReaderCrop(region)) return Outcome.REJECTED_WHOLE_PAGE;
+        if (!isReadableForPlayer(region)) return Outcome.REJECTED_TOO_SMALL;
+        if (region.visibleDescription().isBlank()) return Outcome.REJECTED_MISSING_OBSERVATION;
+        if (!isUsefulPlayerVisual(region)) return Outcome.REJECTED_NON_VISUAL;
+        if (!intersectsCandidate(region, attachedCandidates)) return Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        if (!evidenceIds.containsAll(region.supportedEvidenceIds())) return Outcome.REJECTED_UNKNOWN_EVIDENCE;
+        return null;
     }
 
     private SectionResult result(LessonSection section, Outcome outcome) {
         return new SectionResult(section, new SectionOutcome(section.position(), outcome, outcomeSummary(section.position(), outcome)));
+    }
+
+    private String addedSummary(int sectionPosition, int count) {
+        return count == 1
+                ? outcomeSummary(sectionPosition, Outcome.ADDED)
+                : "第 " + sectionPosition + " 节已加入 " + count + " 处可核对的局部规则书截图";
     }
 
     private Outcome outcomeFor(VisualRegionLocator.Diagnostic diagnostic) {
@@ -331,31 +359,45 @@ public class VisualLessonEnricher {
                 && candidate.y() < y + height && y < candidate.y() + candidate.height();
     }
 
-    private LessonSection mergeVisualIntoSupportedStep(
-            LessonSection section, VisualRegionLocator.LocatedRegion region) {
+    private MergedVisualSection mergeVisualIntoSupportedSteps(
+            LessonSection section, List<VisualRegionLocator.LocatedRegion> regions) {
         List<LessonStep> steps = new ArrayList<>(section.steps());
-        Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
-        int supportedStepIndex = java.util.stream.IntStream.range(0, steps.size())
-                .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
-                .findFirst()
-                .orElse(0);
-        LessonStep supportedStep = steps.get(supportedStepIndex);
-        String observation = stripTrailingPunctuation(region.visibleDescription());
-        String visualText = visualText(observation, supportedStep.text(), isIconFocused(region));
-        String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
-        steps.set(supportedStepIndex, new LessonStep(
-                supportedStep.position(),
-                supportedStep.heading(),
-                TeachingMove.VISUAL,
-                visualText,
-                distinct(supportedStep.sourcePages(), region.pageNumber()),
-                distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
-                new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
-        return new LessonSection(
+        Set<Integer> availableIndexes = java.util.stream.IntStream.range(0, steps.size())
+                .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL)
+                .boxed()
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        List<Integer> sourcePages = section.visualSourcePages();
+        List<UUID> sourceChunkIds = section.visualSourceChunkIds();
+        int added = 0;
+        for (VisualRegionLocator.LocatedRegion region : regions) {
+            if (availableIndexes.isEmpty()) break;
+            Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
+            int supportedStepIndex = availableIndexes.stream()
+                    .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
+                    .findFirst()
+                    .orElse(availableIndexes.iterator().next());
+            LessonStep supportedStep = steps.get(supportedStepIndex);
+            String observation = stripTrailingPunctuation(region.visibleDescription());
+            String visualText = visualText(observation, supportedStep.text(), isIconFocused(region));
+            String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
+            steps.set(supportedStepIndex, new LessonStep(
+                    supportedStep.position(),
+                    supportedStep.heading(),
+                    TeachingMove.VISUAL,
+                    visualText,
+                    distinct(supportedStep.sourcePages(), region.pageNumber()),
+                    distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
+                    new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
+            sourcePages = distinct(sourcePages, region.pageNumber());
+            sourceChunkIds = distinct(sourceChunkIds, region.supportedEvidenceIds());
+            availableIndexes.remove(supportedStepIndex);
+            added++;
+        }
+        LessonSection enriched = new LessonSection(
                 section.position(), section.topicKey(), section.coverageTags(), section.title(), section.required(),
                 section.evidenceStatus(), section.visualKind(), section.visualCaption(),
-                distinct(section.visualSourcePages(), region.pageNumber()),
-                distinct(section.visualSourceChunkIds(), region.supportedEvidenceIds()), steps);
+                sourcePages, sourceChunkIds, steps);
+        return new MergedVisualSection(enriched, added);
     }
 
     private String visualText(String observation, String ruleText, boolean iconCluster) {
@@ -386,4 +428,6 @@ public class VisualLessonEnricher {
     private String stripTrailingPunctuation(String text) {
         return text == null ? "" : text.strip().replaceFirst("[。.!！?？]+$", "");
     }
+
+    private record MergedVisualSection(LessonSection section, int addedCount) {}
 }
