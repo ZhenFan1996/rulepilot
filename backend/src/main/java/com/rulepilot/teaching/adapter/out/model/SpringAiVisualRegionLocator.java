@@ -96,8 +96,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             Choose the C whose step is directly helped by the crop; a crop must visibly distinguish that step from its
             adjacent steps, not merely depict a later or earlier part of the same overall procedure. Do not attach a
             resource legend to a player-board step, a construction example to a resource-naming step, or a scoring
-            example to an end-condition step. If the crop helps another supplied step, cite that step's C reference
-            instead. Do not use a similarly named component from a different page as a substitute.
+            example to an end-condition step. A tie-break crop must visibly show the comparison that resolves the tie,
+            the winner, or the component counted to break the tie; a normal score table is never a tie-break
+            illustration. If the crop helps another supplied step, cite that step's C reference instead. Do not use a
+            similarly named component from a different page as a substitute.
             Coordinates use a top-left 0-1000 page coordinate system. pageNumber must be one supplied page; x and y are
             at least 0; width and height are at least 20; the rectangle must remain inside the page; label is at most 80
             characters. label and visibleDescription must both name a literal visible item, not repeat the lesson claim.

@@ -102,6 +102,8 @@ public class GroundedTeachingAgent {
             Map.entry("🎲", "“骰子”图标"));
     private static final Pattern TRAILING_INCOMPLETE_THOUGHT = Pattern.compile(
             "(?:…+|\\.\\.\\.)\\s*(?:完成(?:了)?|结束(?:了)?|等等|后续|其余)?[。！？!?]?\\s*$");
+    private static final Pattern TRAILING_UNANSWERED_ALTERNATIVE = Pattern.compile(
+            "(?:[，；:：]\\s*(?:还是|或者|抑或)\\s*[^。！？!?]{2,80})[。！？!?]?\\s*$");
     private static final Pattern TEXT_ONLY_PRESENTATION_MARKER = Pattern.compile(
             "(?i)(attached|attachment|image|rulebook|page\\s*\\d|图片|附件|规则书|第\\s*\\d+\\s*页|页面)");
     private static final Pattern VISUAL_LABEL_CONTAINS_LATIN = Pattern.compile("[A-Za-z]");
@@ -1716,6 +1718,13 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Finish every player-facing step; do not end a rule, example, or calculation with an ellipsis.");
         }
+        if (draft.steps().stream().anyMatch(step -> step != null
+                && step.kind() != TeachingMove.CHECK
+                && step.text() != null
+                && TRAILING_UNANSWERED_ALTERNATIVE.matcher(step.text()).find())) {
+            throw new IllegalArgumentException(
+                    "Finish every player-facing instruction; do not end it with an unanswered either/or alternative.");
+        }
         if (INTERNAL_EVIDENCE_MARKER.matcher(draft.visualCaption()).find()
                 || draft.steps().stream().anyMatch(step -> step != null
                         && ((step.heading() != null && INTERNAL_EVIDENCE_MARKER.matcher(step.heading()).find())
@@ -1767,6 +1776,7 @@ public class GroundedTeachingAgent {
         if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
         if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
         if (message.contains("do not end a rule")) return "STEP_TRUNCATED";
+        if (message.contains("unanswered either/or alternative")) return "STEP_UNRESOLVED_ALTERNATIVE";
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";

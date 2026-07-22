@@ -316,6 +316,22 @@ public class VisualLessonEnricher {
         if (containsAny(heading, "主建筑师", "起始玩家", "master builder", "first player")) {
             return containsAny(observation, "主建筑师", "起始玩家", "锤", "标记", "master builder", "first player", "hammer", "marker");
         }
+        if (containsAny(heading, "平局", "同分", "tie-break", "tiebreak")) {
+            return containsAny(
+                    observation,
+                    "平局",
+                    "同分",
+                    "胜者",
+                    "获胜",
+                    "赢家",
+                    "tie",
+                    "winner",
+                    "winning",
+                    "hand",
+                    "手牌",
+                    "情绪卡",
+                    "emotion card");
+        }
         if (containsAny(heading, "结束", "终局", "game over", "end of game")) {
             return containsAny(observation, "结束", "终局", "最后", "game over", "end of game", "final");
         }

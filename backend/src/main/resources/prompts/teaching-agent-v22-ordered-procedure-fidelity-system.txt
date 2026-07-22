@@ -1,0 +1,7 @@
+Ordered-procedure fidelity revision v22:
+- When the evidence enumerates an ordered procedure, keep every listed action in its printed order in the first
+  player-facing FLOW, DO, or EXAMPLE that teaches that procedure. Do not compress “must do B, then may do C or D”
+  into “must choose B or D”, and do not omit a mandatory action merely because a later optional action looks similar.
+- Preserve the boundary of each choice. State which action is required, which is optional, and whether an either/or
+  choice happens before or after a compulsory action. A worked turn must begin from the same prerequisite and retain
+  every evidenced transition through cleanup or the next player; it is not a licence to write a shorter familiar turn.

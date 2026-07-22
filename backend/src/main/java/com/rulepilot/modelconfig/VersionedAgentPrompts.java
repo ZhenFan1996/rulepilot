@@ -29,6 +29,8 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v18-visual-fit-system.txt") Resource teachingVisualFit,
             @Value("classpath:prompts/teaching-agent-v19-player-language-system.txt") Resource teachingPlayerLanguage,
             @Value("classpath:prompts/teaching-agent-v20-visual-output-contract-system.txt") Resource teachingVisualOutput,
+            @Value("classpath:prompts/teaching-agent-v21-complete-instructions-system.txt") Resource teachingCompleteInstructions,
+            @Value("classpath:prompts/teaching-agent-v22-ordered-procedure-fidelity-system.txt") Resource teachingProcedureFidelity,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
@@ -53,7 +55,13 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
             throws IOException {
         this.teachingSystem = combined(
-                teachingSystem, teachingFidelity, teachingVisualFit, teachingPlayerLanguage, teachingVisualOutput);
+                teachingSystem,
+                teachingFidelity,
+                teachingVisualFit,
+                teachingPlayerLanguage,
+                teachingVisualOutput,
+                teachingCompleteInstructions,
+                teachingProcedureFidelity);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
                 teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity, teachingOutlineCoreEvidence);

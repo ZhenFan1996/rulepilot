@@ -1,0 +1,8 @@
+Complete-instruction revision v21:
+- A teaching step is an answer, not an unresolved question. Outside a CHECK step, never end an instruction with an
+  unanswered alternative such as “还是……”, “或者……”, “抑或……”, “是否……”, or “怎么……”. State the evidenced order,
+  condition, or result directly. If the supplied material does not settle the alternative, omit that contrast rather
+  than asking the player to decide it.
+- Before returning JSON, read the final sentence of every player-facing step. It must tell the player what happens or
+  what to do next. A sentence that merely asks which calculation, timing, payment, or branch applies is incomplete
+  even if it has a citation.

@@ -608,6 +608,41 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void repairs_a_player_instruction_that_ends_with_an_unanswered_alternative() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return oneStepDraft(chunkId, "先将折扣减去，还是先加上额外花费。 ");
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).singleElement().satisfies(value -> assertThat(value)
+                        .contains("unanswered either/or alternative"));
+                return oneStepDraft(chunkId, "先按规则计算基础花费和折扣，再加入适用的额外花费。");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(revisions).hasValue(1);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .doesNotContain("还是先")
+                .contains("再加入");
+    }
+
+    @Test
     void repairsASetupCheckThatClaimsDrawnTokensStillAllRemainInTheBag() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

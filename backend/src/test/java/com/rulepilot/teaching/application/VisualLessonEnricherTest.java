@@ -557,6 +557,32 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void rejects_a_regular_score_table_when_the_exact_step_explains_a_tie_break() {
+        UUID evidence = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "SENSITIVITY 得分表",
+                                "一列品质名称旁列出 0、2、4 和 6 分的得分数值",
+                                520,
+                                620,
+                                450,
+                                160,
+                                List.of(evidence),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), tieBreakLesson(evidence), "owner");
+
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+        assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
+                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
+    }
+
+    @Test
     void rejects_a_setup_overview_when_the_step_requires_an_actual_placement() {
         UUID evidence = UUID.randomUUID();
         var result = new VisualLessonEnricher(
@@ -980,6 +1006,23 @@ class VisualLessonEnricherTest {
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(first, second), "test", Instant.now());
+    }
+
+    private IllustratedLesson tieBreakLesson(UUID evidence) {
+        var step = new IllustratedLesson.LessonStep(
+                1,
+                "平局时怎么分胜负？",
+                IllustratedLesson.TeachingMove.DO,
+                "同分时，手牌更多的玩家获胜。",
+                List.of(2),
+                List.of(evidence));
+        var section = new IllustratedLesson.LessonSection(
+                1, "endgame", List.of("endgame"), "游戏结束与计分", true,
+                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "结算分数并处理平局。", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
     }
 
     private IllustratedLesson playerBoardLesson(UUID evidence) {
