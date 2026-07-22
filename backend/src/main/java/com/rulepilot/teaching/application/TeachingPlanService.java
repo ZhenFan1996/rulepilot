@@ -149,6 +149,21 @@ public class TeachingPlanService {
                 "Rulebook lesson topics organized",
                 () -> outlines.organize(outlineRequest),
                 this::outlineOutputTokens), documentPages);
+        try {
+            plans.validate(outline);
+        } catch (IllegalArgumentException invalidOutline) {
+            log.warn("Teaching outline was incomplete; continuing with a source-derived outline: {}", invalidOutline.getMessage());
+            if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "fallbackToSourceOutline",
+                        ActivityOutcome.REJECTED,
+                        "Model outline was incomplete; continuing with a rulebook-derived lesson plan");
+            }
+            outline = bindIconLegendEvidence(outlines.fallback(outlineRequest), documentPages);
+            plans.validate(outline);
+        }
         if (visualOnly) validateVisualPageBindings(outline, documentPages);
         if (!visualOnly && visualCatalog.available(createdBy)) {
             Set<Integer> selectedVisualPages = selectedVisualPageNumbers(outline, documentPages);

@@ -24,11 +24,7 @@ public class TeachingPlanFactory {
             int durationMinutes,
             String createdBy,
             OutlineDraft outline) {
-        if (outline == null || outline.gameTitle() == null || outline.gameTitle().isBlank()
-                || outline.premise() == null || outline.premise().isBlank()
-                || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
-            throw new IllegalArgumentException("model did not produce a usable teaching outline");
-        }
+        validate(outline);
         Set<String> keys = new HashSet<>();
         List<PlannedSection> topics = java.util.stream.IntStream.range(0, outline.topics().size())
                 .mapToObj(index -> {
@@ -49,12 +45,6 @@ public class TeachingPlanFactory {
                             topic.sourcePageNumbers());
                 })
                 .toList();
-        Set<String> covered = topics.stream()
-                .flatMap(topic -> topic.coverageTags().stream())
-                .collect(java.util.stream.Collectors.toSet());
-        if (!covered.containsAll(CORE_COVERAGE)) {
-            throw new IllegalArgumentException("teaching outline omitted setup, core loop, ending, or scoring coverage");
-        }
         return new TeachingPlan(
                 UUID.randomUUID(),
                 documentVersionId,
@@ -66,6 +56,27 @@ public class TeachingPlanFactory {
                 topics,
                 createdBy,
                 Instant.now());
+    }
+
+    void validate(OutlineDraft outline) {
+        if (outline == null || outline.gameTitle() == null || outline.gameTitle().isBlank()
+                || outline.premise() == null || outline.premise().isBlank()
+                || outline.topics().isEmpty() || outline.topics().size() > MAX_TOPICS) {
+            throw new IllegalArgumentException("model did not produce a usable teaching outline");
+        }
+        Set<String> keys = new HashSet<>();
+        Set<String> covered = new HashSet<>();
+        for (int index = 0; index < outline.topics().size(); index++) {
+            var topic = outline.topics().get(index);
+            if (!keys.add(normalizedKey(topic.key(), index + 1))) {
+                throw new IllegalArgumentException("teaching topic keys must be unique");
+            }
+            normalizedQueries(topic.retrievalQueries());
+            covered.addAll(normalizedTags(topic.coverageTags()));
+        }
+        if (!covered.containsAll(CORE_COVERAGE)) {
+            throw new IllegalArgumentException("teaching outline omitted setup, core loop, ending, or scoring coverage");
+        }
     }
 
     private String normalizedKey(String value, int position) {

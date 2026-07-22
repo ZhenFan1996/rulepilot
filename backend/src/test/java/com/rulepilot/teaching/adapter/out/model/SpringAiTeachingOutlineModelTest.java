@@ -79,4 +79,23 @@ class SpringAiTeachingOutlineModelTest {
         verify(configuration).usesFake(Role.TEACHING, "player");
         verify(configuration, never()).usesFake(Role.VISUAL, "player");
     }
+
+    @Test
+    void createsASourceDerivedFallbackWithoutMakingAnotherModelCall() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
+
+        var outline = model.fallback(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(new PageInput(1, "SETTING UP A GAME: Give each player two power tokens.")),
+                List.of(),
+                "player"));
+
+        assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("setup"));
+        assertThat(outline.topics()).anyMatch(topic -> topic.coverageTags().contains("scoring"));
+        verify(configuration, never()).modelFor(Role.TEACHING, "player");
+    }
 }

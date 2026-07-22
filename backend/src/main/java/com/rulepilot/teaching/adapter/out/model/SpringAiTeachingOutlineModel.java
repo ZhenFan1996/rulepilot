@@ -65,6 +65,11 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         }
     }
 
+    @Override
+    public OutlineDraft fallback(OutlineRequest request) {
+        return fake.organize(request);
+    }
+
     private OutlineDraft organizeWithRepair(OutlineRequest request, Role role, String owner) {
         long startedAt = System.nanoTime();
         RuntimeException firstFailure;

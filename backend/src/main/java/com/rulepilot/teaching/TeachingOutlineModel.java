@@ -7,6 +7,14 @@ public interface TeachingOutlineModel {
 
     OutlineDraft organize(OutlineRequest request);
 
+    /**
+     * Produces a source-derived outline when a provider response is structurally unusable.
+     * Implementations must not make another paid model call here.
+     */
+    default OutlineDraft fallback(OutlineRequest request) {
+        return organize(request);
+    }
+
     record OutlineRequest(
             int playerCount,
             int beginnerCount,
