@@ -30,6 +30,15 @@ test('uses a publisher product page Open Graph cover only when its title identif
   assert.equal(selectPublisherCover(unrelatedPage, 'https://ledergames.com/products/fort', 'Fort'), null)
 })
 
+test('rejects a tiny publisher social image even when the page title matches the game', () => {
+  const componentPage = `
+    <meta property="og:title" content="Dice City | AEG">
+    <meta property="og:image" content="https://cdn.publisher.example/die.png?resize=100%2C105">
+  `
+
+  assert.equal(selectPublisherCover(componentPage, 'https://www.publisher.example/dice-city/', 'Dice City'), null)
+})
+
 test('parses the bounded command interface', () => {
   assert.deepEqual(parseArguments(['--source', 'https://www.publisher.example/calico/', '--title', 'Calico']), {
     source: 'https://www.publisher.example/calico/', title: 'Calico',

@@ -52,7 +52,23 @@ function candidateUrl(value, source, allowExternal = false) {
   if (url.protocol !== 'https:' || url.username || url.password) return null
   if (!allowExternal && url.hostname !== source.hostname && !url.hostname.endsWith(`.${source.hostname}`)) return null
   if (!/\.(?:avif|gif|jpe?g|png|webp)(?:$|[?#])/i.test(url.pathname)) return null
+  if (requestsTinyImage(url)) return null
   return url.toString()
+}
+
+function requestsTinyImage(url) {
+  const requested = ['resize', 'fit', 'width', 'height', 'w', 'h']
+    .map(name => url.searchParams.get(name))
+    .filter(Boolean)
+    .flatMap(value => [...value.matchAll(/\d+/g)].map(match => Number(match[0])))
+  return requested.length >= 2 && Math.max(...requested) < 180
+}
+
+function hasTinyTagDimensions(values) {
+  const width = Number(values.get('width'))
+  const height = Number(values.get('height'))
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+    && Math.max(width, height) < 180
 }
 
 function metaValue(html, name) {
@@ -89,7 +105,7 @@ export function discoverCoverCandidates(html, sourceUrl, title) {
   for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
     const values = attributes(match[0])
     const url = candidateUrl(values.get('src') ?? values.get('data-src'), source)
-    if (!url) continue
+    if (!url || hasTinyTagDimensions(values)) continue
     const descriptor = [url, values.get('alt'), values.get('title'), values.get('class')]
       .filter(Boolean).join(' ').toLowerCase()
     const tokenMatches = tokens.filter(token => descriptor.includes(token)).length
