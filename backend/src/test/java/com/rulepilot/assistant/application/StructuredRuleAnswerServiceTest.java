@@ -10,6 +10,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -578,6 +579,112 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void doesNotTreatAProceduralRewardQuestionAsAnUnresolvedIconQuestion() {
+        RuleEvidenceHit turnRule = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ROUND_STRUCTURE",
+                "Dice resolution",
+                "The active player rolls both dice and resolves the matching colony rewards. Each other player "
+                        + "may resolve the passive reward for the same die value.",
+                11,
+                11,
+                0.9);
+        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> List.of(
+                visualFact(11, "dice icons", "The matching reward rows contain colored icon glyphs.", 0.9));
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return List.of(turnRule);
+            }
+        };
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "可以；主动玩家结算主动奖励，其他玩家可结算同点数的被动奖励。",
+                        "主动玩家先掷两颗骰子并处理对应殖民地奖励；其他玩家针对同一个骰子点数，处理自己卡牌上的被动奖励。",
+                        List.of(turnRule.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                return new ModelDraft(false, "This answer does not need icon reconciliation", null, null, List.of(), List.of(), "LOW");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(turnRule, 0.9, 1, null, false)),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "主动玩家掷出的骰子落在殖民地卡上时，其他玩家是否也能获得奖励？双方各要怎样处理？",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", "骰子与奖励", 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("主动玩家", "被动奖励");
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(11);
+        assertThat(revisions).hasValue(0);
+    }
+
+    @Test
+    void removesAnUnaskedRepeatabilityRestrictionThatItsCitationDoesNotSupport() {
+        RuleEvidenceHit rewardRule = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ACTIONS",
+                "Reward timing",
+                "After rolling, each player chooses a reward that matches their result.",
+                8,
+                8,
+                0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "领取匹配结果的奖励。",
+                        "按当前结果领取对应奖励；每个奖励最多只能领取一次，以避免无限循环。",
+                        List.of(rewardRule.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("UNASKED_REPEATABILITY"));
+                return new ModelDraft(
+                        "领取匹配结果的奖励。",
+                        "按当前结果领取对应奖励。",
+                        List.of(rewardRule.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(rewardRule, 0.9, 1, null, false)),
+                model);
+
+        var answer = service.answer(
+                "掷骰后如何领取奖励？", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.explanation()).doesNotContain("一次", "无限循环");
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void usesAnExplicitCrossPageIconMappingWithoutAStochasticSecondModelPass() {
         RuleEvidenceHit setup = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "SETUP", "Player setup",
@@ -968,6 +1075,88 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(7, 8);
+    }
+
+    @Test
+    void preservesDirectQuestionVisualFactsWhenRewriteQueriesReturnHigherScoredGenericPages() {
+        String placeholder =
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
+        RuleEvidenceHit pageTwo = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 2", placeholder, 2, 2, 0.01);
+        RuleEvidenceHit pageThree = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 3", placeholder, 3, 3, 0.01);
+        RuleEvidenceHit pageFour = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 4", placeholder, 4, 4, 0.01);
+        RuleEvidenceHit pageFive = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 5", placeholder, 5, 5, 0.01);
+        RuleEvidenceHit pageSeven = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 7", placeholder, 7, 7, 0.01);
+        RuleEvidenceHit pageTwelve = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "GENERAL", "Visual rulebook page 12", placeholder, 12, 12, 0.01);
+        Map<Integer, RuleEvidenceHit> pages = Map.of(
+                2, pageTwo, 3, pageThree, 4, pageFour, 5, pageFive, 7, pageSeven, 12, pageTwelve);
+        List<String> visualQueries = new java.util.ArrayList<>();
+        VisualRulebookPageFactSearch visualFacts = new VisualRulebookPageFactSearch() {
+            private int calls;
+
+            @Override
+            public List<PageFactMatch> search(UUID documentVersionId, String query, int limit) {
+                visualQueries.add(query);
+                return switch (calls++) {
+                    case 0 -> List.of(visualFact(2, "generic overview", "Generic overview", 100),
+                            visualFact(3, "generic setup", "Generic setup", 90));
+                    case 1 -> List.of(visualFact(4, "generic components", "Generic components", 80),
+                            visualFact(5, "generic cards", "Generic cards", 70));
+                    case 2 -> List.of(
+                            visualFact(12, "active passive rewards", "Active players take station rewards; passive players take deployed rewards.", 10),
+                            visualFact(7, "deployed rewards", "Each player independently allocates dice and claims applicable rewards.", 9));
+                    default -> List.of(visualFact(4, "generic components", "Generic components", 80));
+                };
+            }
+        };
+        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return pageNumbers.stream().map(pages::get).toList();
+            }
+        };
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
+                return List.of("generic dice overview", "generic card reward overview");
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                assertThat(visualQueries).contains("主动玩家掷出骰子后", "其他被动玩家能领取自己的已部署奖励吗");
+                assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::pageFrom).contains(12, 7);
+                return new ModelDraft(
+                        "被动玩家按同一骰子结果领取已部署奖励。",
+                        "主动玩家领取站点奖励；被动玩家领取自己的已部署奖励。",
+                        List.of(pageTwelve.chunkId(), pageSeven.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (documentVersionId, query, options) -> pages.values().stream()
+                        .map(source -> new HybridEvidenceHit(source, 0.01, 1, null, false))
+                        .toList(),
+                visualFacts,
+                pageLookup,
+                model);
+
+        var answer = service.answer(
+                "主动玩家掷出骰子后，其他被动玩家能领取自己的已部署奖励吗",
+                new QuestionContext(versionId, "ROUND_STRUCTURE", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(12, 7);
     }
 
     @Test

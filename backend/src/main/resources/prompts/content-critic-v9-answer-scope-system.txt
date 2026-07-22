@@ -1,0 +1,6 @@
+Answer-scope revision v9:
+- For an answer claim, audit every appended restriction as carefully as its main verdict. Report UNSUPPORTED_CLAIM
+  when the response adds a loop-prevention rule, a "once only" limit, repeatability condition, strategy rationale,
+  or component identity that the claim's cited evidence does not directly establish for the asked situation.
+- A familiar rule from another cited page is still unsupported unless that page is cited by the claim and its scope
+  covers the current action. Do not accept an extra caveat merely because it might be true elsewhere in the rulebook.

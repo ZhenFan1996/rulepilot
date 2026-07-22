@@ -21,6 +21,14 @@ class JpaVisualRulebookPageFactsTest {
     }
 
     @Test
+    void samplesLongChineseQuestionsAcrossTheEntireQuestionInsteadOfOnlyThePrefix() {
+        assertThat(JpaVisualRulebookPageFacts.cjkFragments(
+                        "主动玩家掷出骰子后，其他被动玩家是否能从自己已部署卡牌领取红色奖励？"))
+                .contains("主动", "被动", "红色", "奖励")
+                .hasSizeLessThanOrEqualTo(16);
+    }
+
+    @Test
     void normalizesPlacementWordsForPrintedRulebookTerms() {
         assertThat(JpaVisualRulebookPageFacts.searchTerms(
                         "Where can I place a Wildlife Token after placing it on Keystone Tiles?"))

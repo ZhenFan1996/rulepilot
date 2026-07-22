@@ -49,7 +49,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             Candidate rectangles are allowed boundaries, not compulsory text targets. A candidate named "Cited page N
             visual context" lets you select a diagram, board layout, table, icon group, component, or worked example
             anywhere on that cited page. A section heading, page title, or paragraph-only crop is never a useful visual
-            aid. When several crops are relevant, return at most two distinct anchors that work together: prefer an
+            aid. A candidate can include a visual retrieval hint from a previous image pass. It is only a search hint:
+            inspect the supplied page yourself, and never report an object because the hint says it exists. When several
+            crops are relevant, return at most two distinct anchors that work together: prefer an
             icon or component group with its printed legend, then a worked state, flow, or layout that shows the player
             what to do. A diagram or icon group is useful even if its meaning is explained by the cited text rather
             than printed inside the crop. For an icon rule, prefer one compact crop containing the complete icon or
@@ -63,6 +65,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             icon, card, or diagram. Do not call an overview photograph a worked action state: when a claim says a player
             places, moves, removes, or transforms a piece, the crop must literally show that piece in the relevant board
             area, an arrow, or a before-and-after state.
+            For a claim about one named scoring pattern, a useful crop contains only that pattern's complete card row or
+            compact card group and its directly adjacent score reference. Do not include another animal, faction, or
+            category's examples, even partially above or below the target group; return no crop rather than a mixed
+            scoring column.
             In visibleDescription, enumerate the literal icon/label relationship a player should look at (for example,
             "a dice icon beside a paint icon with a right arrow"), in natural Simplified Chinese, without explaining its
             game effect.
@@ -141,6 +147,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     static boolean requiresTighterReaderViewport(LocatedRegion region) {
         return requiresTighterIconViewport(region)
+                || requiresTighterScoreExampleViewport(region)
                 || (long) region.width() * region.height() > MAX_READER_CROP_AREA;
     }
 
@@ -153,12 +160,27 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return iconLegend && region.height() * 10 > region.width() * 14;
     }
 
+    /**
+     * A nearly square or portrait score-example column is often a stack of several animals' cards, not the one scoring
+     * pattern named by the current rule. Ask vision to split it before publishing a misleading "example" crop.
+     * Portrait cards without score-example language remain valid reader aids.
+     */
+    static boolean requiresTighterScoreExampleViewport(LocatedRegion region) {
+        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
+        boolean scoreExample = (observation.contains("计分")
+                        || observation.contains("得分")
+                        || observation.contains("分数")
+                        || observation.matches(".*\\b(score|scoring|points)\\b.*"))
+                && (observation.contains("示例") || observation.matches(".*\\bexample\\b.*"));
+        return scoreExample && region.width() <= 340 && region.height() * 4 > region.width() * 3;
+    }
+
     static String tightIconViewportInstruction() {
         return "The previous icon crop was too tall and likely included unrelated numbered prose. Return a tighter rectangle around only the literal icons and their direct labels. Do not include adjacent steps, paragraphs, component counts, or a page footer. If that tight icon crop is not available, return an empty regions array.";
     }
 
     static String tightReaderViewportInstruction() {
-        return "The previous crop occupied too much of the page or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, score reference, or worked state that directly helps the cited step. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
+        return "The previous crop occupied too much of the page, was a portrait strip spanning neighbouring score examples, or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, one score reference, or worked state that directly helps the cited step. If the claim names one scoring pattern, include only that pattern's card row or compact group; do not include another animal's examples or partial rows above or below. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {

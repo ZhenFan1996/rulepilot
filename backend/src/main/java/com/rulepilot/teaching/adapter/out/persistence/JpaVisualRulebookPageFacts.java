@@ -26,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("!test")
 public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, VisualRulebookPageFactSearch {
 
+    private static final int MAX_CJK_FRAGMENTS = 16;
     private static final Set<String> SEARCH_FILLER = Set.of(
             "and", "are", "can", "does", "for", "from", "how", "into", "must", "not", "the", "this", "what",
             "when", "where", "with", "you", "your");
@@ -150,18 +151,29 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
     static List<String> cjkFragments(String query) {
         java.util.LinkedHashSet<String> fragments = new java.util.LinkedHashSet<>();
         Matcher matcher = CJK_RUN.matcher(query);
-        while (matcher.find() && fragments.size() < 16) {
+        while (matcher.find()) {
             String run = matcher.group();
             if (run.length() == 1) {
                 fragments.add(run);
                 continue;
             }
-            for (int index = 0; index < run.length() - 1 && fragments.size() < 16; index++) {
+            for (int index = 0; index < run.length() - 1; index++) {
                 String fragment = run.substring(index, index + 2);
                 if (!CJK_QUESTION_FILLER.contains(fragment)) fragments.add(fragment);
             }
         }
-        return List.copyOf(fragments);
+        if (fragments.size() <= MAX_CJK_FRAGMENTS) return List.copyOf(fragments);
+
+        List<String> candidates = List.copyOf(fragments);
+        java.util.LinkedHashSet<String> selected = new java.util.LinkedHashSet<>();
+        for (int slot = 0; slot < MAX_CJK_FRAGMENTS; slot++) {
+            int index = (int) Math.round((double) slot * (candidates.size() - 1) / (MAX_CJK_FRAGMENTS - 1));
+            selected.add(candidates.get(index));
+        }
+        candidates.stream()
+                .filter(fragment -> selected.size() < MAX_CJK_FRAGMENTS)
+                .forEach(selected::add);
+        return List.copyOf(selected);
     }
 
     private static boolean isLatin(String value) {

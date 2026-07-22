@@ -40,11 +40,13 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v8-direct-rulings-system.txt") Resource answerDirectRulings,
             @Value("classpath:prompts/rule-answer-agent-v9-prohibition-fidelity-system.txt") Resource answerProhibitionFidelity,
             @Value("classpath:prompts/rule-answer-agent-v10-completeness-boundary-system.txt") Resource answerCompletenessBoundary,
+            @Value("classpath:prompts/rule-answer-agent-v11-scope-discipline-system.txt") Resource answerScopeDiscipline,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
+            @Value("classpath:prompts/content-critic-v9-answer-scope-system.txt") Resource criticAnswerScope,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
@@ -57,11 +59,16 @@ public class VersionedAgentPrompts {
                 teachingOutlineSystem, teachingOutlineFidelity, teachingOutlineVisualDensity, teachingOutlineCoreEvidence);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
-                answerSystem, answerFidelity, answerDirectRulings, answerProhibitionFidelity, answerCompletenessBoundary);
+                answerSystem,
+                answerFidelity,
+                answerDirectRulings,
+                answerProhibitionFidelity,
+                answerCompletenessBoundary,
+                answerScopeDiscipline);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = combined(criticSystem, criticFidelity);
+        this.criticSystem = combined(criticSystem, criticFidelity, criticAnswerScope);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);

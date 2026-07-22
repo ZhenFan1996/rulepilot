@@ -171,6 +171,46 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void requests_a_tighter_retry_for_a_tall_score_example_column_but_keeps_a_compact_score_row_and_portrait_component_card() {
+        var stackedScoreExamples = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                11,
+                "鲑鱼计分卡示例",
+                "四个鲑鱼计分卡示例，旁边标有数字和得分说明",
+                45,
+                460,
+                260,
+                300,
+                List.of(UUID.randomUUID()));
+        var portraitCard = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                3,
+                "纪念碑卡牌解剖图",
+                "一张竖版卡牌标出标题、插画、资源图案和能力区域",
+                650,
+                308,
+                350,
+                692,
+                List.of(UUID.randomUUID()));
+        var compactScoreRow = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                11,
+                "鲑鱼计分卡示例",
+                "四张鲑鱼计分卡的粉色图标与相邻得分说明",
+                25,
+                510,
+                300,
+                180,
+                List.of(UUID.randomUUID()));
+
+        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(stackedScoreExamples)).isTrue();
+        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(portraitCard)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(compactScoreRow)).isFalse();
+        assertThat(SpringAiVisualRegionLocator.withoutOversizedReaderViewports(
+                        List.of(stackedScoreExamples, compactScoreRow, portraitCard)))
+                .containsExactly(compactScoreRow, portraitCard);
+        assertThat(SpringAiVisualRegionLocator.tightReaderViewportInstruction())
+                .contains("neighbouring score examples", "another animal's examples");
+    }
+
+    @Test
     void rebinds_a_visual_crop_to_the_matching_source_page_when_the_model_numbers_a_neighbouring_claim() {
         Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2));
         Claim cardAnatomy = new Claim(UUID.randomUUID(), "文物卡的构成", List.of(3));

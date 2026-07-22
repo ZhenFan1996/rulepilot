@@ -6,6 +6,8 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;
 import java.util.List;
@@ -60,6 +62,30 @@ class VisualLessonEnricherTest {
 
         assertThat(enriched.sections().getFirst().steps().getFirst().text())
                 .isEqualTo("图中可见圆形标记位于一条弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。");
+    }
+
+    @Test
+    void keeps_a_models_existing_image_introducer_instead_of_repeating_it_for_players() {
+        UUID chunk = UUID.randomUUID();
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "轨道",
+                                "图中展示一枚探测器标记位于弧形轨道旁",
+                                120,
+                                220,
+                                180,
+                                120,
+                                List.of(chunk))))
+                .enrich(UUID.randomUUID(), lesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("图中展示一枚探测器标记位于弧形轨道旁。结合图片完成这一步：把探测器放到轨道上。")
+                .doesNotContain("图中可见图中");
     }
 
     @Test
@@ -628,6 +654,33 @@ class VisualLessonEnricherTest {
     }
 
     @Test
+    void replaces_a_narrow_tall_score_example_that_stacks_neighbouring_rules() {
+        UUID chunk = UUID.randomUUID();
+        var result = new VisualLessonEnricher(
+                        ignored -> understanding(),
+                        (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                                2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                        new VisualRegionCandidateSelector(),
+                        request -> java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                                2,
+                                "鲑鱼计分卡",
+                                "四张鲑鱼计分卡的粉色鲑鱼图标与相邻分数格",
+                                45,
+                                510,
+                                300,
+                                180,
+                                List.of(chunk),
+                                List.of(1))))
+                .enrichWithReport(UUID.randomUUID(), lessonWithNarrowTallScoreVisual(chunk), "owner");
+
+        var step = result.lesson().sections().getFirst().steps().getFirst();
+        assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
+        assertThat(step.visualFocus())
+                .isEqualTo(new IllustratedLesson.VisualFocus(2, "鲑鱼计分卡", 45, 510, 300, 180));
+        assertThat(step.text()).contains("鲑鱼按相邻游群计分。");
+    }
+
+    @Test
     void sends_the_most_relevant_candidate_pages_before_lower_numbered_pages() {
         UUID version = UUID.randomUUID();
         UUID chunk = UUID.randomUUID();
@@ -654,6 +707,47 @@ class VisualLessonEnricherTest {
 
         assertThat(enriched.sections().getFirst().steps()).hasSize(1);
         assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus()).isNotNull();
+    }
+
+    @Test
+    void uses_the_rendered_page_catalog_to_prioritize_a_cited_visual_example_when_text_is_translated() {
+        UUID version = UUID.randomUUID();
+        UUID chunk = UUID.randomUUID();
+        RulebookUnderstanding EnglishSource = new RulebookUnderstanding(
+                List.of(
+                        block(2, "Set up the board", 100, 200),
+                        block(3, "Place animal tokens", 100, 200),
+                        block(4, "End scoring", 100, 200)),
+                List.of(), List.of(), List.of());
+        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID ignored, List<PageFact> pages) {}
+
+            @Override
+            public List<PageFact> find(UUID ignored, Set<Integer> pages) {
+                return List.of(new PageFact(
+                        3,
+                        "Animal tokens",
+                        "六边形地块上的动物标记与相邻图标",
+                        List.of("动物标记", "六边形", "图标")));
+            }
+        };
+        DocumentPageImages images = (ignored, pages) -> pages.stream()
+                .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {(byte) page.intValue()}, 1_000, 1_000))
+                .toList();
+        VisualRegionLocator locator = request -> {
+            assertThat(request.pages()).extracting(VisualRegionLocator.PageImage::pageNumber).containsExactly(3, 2);
+            assertThat(request.candidates().getFirst().sourceText()).contains("Visual retrieval hint").contains("动物标记");
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    3, "动物标记与六边形地块", "一枚动物标记放在六边形地块旁的图标区域", 200, 280, 280, 180, List.of(chunk)));
+        };
+
+        IllustratedLesson enriched = new VisualLessonEnricher(
+                        ignored -> EnglishSource, images, facts, new VisualRegionCandidateSelector(), locator)
+                .enrich(version, threePageTranslatedLesson(chunk));
+
+        assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus())
+                .isEqualTo(new IllustratedLesson.VisualFocus(3, "动物标记与六边形地块", 200, 280, 280, 180));
     }
 
     private RulebookUnderstanding understanding() {
@@ -694,6 +788,23 @@ class VisualLessonEnricherTest {
                 List.of(section), "test", Instant.now());
     }
 
+    private IllustratedLesson threePageTranslatedLesson(UUID chunk) {
+        var step = new IllustratedLesson.LessonStep(
+                1,
+                "放置动物标记",
+                IllustratedLesson.TeachingMove.DO,
+                "把动物标记放到符合条件的六边形地块上。",
+                List.of(2, 3, 4),
+                List.of(chunk));
+        var section = new IllustratedLesson.LessonSection(
+                1, "animals", List.of("animals"), "动物标记", true,
+                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
+                "放置动物标记。", List.of(), List.of(), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
     private IllustratedLesson lessonWithOverlyBroadVisual(UUID chunk) {
         var step = new IllustratedLesson.LessonStep(
                 1,
@@ -707,6 +818,24 @@ class VisualLessonEnricherTest {
                 1, "setup", List.of("setup"), "开局设置", true,
                 IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                 "把探测器放到轨道上。", List.of(2), List.of(chunk), List.of(step));
+        return new IllustratedLesson(
+                UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
+                List.of(section), "test", Instant.now());
+    }
+
+    private IllustratedLesson lessonWithNarrowTallScoreVisual(UUID chunk) {
+        var step = new IllustratedLesson.LessonStep(
+                1,
+                "鲑鱼游群计分",
+                IllustratedLesson.TeachingMove.VISUAL,
+                "图中图标提示：四张鲑鱼计分卡。先认出这组图标，再按规则处理：鲑鱼按相邻游群计分。",
+                List.of(2),
+                List.of(chunk),
+                new IllustratedLesson.VisualFocus(2, "鲑鱼计分卡示例", 45, 460, 260, 540));
+        var section = new IllustratedLesson.LessonSection(
+                1, "scoring", List.of("scoring"), "鲑鱼计分", true,
+                IllustratedLesson.EvidenceStatus.CITED_DRAFT, IllustratedLesson.VisualKind.REFERENCE_CARD,
+                "鲑鱼按相邻游群计分。", List.of(2), List.of(chunk), List.of(step));
         return new IllustratedLesson(
                 UUID.randomUUID(), UUID.randomUUID(), IllustratedLesson.LessonStatus.DRAFT_READY,
                 List.of(section), "test", Instant.now());

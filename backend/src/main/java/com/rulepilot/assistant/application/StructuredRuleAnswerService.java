@@ -71,10 +71,17 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v40-evidence-completeness-boundary";
+    private static final String ANSWER_POLICY_VERSION = "answer-v42-answer-scope-discipline";
     private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
             "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
+            "(?iu)\\b(?:which|what)\\s+(?:resource|token|icon|symbol)\\b"
+                    + "|\\b(?:resource|token|icon|symbol)\\b.{0,36}\\b(?:mean|represent|refer|correspond)\\b"
+                    + "|\\b(?:pay|cost|spend)\\b.{0,36}\\b(?:resource|token|icon|symbol)\\b"
+                    + "|(?:哪个|哪种|哪一种|什么|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)"
+                    + "|(?:图标|符号).{0,36}(?:表示|代表|对应|是什么|含义)"
+                    + "|(?:支付|花费|消耗|获得).{0,18}(?:什么|哪种|哪一种|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)");
+    private static final Pattern VISUAL_EVIDENCE_PRIORITY_QUESTION = Pattern.compile(
             "(?iu)\\b(which|what|resource|token|icon|symbol|pay|cost|gain|spend|score|stake)\\b"
                     + "|支付|费用|代价|获得|得分|令牌|标记|图标|符号|胜利点|资源|下注");
     private static final Pattern INTERNAL_EVIDENCE_REFERENCE = Pattern.compile(
@@ -97,6 +104,20 @@ public class StructuredRuleAnswerService {
                     + "[^。；;\\n]{0,120}(?:activate|use|发动|使用|前提)"
                     + "|(?:activate|use|发动|使用|前提)[^。；;\\n]{0,80}(?:at least|至少|需要)"
                     + "[^。；;\\n]{0,32}(?:cards?|张[^，。；\\n]{0,20}牌)");
+    private static final Pattern UNASKED_REPEATABILITY_CLAIM = Pattern.compile(
+            "(?iu)(?:each\\s+(?:reward|effect|action).{0,32}(?:once|twice)|"
+                    + "(?:may|can|only|at most).{0,32}(?:once|twice)|"
+                    + "每个(?:奖励|效果|行动).{0,32}(?:仅|只|最多|可).{0,16}(?:一次|两次)|"
+                    + "(?:最多|只能).{0,28}(?:领取|执行|获得).{0,20}(?:一次|两次)|无限循环)");
+    private static final Pattern REPEATABILITY_QUESTION = Pattern.compile(
+            "(?iu)\\b(?:again|repeat|repeated|how many times|once|twice|unlimited)\\b"
+                    + "|次数|几次|重复|再次|还能|多次|反复|无限");
+    private static final Pattern EVIDENCED_REPEATABILITY = Pattern.compile(
+            "(?iu)(?:each\\s+(?:reward|effect|action).{0,48}(?:once|twice)|"
+                    + "(?:only|at most).{0,32}(?:once|twice)|"
+                    + "每个(?:奖励|效果|行动).{0,48}(?:一次|两次)|"
+                    + "每回合.{0,28}(?:只能|最多).{0,28}(?:一次|两次)|"
+                    + "(?:最多|只能).{0,36}(?:领取|执行|获得).{0,24}(?:一次|两次)|无限循环)");
     private static final Pattern NEGATED_CARD_REQUIREMENT = Pattern.compile(
             "(?iu)(?:不需要|无需|无须|不必|并非|不是|不要求|没有).{0,40}(?:cards?|hand|手牌|张[^，。；\\n]{0,20}牌)"
                     + "|(?:does not|doesn't|do not|don't|need not|no need to|not required|without)"
@@ -428,6 +449,9 @@ public class StructuredRuleAnswerService {
             if (containsInactiveActorContinuation(draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答让已退出当前流程的玩家继续行动，未向玩家发布。");
             }
+            if (containsUnaskedUnsupportedRepeatabilityClaim(modelRequest, draft)) {
+                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答附加了未被引用支持的次数限制，未向玩家发布。");
+            }
             if (!namesEveryResolvedVisualComponent(modelRequest, draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未使用视觉证据确认的组件名称，未向玩家发布。");
             }
@@ -654,7 +678,27 @@ public class StructuredRuleAnswerService {
                     + "that state change. Use the supplied evidence's explicit replacement, skip, or successor rule; "
                     + "if the evidence does not resolve the successor, set answerable to false.");
         }
+        if (containsUnaskedUnsupportedRepeatabilityClaim(request, draft)) {
+            feedback.add("UNASKED_REPEATABILITY: The answer adds a once-only, twice-only, repeatability, or "
+                    + "loop-prevention restriction that the player did not ask about and the draft's own cited "
+                    + "evidence does not establish for this ruling. Remove that peripheral restriction. Keep a "
+                    + "repeatability boundary only when the question asks about it or cite the exact evidence that "
+                    + "governs the same action.");
+        }
         return List.copyOf(feedback);
+    }
+
+    private boolean containsUnaskedUnsupportedRepeatabilityClaim(ModelRequest request, ModelDraft draft) {
+        if (REPEATABILITY_QUESTION.matcher(request.question()).find()
+                || !UNASKED_REPEATABILITY_CLAIM.matcher(playerFacingText(draft)).find()) {
+            return false;
+        }
+        Set<UUID> citationIds = Set.copyOf(draft.citationIds());
+        return request.evidence().stream()
+                .filter(source -> citationIds.contains(source.chunkId()))
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .noneMatch(excerpt -> EVIDENCED_REPEATABILITY.matcher(excerpt).find());
     }
 
     private boolean requiresEndTurnProcedureCitation(ModelRequest request) {
@@ -977,6 +1021,7 @@ public class StructuredRuleAnswerService {
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         Map<Integer, PageFactMatch> visualFactsByPage = new LinkedHashMap<>();
         Set<Integer> requiredVisualFactPages = new LinkedHashSet<>();
+        Set<Integer> directQuestionVisualFactPages = new LinkedHashSet<>();
         boolean conflicting = false;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
@@ -1046,6 +1091,9 @@ public class StructuredRuleAnswerService {
                         matches -> matches.size() * 80);
                 visualMatches.forEach(match -> visualFactsByPage.merge(
                         match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+                if (isDirectQuestionIntent(intent.query(), question.normalizedQuestion())) {
+                    visualMatches.forEach(match -> directQuestionVisualFactPages.add(match.pageNumber()));
+                }
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException retrievalFailure) {
@@ -1077,8 +1125,10 @@ public class StructuredRuleAnswerService {
         if (conflicting) {
             return new RetrievalResult(List.of(), true);
         }
+        Set<Integer> visualPagePriority = new LinkedHashSet<>(directQuestionVisualFactPages);
+        visualPagePriority.addAll(requiredVisualFactPages);
         Set<UUID> visualEvidenceIds = mergeVisualPageEvidence(
-                assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, requiredVisualFactPages);
+                assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, visualPagePriority);
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
         List<HybridEvidenceHit> selectedVisualEvidence = visualEvidenceIds.stream()
                 .map(evidenceById::get)
@@ -1092,8 +1142,8 @@ public class StructuredRuleAnswerService {
                 .filter(java.util.Objects::nonNull)
                 .filter(hit -> visualEvidenceIds.isEmpty() || !isVisualPlaceholder(hit))
                 .toList();
-        boolean visualIdentityQuestion = VISUAL_IDENTITY_QUESTION.matcher(question.normalizedQuestion()).find();
-        if (visualIdentityQuestion) {
+        boolean visualEvidencePriority = VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question.normalizedQuestion()).find();
+        if (visualEvidencePriority) {
             selectedVisualEvidence.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
             selectedIntentAnchors.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         } else {
@@ -1117,6 +1167,18 @@ public class StructuredRuleAnswerService {
         return combined.length() <= 600 ? combined : combined.substring(0, 600);
     }
 
+    private boolean isDirectQuestionIntent(String query, String normalizedQuestion) {
+        String normalizedQuery = normalizeIntentComparison(query);
+        String normalizedQuestionValue = normalizeIntentComparison(normalizedQuestion);
+        return normalizedQuery.equals(normalizedQuestionValue)
+                || (normalizedQuery.length() >= 4 && normalizedQuestionValue.contains(normalizedQuery));
+    }
+
+    private String normalizeIntentComparison(String value) {
+        if (value == null) return "";
+        return value.strip().replaceAll("[?？!！;；,，]+$", "").strip();
+    }
+
     private boolean requiresIconLegend(java.util.Collection<PageFactMatch> facts) {
         return facts.stream().anyMatch(fact -> UNRESOLVED_VISUAL_SYMBOL.matcher(
                         fact.printedTerms() + " " + fact.factualSummary())
@@ -1133,7 +1195,6 @@ public class StructuredRuleAnswerService {
         Set<Integer> pages = new LinkedHashSet<>();
         requiredPages.stream()
                 .filter(factsByPage::containsKey)
-                .sorted()
                 .forEach(pages::add);
         factsByPage.values().stream()
                 .sorted(Comparator.comparingDouble(PageFactMatch::score).reversed()

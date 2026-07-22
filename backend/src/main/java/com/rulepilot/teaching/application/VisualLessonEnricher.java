@@ -6,6 +6,7 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
+import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
@@ -40,6 +41,7 @@ public class VisualLessonEnricher {
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
+    private final VisualRulebookPageFacts visualPageFacts;
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
@@ -50,6 +52,7 @@ public class VisualLessonEnricher {
     public VisualLessonEnricher(
             RulebookUnderstandingCatalog understanding,
             DocumentPageImages pageImages,
+            VisualRulebookPageFacts visualPageFacts,
             VisualRegionCandidateSelector candidates,
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
@@ -57,6 +60,7 @@ public class VisualLessonEnricher {
             @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection) {
         this.understanding = understanding;
         this.pageImages = pageImages;
+        this.visualPageFacts = visualPageFacts;
         this.candidates = candidates;
         this.locator = locator;
         this.prioritizer = prioritizer;
@@ -75,7 +79,16 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
+        this(understanding, pageImages, VisualRulebookPageFacts.empty(), candidates, locator, new VisualSectionPrioritizer(), 12, 6);
+    }
+
+    VisualLessonEnricher(
+            RulebookUnderstandingCatalog understanding,
+            DocumentPageImages pageImages,
+            VisualRulebookPageFacts visualPageFacts,
+            VisualRegionCandidateSelector candidates,
+            VisualRegionLocator locator) {
+        this(understanding, pageImages, visualPageFacts, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -186,7 +199,7 @@ public class VisualLessonEnricher {
             String modelConfigurationOwner) {
         Set<Integer> citedPages = new LinkedHashSet<>(step.sourcePages());
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
-                understanding, citedPages, terms(section, step));
+                understanding, citedPages, terms(section, step), visualPageFacts.find(documentVersionId, citedPages));
         if (selected.isEmpty()) return StepLocation.rejected(Outcome.NO_CITED_CANDIDATE);
         List<Integer> candidatePageOrder = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
                 .distinct()
@@ -412,11 +425,29 @@ public class VisualLessonEnricher {
 
     private boolean isCompactReaderCrop(VisualRegionLocator.LocatedRegion region) {
         return (region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000)
-                && (long) region.width() * region.height() <= MAX_READER_CROP_AREA;
+                && (long) region.width() * region.height() <= MAX_READER_CROP_AREA
+                && !isNarrowScoreExampleViewport(region.label() + " " + region.visibleDescription(), region.width(), region.height());
     }
 
     private boolean needsTighterReaderCrop(VisualFocus focus) {
-        return focus != null && (long) focus.width() * focus.height() > MAX_READER_CROP_AREA;
+        return focus != null
+                && ((long) focus.width() * focus.height() > MAX_READER_CROP_AREA || isNarrowScoreExampleViewport(focus));
+    }
+
+    /**
+     * The persisted focus no longer has the model's full observation, so use its literal label and geometry to revisit
+     * the one known risky shape: a tall score-example strip. This lets later enrichment repair an old crop that
+     * actually stacks neighbouring examples, while keeping portrait component cards intact.
+     */
+    private boolean isNarrowScoreExampleViewport(VisualFocus focus) {
+        return focus != null && isNarrowScoreExampleViewport(focus.label(), focus.width(), focus.height());
+    }
+
+    private boolean isNarrowScoreExampleViewport(String description, int width, int height) {
+        String normalized = description.toLowerCase(java.util.Locale.ROOT);
+        boolean scoreExample = containsAny(normalized, "计分", "得分", "分数", "score", "scoring", "points")
+                && containsAny(normalized, "示例", "example");
+        return scoreExample && width <= 340 && height * 4 > width * 3;
     }
 
     /**
@@ -689,9 +720,14 @@ public class VisualLessonEnricher {
     private String visualText(String observation, String ruleText, boolean iconCluster) {
         String prefix = iconCluster
                 ? "图中图标提示：" + observation + "。先认出这组图标，再按规则处理："
-                : "图中可见" + observation + "。结合图片完成这一步：";
+                : (startsWithImageIntroducer(observation) ? observation : "图中可见" + observation) + "。结合图片完成这一步：";
         String combined = prefix + ruleText;
         return combined.length() <= 600 ? combined : ruleText;
+    }
+
+    private boolean startsWithImageIntroducer(String observation) {
+        String normalized = observation == null ? "" : observation.strip();
+        return normalized.startsWith("图中") || normalized.startsWith("这张图") || normalized.startsWith("此图");
     }
 
     private String originalRuleText(LessonStep step) {

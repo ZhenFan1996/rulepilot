@@ -26,11 +26,13 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v8-direct-rulings-system.txt"),
                 resource("rule-answer-agent-v9-prohibition-fidelity-system.txt"),
                 resource("rule-answer-agent-v10-completeness-boundary-system.txt"),
+                resource("rule-answer-agent-v11-scope-discipline-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
                 resource("content-critic-v7-system.txt"),
                 resource("content-critic-v8-fidelity-system.txt"),
+                resource("content-critic-v9-answer-scope-system.txt"),
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
@@ -141,7 +143,10 @@ class VersionedAgentPromptsTest {
                         "Prohibition-fidelity revision v9",
                         "does not bypass a prohibited terrain",
                         "Evidence-completeness revision v10",
-                        "Selected evidence is not a complete rulebook index");
+                        "Selected evidence is not a complete rulebook index",
+                        "Scope-discipline revision v11",
+                        "loop-prevention rule",
+                        "player's wording is not a component definition");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
         assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");
@@ -158,6 +163,8 @@ class VersionedAgentPromptsTest {
                         "cost in one unit",
                         "named object",
                         "negation",
+                        "Answer-scope revision v9",
+                        "loop-prevention rule",
                         "heading ownership",
                         "player turn (回合)",
                         "default next-actor rules",

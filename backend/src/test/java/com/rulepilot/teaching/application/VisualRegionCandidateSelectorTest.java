@@ -6,6 +6,7 @@ import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.BlockRole;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.PageBlock;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import java.util.List;
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -99,6 +100,44 @@ class VisualRegionCandidateSelectorTest {
                 understanding, new LinkedHashSet<>(List.of(4, 5, 6)), List.of("玩家设置规则"));
 
         assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::pageNumber).containsExactly(4, 6);
+    }
+
+    @Test
+    void ranks_a_cited_page_with_a_matching_visual_catalog_hint_ahead_of_textually_opaque_pages() {
+        var understanding = new RulebookUnderstanding(
+                List.of(
+                        block(4, 0, BlockRole.BODY, "Set up the board", 100, 200, 300, 160),
+                        block(5, 0, BlockRole.BODY, "Move the pieces", 100, 200, 300, 160),
+                        block(6, 0, BlockRole.BODY, "Count the points", 100, 200, 300, 160)),
+                List.of(), List.of(), List.of());
+        List<PageFact> facts = List.of(
+                new PageFact(4, "Setup", "一个空棋盘和起始组件", List.of("棋盘", "起始组件")),
+                new PageFact(5, "Animal tokens", "六边形地块上的动物标记与相邻图标", List.of("动物标记", "六边形", "图标")),
+                new PageFact(6, "Scoring", "末局计分表", List.of("计分", "分数表")));
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding, new LinkedHashSet<>(List.of(4, 5, 6)), List.of("动物标记如何放到六边形地块"), facts);
+
+        assertThat(selected).extracting(VisualRegionCandidateSelector.Candidate::pageNumber).containsExactly(5, 4);
+        assertThat(selected.getFirst().sourceText()).contains("Visual retrieval hint").contains("动物标记");
+    }
+
+    @Test
+    void never_uses_a_visual_catalog_hint_from_an_uncited_page() {
+        var understanding = new RulebookUnderstanding(
+                List.of(block(4, 0, BlockRole.BODY, "Set up the board", 100, 200, 300, 160)),
+                List.of(), List.of(), List.of());
+
+        var selected = new VisualRegionCandidateSelector().select(
+                understanding,
+                Set.of(4),
+                List.of("动物标记如何放到六边形地块"),
+                List.of(new PageFact(5, "Animal tokens", "六边形地块上的动物标记", List.of("动物标记", "六边形"))));
+
+        assertThat(selected).singleElement().satisfies(candidate -> {
+            assertThat(candidate.pageNumber()).isEqualTo(4);
+            assertThat(candidate.sourceText()).doesNotContain("Visual retrieval hint");
+        });
     }
 
     private PageBlock block(int page, int index, BlockRole role, String text, int x, int y, int width, int height) {
