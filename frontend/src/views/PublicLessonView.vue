@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -236,6 +236,10 @@ async function submitPublicQuestion() {
     publicAnswerTurns.value = [...publicAnswerTurns.value, { question, answer: received }].slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
     rememberPublicAnswerTurns()
     publicQuestion.value = ''
+    await nextTick()
+    const answerElement = document.getElementById(`public-answer-${publicAnswerTurns.value.length - 1}`)
+    answerElement?.focus({ preventScroll: true })
+    answerElement?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
   } catch (error) {
     publicAnswerError.value = error instanceof Error ? error.message : t('public.answer.fallback')
   } finally {
@@ -308,15 +312,6 @@ watch([locale, planId], () => {
             <div class="self-end rounded-xl border border-indigo/10 bg-paper px-4 py-3 text-xs leading-5 text-ink/50">{{ t('public.question.exampleLabel') }}<br><span class="font-semibold text-ink/65">{{ t('public.question.example') }}</span></div>
           </div>
 
-          <form class="mt-4" @submit.prevent="submitPublicQuestion">
-            <label for="public-question" class="sr-only">{{ t('public.question.submit') }}</label>
-            <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
-            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-              <p class="text-xs text-ink/45">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
-              <button type="submit" :disabled="publicAnswerLoading || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
-            </div>
-          </form>
-
           <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
           <div v-else-if="publicAnswerLoading" class="mt-5 rounded-2xl border border-indigo/12 bg-paper p-5" role="status" aria-live="polite">
             <div class="flex items-center gap-3"><span class="size-3 animate-pulse rounded-full bg-copper" /><p class="text-sm font-semibold">{{ t('public.question.stage') }}</p></div>
@@ -326,7 +321,7 @@ watch([locale, planId], () => {
           <ol v-if="publicAnswerTurns.length" class="mt-6 space-y-5" :aria-label="t('public.question.thread')">
             <li v-for="(turn, index) in publicAnswerTurns" :key="`${index}-${turn.question}`" class="space-y-3">
               <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
-              <article class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm sm:max-w-[88%]">
+              <article :id="`public-answer-${index}`" tabindex="-1" class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm outline-none focus:ring-4 focus:ring-indigo/15 sm:max-w-[88%]">
                 <div class="p-5 sm:p-6">
                   <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
                   <p class="mt-4 font-display text-xl font-semibold leading-8">{{ turn.answer.answer.shortVerdict }}</p>
@@ -357,6 +352,15 @@ watch([locale, planId], () => {
               </article>
             </li>
           </ol>
+
+          <form class="mt-5" @submit.prevent="submitPublicQuestion">
+            <label for="public-question" class="sr-only">{{ t('public.question.submit') }}</label>
+            <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
+            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p class="text-xs text-ink/45">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
+              <button type="submit" :disabled="publicAnswerLoading || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
+            </div>
+          </form>
         </section>
 
         <section v-for="section in publicLesson.lesson.sections" :key="section.position" class="border-b border-ink/10 py-10">

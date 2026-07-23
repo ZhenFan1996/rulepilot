@@ -122,6 +122,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('a[aria-label="打开来源：设置，第 2 页"]').attributes('href'))
       .toBe('/api/public/lessons/plan-1/pages/2/image')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
+    expect(wrapper.get('#public-answer-0').element.compareDocumentPosition(wrapper.get('form').element) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .not.toBe(0)
 
     wrapper.unmount()
     const restored = mount(PublicLessonView, { global: { plugins: [router] } })
