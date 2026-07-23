@@ -1493,28 +1493,6 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void preservesValidatedTextFallbackPresentationMetadataWhenARevisionDropsIt() {
-        UUID chunkId = UUID.randomUUID();
-        SectionDraft previous = new SectionDraft(
-                "原章节",
-                VisualKind.REFERENCE_CARD,
-                "按引用完成这一节。",
-                List.of(chunkId),
-                List.of(new StepDraft("原步骤", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
-        StepDraft revisedStep = new StepDraft(
-                "修订步骤", TeachingMove.DO, "修订后的规则文字。", List.of(chunkId));
-        SectionDraft revised = new SectionDraft(
-                "修订章节", null, "", List.of(), List.of(revisedStep));
-
-        SectionDraft preserved = GroundedTeachingAgent.preserveTextOnlyPresentationMetadata(previous, revised);
-
-        assertThat(preserved.visualKind()).isEqualTo(VisualKind.REFERENCE_CARD);
-        assertThat(preserved.visualCaption()).isEqualTo("按引用完成这一节。");
-        assertThat(preserved.visualCitationIds()).containsExactly(chunkId);
-        assertThat(preserved.steps()).containsExactly(revisedStep);
-    }
-
-    @Test
     void withholdsStoredPageImagesFromATextOnlyTeachingModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

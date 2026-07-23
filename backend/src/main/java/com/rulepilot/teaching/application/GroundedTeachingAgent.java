@@ -60,7 +60,6 @@ public class GroundedTeachingAgent {
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int EVIDENCE_PER_INTENT = 3;
-    private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
     /*
      * The cited base lesson is published section by section.  Whole-lesson review improves it,
      * but must not turn a usable first read into an unbounded rewrite job.
@@ -76,6 +75,7 @@ public class GroundedTeachingAgent {
     private final VisualRulebookPageFacts visualFacts;
     private final TeachingVisualEvidenceResolver visualEvidenceResolver;
     private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
+    private final TeachingDraftRecoveryPolicy draftRecoveryPolicy = new TeachingDraftRecoveryPolicy();
     private final int maxToolCalls;
     private final int baseSectionParallelism;
 
@@ -564,7 +564,8 @@ public class GroundedTeachingAgent {
         } catch (AgentExecutionStoppedException stopped) {
             throw stopped;
         } catch (RuntimeException visualCompositionFailure) {
-            if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
+            if (draftRecoveryPolicy.canFallbackToCitedText(
+                    !modelRequest.pageImages().isEmpty(), hasOnlyVisualPageEvidence(evidence))) {
                 log.warn(
                         "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
                         planned.topicKey(),
@@ -576,7 +577,9 @@ public class GroundedTeachingAgent {
             throw visualCompositionFailure;
         }
         draft = normalizeDraft(draft, modelRequest);
-        int maxRepairAttempts = modelRequest.pageImages().isEmpty() ? MAX_DRAFT_REPAIR_ATTEMPTS : 1;
+        boolean hasPageImages = !modelRequest.pageImages().isEmpty();
+        boolean hasOnlyVisualPageEvidence = hasOnlyVisualPageEvidence(evidence);
+        int maxRepairAttempts = draftRecoveryPolicy.maxRepairAttempts(hasPageImages);
         for (int repair = 0; ; repair++) {
             try {
                 LessonSection accepted = validatedSection(
@@ -595,30 +598,25 @@ public class GroundedTeachingAgent {
                         repair,
                         ActivityOutcome.REJECTED,
                         rejectionCategory(rejectedDraft));
+                if (draftRecoveryPolicy.shouldFallbackToCitedText(
+                        hasPageImages, hasOnlyVisualPageEvidence, repair)) {
+                    return fallbackToTextDraft(
+                            plan,
+                            planned,
+                            evidence,
+                            modelRequest,
+                            assistantRunId,
+                            sectionIndex,
+                            repair + 1);
+                }
                 if (repair == maxRepairAttempts) {
-                    if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
-                        return fallbackToTextDraft(
-                                plan,
-                                planned,
-                                evidence,
-                                modelRequest,
-                                assistantRunId,
-                                sectionIndex,
-                                repair + 1);
-                    }
-                    if (repair == maxRepairAttempts) throw rejectedDraft;
+                    throw rejectedDraft;
                 }
                 String diagnostic = rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
                         : rejectedDraft.getMessage();
-                List<String> feedback = modelRequest.pageImages().isEmpty() || !isVisualLocalizationFailure(rejectedDraft)
-                        ? List.of(diagnostic)
-                        : List.of(
-                                diagnostic,
-                                "The attached page images are usable visual evidence. Keep the grounded text, but repair "
-                                        + "one VISUAL step: cite an attached-page E-reference and return a compact "
-                                        + "0-1000 focus rectangle that contains the icon, component group, board area, "
-                                        + "flow, or worked state named in that step. Do not fall back to text-only.");
+                List<String> feedback = draftRecoveryPolicy.repairFeedback(
+                        diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
@@ -639,7 +637,7 @@ public class GroundedTeachingAgent {
                 } catch (AgentExecutionStoppedException stopped) {
                     throw stopped;
                 } catch (RuntimeException visualRepairFailure) {
-                    if (!modelRequest.pageImages().isEmpty() && !hasOnlyVisualPageEvidence(evidence)) {
+                    if (draftRecoveryPolicy.canFallbackToCitedText(hasPageImages, hasOnlyVisualPageEvidence)) {
                         log.warn(
                                 "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
                                 planned.topicKey(),
@@ -663,7 +661,7 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int sectionIndex,
             int validationAttempt) {
-        TeachingLessonModel.SectionRequest textOnlyRequest = withoutPageImages(visualRequest);
+        TeachingLessonModel.SectionRequest textOnlyRequest = draftRecoveryPolicy.withoutPageImages(visualRequest);
         SectionDraft textOnlyDraft = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -692,12 +690,11 @@ public class GroundedTeachingAgent {
                         validationAttempt + repair,
                         ActivityOutcome.REJECTED,
                         "TEXT_FALLBACK_" + rejectionCategory(rejectedFallback));
-                if (repair == MAX_DRAFT_REPAIR_ATTEMPTS) throw rejectedFallback;
-                List<String> repairFeedback = List.of(
-                        "Keep this section text-only and preserve all grounded rule coverage. "
-                                + (rejectedFallback.getMessage() == null
-                                        ? "The previous fallback failed lesson validation."
-                                        : rejectedFallback.getMessage()));
+                if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) throw rejectedFallback;
+                List<String> repairFeedback = draftRecoveryPolicy.textFallbackFeedback(
+                        rejectedFallback.getMessage() == null
+                                ? "The previous fallback failed lesson validation."
+                                : rejectedFallback.getMessage());
                 SectionDraft draftToRevise = textOnlyDraft;
                 textOnlyDraft = invocations.invoke(
                         assistantRunId,
@@ -709,28 +706,9 @@ public class GroundedTeachingAgent {
                         () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
                         result -> estimateTokens(result.toString()));
                 textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
-                textOnlyDraft = preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
+                textOnlyDraft = draftRecoveryPolicy.preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
             }
         }
-    }
-
-    static SectionDraft preserveTextOnlyPresentationMetadata(SectionDraft previous, SectionDraft revised) {
-        if (previous == null || revised == null) return revised;
-        String caption = revised.visualCaption();
-        if (caption == null || caption.isBlank() || caption.length() > 240) {
-            caption = previous.visualCaption();
-        }
-        List<UUID> citations = revised.visualCitationIds();
-        if (citations == null || citations.isEmpty()) {
-            citations = previous.visualCitationIds();
-        }
-        VisualKind visualKind = revised.visualKind() == null ? previous.visualKind() : revised.visualKind();
-        if (java.util.Objects.equals(caption, revised.visualCaption())
-                && java.util.Objects.equals(citations, revised.visualCitationIds())
-                && visualKind == revised.visualKind()) {
-            return revised;
-        }
-        return new SectionDraft(revised.title(), visualKind, caption, citations, revised.steps());
     }
 
     private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
@@ -740,25 +718,6 @@ public class GroundedTeachingAgent {
     private boolean hasOnlyVisualPageEvidence(List<RuleEvidence> evidence) {
         return !evidence.isEmpty()
                 && evidence.stream().allMatch(TeachingVisualEvidenceSelector::isVisualPageEvidence);
-    }
-
-    private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {
-        return new TeachingLessonModel.SectionRequest(
-                request.topicKey(),
-                request.title(),
-                request.objective(),
-                request.coverageTags(),
-                request.playerCount(),
-                request.beginnerCount(),
-                request.totalDurationMinutes(),
-                request.sectionDurationSeconds(),
-                request.maxSteps(),
-                request.priorSections(),
-                request.evidence(),
-                List.of(),
-                request.requiredRuleIntents(),
-                request.modelConfigurationOwner(),
-                request.chapterScope());
     }
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
