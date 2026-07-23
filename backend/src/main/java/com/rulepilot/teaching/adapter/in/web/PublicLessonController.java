@@ -6,8 +6,10 @@ import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonReader;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
 import com.rulepilot.teaching.application.LessonLocalizationService;
+import com.rulepilot.teaching.application.PublicCoverThumbnailService;
 import com.rulepilot.assistant.PlayerLocale;
 import java.net.URI;
+import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -34,6 +36,7 @@ public class PublicLessonController {
     private final PublicLessonCatalog catalog;
     private final PublicLessonQuestionService questions;
     private final LessonLocalizationService localizations;
+    private final PublicCoverThumbnailService coverThumbnails;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper crops;
 
@@ -42,12 +45,14 @@ public class PublicLessonController {
             PublicLessonCatalog catalog,
             PublicLessonQuestionService questions,
             LessonLocalizationService localizations,
+            PublicCoverThumbnailService coverThumbnails,
             DocumentPageImages pageImages,
             DocumentPageImageCropper crops) {
         this.lessons = lessons;
         this.catalog = catalog;
         this.questions = questions;
         this.localizations = localizations;
+        this.coverThumbnails = coverThumbnails;
         this.pageImages = pageImages;
         this.crops = crops;
     }
@@ -76,6 +81,21 @@ public class PublicLessonController {
         String sourceUrl = require(planId).officialSourceUrl();
         if (sourceUrl == null) throw notFound();
         return ResponseEntity.status(HttpStatus.FOUND).location(URI.create(sourceUrl)).build();
+    }
+
+    @GetMapping("/{planId}/cover")
+    ResponseEntity<byte[]> cover(@PathVariable UUID planId) {
+        var cover = require(planId).gameCover();
+        if (cover == null) throw notFound();
+        try {
+            var thumbnail = coverThumbnails.thumbnailFor(cover.imageUrl());
+            return ResponseEntity.ok()
+                    .contentType(MediaType.IMAGE_JPEG)
+                    .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
+                    .body(thumbnail.content());
+        } catch (RuntimeException unavailable) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "public cover is temporarily unavailable");
+        }
     }
 
     @GetMapping("/{planId}/pages/{pageNumber}/image")

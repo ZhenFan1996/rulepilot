@@ -45,4 +45,15 @@ class TeachingGenerationConfiguration {
         executor.setWaitForTasksToCompleteOnShutdown(false);
         return executor;
     }
+
+    @Bean(name = "publicCoverWarmupExecutor")
+    ThreadPoolTaskExecutor publicCoverWarmupExecutor() {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(60);
+        executor.setThreadNamePrefix("public-cover-warmup-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        return executor;
+    }
 }

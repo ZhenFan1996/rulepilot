@@ -34,7 +34,7 @@ describe('PublicLibraryView', () => {
 
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('8 章 · 51 步')
-    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com')
+    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').classes()).toContain('object-contain')
     expect(wrapper.text()).toContain('首页')
     expect(wrapper.text()).toContain('我的讲解')

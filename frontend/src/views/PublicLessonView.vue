@@ -5,6 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
+import { publicCoverUrl } from '@/lib/publicCover'
 
 interface VisualFocus {
   pageNumber: number
@@ -335,7 +336,7 @@ watch([locale, planId], () => {
         <div class="border-b border-ink/10 pb-8">
           <div class="flex items-start gap-5 sm:gap-7">
             <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="t('public.cover.open', { title: displayTitle, source: publicLesson.gameCover.attributionLabel })">
-              <img :src="publicLesson.gameCover.imageUrl" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
+              <img :src="publicCoverUrl(planId, publicLesson.gameCover.imageUrl)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async">
             </a>
             <div>
               <p class="text-sm font-semibold text-copper">{{ t('public.hero.eyebrow') }}</p>

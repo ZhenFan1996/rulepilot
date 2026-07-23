@@ -63,7 +63,7 @@ describe('PublicLessonView', () => {
     expect(wrapper.findAll('header')).toHaveLength(1)
     expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-ink'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com/wingspan.jpg')
+    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.text()).toContain('放置玩家板')
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
