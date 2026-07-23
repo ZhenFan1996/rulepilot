@@ -29,6 +29,8 @@ public interface RuleDocumentRepository {
 
     Optional<DocumentVersion> findVersion(UUID versionId);
 
+    List<DocumentVersion> findVersions(UUID documentId);
+
     long ruleDataVersion(UUID versionId);
 
     long incrementRuleDataVersion(UUID versionId);
@@ -42,6 +44,10 @@ public interface RuleDocumentRepository {
     void updatePageImage(UUID versionId, int pageNumber, String objectKey, int width, int height);
 
     List<PageImageMetadata> findPageImages(UUID versionId, java.util.Set<Integer> pageNumbers);
+
+    List<PageImageMetadata> findAllPageImages(UUID versionId);
+
+    void deleteDocument(UUID documentId);
 
     List<DocumentSummary> findByEdition(UUID editionId, String createdBy);
 

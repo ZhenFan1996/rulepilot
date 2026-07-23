@@ -4,6 +4,7 @@ import com.rulepilot.document.DocumentPageImageCropper;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonReader;
+import com.rulepilot.teaching.application.PublicLessonQuestionService;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -28,16 +30,19 @@ public class PublicLessonController {
 
     private final PublicLessonReader lessons;
     private final PublicLessonCatalog catalog;
+    private final PublicLessonQuestionService questions;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper crops;
 
     public PublicLessonController(
             PublicLessonReader lessons,
             PublicLessonCatalog catalog,
+            PublicLessonQuestionService questions,
             DocumentPageImages pageImages,
             DocumentPageImageCropper crops) {
         this.lessons = lessons;
         this.catalog = catalog;
+        this.questions = questions;
         this.pageImages = pageImages;
         this.crops = crops;
     }
@@ -50,6 +55,13 @@ public class PublicLessonController {
     @GetMapping("/{planId}")
     PublicLessonResponse lesson(@PathVariable UUID planId) {
         return PublicLessonResponse.from(require(planId));
+    }
+
+    @PostMapping("/{planId}/answers")
+    PublicLessonQuestionService.PublicAnswer answer(
+            @PathVariable UUID planId,
+            @org.springframework.web.bind.annotation.RequestBody PublicLessonQuestionService.QuestionRequest request) {
+        return questions.answer(planId, request).orElseThrow(this::notFound);
     }
 
     @GetMapping("/{planId}/rulebook")

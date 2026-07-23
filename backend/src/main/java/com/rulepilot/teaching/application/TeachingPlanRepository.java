@@ -18,4 +18,6 @@ public interface TeachingPlanRepository {
     List<TeachingPlan> findRecent(int limit);
 
     Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy);
+
+    void delete(UUID planId);
 }

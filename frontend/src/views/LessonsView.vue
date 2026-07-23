@@ -48,6 +48,9 @@ const progressErrors = ref<Record<string, string>>({})
 const loading = ref(true)
 const errorMessage = ref('')
 const launchingPlanId = ref('')
+const deletingPlanId = ref('')
+const cleanupLoading = ref(false)
+const cleanupMessage = ref('')
 const now = ref(Date.now())
 const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
@@ -254,6 +257,63 @@ async function launch(planId: string) {
   }
 }
 
+async function deletePlan(plan: TeachingPlan) {
+  if (deletingPlanId.value || cleanupLoading.value) return
+  if (!window.confirm(`删除“${plan.gameTitle}”的这份讲解吗？规则书会保留，你之后可以重新生成。`)) return
+  deletingPlanId.value = plan.id
+  errorMessage.value = ''
+  try {
+    const csrfResponse = await checkedFetch('/api/auth/csrf')
+    if (!csrfResponse.ok) throw new Error('无法建立安全会话。')
+    const csrf = await csrfResponse.json() as CsrfResponse
+    const response = await checkedFetch(`/api/v1/teaching-plans/${encodeURIComponent(plan.id)}`, {
+      method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error('讲解暂时无法删除，请稍后重试。')
+    if (localStorage.getItem('rulepilot:last-plan-id') === plan.id) localStorage.removeItem('rulepilot:last-plan-id')
+    plans.value = plans.value.filter((item) => item.id !== plan.id)
+    const nextProgress = { ...progress.value }
+    delete nextProgress[plan.id]
+    progress.value = nextProgress
+    cleanupMessage.value = '讲解已删除。'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '讲解暂时无法删除。'
+  } finally {
+    deletingPlanId.value = ''
+  }
+}
+
+async function cleanDuplicates() {
+  if (cleanupLoading.value || deletingPlanId.value) return
+  cleanupLoading.value = true
+  cleanupMessage.value = ''
+  errorMessage.value = ''
+  try {
+    const previewResponse = await checkedFetch('/api/v1/teaching-plans/cleanup-preview')
+    if (!previewResponse.ok) throw new Error('暂时无法检查重复讲解。')
+    const preview = await previewResponse.json() as { duplicateCount: number }
+    if (preview.duplicateCount === 0) {
+      cleanupMessage.value = '没有发现相同规则书和相同讲解偏好的重复项。'
+      return
+    }
+    if (!window.confirm(`发现 ${preview.duplicateCount} 份重复讲解。将保留内容最完整且最新的一份，删除其余重复项。继续吗？`)) return
+    const csrfResponse = await checkedFetch('/api/auth/csrf')
+    if (!csrfResponse.ok) throw new Error('无法建立安全会话。')
+    const csrf = await csrfResponse.json() as CsrfResponse
+    const response = await checkedFetch('/api/v1/teaching-plans/cleanup-duplicates', {
+      method: 'POST', headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error('重复讲解暂时无法清理。')
+    const result = await response.json() as { deletedCount: number }
+    await loadPlans()
+    cleanupMessage.value = result.deletedCount ? `已清理 ${result.deletedCount} 份重复讲解。` : '没有需要清理的讲解。'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '重复讲解暂时无法清理。'
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
 onMounted(() => {
   disposed = false
   clockTimer = setInterval(() => { now.value = Date.now() }, 1000)
@@ -275,10 +335,14 @@ onBeforeUnmount(() => {
           <h1 class="font-display text-4xl font-semibold tracking-tight">准备中的，也不会丢</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">生成会在后台继续。回来后可以看进度、处理失败，或从上次阅读的位置继续。</p>
         </div>
-        <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">上传规则书</RouterLink>
+        <div class="flex flex-wrap gap-2">
+          <button v-if="plans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="cleanDuplicates">{{ cleanupLoading ? '正在整理…' : '整理重复讲解' }}</button>
+          <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">上传规则书</RouterLink>
+        </div>
       </div>
 
       <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">任务已经交给后台。你可以留在这里看进度，也可以先去做别的。</p>
+      <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
       <p v-if="plans.length" class="mt-6 text-sm text-ink/45">共 {{ plans.length }} 份，{{ readableCount }} 份已有内容可以阅读。</p>
 
       <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">正在读取讲解…</div>
@@ -335,9 +399,12 @@ onBeforeUnmount(() => {
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">上次打开</span>
             <span v-else class="text-xs text-ink/35">{{ plan.sections.length }} 个章节</span>
-            <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? '立即阅读完整讲解' : stateOf(plan.id) === 'GENERATING' ? '阅读已完成章节' : stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
-            <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? '正在启动…' : stateOf(plan.id) === 'FAILED' ? '重新生成' : '开始生成' }}</button>
-            <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />后台处理中</span>
+            <div class="flex items-center gap-2">
+              <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? '立即阅读完整讲解' : stateOf(plan.id) === 'GENERATING' ? '阅读已完成章节' : stateOf(plan.id) === 'INCOMPLETE' ? '阅读并补全' : '打开讲解' }}</RouterLink>
+              <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? '正在启动…' : stateOf(plan.id) === 'FAILED' ? '重新生成' : '开始生成' }}</button>
+              <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />后台处理中</span>
+              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deletePlan(plan)">{{ deletingPlanId === plan.id ? '删除中…' : '删除' }}</button>
+            </div>
           </div>
         </li>
       </ol>

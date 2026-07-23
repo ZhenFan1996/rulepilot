@@ -182,6 +182,18 @@ public class AssistantRunService implements AssistantRuns {
         persist(current, cancelled, "Cancellation requested by run owner");
     }
 
+    @Override
+    @Transactional
+    public void deleteOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        if (mode == null || subjectId == null || ownerUsername == null || ownerUsername.isBlank()) {
+            throw new IllegalArgumentException("assistant run deletion scope is invalid");
+        }
+        latestOwnedRun(mode, subjectId, ownerUsername.strip())
+                .filter(run -> !run.state().terminal())
+                .ifPresent(run -> requestCancellation(run.id(), ownerUsername.strip()));
+        repository.deleteBySubject(mode, subjectId, ownerUsername.strip());
+    }
+
     private AssistantRun require(UUID runId, long expectedRevision) {
         AssistantRun current = repository.find(runId)
                 .orElseThrow(() -> new IllegalArgumentException("assistant run does not exist"));

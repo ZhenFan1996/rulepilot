@@ -3,11 +3,13 @@ package com.rulepilot.teaching.adapter.in.web;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.rulepilot.teaching.application.TeachingPlanService;
+import com.rulepilot.teaching.application.TeachingPlanRemovalService;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.security.Principal;
 import java.time.Instant;
@@ -22,12 +24,13 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class TeachingPlanDetailsControllerTest {
 
     private final TeachingPlanService plans = mock(TeachingPlanService.class);
+    private final TeachingPlanRemovalService removals = mock(TeachingPlanRemovalService.class);
     private final Principal alice = () -> "alice";
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new TeachingPlanDetailsController(plans)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(new TeachingPlanDetailsController(plans, removals)).build();
     }
 
     @Test
@@ -52,6 +55,16 @@ class TeachingPlanDetailsControllerTest {
                 .andExpect(status().isNotFound());
 
         verify(plans).findOwned(planId, "alice");
+    }
+
+    @Test
+    void deletesOnlyTheAuthenticatedUsersTeachingPlan() throws Exception {
+        UUID planId = UUID.randomUUID();
+
+        mockMvc.perform(delete("/api/v1/teaching-plans/{planId}", planId).principal(alice))
+                .andExpect(status().isNoContent());
+
+        verify(removals).removeOwned(planId, "alice");
     }
 
     private TeachingPlan plan(String owner) {

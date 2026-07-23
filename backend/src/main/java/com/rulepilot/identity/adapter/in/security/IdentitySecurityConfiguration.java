@@ -55,7 +55,7 @@ public class IdentitySecurityConfiguration {
                         .requestMatchers("/actuator/metrics", "/actuator/metrics/**").hasRole("ADMIN")
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated())
-                .csrf(csrf -> csrf.ignoringRequestMatchers("/mcp", "/mcp/**"))
+                .csrf(csrf -> csrf.ignoringRequestMatchers("/mcp", "/mcp/**", "/api/public/lessons/**"))
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) -> response.sendError(HttpStatus.UNAUTHORIZED.value()))
                         .accessDeniedHandler((request, response, exception) -> response.sendError(HttpStatus.FORBIDDEN.value())))

@@ -90,6 +90,14 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                 .map(plan -> plan.toDomain(findSections(plan.id)));
     }
 
+    @Override
+    public void delete(UUID planId) {
+        entityManager.createNativeQuery("delete from teaching_plan where id = :planId")
+                .setParameter("planId", planId)
+                .executeUpdate();
+        entityManager.flush();
+    }
+
     private List<PlannedSection> findSections(UUID planId) {
         return entityManager
                 .createQuery(

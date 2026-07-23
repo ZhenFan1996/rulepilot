@@ -47,4 +47,54 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
   })
+
+  it('lets an anonymous reader ask and receive cited examples plus same-page imagery', async () => {
+    const lesson = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: null, gameCover: null,
+      lesson: {
+        id: 'lesson-1', status: 'COMPLETE', sections: [{
+          position: 1, title: '摆好鸟类保护区', visualCaption: '', steps: [
+            { position: 1, heading: '放置玩家板', kind: 'VISUAL', text: '把玩家板放在自己面前。', sourcePages: [2], visualFocus: { pageNumber: 2, label: '玩家板设置', x: 100, y: 200, width: 500, height: 300 } },
+            { position: 2, heading: '开局示例', kind: 'EXAMPLE', text: '每位玩家从自己的玩家板开始。', sourcePages: [2], visualFocus: null },
+          ],
+        }],
+      },
+    }
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Response.json({
+          answer: {
+            status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步。',
+            citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', clarification: null,
+          },
+          visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
+          examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
+        })
+      }
+      return Response.json(lesson)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('玩家板先放哪里？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')).toBeTruthy()
+    expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
+    expect(wrapper.text()).toContain('同页图例')
+    expect(wrapper.text()).toContain('照这个例子走：开局示例')
+    expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
+  })
 })

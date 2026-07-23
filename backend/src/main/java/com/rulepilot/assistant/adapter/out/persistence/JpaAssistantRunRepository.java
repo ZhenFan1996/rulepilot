@@ -171,6 +171,18 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                 .toList();
     }
 
+    @Override
+    public void deleteBySubject(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
+        entityManager.createNativeQuery("""
+                        delete from assistant_run
+                        where mode = :mode and subject_id = :subjectId and owner_username = :owner
+                        """)
+                .setParameter("mode", mode.name())
+                .setParameter("subjectId", subjectId)
+                .setParameter("owner", ownerUsername)
+                .executeUpdate();
+    }
+
     private void insertStep(
             UUID runId,
             long sequence,

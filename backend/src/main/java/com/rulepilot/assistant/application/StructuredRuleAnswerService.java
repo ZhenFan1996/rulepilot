@@ -21,6 +21,7 @@ import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
@@ -68,7 +69,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
-public class StructuredRuleAnswerService {
+public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     private static final String ANSWER_POLICY_VERSION = "answer-v42-answer-scope-discipline";
@@ -259,6 +260,30 @@ public class StructuredRuleAnswerService {
         return Observation.createNotStarted("rulepilot.answer.workflow", observations)
                 .contextualName("answer-workflow")
                 .observe(() -> answerWithRunObserved(question, context, username, gameSessionId, true));
+    }
+
+    @Override
+    public RuleAnswering.AnswerResult answerForPublicReader(
+            UUID documentVersionId, String question, String currentLessonSection, String previousQuestion) {
+        AnswerCreation creation = answerWithRun(
+                question,
+                new QuestionContext(documentVersionId, currentLessonSection, null, null, Set.of(), previousQuestion, null),
+                "public-reader",
+                null);
+        StructuredRuleAnswer answer = creation.answer();
+        return new RuleAnswering.AnswerResult(
+                creation.assistantRunId(),
+                new RuleAnswering.Answer(
+                        answer.status().name(),
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        answer.citations().stream()
+                                .map(citation -> new RuleAnswering.Citation(
+                                        citation.heading(), citation.pageFrom(), citation.pageTo()))
+                                .toList(),
+                        answer.exceptions(),
+                        answer.confidence().name(),
+                        answer.clarification()));
     }
 
     public AnswerCreation evaluateWithRun(

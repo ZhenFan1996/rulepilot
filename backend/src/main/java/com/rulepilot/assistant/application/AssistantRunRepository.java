@@ -22,4 +22,6 @@ public interface AssistantRunRepository {
     List<AssistantRun> findNonTerminalOwned(AssistantRunMode mode, String ownerUsername);
 
     List<StepSnapshot> steps(UUID runId);
+
+    void deleteBySubject(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 }

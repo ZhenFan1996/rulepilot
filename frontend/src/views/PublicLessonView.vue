@@ -36,10 +36,32 @@ interface PublicLessonResponse {
   lesson: { id: string; status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'; sections: LessonSection[] }
 }
 
+interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
+interface PublicAnswer {
+  answer: {
+    status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT'
+    shortVerdict: string
+    explanation: string | null
+    citations: RuleCitation[]
+    exceptions: string[]
+    confidence: 'LOW' | 'MEDIUM' | 'HIGH'
+    clarification: string | null
+  }
+  visualAids: Array<{ visualFocus: VisualFocus; relatedStep: string }>
+  examples: Array<{ heading: string; text: string; sourcePages: number[] }>
+}
+
+interface PublicAnswerTurn { question: string; answer: PublicAnswer }
+
 const route = useRoute()
 const loading = ref(true)
 const errorMessage = ref('')
 const publicLesson = ref<PublicLessonResponse | null>(null)
+const publicQuestion = ref('')
+const selectedSectionPosition = ref<number | null>(null)
+const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
+const publicAnswerLoading = ref(false)
+const publicAnswerError = ref('')
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 
 function sourcePageUrl(pageNumber: number) {
@@ -66,6 +88,51 @@ async function load() {
     errorMessage.value = error instanceof Error ? error.message : '暂时无法打开这份讲解。'
   } finally {
     loading.value = false
+  }
+}
+
+function confidenceLabel(confidence: PublicAnswer['answer']['confidence']) {
+  return { LOW: '依据较少', MEDIUM: '已核对依据', HIGH: '依据充分' }[confidence]
+}
+
+function answerFailureMessage(answer: PublicAnswer['answer']) {
+  if (answer.status === 'CLARIFICATION_REQUIRED') return answer.clarification ?? '请补充你正在看的步骤或局面。'
+  if (answer.status === 'MODEL_TIMEOUT') return '这次核对超时了，可以稍后再问，或直接查看下方来源页。'
+  return answer.shortVerdict
+}
+
+function askAboutSection(section: LessonSection) {
+  selectedSectionPosition.value = section.position
+  publicQuestion.value = `请把“${section.title}”这一章最容易弄错的步骤讲清楚，并走一个规则书允许的例子。`
+  document.getElementById('public-question')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  window.setTimeout(() => (document.getElementById('public-question') as HTMLTextAreaElement | null)?.focus(), 250)
+}
+
+async function submitPublicQuestion() {
+  const question = publicQuestion.value.trim()
+  if (!question || publicAnswerLoading.value || !planId.value) return
+  publicAnswerLoading.value = true
+  publicAnswerError.value = ''
+  try {
+    const previousTurn = publicAnswerTurns.value.at(-1)
+    const response = await fetch(`/api/public/lessons/${encodeURIComponent(planId.value)}/answers`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        sectionPosition: selectedSectionPosition.value,
+        previousQuestion: previousTurn?.question ?? null,
+      }),
+    })
+    if (response.status === 404) throw new Error('这份讲解已不再公开，无法继续答疑。')
+    if (!response.ok) throw new Error('暂时无法核对规则书，请稍后再试。')
+    const received = await response.json() as PublicAnswer
+    publicAnswerTurns.value.push({ question, answer: received })
+    publicQuestion.value = ''
+  } catch (error) {
+    publicAnswerError.value = error instanceof Error ? error.message : '暂时无法核对规则书。'
+  } finally {
+    publicAnswerLoading.value = false
   }
 }
 
@@ -108,8 +175,75 @@ onMounted(() => { void load() })
         <a v-if="publicLesson.officialSourceUrl" :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex min-h-11 items-center rounded-lg border border-indigo/30 px-4 font-semibold text-indigo hover:bg-indigo/5">打开官方原规则书</a>
       </div>
 
+      <section class="mt-8 rounded-3xl border border-indigo/20 bg-indigo/[0.045] p-5 shadow-[0_18px_50px_-36px_rgba(40,57,128,0.75)] sm:p-7" aria-labelledby="public-question-title">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">桌边答疑</p>
+            <h2 id="public-question-title" class="mt-2 font-display text-3xl font-semibold tracking-tight">读到哪一步卡住了？</h2>
+            <p class="mt-2 max-w-2xl leading-7 text-ink/60">直接提问。回答只根据这份公开规则书的引用组织；命中同页图例或示例时，也会一并带回来。</p>
+          </div>
+          <span class="w-fit rounded-full bg-paper px-3 py-1.5 text-xs font-semibold text-indigo">无需登录</span>
+        </div>
+
+        <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <label class="text-sm font-semibold text-ink/70">正在看的章节 <span class="font-normal text-ink/40">（可选）</span>
+            <select v-model="selectedSectionPosition" :disabled="publicAnswerLoading" class="mt-2 min-h-11 w-full rounded-xl border border-ink/15 bg-paper px-3 font-normal outline-none focus:border-indigo disabled:opacity-50">
+              <option :value="null">整本规则书</option>
+              <option v-for="section in publicLesson.lesson.sections" :key="section.position" :value="section.position">第 {{ section.position }} 章 · {{ section.title }}</option>
+            </select>
+          </label>
+          <div class="self-end rounded-xl border border-indigo/10 bg-paper px-4 py-3 text-xs leading-5 text-ink/50">例如：<br><span class="font-semibold text-ink/65">“这一步之后是谁行动？”</span></div>
+        </div>
+
+        <form class="mt-4" @submit.prevent="submitPublicQuestion">
+          <label for="public-question" class="sr-only">向公开规则讲解提问</label>
+          <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading" placeholder="例如：完成这个动作后，接下来要做什么？为什么？" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <p class="text-xs text-ink/45">{{ publicQuestion.length }}/800 · 每个结论都会附来源页</p>
+            <button type="submit" :disabled="publicAnswerLoading || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? '正在查找规则依据…' : '问规则书' }}</button>
+          </div>
+        </form>
+
+        <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
+        <div v-else-if="publicAnswerLoading" class="mt-5 rounded-2xl border border-indigo/12 bg-paper p-5" role="status" aria-live="polite">
+          <div class="flex items-center gap-3"><span class="size-3 animate-pulse rounded-full bg-copper" /><p class="text-sm font-semibold">正在查找引用、核对原文，再组织成可执行的回答…</p></div>
+          <div class="mt-4 grid gap-2 text-xs text-ink/50 sm:grid-cols-3"><span>1. 对齐问题</span><span>2. 查找规则书</span><span>3. 附上来源与图例</span></div>
+        </div>
+
+        <ol v-if="publicAnswerTurns.length" class="mt-6 space-y-5" aria-label="本次公开答疑">
+          <li v-for="(turn, index) in publicAnswerTurns" :key="`${index}-${turn.question}`" class="space-y-3">
+            <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
+            <article class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm sm:max-w-[88%]">
+              <div class="p-5 sm:p-6">
+                <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span class="text-xs font-semibold text-ink/40">规则书答复</span></div>
+                <p class="mt-4 font-display text-xl font-semibold leading-8">{{ turn.answer.answer.shortVerdict }}</p>
+                <p v-if="turn.answer.answer.status === 'ANSWERED' && turn.answer.answer.explanation" class="mt-3 leading-7 text-ink/75">{{ turn.answer.answer.explanation }}</p>
+                <p v-else class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ answerFailureMessage(turn.answer.answer) }}</p>
+                <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
+
+                <div v-if="turn.answer.answer.citations.length" class="mt-5 border-t border-ink/10 pt-4">
+                  <p class="text-xs font-semibold uppercase tracking-[0.12em] text-ink/40">依据</p>
+                  <ul class="mt-2 flex flex-wrap gap-2"><li v-for="citation in turn.answer.answer.citations" :key="`${citation.heading}-${citation.pageFrom}`" class="rounded-xl bg-canvas px-3 py-2 text-xs font-semibold text-indigo">{{ citation.heading }} · 第 {{ citation.pageFrom }}{{ citation.pageTo !== citation.pageFrom ? `–${citation.pageTo}` : '' }} 页</li></ul>
+                </div>
+
+                <div v-if="turn.answer.visualAids.length || turn.answer.examples.length" class="mt-5 border-t border-ink/10 pt-4">
+                  <p class="text-sm font-semibold text-indigo">把这段答案和规则书放在一起看</p>
+                  <div v-if="turn.answer.visualAids.length" class="mt-3 grid gap-3 sm:grid-cols-2">
+                    <a v-for="aid in turn.answer.visualAids" :key="`${aid.visualFocus.pageNumber}-${aid.visualFocus.x}-${aid.visualFocus.y}`" :href="sourcePageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-2xl border border-ink/10 bg-canvas transition hover:border-indigo/35">
+                      <img :src="cropUrl(aid.visualFocus)" :alt="`${aid.visualFocus.label}（规则书第 ${aid.visualFocus.pageNumber} 页）`" class="aspect-[4/3] w-full object-contain">
+                      <span class="block border-t border-ink/10 px-3 py-2 text-xs font-semibold text-indigo">同页图例 · {{ aid.relatedStep }}</span>
+                    </a>
+                  </div>
+                  <ul v-if="turn.answer.examples.length" class="mt-3 space-y-2"><li v-for="example in turn.answer.examples" :key="`${example.heading}-${example.text}`" class="rounded-2xl bg-copper/[0.07] px-4 py-3"><p class="text-sm font-semibold text-copper">照这个例子走：{{ example.heading }}</p><p class="mt-1 text-sm leading-6 text-ink/70">{{ example.text }}</p><p v-if="example.sourcePages.length" class="mt-2 text-xs text-ink/45">同样来自第 {{ example.sourcePages.join('、') }} 页</p></li></ul>
+                </div>
+              </div>
+            </article>
+          </li>
+        </ol>
+      </section>
+
       <section v-for="section in publicLesson.lesson.sections" :key="section.position" class="border-b border-ink/10 py-10">
-        <p class="text-sm font-semibold text-copper">第 {{ section.position }} 章</p>
+        <div class="flex flex-wrap items-center justify-between gap-3"><p class="text-sm font-semibold text-copper">第 {{ section.position }} 章</p><button type="button" class="rounded-lg border border-indigo/20 px-3 py-2 text-xs font-semibold text-indigo hover:bg-indigo/5" @click="askAboutSection(section)">问这一章</button></div>
         <h2 class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ section.title }}</h2>
         <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
 

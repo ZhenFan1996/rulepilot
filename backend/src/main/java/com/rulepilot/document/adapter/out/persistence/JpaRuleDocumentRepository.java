@@ -132,6 +132,19 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
     }
 
     @Override
+    public List<DocumentVersion> findVersions(UUID documentId) {
+        return entityManager
+                .createQuery(
+                        "select v from DocumentVersionEntity v where v.documentId = :documentId order by v.versionNumber",
+                        DocumentVersionEntity.class)
+                .setParameter("documentId", documentId)
+                .getResultList()
+                .stream()
+                .map(DocumentVersionEntity::toDomain)
+                .toList();
+    }
+
+    @Override
     public long ruleDataVersion(UUID versionId) {
         DocumentVersionEntity version = entityManager.find(DocumentVersionEntity.class, versionId);
         if (version == null) {
@@ -223,6 +236,80 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
                 .map(page -> new PageImageMetadata(
                         page.pageNumber, page.imageObjectKey, page.imageWidth, page.imageHeight))
                 .toList();
+    }
+
+    @Override
+    public List<PageImageMetadata> findAllPageImages(UUID versionId) {
+        return entityManager
+                .createQuery(
+                        "select p from DocumentPageEntity p where p.documentVersionId = :versionId "
+                                + "and p.imageObjectKey is not null order by p.pageNumber",
+                        DocumentPageEntity.class)
+                .setParameter("versionId", versionId)
+                .getResultList()
+                .stream()
+                .map(page -> new PageImageMetadata(
+                        page.pageNumber, page.imageObjectKey, page.imageWidth, page.imageHeight))
+                .toList();
+    }
+
+    @Override
+    public void deleteDocument(UUID documentId) {
+        entityManager.createNativeQuery("""
+                        delete from outbox_event
+                        where aggregate_type = 'DOCUMENT_VERSION'
+                          and aggregate_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from processing_stage_execution
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from confirmed_ruling
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from game_session
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from visual_rulebook_page_fact
+                        where document_version_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from assistant_run
+                        where subject_id in (
+                            select plan.id
+                            from teaching_plan plan
+                            where plan.document_version_id in (
+                                select id from document_version where document_id = :documentId
+                            )
+                        )
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from assistant_run
+                        where subject_id in (select id from document_version where document_id = :documentId)
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.createNativeQuery("""
+                        delete from rule_document where id = :documentId
+                        """)
+                .setParameter("documentId", documentId)
+                .executeUpdate();
+        entityManager.flush();
     }
 
     @Override

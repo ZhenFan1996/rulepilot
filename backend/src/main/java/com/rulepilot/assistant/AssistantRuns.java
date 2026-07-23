@@ -23,6 +23,8 @@ public interface AssistantRuns {
 
     void requestCancellation(UUID runId, String ownerUsername);
 
+    void deleteOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername);
+
     Optional<RunDetails> findOwned(UUID runId, String ownerUsername);
 
     Optional<RunDetails> findLatestOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername);

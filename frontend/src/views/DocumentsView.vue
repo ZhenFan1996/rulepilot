@@ -50,6 +50,7 @@ const beginnerCount = ref(4)
 const durationMinutes = ref(25)
 const loading = ref(true)
 const uploading = ref(false)
+const deletingDocumentId = ref('')
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
@@ -445,6 +446,32 @@ async function uploadRulebook() {
   }
 }
 
+async function deleteRulebook(entry: DocumentResponse) {
+  if (deletingDocumentId.value || preparingVersionId.value) return
+  const confirmed = window.confirm(`删除“${entry.document.title}”吗？这会同时删除本地规则书、页面图片和由它生成的讲解，无法恢复。`)
+  if (!confirmed) return
+  deletingDocumentId.value = entry.document.id
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(entry.document.id)}`, {
+      method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error('规则书暂时无法删除，请稍后重试。')
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, entry.latestVersion.id)
+    if (processingVersionId.value === entry.latestVersion.id) {
+      closeProgressConnection(entry.latestVersion.id)
+      processingVersionId.value = ''
+    }
+    await loadDocuments()
+    message.value = '规则书和它生成的讲解已经删除。'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '规则书暂时无法删除。'
+  } finally {
+    deletingDocumentId.value = ''
+  }
+}
+
 onMounted(() => {
   disposed = false
   void load()
@@ -561,7 +588,10 @@ onBeforeUnmount(() => {
                   {{ documentStatusLabel(entry.latestVersion.status) }} · {{ Math.ceil(entry.latestVersion.size / 1024) }} KiB
                 </p>
               </div>
-              <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId)" class="shrink-0 rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
+              <div class="flex shrink-0 flex-wrap gap-2">
+                <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
+                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? '正在删除…' : '删除' }}</button>
+              </div>
             </div>
           </li>
         </ul>
