@@ -1,0 +1,153 @@
+package com.rulepilot.assistant.application;
+
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
+import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import java.util.Collection;
+import java.util.Locale;
+import java.util.regex.Pattern;
+
+/**
+ * Pure, evidence-only answer rules shared by retrieval selection and final citation validation.
+ *
+ * <p>These predicates identify what source material can support a player question. They never create a rule or
+ * change player-facing model text.</p>
+ */
+final class AnswerEvidencePolicy {
+
+    private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
+            "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
+    private static final Pattern VISUAL_EVIDENCE_PRIORITY_QUESTION = Pattern.compile(
+            "(?iu)\\b(which|what|resource|token|icon|symbol|pay|cost|gain|spend|score|stake)\\b"
+                    + "|支付|费用|代价|获得|得分|令牌|标记|图标|符号|胜利点|资源|下注");
+    private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
+            "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
+                    + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
+    private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
+            "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
+                    + "游戏结束|结束条件|终局))"
+                    + "(?=.*(?:\\bif\\b|\\bwhen\\b|\\bafter\\b|若|如果|当|达到|至少)).*");
+    private static final Pattern EVIDENCED_ENDGAME_SCORING = Pattern.compile(
+            "(?iu)(?:score|scoring|points?|winner|wins?|计分|得分|分数|获胜|胜者)");
+    private static final Pattern EVIDENCED_ENDGAME_TIE = Pattern.compile(
+            "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:winner|wins?|break)|平局.{0,80}(?:获胜|胜者|比较|决胜)|同分.{0,80}(?:获胜|胜者|比较|决胜))");
+    private static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
+
+    private AnswerEvidencePolicy() {}
+
+    static boolean hasUnresolvedVisualSymbol(String value) {
+        return value != null && UNRESOLVED_VISUAL_SYMBOL.matcher(value).find();
+    }
+
+    static boolean visualEvidencePriority(String question) {
+        return question != null && VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question).find();
+    }
+
+    static boolean hasEndTurnProcedure(EvidenceInput source) {
+        return source != null && hasEndTurnProcedure(source.excerpt());
+    }
+
+    static boolean hasEndTurnProcedure(HybridEvidenceHit hit) {
+        return hit != null && hasEndTurnProcedure(hit.evidence().excerpt());
+    }
+
+    static boolean hasEndTurnProcedure(String excerpt) {
+        return excerpt != null && EVIDENCED_END_TURN_PROCEDURE.matcher(excerpt).find();
+    }
+
+    static boolean hasEndgameResolution(EvidenceInput source) {
+        return source != null
+                && source.excerpt() != null
+                && !"COMPONENTS".equalsIgnoreCase(source.sectionType())
+                && EVIDENCED_ENDGAME_TRIGGER.matcher(source.excerpt()).find();
+    }
+
+    static boolean hasEndgameResolution(HybridEvidenceHit hit) {
+        if (hit == null) return false;
+        return hasEndgameResolution(new EvidenceInput(
+                hit.evidence().chunkId(),
+                hit.evidence().sectionType(),
+                hit.evidence().heading(),
+                hit.evidence().excerpt(),
+                hit.evidence().pageFrom(),
+                hit.evidence().pageTo()));
+    }
+
+    static int endgameResolutionDetailScore(HybridEvidenceHit hit) {
+        if (!hasEndgameResolution(hit)) return 0;
+        String excerpt = hit.evidence().excerpt();
+        int score = 10;
+        if (hasEndgameScoring(excerpt)) score += 10;
+        if (hasEndgameTie(excerpt)) score += 10;
+        if (excerpt.toLowerCase(Locale.ROOT).contains("clean up") || excerpt.contains("清理")) score += 4;
+        String heading = hit.evidence().heading().toLowerCase(Locale.ROOT);
+        if (heading.contains("ending") || heading.contains("end game") || heading.contains("round")) score += 12;
+        return score;
+    }
+
+    static boolean hasEndgameScoring(String excerpt) {
+        return excerpt != null && EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find();
+    }
+
+    static boolean hasEndgameTie(String excerpt) {
+        return excerpt != null && EVIDENCED_ENDGAME_TIE.matcher(excerpt).find();
+    }
+
+    static boolean isEndgameResolutionQuestion(String question) {
+        String normalized = question == null ? "" : question.toLowerCase(Locale.ROOT);
+        return mentionsEndTrigger(normalized)
+                && containsAny(normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
+    }
+
+    static boolean mentionsEndTrigger(String value) {
+        return containsAny(
+                value, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
+    }
+
+    static boolean asksScoring(String value) {
+        return containsAny(value, "score", "scoring", "point", "计分", "得分", "分数");
+    }
+
+    static boolean asksTie(String value) {
+        return containsAny(value, "tie", "tied", "平局", "同分");
+    }
+
+    static boolean asksEndgameTiming(String value) {
+        return containsAny(value, "when", "immediately", "何时", "什么时候", "立刻", "立即");
+    }
+
+    static boolean requiresIconLegend(Collection<PageFactMatch> facts) {
+        return facts.stream().anyMatch(fact -> hasUnresolvedVisualSymbol(fact.printedTerms() + " " + fact.factualSummary()));
+    }
+
+    static boolean isVisualPlaceholder(HybridEvidenceHit hit) {
+        return hit != null && VISUAL_PAGE_PLACEHOLDER.equals(hit.evidence().excerpt());
+    }
+
+    static boolean requiresCrossLanguageExpansion(String question) {
+        if (question == null || question.isBlank()) return false;
+        return question.codePoints()
+                .filter(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
+                .count() >= 2;
+    }
+
+    static boolean sameEvidenceSnapshot(HybridEvidenceHit first, HybridEvidenceHit second) {
+        var left = first.evidence();
+        var right = second.evidence();
+        return left.chunkId().equals(right.chunkId())
+                && left.documentVersionId().equals(right.documentVersionId())
+                && left.sectionType().equals(right.sectionType())
+                && left.heading().equals(right.heading())
+                && left.excerpt().equals(right.excerpt())
+                && left.pageFrom() == right.pageFrom()
+                && left.pageTo() == right.pageTo();
+    }
+
+    private static boolean containsAny(String value, String... values) {
+        for (String candidate : values) {
+            if (value.contains(candidate)) return true;
+        }
+        return false;
+    }
+}

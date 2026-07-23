@@ -77,8 +77,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     private static final String ANSWER_POLICY_VERSION = "answer-v58-document-scoped-resolution-evidence";
-    private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
-            "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
             "(?iu)\\b(?:which|what)\\s+(?:resource|token|icon|symbol)\\b"
                     + "|\\b(?:resource|token|icon|symbol)\\b.{0,36}\\b(?:mean|represent|refer|correspond)\\b"
@@ -86,9 +84,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "|(?:哪个|哪种|哪一种|什么|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)"
                     + "|(?:图标|符号).{0,36}(?:表示|代表|对应|是什么|含义)"
                     + "|(?:支付|花费|消耗|获得).{0,18}(?:什么|哪种|哪一种|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)");
-    private static final Pattern VISUAL_EVIDENCE_PRIORITY_QUESTION = Pattern.compile(
-            "(?iu)\\b(which|what|resource|token|icon|symbol|pay|cost|gain|spend|score|stake)\\b"
-                    + "|支付|费用|代价|获得|得分|令牌|标记|图标|符号|胜利点|资源|下注");
     private static final Pattern INTERNAL_EVIDENCE_REFERENCE = Pattern.compile(
             "(?iu)[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|\\bchunk(?:id)?\\b"
                     + "|(?:证据|引用|evidence|source)\\s*\\[?E\\d+\\]?|\\[E\\d+\\]|\\[[0-9a-f]{8}\\]");
@@ -157,22 +152,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
             "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
                     + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
-            "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
-                    + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
-            "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
-                    + "游戏结束|结束条件|终局))"
-                    + "(?=.*(?:\\bif\\b|\\bwhen\\b|\\bafter\\b|若|如果|当|达到|至少)).*");
-    private static final Pattern EVIDENCED_ENDGAME_SCORING = Pattern.compile(
-            "(?iu)(?:score|scoring|points?|winner|wins?|计分|得分|分数|获胜|胜者)");
-    private static final Pattern EVIDENCED_ENDGAME_TIE = Pattern.compile(
-            "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:winner|wins?|break)|平局.{0,80}(?:获胜|胜者|比较|决胜)|同分.{0,80}(?:获胜|胜者|比较|决胜))");
     private static final Pattern TITLE_CASED_ENGLISH_LABEL = Pattern.compile(
             "\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,3}\\b");
-    private static final String VISUAL_PAGE_PLACEHOLDER =
-            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
-
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
@@ -786,23 +767,19 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private boolean requiresEndTurnProcedureCitation(ModelRequest request) {
         return END_TURN_PROCEDURE_QUESTION.matcher(request.question()).matches()
                 && request.evidence().stream()
-                        .anyMatch(this::hasEvidencedEndTurnProcedure);
+                        .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
     }
 
     private boolean citesEndTurnProcedure(ModelRequest request, ModelDraft draft) {
         Set<UUID> citations = Set.copyOf(draft.citationIds());
         return request.evidence().stream()
                 .filter(source -> citations.contains(source.chunkId()))
-                .anyMatch(this::hasEvidencedEndTurnProcedure);
+                .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
     }
 
     private boolean requiresEndgameResolutionCitation(ModelRequest request) {
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean mentionsEndTrigger = containsAny(
-                question, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
-        boolean mentionsResolution = containsAny(
-                question, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
-        return mentionsEndTrigger && mentionsResolution
+        return AnswerEvidencePolicy.isEndgameResolutionQuestion(question)
                 && request.evidence().stream().anyMatch(source -> hasRequiredEndgameResolution(request, source));
     }
 
@@ -838,16 +815,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private boolean isEndgameTimingAndTieSummary(ModelRequest request) {
         if (!requiresEndgameResolutionCitation(request)) return false;
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksTiming = containsAny(question, "when", "immediately", "何时", "什么时候", "立刻", "立即");
-        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        boolean asksTiming = AnswerEvidencePolicy.asksEndgameTiming(question);
+        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
         return asksTiming && asksTie;
-    }
-
-    private boolean hasEvidencedEndgameResolution(EvidenceInput source) {
-        return source != null
-                && source.excerpt() != null
-                && !"COMPONENTS".equalsIgnoreCase(source.sectionType())
-                && EVIDENCED_ENDGAME_TRIGGER.matcher(source.excerpt()).find();
     }
 
     private boolean hasRequiredEndgameResolution(ModelRequest request, EvidenceInput source) {
@@ -855,63 +825,40 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private boolean hasRequiredEndgameResolution(ModelRequest request, List<EvidenceInput> sources) {
-        if (sources.stream().noneMatch(this::hasEvidencedEndgameResolution)) return false;
+        if (sources.stream().noneMatch(AnswerEvidencePolicy::hasEndgameResolution)) return false;
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksScoring = containsAny(question, "score", "scoring", "point", "计分", "得分", "分数");
-        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        boolean asksScoring = AnswerEvidencePolicy.asksScoring(question);
+        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
         boolean citesScoring = sources.stream()
                 .map(EvidenceInput::excerpt)
                 .filter(java.util.Objects::nonNull)
-                .anyMatch(excerpt -> EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find());
+                .anyMatch(AnswerEvidencePolicy::hasEndgameScoring);
         boolean citesTie = sources.stream()
                 .map(EvidenceInput::excerpt)
                 .filter(java.util.Objects::nonNull)
-                .anyMatch(excerpt -> EVIDENCED_ENDGAME_TIE.matcher(excerpt).find());
+                .anyMatch(AnswerEvidencePolicy::hasEndgameTie);
         return (!asksScoring || citesScoring) && (!asksTie || citesTie);
     }
 
     private List<EvidenceInput> requiredEndgameEvidence(ModelRequest request, List<EvidenceInput> sources) {
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksScoring = containsAny(question, "score", "scoring", "point", "计分", "得分", "分数");
-        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        boolean asksScoring = AnswerEvidencePolicy.asksScoring(question);
+        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
         LinkedHashSet<EvidenceInput> required = new LinkedHashSet<>();
-        sources.stream().filter(this::hasEvidencedEndgameResolution).findFirst().ifPresent(required::add);
+        sources.stream().filter(AnswerEvidencePolicy::hasEndgameResolution).findFirst().ifPresent(required::add);
         if (asksScoring) {
             sources.stream()
-                    .filter(source -> source.excerpt() != null && EVIDENCED_ENDGAME_SCORING.matcher(source.excerpt()).find())
+                    .filter(source -> AnswerEvidencePolicy.hasEndgameScoring(source.excerpt()))
                     .findFirst()
                     .ifPresent(required::add);
         }
         if (asksTie) {
             sources.stream()
-                    .filter(source -> source.excerpt() != null && EVIDENCED_ENDGAME_TIE.matcher(source.excerpt()).find())
+                    .filter(source -> AnswerEvidencePolicy.hasEndgameTie(source.excerpt()))
                     .findFirst()
                     .ifPresent(required::add);
         }
         return List.copyOf(required);
-    }
-
-    private boolean hasEvidencedEndgameResolution(HybridEvidenceHit hit) {
-        if (hit == null) return false;
-        return hasEvidencedEndgameResolution(new EvidenceInput(
-                hit.evidence().chunkId(),
-                hit.evidence().sectionType(),
-                hit.evidence().heading(),
-                hit.evidence().excerpt(),
-                hit.evidence().pageFrom(),
-                hit.evidence().pageTo()));
-    }
-
-    private int endgameResolutionDetailScore(HybridEvidenceHit hit) {
-        if (!hasEvidencedEndgameResolution(hit)) return 0;
-        String excerpt = hit.evidence().excerpt();
-        int score = 10;
-        if (EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find()) score += 10;
-        if (EVIDENCED_ENDGAME_TIE.matcher(excerpt).find()) score += 10;
-        if (excerpt.toLowerCase(Locale.ROOT).contains("clean up") || excerpt.contains("清理")) score += 4;
-        String heading = hit.evidence().heading().toLowerCase(Locale.ROOT);
-        if (heading.contains("ending") || heading.contains("end game") || heading.contains("round")) score += 12;
-        return score;
     }
 
     private boolean containsUncitedEnglishTitleLabel(ModelRequest request, ModelDraft draft) {
@@ -931,24 +878,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return false;
     }
 
-    private static boolean containsAny(String value, String... values) {
-        for (String candidate : values) {
-            if (value.contains(candidate)) return true;
-        }
-        return false;
-    }
-
-    private boolean hasEvidencedEndTurnProcedure(HybridEvidenceHit hit) {
-        return hit != null && hasEvidencedEndTurnProcedure(hit.evidence().excerpt());
-    }
-
-    private boolean hasEvidencedEndTurnProcedure(EvidenceInput evidence) {
-        return evidence != null && hasEvidencedEndTurnProcedure(evidence.excerpt());
-    }
-
-    private boolean hasEvidencedEndTurnProcedure(String excerpt) {
-        return excerpt != null && EVIDENCED_END_TURN_PROCEDURE.matcher(excerpt).find();
-    }
 
     private ModelDraft revisePlayerFacingDraft(
             UUID assistantRunId,
@@ -985,7 +914,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 .map(EvidenceInput::excerpt)
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(excerpt -> excerpt.contains("Visual page facts")
-                        && UNRESOLVED_VISUAL_SYMBOL.matcher(excerpt).find());
+                        && AnswerEvidencePolicy.hasUnresolvedVisualSymbol(excerpt));
     }
 
     private boolean hasEvidencedCrossPageIconMapping(ModelRequest request) {
@@ -1060,7 +989,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private boolean containsUnresolvedVisualSymbol(ModelDraft draft) {
-        return UNRESOLVED_VISUAL_SYMBOL.matcher(playerFacingText(draft)).find();
+        return AnswerEvidencePolicy.hasUnresolvedVisualSymbol(playerFacingText(draft));
     }
 
     private boolean containsResourceCardConflation(ModelDraft draft) {
@@ -1303,13 +1232,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             } else if (!retrieved.isEmpty() && !supplementaryIntent
                     && intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION) {
                 HybridEvidenceHit directResolution = retrieved.stream()
-                        .max(Comparator.comparingInt(this::endgameResolutionDetailScore))
+                        .max(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore))
                         .orElse(retrieved.getFirst());
                 intentAnchors.putIfAbsent(directResolution.evidence().chunkId(), directResolution);
             } else if (!retrieved.isEmpty() && !supplementaryIntent
                     && intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
                 HybridEvidenceHit directProcedure = retrieved.stream()
-                        .filter(this::hasEvidencedEndTurnProcedure)
+                        .filter(AnswerEvidencePolicy::hasEndTurnProcedure)
                         .findFirst()
                         .orElse(retrieved.getFirst());
                 intentAnchors.putIfAbsent(directProcedure.evidence().chunkId(), directProcedure);
@@ -1322,7 +1251,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
             for (HybridEvidenceHit hit : retrieved) {
                 HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
-                if (existing != null && !sameEvidenceSnapshot(existing, hit)) {
+                if (existing != null && !AnswerEvidencePolicy.sameEvidenceSnapshot(existing, hit)) {
                     conflicting = true;
                     break;
                 }
@@ -1356,11 +1285,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 break;
             }
         }
-        if (!conflicting && isEndgameResolutionQuestion(question.normalizedQuestion())) {
+        if (!conflicting && AnswerEvidencePolicy.isEndgameResolutionQuestion(question.normalizedQuestion())) {
             enrichAdjacentEndgameEvidence(
                     assistantRunId, context.documentVersionId(), evidenceById, intentAnchors);
         }
-        if (!conflicting && requiresIconLegend(visualFactsByPage.values())) {
+        if (!conflicting && AnswerEvidencePolicy.requiresIconLegend(visualFactsByPage.values())) {
             try {
                 List<PageFactMatch> legendMatches = invocations.invoke(
                         assistantRunId,
@@ -1406,9 +1335,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         List<HybridEvidenceHit> selectedIntentAnchors = intentAnchors.values().stream()
                 .map(hit -> evidenceById.get(hit.evidence().chunkId()))
                 .filter(java.util.Objects::nonNull)
-                .filter(hit -> visualEvidenceIds.isEmpty() || !isVisualPlaceholder(hit))
+                .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
                 .toList();
-        boolean visualEvidencePriority = VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question.normalizedQuestion()).find();
+        boolean visualEvidencePriority = AnswerEvidencePolicy.visualEvidencePriority(question.normalizedQuestion());
         if (visualEvidencePriority) {
             selectedVisualEvidence.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
             selectedIntentAnchors.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
@@ -1418,34 +1347,32 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         if (selected.size() < 3) {
             evidenceById.values().stream()
-                    .filter(hit -> visualEvidenceIds.isEmpty() || !isVisualPlaceholder(hit))
+                    .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
                     .sorted(Comparator.comparingDouble(HybridEvidenceHit::score)
                             .reversed()
                             .thenComparing(hit -> hit.evidence().chunkId()))
                     .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         }
         List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(5).toList();
-        if (isEndgameResolutionQuestion(question.normalizedQuestion())) {
+        if (AnswerEvidencePolicy.isEndgameResolutionQuestion(question.normalizedQuestion())) {
             List<HybridEvidenceHit> decisiveEvidence = selectedEvidence.stream()
-                    .filter(this::hasEvidencedEndgameResolution)
-                    .sorted(Comparator.comparingInt(this::endgameResolutionDetailScore).reversed())
+                    .filter(AnswerEvidencePolicy::hasEndgameResolution)
+                    .sorted(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore).reversed())
                     .limit(1)
                     .toList();
             if (!decisiveEvidence.isEmpty()) {
                 LinkedHashMap<UUID, HybridEvidenceHit> complementaryEvidence = new LinkedHashMap<>();
                 decisiveEvidence.forEach(hit -> complementaryEvidence.put(hit.evidence().chunkId(), hit));
                 String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
-                if (containsAny(normalizedQuestion, "score", "scoring", "point", "计分", "得分", "分数")) {
+                if (AnswerEvidencePolicy.asksScoring(normalizedQuestion)) {
                     selectedEvidence.stream()
-                            .filter(hit -> hit.evidence().excerpt() != null
-                                    && EVIDENCED_ENDGAME_SCORING.matcher(hit.evidence().excerpt()).find())
+                            .filter(hit -> AnswerEvidencePolicy.hasEndgameScoring(hit.evidence().excerpt()))
                             .findFirst()
                             .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
                 }
-                if (containsAny(normalizedQuestion, "tie", "tied", "平局", "同分")) {
+                if (AnswerEvidencePolicy.asksTie(normalizedQuestion)) {
                     selectedEvidence.stream()
-                            .filter(hit -> hit.evidence().excerpt() != null
-                                    && EVIDENCED_ENDGAME_TIE.matcher(hit.evidence().excerpt()).find())
+                            .filter(hit -> AnswerEvidencePolicy.hasEndgameTie(hit.evidence().excerpt()))
                             .findFirst()
                             .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
                 }
@@ -1463,7 +1390,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     .distinct()
                     .collect(Collectors.joining(","));
             String decisivePages = selectedEvidence.stream()
-                    .filter(this::hasEvidencedEndgameResolution)
+                    .filter(AnswerEvidencePolicy::hasEndgameResolution)
                     .map(hit -> Integer.toString(hit.evidence().pageFrom()))
                     .distinct()
                     .collect(Collectors.joining(","));
@@ -1483,8 +1410,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             Map<UUID, HybridEvidenceHit> evidenceById,
             Map<UUID, HybridEvidenceHit> intentAnchors) {
         Set<UUID> proximityAnchors = evidenceById.values().stream()
-                .filter(this::hasEvidencedEndgameResolution)
-                .sorted(Comparator.comparingInt(this::endgameResolutionDetailScore).reversed())
+                .filter(AnswerEvidencePolicy::hasEndgameResolution)
+                .sorted(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore).reversed())
                 .map(hit -> hit.evidence().chunkId())
                 .limit(1)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -1514,8 +1441,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 }
             }
             Optional<HybridEvidenceHit> decisive = evidenceById.values().stream()
-                    .filter(this::hasEvidencedEndgameResolution)
-                    .max(Comparator.comparingInt(this::endgameResolutionDetailScore));
+                    .filter(AnswerEvidencePolicy::hasEndgameResolution)
+                    .max(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore));
             if (decisive.isPresent()) {
                 Optional<HybridEvidenceHit> timing = evidenceById.values().stream()
                         .filter(this::hasEvidencedEndgameTiming)
@@ -1567,15 +1494,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 || text.contains("回合结束");
     }
 
-    private boolean isEndgameResolutionQuestion(String question) {
-        String normalized = question == null ? "" : question.toLowerCase(Locale.ROOT);
-        boolean mentionsEndTrigger = containsAny(
-                normalized, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
-        boolean mentionsResolution = containsAny(
-                normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
-        return mentionsEndTrigger && mentionsResolution;
-    }
-
     private String replenishmentRetrievalQuery(String question) {
         String prefix = "耗尽 为空 回收 移回 补充 洗混 继续 ";
         String combined = prefix + question.strip();
@@ -1592,12 +1510,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private String normalizeIntentComparison(String value) {
         if (value == null) return "";
         return value.strip().replaceAll("[?？!！;；,，]+$", "").strip();
-    }
-
-    private boolean requiresIconLegend(java.util.Collection<PageFactMatch> facts) {
-        return facts.stream().anyMatch(fact -> UNRESOLVED_VISUAL_SYMBOL.matcher(
-                        fact.printedTerms() + " " + fact.factualSummary())
-                .find());
     }
 
     private Set<UUID> mergeVisualPageEvidence(
@@ -1645,7 +1557,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             PageFactMatch fact = factsByPage.get(source.pageFrom());
             if (fact == null) continue;
             HybridEvidenceHit existing = evidenceById.get(source.chunkId());
-            if (existing != null && !isVisualPlaceholder(existing)) {
+            if (existing != null && !AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
                 var textSource = existing.evidence();
                 var enrichedSource = new com.rulepilot.retrieval.evidence.RuleEvidenceHit(
                         textSource.chunkId(),
@@ -1687,17 +1599,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return Set.copyOf(enriched);
     }
 
-    private boolean isVisualPlaceholder(HybridEvidenceHit hit) {
-        return VISUAL_PAGE_PLACEHOLDER.equals(hit.evidence().excerpt());
-    }
-
     private static RuleEvidenceLookup emptyEvidenceLookup() {
         return (documentVersionId, chunkIds) -> List.of();
     }
 
     private List<String> rewriteCrossLanguageQueries(
             UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
-        if (!requiresCrossLanguageExpansion(question.normalizedQuestion())) {
+        if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.normalizedQuestion())) {
             return List.of();
         }
         RuleAnswerRateLimiter.Permit permit = rateLimiter.acquireModel(username, null, model.providerId());
@@ -1720,28 +1628,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         } finally {
             permit.close();
         }
-    }
-
-    private boolean requiresCrossLanguageExpansion(String question) {
-        if (question == null || question.isBlank()) {
-            return false;
-        }
-        long cjkCharacters = question.codePoints()
-                .filter(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN)
-                .count();
-        return cjkCharacters >= 2;
-    }
-
-    private boolean sameEvidenceSnapshot(HybridEvidenceHit first, HybridEvidenceHit second) {
-        var left = first.evidence();
-        var right = second.evidence();
-        return left.chunkId().equals(right.chunkId())
-                && left.documentVersionId().equals(right.documentVersionId())
-                && left.sectionType().equals(right.sectionType())
-                && left.heading().equals(right.heading())
-                && left.excerpt().equals(right.excerpt())
-                && left.pageFrom() == right.pageFrom()
-                && left.pageTo() == right.pageTo();
     }
 
     private ModelRequest toRequest(
