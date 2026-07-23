@@ -1368,6 +1368,47 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void reportsUnavailableRetrievalWithoutCallingTheAnswerModel() {
+        AtomicBoolean modelCalled = new AtomicBoolean();
+        var service = answerService(
+                (version, query, options) -> {
+                    throw new IllegalStateException("search temporarily unavailable");
+                },
+                request -> {
+                    modelCalled.set(true);
+                    return null;
+                });
+
+        var answer = service.answer(
+                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
+        assertThat(answer.shortVerdict()).isEqualTo("规则检索暂时不可用，尚未生成答案。");
+        assertThat(answer.citations()).isEmpty();
+        assertThat(modelCalled).isFalse();
+    }
+
+    @Test
+    void retainsTextEvidenceWhenAnOptionalVisualLookupFails() {
+        RuleEvidenceHit source = evidence("SCORING");
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                (documentVersionId, query, limit) -> {
+                    throw new IllegalStateException("visual index temporarily unavailable");
+                },
+                (documentVersionId, chunkIds) -> List.of(),
+                request -> new ModelDraft(
+                        "每枚硬币一分。", "计算最终分数时，每枚硬币计一分。",
+                        List.of(source.chunkId()), List.of(), "HIGH"));
+
+        var answer = service.answer(
+                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
+    }
+
+    @Test
     void answersFromContextualSupplementaryRetrievalWhenPrimaryHasNoMatch() {
         RuleEvidenceHit source = evidence("ACTIONS");
         AtomicInteger retrievalCalls = new AtomicInteger();

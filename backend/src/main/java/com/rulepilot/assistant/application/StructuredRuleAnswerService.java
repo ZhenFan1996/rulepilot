@@ -419,8 +419,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         RetrievalResult retrievalResult = retrieveEvidence(assistantRunId, understood, context, username);
         List<HybridEvidenceHit> evidence = retrievalResult.evidence();
-        if (retrievalResult.conflicting()) {
+        if (retrievalResult.state() == RetrievalState.CONFLICTING) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突，无法可靠回答。");
+        }
+        if (retrievalResult.state() == RetrievalState.UNAVAILABLE) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "规则检索暂时不可用，尚未生成答案。");
         }
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
@@ -1235,28 +1238,40 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         Set<Integer> requiredVisualFactPages = new LinkedHashSet<>();
         Set<Integer> directQuestionVisualFactPages = new LinkedHashSet<>();
         boolean conflicting = false;
+        int successfulCoreRetrievals = 0;
+        int failedCoreRetrievals = 0;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
         if (intents.stream().anyMatch(intent -> intent.purpose() == RetrievalPurpose.EXHAUSTED_SOURCE)) {
-            List<PageFactMatch> replenishmentMatches = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    "searchExplicitReplenishmentProcedure",
-                    18,
-                    "Direct replenishment procedure evidence retrieved",
-                    () -> visualFacts.search(
-                            context.documentVersionId(),
-                            replenishmentRetrievalQuery(question.normalizedQuestion()),
-                            3),
-                    matches -> matches.size() * 80);
-            replenishmentMatches.forEach(match -> visualFactsByPage.merge(
-                    match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
-            replenishmentMatches.forEach(match -> requiredVisualFactPages.add(match.pageNumber()));
+            try {
+                List<PageFactMatch> replenishmentMatches = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "searchExplicitReplenishmentProcedure",
+                        18,
+                        "Direct replenishment procedure evidence retrieved",
+                        () -> visualFacts.search(
+                                context.documentVersionId(),
+                                replenishmentRetrievalQuery(question.normalizedQuestion()),
+                                3),
+                        matches -> matches.size() * 80);
+                replenishmentMatches.forEach(match -> visualFactsByPage.merge(
+                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+                replenishmentMatches.forEach(match -> requiredVisualFactPages.add(match.pageNumber()));
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException lookupFailure) {
+                LOGGER.warn(
+                        "Optional replenishment fact lookup failed for document version {}: {}",
+                        context.documentVersionId(),
+                        lookupFailure.getClass().getSimpleName());
+            }
         }
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
             RetrievalIntent intent = intents.get(intentIndex);
+            List<HybridEvidenceHit> retrieved;
             try {
-                List<HybridEvidenceHit> retrieved = invocations.invoke(
+                retrieved = invocations.invoke(
                         assistantRunId,
                         ActivityType.TOOL,
                         "hybridRuleSearch",
@@ -1270,40 +1285,52 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                         intent.sectionTypes(),
                                         intent.currentSectionType())),
                         this::evidenceTokens);
-                boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
-                if (!retrieved.isEmpty() && !supplementaryIntent
-                        && intent.purpose() == RetrievalPurpose.STATE_TRANSITION) {
-                    retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
-                } else if (!retrieved.isEmpty() && !supplementaryIntent
-                        && intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION) {
-                    HybridEvidenceHit directResolution = retrieved.stream()
-                            .max(Comparator.comparingInt(this::endgameResolutionDetailScore))
-                            .orElse(retrieved.getFirst());
-                    intentAnchors.putIfAbsent(directResolution.evidence().chunkId(), directResolution);
-                } else if (!retrieved.isEmpty() && !supplementaryIntent
-                        && intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
-                    HybridEvidenceHit directProcedure = retrieved.stream()
-                            .filter(this::hasEvidencedEndTurnProcedure)
-                            .findFirst()
-                            .orElse(retrieved.getFirst());
-                    intentAnchors.putIfAbsent(directProcedure.evidence().chunkId(), directProcedure);
-                } else if (!retrieved.isEmpty() && !supplementaryIntent) {
-                    HybridEvidenceHit diverseAnchor = retrieved.stream()
-                            .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))
-                            .findFirst()
-                            .orElse(retrieved.getFirst());
-                    intentAnchors.putIfAbsent(diverseAnchor.evidence().chunkId(), diverseAnchor);
+                successfulCoreRetrievals++;
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException retrievalFailure) {
+                failedCoreRetrievals++;
+                LOGGER.warn(
+                        "Answer retrieval intent failed for document version {}: {}",
+                        context.documentVersionId(),
+                        retrievalFailure.getClass().getSimpleName());
+                continue;
+            }
+            boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
+            if (!retrieved.isEmpty() && !supplementaryIntent
+                    && intent.purpose() == RetrievalPurpose.STATE_TRANSITION) {
+                retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
+            } else if (!retrieved.isEmpty() && !supplementaryIntent
+                    && intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION) {
+                HybridEvidenceHit directResolution = retrieved.stream()
+                        .max(Comparator.comparingInt(this::endgameResolutionDetailScore))
+                        .orElse(retrieved.getFirst());
+                intentAnchors.putIfAbsent(directResolution.evidence().chunkId(), directResolution);
+            } else if (!retrieved.isEmpty() && !supplementaryIntent
+                    && intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
+                HybridEvidenceHit directProcedure = retrieved.stream()
+                        .filter(this::hasEvidencedEndTurnProcedure)
+                        .findFirst()
+                        .orElse(retrieved.getFirst());
+                intentAnchors.putIfAbsent(directProcedure.evidence().chunkId(), directProcedure);
+            } else if (!retrieved.isEmpty() && !supplementaryIntent) {
+                HybridEvidenceHit diverseAnchor = retrieved.stream()
+                        .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))
+                        .findFirst()
+                        .orElse(retrieved.getFirst());
+                intentAnchors.putIfAbsent(diverseAnchor.evidence().chunkId(), diverseAnchor);
+            }
+            for (HybridEvidenceHit hit : retrieved) {
+                HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
+                if (existing != null && !sameEvidenceSnapshot(existing, hit)) {
+                    conflicting = true;
+                    break;
                 }
-                for (HybridEvidenceHit hit : retrieved) {
-                    HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
-                    if (existing != null && !sameEvidenceSnapshot(existing, hit)) {
-                        conflicting = true;
-                        break;
-                    }
-                    if (existing == null || hit.score() > existing.score()) {
-                        evidenceById.put(hit.evidence().chunkId(), hit);
-                    }
+                if (existing == null || hit.score() > existing.score()) {
+                    evidenceById.put(hit.evidence().chunkId(), hit);
                 }
+            }
+            try {
                 List<PageFactMatch> visualMatches = invocations.invoke(
                         assistantRunId,
                         ActivityType.TOOL,
@@ -1319,11 +1346,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 }
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
-            } catch (RuntimeException retrievalFailure) {
+            } catch (RuntimeException visualLookupFailure) {
                 LOGGER.warn(
-                        "Answer retrieval intent failed for document version {}: {}",
+                        "Optional visual fact lookup failed for document version {}: {}",
                         context.documentVersionId(),
-                        retrievalFailure.getClass().getSimpleName());
+                        visualLookupFailure.getClass().getSimpleName());
             }
             if (conflicting) {
                 break;
@@ -1334,23 +1361,35 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     assistantRunId, context.documentVersionId(), evidenceById, intentAnchors);
         }
         if (!conflicting && requiresIconLegend(visualFactsByPage.values())) {
-            List<PageFactMatch> legendMatches = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    "searchVisualRulebookIconLegend",
-                    12,
-                    "Cross-page icon legend evidence retrieved",
-                    () -> visualFacts.search(
-                            context.documentVersionId(),
-                            "component legend setup contents token marker piece card tile resource icon symbol "
-                                    + "starting components player reference 组件 图例 配件 设置 令牌 标记 棋子 卡牌 板块 资源 图标",
-                            2),
-                    matches -> matches.size() * 80);
-            legendMatches.forEach(match -> visualFactsByPage.merge(
-                    match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+            try {
+                List<PageFactMatch> legendMatches = invocations.invoke(
+                        assistantRunId,
+                        ActivityType.TOOL,
+                        "searchVisualRulebookIconLegend",
+                        12,
+                        "Cross-page icon legend evidence retrieved",
+                        () -> visualFacts.search(
+                                context.documentVersionId(),
+                                "component legend setup contents token marker piece card tile resource icon symbol "
+                                        + "starting components player reference 组件 图例 配件 设置 令牌 标记 棋子 卡牌 板块 资源 图标",
+                                2),
+                        matches -> matches.size() * 80);
+                legendMatches.forEach(match -> visualFactsByPage.merge(
+                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException lookupFailure) {
+                LOGGER.warn(
+                        "Optional icon-legend lookup failed for document version {}: {}",
+                        context.documentVersionId(),
+                        lookupFailure.getClass().getSimpleName());
+            }
         }
         if (conflicting) {
-            return new RetrievalResult(List.of(), true);
+            return new RetrievalResult(List.of(), RetrievalState.CONFLICTING);
+        }
+        if (successfulCoreRetrievals == 0 && failedCoreRetrievals > 0) {
+            return new RetrievalResult(List.of(), RetrievalState.UNAVAILABLE);
         }
         Set<Integer> visualPagePriority = new LinkedHashSet<>(directQuestionVisualFactPages);
         visualPagePriority.addAll(requiredVisualFactPages);
@@ -1435,7 +1474,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     ActivityOutcome.SUCCEEDED,
                     "Endgame evidence pages=" + pages + "; decisive pages=" + decisivePages);
         }
-        return new RetrievalResult(selectedEvidence, false);
+        return new RetrievalResult(selectedEvidence, RetrievalState.READY);
     }
 
     private void enrichAdjacentEndgameEvidence(
@@ -1578,14 +1617,25 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 .map(PageFactMatch::pageNumber)
                 .forEach(pages::add);
         Set<Integer> selectedPages = pages.stream().limit(4).collect(Collectors.toCollection(LinkedHashSet::new));
-        List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> pageSources = invocations.invoke(
-                assistantRunId,
-                ActivityType.TOOL,
-                "readVisualRulebookFactPages",
-                selectedPages.size(),
-                "Original rulebook pages " + selectedPages + " for visual facts retrieved",
-                () -> evidenceLookup.findByPageNumbers(documentVersionId, selectedPages),
-                sources -> sources.size() * 80);
+        List<com.rulepilot.retrieval.evidence.RuleEvidenceHit> pageSources;
+        try {
+            pageSources = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    "readVisualRulebookFactPages",
+                    selectedPages.size(),
+                    "Original rulebook pages " + selectedPages + " for visual facts retrieved",
+                    () -> evidenceLookup.findByPageNumbers(documentVersionId, selectedPages),
+                    sources -> sources.size() * 80);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException lookupFailure) {
+            LOGGER.warn(
+                    "Optional visual source-page lookup failed for document version {}: {}",
+                    documentVersionId,
+                    lookupFailure.getClass().getSimpleName());
+            return Set.of();
+        }
         Set<UUID> enriched = new LinkedHashSet<>();
         Map<Integer, Integer> rankByPage = new LinkedHashMap<>();
         int rank = 1;
@@ -1843,7 +1893,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
 
-    private record RetrievalResult(List<HybridEvidenceHit> evidence, boolean conflicting) {}
+    private enum RetrievalState { READY, CONFLICTING, UNAVAILABLE }
+
+    private record RetrievalResult(List<HybridEvidenceHit> evidence, RetrievalState state) {}
 
     private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {
         List<RuleCitation> citations = ruling.citations().stream().map(citation -> new RuleCitation(
