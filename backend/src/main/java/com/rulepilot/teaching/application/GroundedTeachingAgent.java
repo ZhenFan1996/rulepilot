@@ -228,6 +228,11 @@ public class GroundedTeachingAgent {
                 3);
     }
 
+    /**
+     * Completes the compatibility workflow in one call. The production launcher uses
+     * {@link #createBase(TeachingPlan, UUID, IllustratedLesson, Consumer)} so a player can read
+     * source-cited chapters before optional visual work and whole-lesson review finish.
+     */
     public IllustratedLesson create(TeachingPlan plan, UUID assistantRunId) {
         return create(plan, assistantRunId, null);
     }
@@ -242,7 +247,7 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
-        return create(plan, assistantRunId, previousLesson, progressPublisher, true, true);
+        return createComplete(plan, assistantRunId, previousLesson, progressPublisher);
     }
 
     /**
@@ -325,15 +330,78 @@ public class GroundedTeachingAgent {
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
             int queriesPerTopic) {
+        return generateSection(
+                plan,
+                planned,
+                pacing,
+                priorSections,
+                reusableSections,
+                assistantRunId,
+                queriesPerTopic,
+                planned.position() - 1,
+                GenerationMode.PROGRESSIVE_BASE);
+    }
+
+    private SectionOutcome generateSection(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            TeachingPacingPolicy.SectionPacing pacing,
+            List<PriorSectionContext> priorSections,
+            Map<String, LessonSection> reusableSections,
+            UUID assistantRunId,
+            int queryBudget,
+            int sectionIndex,
+            GenerationMode mode) {
         LessonSection reusable = reusableSections.get(planned.topicKey());
         if (reusable != null) {
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-            return new SectionOutcome(planned.position(), reusable, null);
+            return new SectionOutcome(planned.position(), reusable, null, 0);
         }
+        EvidenceResolution resolution = retrieveSectionEvidence(
+                plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
+        if (!resolution.verified()) {
+            recordPublication(
+                    assistantRunId,
+                    planned,
+                    ActivityOutcome.REJECTED,
+                    resolution.state() == EvidenceState.EMPTY
+                            ? mode.noEvidenceCategory()
+                            : mode.invalidEvidenceCategory());
+            return new SectionOutcome(planned.position(), insufficient(planned), null, resolution.toolCalls());
+        }
+        try {
+            DraftCandidate composed = composeDraft(
+                    plan,
+                    planned,
+                    pacing,
+                    priorSections,
+                    resolution.evidence(),
+                    assistantRunId,
+                    sectionIndex,
+                    mode.includeVisualEvidence());
+            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, mode.publishedCategory());
+            return new SectionOutcome(planned.position(), composed.section(), composed, resolution.toolCalls());
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException invalidDraft) {
+            log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
+            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, mode.withheldCategory());
+            return new SectionOutcome(planned.position(), insufficient(planned), null, resolution.toolCalls());
+        }
+    }
+
+    private EvidenceResolution retrieveSectionEvidence(
+            TeachingPlan plan,
+            TeachingPlan.PlannedSection planned,
+            UUID assistantRunId,
+            int queryBudget,
+            boolean bindVisualPageEvidence) {
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
         boolean conflictingEvidence = false;
-        for (String query : retrievalQueries(planned, queriesPerTopic)) {
+        int toolCalls = 0;
+        for (String query : retrievalQueries(planned, queryBudget)) {
+            toolCalls++;
             try {
                 List<RuleEvidence> retrieved = invocations.invoke(
                         assistantRunId,
@@ -354,37 +422,23 @@ public class GroundedTeachingAgent {
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException retrievalFailure) {
-                log.warn("Base teaching retrieval failed for topic {}: {}", planned.topicKey(), retrievalFailure.getMessage());
+                log.warn("Teaching evidence retrieval failed for topic {}: {}", planned.topicKey(), retrievalFailure.getMessage());
             }
             if (conflictingEvidence) break;
         }
         List<RuleEvidence> evidence = conflictingEvidence ? List.of() : balancedEvidence(evidenceByIntent);
-        evidence = visualPageBoundEvidence(plan, planned, evidence, assistantRunId);
-        if (evidence.isEmpty() || !evidenceVerifier.verify(new VerificationRequest(
+        if (bindVisualPageEvidence) {
+            evidence = visualPageBoundEvidence(plan, planned, evidence, assistantRunId);
+        }
+        if (evidence.isEmpty()) {
+            return new EvidenceResolution(List.of(), toolCalls, EvidenceState.EMPTY);
+        }
+        boolean verified = evidenceVerifier.verify(new VerificationRequest(
                         plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
-                .verified()) {
-            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_VALID_BASE_EVIDENCE");
-            return new SectionOutcome(planned.position(), insufficient(planned), null);
-        }
-        try {
-            DraftCandidate composed = composeDraft(
-                    plan,
-                    planned,
-                    pacing,
-                    priorSections,
-                    evidence,
-                    assistantRunId,
-                    planned.position() - 1,
-                    false);
-            recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_BASE_SECTION_PUBLISHED");
-            return new SectionOutcome(planned.position(), composed.section(), composed);
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException invalidDraft) {
-            log.warn("Base teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
-            recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "BASE_DRAFT_WITHHELD");
-            return new SectionOutcome(planned.position(), insufficient(planned), null);
-        }
+                .verified();
+        return verified
+                ? new EvidenceResolution(evidence, toolCalls, EvidenceState.VERIFIED)
+                : new EvidenceResolution(List.of(), toolCalls, EvidenceState.INVALID);
     }
 
     private SectionOutcome await(Future<SectionOutcome> future) {
@@ -399,13 +453,11 @@ public class GroundedTeachingAgent {
         }
     }
 
-    private IllustratedLesson create(
+    private IllustratedLesson createComplete(
             TeachingPlan plan,
             UUID assistantRunId,
             IllustratedLesson previousLesson,
-            Consumer<IllustratedLesson> progressPublisher,
-            boolean includeVisualEvidence,
-            boolean reviewBeforeReturn) {
+            Consumer<IllustratedLesson> progressPublisher) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
@@ -416,113 +468,32 @@ public class GroundedTeachingAgent {
         int toolCalls = 0;
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
-            LessonSection reusable = reusableSections.get(planned.topicKey());
-            if (reusable != null) {
-                log.info("Teaching topic {} reuses a previously verified section", planned.topicKey());
-                sections.add(reusable);
-                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
-                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-                continue;
-            }
-            if (toolCalls >= maxToolCalls) {
+            boolean reusable = reusableSections.containsKey(planned.topicKey());
+            if (!reusable && toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
                 sections.add(insufficient(planned));
                 publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
-
-            Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
-            List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
-            boolean conflictingEvidence = false;
-            for (String query : retrievalQueries(planned, queriesPerTopic)) {
-                if (toolCalls >= maxToolCalls) {
-                    break;
-                }
-                toolCalls++;
-                try {
-                    List<RuleEvidence> retrieved = invocations.invoke(
-                            assistantRunId,
-                            ActivityType.TOOL,
-                            operationName("searchRuleEvidence", planned.position()),
-                            estimateTokens(query),
-                            "Version-scoped rule evidence retrieved",
-                            () -> retrieve(plan.documentVersionId(), planned.topicKey(), query),
-                            this::evidenceTokens);
-                    evidenceByIntent.add(retrieved);
-                    for (RuleEvidence source : retrieved) {
-                        RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
-                        if (existing != null && !sameEvidence(existing, source)) {
-                            conflictingEvidence = true;
-                            break;
-                        }
-                    }
-                } catch (AgentExecutionStoppedException stopped) {
-                    throw stopped;
-                } catch (RuntimeException retrievalFailure) {
-                    log.warn(
-                            "Teaching Agent retrieval failed for topic {} query '{}': {}",
-                            planned.topicKey(),
-                            query,
-                            retrievalFailure.getMessage());
-                }
-                if (conflictingEvidence) {
-                    log.warn("Teaching Agent retrieved conflicting snapshots for topic {}", planned.topicKey());
-                    break;
-                }
-            }
-            List<RuleEvidence> evidence = conflictingEvidence
-                    ? List.of()
-                    : balancedEvidence(evidenceByIntent);
-            if (evidence.isEmpty()) {
-                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "NO_RETRIEVED_EVIDENCE");
-                sections.add(insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-                continue;
-            }
-            if (!evidenceVerifier.verify(new VerificationRequest(
-                            plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
-                    .verified()) {
-                recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "RETRIEVED_EVIDENCE_INVALID");
-                sections.add(insufficient(planned));
-                publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
-                continue;
-            }
-
-            try {
-                DraftCandidate composed = composeDraft(
-                        plan,
-                        planned,
-                        pacing.get(planned.position()),
-                        continuityContext(sections),
-                        evidence,
-                        assistantRunId,
-                        sections.size(),
-                        includeVisualEvidence);
-                sections.add(composed.section());
-                reviewCandidates.add(composed);
-                recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "CITED_DRAFT_PUBLISHED");
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException invalidOrFailedModelOutput) {
-                log.warn(
-                        "Teaching Agent model {} failed validation for section {}: {} ({})",
-                        model.providerId(),
-                        planned.topicKey(),
-                        invalidOrFailedModelOutput.getClass().getSimpleName(),
-                        invalidOrFailedModelOutput.getMessage());
-                recordPublication(
-                        assistantRunId,
-                        planned,
-                        ActivityOutcome.REJECTED,
-                        "DRAFT_WITHHELD_AFTER_REPAIR_BUDGET");
-                sections.add(insufficient(planned));
-            }
+            SectionOutcome outcome = generateSection(
+                    plan,
+                    planned,
+                    pacing.get(planned.position()),
+                    continuityContext(sections),
+                    reusableSections,
+                    assistantRunId,
+                    Math.min(queriesPerTopic, maxToolCalls - toolCalls),
+                    sections.size(),
+                    GenerationMode.COMPATIBILITY_COMPLETE);
+            toolCalls += outcome.retrievalToolCalls();
+            sections.add(outcome.section());
+            if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
             publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
         }
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
-        if (reviewBeforeReturn && draftReady.status() == LessonStatus.DRAFT_READY) {
+        if (draftReady.status() == LessonStatus.DRAFT_READY) {
             reviewPublishedLesson(
                     plan, reviewCandidates, sections, assistantRunId,
                     () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
@@ -1964,7 +1935,42 @@ public class GroundedTeachingAgent {
             SectionDraft draft,
             LessonSection section) {}
 
-    private record SectionOutcome(int position, LessonSection section, DraftCandidate reviewCandidate) {}
+    private record GenerationMode(
+            boolean bindVisualPageEvidence,
+            boolean includeVisualEvidence,
+            String noEvidenceCategory,
+            String invalidEvidenceCategory,
+            String publishedCategory,
+            String withheldCategory) {
+        private static final GenerationMode PROGRESSIVE_BASE = new GenerationMode(
+                true,
+                false,
+                "NO_VALID_BASE_EVIDENCE",
+                "NO_VALID_BASE_EVIDENCE",
+                "CITED_BASE_SECTION_PUBLISHED",
+                "BASE_DRAFT_WITHHELD");
+        private static final GenerationMode COMPATIBILITY_COMPLETE = new GenerationMode(
+                false,
+                true,
+                "NO_RETRIEVED_EVIDENCE",
+                "RETRIEVED_EVIDENCE_INVALID",
+                "CITED_DRAFT_PUBLISHED",
+                "DRAFT_WITHHELD_AFTER_REPAIR_BUDGET");
+    }
+
+    private enum EvidenceState { VERIFIED, EMPTY, INVALID }
+
+    private record EvidenceResolution(List<RuleEvidence> evidence, int toolCalls, EvidenceState state) {
+        boolean verified() {
+            return state == EvidenceState.VERIFIED;
+        }
+    }
+
+    private record SectionOutcome(
+            int position,
+            LessonSection section,
+            DraftCandidate reviewCandidate,
+            int retrievalToolCalls) {}
 
     private record LessonReviewBatch(
             ReviewRequest request,

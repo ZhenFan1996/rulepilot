@@ -874,6 +874,67 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void retainsAReusableChapterAfterTheCompatibilityPathUsesItsToolBudget() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                20,
+                "Game",
+                "Premise",
+                List.of(topic(1, TeachingSectionType.SETUP), topic(2, TeachingSectionType.ACTIONS)),
+                "player",
+                Instant.now());
+        LessonSection reusableActions = new LessonSection(
+                2,
+                TeachingSectionType.ACTIONS.name(),
+                List.of("core_loop"),
+                "已验证的行动",
+                true,
+                EvidenceStatus.SUPPORTED,
+                VisualKind.REFERENCE_CARD,
+                "行动顺序",
+                List.of(3),
+                List.of(chunkId),
+                List.of(new LessonStep(
+                        1,
+                        "执行行动",
+                        TeachingMove.DO,
+                        "轮到你时执行一个允许的行动。",
+                        List.of(3),
+                        List.of(chunkId),
+                        null)));
+        IllustratedLesson previous = new IllustratedLesson(
+                UUID.randomUUID(),
+                plan.id(),
+                LessonStatus.COMPLETE,
+                List.of(reusableActions),
+                GroundedTeachingAgent.GENERATOR_VERSION,
+                Instant.now());
+        AtomicInteger retrievals = new AtomicInteger();
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> {
+                    retrievals.incrementAndGet();
+                    return List.of(evidence(chunkId, versionId));
+                },
+                new FakeTeachingLessonModel(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                1);
+
+        IllustratedLesson lesson = agent.create(plan, UUID.randomUUID(), previous);
+
+        assertThat(retrievals).hasValue(1);
+        assertThat(lesson.sections()).extracting(LessonSection::title)
+                .containsExactly("SETUP", "已验证的行动");
+        assertThat(lesson.sections().get(1)).isEqualTo(reusableActions);
+    }
+
+    @Test
     void regeneratesPreviouslyVerifiedVisualTopicThatNeverUsedItsPageImage() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
