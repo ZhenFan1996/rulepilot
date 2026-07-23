@@ -92,14 +92,8 @@ class PublicLessonQuestionServiceTest {
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");
-            assertThat(value.visualAids()).singleElement().satisfies(aid -> {
-                assertThat(aid.relatedStep()).isEqualTo("Cited rulebook illustration");
-                assertThat(aid.visualFocus().label()).isEqualTo("Rulebook illustration");
-            });
-            assertThat(value.examples()).singleElement().satisfies(example -> {
-                assertThat(example.heading()).isEqualTo("Cited rulebook example");
-                assertThat(example.text()).isEqualTo("The answer above is grounded in the illustrated example on the cited page.");
-            });
+            assertThat(value.visualAids()).isEmpty();
+            assertThat(value.examples()).isEmpty();
         });
     }
 
@@ -126,17 +120,20 @@ class PublicLessonQuestionServiceTest {
     private PublicLessonReader.PublicLesson publicLesson(UUID planId, UUID versionId, UUID chunk) {
         UUID unrelatedChunk = UUID.randomUUID();
         IllustratedLesson.LessonStep visual = new IllustratedLesson.LessonStep(
-                1, "识别标记", IllustratedLesson.TeachingMove.VISUAL, "看清标记。", List.of(2), List.of(chunk),
+                2, "识别标记", IllustratedLesson.TeachingMove.VISUAL, "看清标记。", List.of(2), List.of(chunk),
                 new IllustratedLesson.VisualFocus(2, "标记图例", 100, 100, 200, 200));
+        IllustratedLesson.LessonStep sameEvidenceButUnrelatedVisual = new IllustratedLesson.LessonStep(
+                1, "传递先手卡", IllustratedLesson.TeachingMove.VISUAL, "将先手卡传给下一位玩家。", List.of(2), List.of(chunk),
+                new IllustratedLesson.VisualFocus(2, "先手卡", 400, 100, 200, 200));
         IllustratedLesson.LessonStep example = new IllustratedLesson.LessonStep(
-                2, "放置示例", IllustratedLesson.TeachingMove.EXAMPLE, "把一个标记放到起始格。", List.of(2), List.of(chunk));
+                3, "放置示例", IllustratedLesson.TeachingMove.EXAMPLE, "把一个标记放到起始格。", List.of(2), List.of(chunk));
         IllustratedLesson.LessonStep unrelatedSamePage = new IllustratedLesson.LessonStep(
-                3, "另一条规则图例", IllustratedLesson.TeachingMove.VISUAL, "不应返回。", List.of(2), List.of(unrelatedChunk),
+                4, "另一条规则图例", IllustratedLesson.TeachingMove.VISUAL, "不应返回。", List.of(2), List.of(unrelatedChunk),
                 new IllustratedLesson.VisualFocus(2, "无关图例", 500, 100, 200, 200));
         IllustratedLesson.LessonStep unrelatedExample = new IllustratedLesson.LessonStep(
-                4, "无关示例", IllustratedLesson.TeachingMove.EXAMPLE, "不应返回。", List.of(2), List.of(unrelatedChunk));
+                5, "无关示例", IllustratedLesson.TeachingMove.EXAMPLE, "不应返回。", List.of(2), List.of(unrelatedChunk));
         IllustratedLesson.LessonStep otherPage = new IllustratedLesson.LessonStep(
-                5, "另一页图例", IllustratedLesson.TeachingMove.VISUAL, "不应返回。", List.of(3), List.of(chunk),
+                6, "另一页图例", IllustratedLesson.TeachingMove.VISUAL, "不应返回。", List.of(3), List.of(chunk),
                 new IllustratedLesson.VisualFocus(3, "另一页", 100, 100, 200, 200));
         IllustratedLesson lesson = new IllustratedLesson(
                 UUID.randomUUID(), planId, IllustratedLesson.LessonStatus.COMPLETE,
@@ -144,7 +141,7 @@ class PublicLessonQuestionServiceTest {
                         1, "setup", List.of("设置"), "设置", true,
                         IllustratedLesson.EvidenceStatus.SUPPORTED, IllustratedLesson.VisualKind.TABLE_LAYOUT,
                         "设置图", List.of(2), List.of(chunk, unrelatedChunk),
-                        List.of(visual, example, unrelatedSamePage, unrelatedExample, otherPage))),
+                        List.of(sameEvidenceButUnrelatedVisual, visual, example, unrelatedSamePage, unrelatedExample, otherPage))),
                 "test", Instant.now());
         return new PublicLessonReader.PublicLesson(planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, lesson);
     }
