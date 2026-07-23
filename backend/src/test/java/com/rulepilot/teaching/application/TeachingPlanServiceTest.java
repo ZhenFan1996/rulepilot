@@ -56,7 +56,7 @@ class TeachingPlanServiceTest {
                 page(11, "Appendix"),
                 page(12, "Credits"));
 
-        assertThat(TeachingPlanService.selectedVisualPageNumbers(outline, pages))
+        assertThat(VisualOutlineEvidencePolicy.selectedVisualPageNumbers(outline, pages))
                 .containsExactly(7, 5, 9, 6);
     }
 
@@ -70,7 +70,7 @@ class TeachingPlanServiceTest {
                 page(7, "Setup: Give each player two energy markers and one score token. Keep markers behind the screen."),
                 page(14, "You may use this wager only if you have at least 2  . Place 2  on it."));
 
-        assertThat(TeachingPlanService.selectedVisualPageNumbers(outline, pages))
+        assertThat(VisualOutlineEvidencePolicy.selectedVisualPageNumbers(outline, pages))
                 .containsExactly(7, 14);
     }
 
@@ -85,7 +85,7 @@ class TeachingPlanServiceTest {
                 page(7, "Setting up: Give each player energy markers placed behind the screen and one score token placed in front."),
                 page(14, "Use this wager only if you have at least 2  . Place 2  on it."));
 
-        OutlineDraft bound = TeachingPlanService.bindIconLegendEvidence(outline, pages);
+        OutlineDraft bound = VisualOutlineEvidencePolicy.bindIconLegendEvidence(outline, pages);
 
         assertThat(bound.topics().getFirst().sourcePageNumbers()).containsExactly(14, 7);
     }
@@ -101,7 +101,7 @@ class TeachingPlanServiceTest {
                 page(7, "Setting up: Give each player energy markers placed behind the screen and one score token placed in front."),
                 page(14, "Use this wager only if you have at least 2  . Place 2  on it."));
 
-        OutlineDraft bound = TeachingPlanService.bindIconLegendEvidence(outline, pages);
+        OutlineDraft bound = VisualOutlineEvidencePolicy.bindIconLegendEvidence(outline, pages);
 
         assertThat(bound.topics().getFirst().sourcePageNumbers()).containsExactly(14, 15, 16, 17, 7);
     }
@@ -117,9 +117,9 @@ class TeachingPlanServiceTest {
                 page(4, "设置：每位玩家拿取2枚月亮指示物和1枚声望令牌，放在自己面前。"),
                 page(8, "支付2  后，从市场拿取一张卡牌。"));
 
-        assertThat(TeachingPlanService.selectedVisualPageNumbers(outline, pages))
+        assertThat(VisualOutlineEvidencePolicy.selectedVisualPageNumbers(outline, pages))
                 .containsExactly(4, 8);
-        assertThat(TeachingPlanService.bindIconLegendEvidence(outline, pages)
+        assertThat(VisualOutlineEvidencePolicy.bindIconLegendEvidence(outline, pages)
                         .topics().getFirst().sourcePageNumbers())
                 .containsExactly(8, 4);
     }
@@ -280,7 +280,7 @@ class TeachingPlanServiceTest {
                 page(6, "◉ ◉"),
                 page(7, "△"));
 
-        assertThat(TeachingPlanService.unownedSparseVisualCoveragePageNumbers(outline, pages, 4))
+        assertThat(VisualOutlineEvidencePolicy.unownedSparseVisualCoveragePageNumbers(outline, pages, 4))
                 .containsExactly(3, 5, 6, 7)
                 .doesNotContain(1, 2, 4);
     }
@@ -377,7 +377,7 @@ class TeachingPlanServiceTest {
         OutlineDraft outline = new OutlineDraft(
                 "Game", "Premise", List.of(topic("round", true, List.of(1))));
 
-        TeachingPlanService.validateVisualRulebookCoverage(outline, inputs);
+        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(outline, inputs);
     }
 
     @Test
@@ -399,10 +399,10 @@ class TeachingPlanServiceTest {
                         topicWithTags("ending", List.of("end", "scoring"), List.of(4))));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> TeachingPlanService.validateVisualCoreTopicBindings(wrongEnding, pages))
+                        () -> VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(wrongEnding, pages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("end");
-        TeachingPlanService.validateVisualCoreTopicBindings(supportedEnding, pages);
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(supportedEnding, pages);
     }
 
     @Test
@@ -418,10 +418,10 @@ class TeachingPlanServiceTest {
                         topicWithTags("play", List.of("core_loop"), List.of(2)),
                         topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
 
-        OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(misplacedEnding, pages);
+        OutlineDraft repaired = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(misplacedEnding, pages);
 
         assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(4, 3);
-        TeachingPlanService.validateVisualCoreTopicBindings(repaired, pages);
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(repaired, pages);
     }
 
     @Test
@@ -436,10 +436,10 @@ class TeachingPlanServiceTest {
                         topicWithTags("play", List.of("core_loop"), List.of(2)),
                         topicWithTags("ending", List.of("end", "scoring"), List.of(5, 6, 7, 8))));
 
-        OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(outline, pages);
+        OutlineDraft repaired = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
 
         assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(4, 5, 6, 7, 8);
-        TeachingPlanService.validateVisualCoreTopicBindings(repaired, pages);
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(repaired, pages);
     }
 
     @Test
@@ -454,7 +454,7 @@ class TeachingPlanServiceTest {
                         topicWithTags("setup", List.of("setup"), List.of(1)),
                         topicWithTags("play", List.of("core_loop"), List.of(2, 3, 4, 5))));
 
-        OutlineDraft repaired = TeachingPlanService.bindVisualCoreTopicEvidence(outline, pages);
+        OutlineDraft repaired = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
 
         assertThat(repaired.topics().get(1).sourcePageNumbers()).containsExactly(2, 3, 4, 5);
     }
@@ -473,14 +473,14 @@ class TeachingPlanServiceTest {
                         topicWithTags("play", List.of("core_loop"), List.of(5)),
                         topicWithTags("ending", List.of("end", "scoring"), List.of(5, 6, 7, 8))));
 
-        OutlineDraft bound = TeachingPlanService.bindVisualCoreTopicEvidence(source, pages);
-        OutlineDraft restored = TeachingPlanService.augmentVisualCoverage(bound, source);
+        OutlineDraft bound = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(source, pages);
+        OutlineDraft restored = VisualOutlineEvidencePolicy.augmentVisualCoverage(bound, source);
 
         assertThat(restored.topics().get(2)).satisfies(topic -> {
             assertThat(topic.sourcePageNumbers()).containsExactly(4, 5, 6, 7, 8);
             assertThat(topic.coverageTags()).contains("end", "scoring");
         });
-        TeachingPlanService.validateVisualRulebookCoverage(restored, pages);
+        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(restored, pages);
     }
 
     @Test
@@ -502,10 +502,10 @@ class TeachingPlanServiceTest {
                         topicWithTags("ending", List.of("end", "scoring"), List.of(4))));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> TeachingPlanService.validateVisualCoreTopicBindings(incompleteEnding, pages))
+                        () -> VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(incompleteEnding, pages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("end");
-        TeachingPlanService.validateVisualCoreTopicBindings(completeEnding, pages);
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(completeEnding, pages);
     }
 
     @Test
@@ -515,7 +515,8 @@ class TeachingPlanServiceTest {
                 .toList();
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> TeachingPlanService.validateVisualFastBaseline(new OutlineDraft("Game", "Premise", topics)))
+                        () -> VisualOutlineEvidencePolicy.validateVisualFastBaseline(
+                                new OutlineDraft("Game", "Premise", topics)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("ten-section fast baseline");
     }
@@ -532,8 +533,8 @@ class TeachingPlanServiceTest {
                         topic("turn", false, List.of(3, 4)),
                         topic("end", false, List.of(5))));
 
-        assertThat(TeachingPlanService.keepFastVisualBaseline(model, source)).isSameAs(source);
-        assertThat(TeachingPlanService.keepFastVisualBaseline(source, model)).isSameAs(source);
+        assertThat(VisualOutlineEvidencePolicy.keepFastVisualBaseline(model, source)).isSameAs(source);
+        assertThat(VisualOutlineEvidencePolicy.keepFastVisualBaseline(source, model)).isSameAs(source);
     }
 
     @Test
@@ -555,7 +556,7 @@ class TeachingPlanServiceTest {
                 new PageInput(3, visualCatalogPage("ACTIONS", "action sequence")));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> TeachingPlanService.validateVisualRulebookCoverage(incomplete, pages))
+                        () -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(incomplete, pages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("3");
     }
@@ -573,7 +574,7 @@ class TeachingPlanServiceTest {
                         topic("components", true, List.of(2, 3)),
                         topic("setup", true, List.of(4, 5))));
 
-        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+        OutlineDraft augmented = VisualOutlineEvidencePolicy.augmentVisualCoverage(model, source);
 
         assertThat(augmented.topics()).hasSize(3);
         assertThat(augmented.topics().getFirst().key()).isEqualTo("specific-actions");
@@ -610,7 +611,7 @@ class TeachingPlanServiceTest {
                         List.of("actions"),
                         List.of(5, 6))));
 
-        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+        OutlineDraft augmented = VisualOutlineEvidencePolicy.augmentVisualCoverage(model, source);
 
         assertThat(augmented.topics()).hasSize(1);
         assertThat(augmented.topics().getFirst().key()).isEqualTo("actions-and-costs");
@@ -646,7 +647,7 @@ class TeachingPlanServiceTest {
                         List.of("end", "scoring", "tie_breaker"),
                         List.of(13, 14))));
 
-        OutlineDraft augmented = TeachingPlanService.augmentVisualCoverage(model, source);
+        OutlineDraft augmented = VisualOutlineEvidencePolicy.augmentVisualCoverage(model, source);
 
         assertThat(augmented.topics()).singleElement().satisfies(topic -> {
             assertThat(topic.key()).isEqualTo("end-game-and-scoring");
