@@ -63,7 +63,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,16 +76,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     private static final String ANSWER_POLICY_VERSION = "answer-v58-document-scoped-resolution-evidence";
-    private static final Pattern EVIDENCED_REPLENISHMENT_PROCEDURE = Pattern.compile(
-            "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
-                    + "(?=.*(?:empty|no\\s+(?:dice|cards?|tokens?)|无(?:骰|牌|令牌)|没有(?:骰|牌|令牌)|为空|耗尽))"
-                    + ".*(?:discard|return|recycle|refill|reshuffle|continue|弃置|移回|回收|补充|洗混|继续)");
-    private static final Pattern DIRECT_CHINESE_REPLENISHMENT_SENTENCE = Pattern.compile(
-            "(?:若|如果|当)[^。；;]{0,120}(?:无|没有|为空|耗尽)[^。；;]{0,180}"
-                    + "(?:弃置|移回|回收|补充|洗混|继续)[^。；;]{0,180}[。；;]");
-    private static final Pattern EXHAUSTED_SOURCE_QUESTION = Pattern.compile(
-            "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
-                    + "(?=.*(?:not\\s+enough|insufficient|empty|runs\\s+out|不足|不够|用完|没有骰子)).*");
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
@@ -379,12 +368,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     assistantRunId, username, gameSessionId, modelRequest, draft);
         }
         if (!draft.answerable()) {
-            draft = directReplenishmentFallback(modelRequest).orElse(null);
+            draft = AnswerReplenishmentPolicy.directFallback(modelRequest).orElse(null);
             if (draft == null) {
                 return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
             }
         }
-        draft = replaceMisdirectedReplenishmentDraft(modelRequest, draft);
+        draft = AnswerReplenishmentPolicy.replaceMisdirectedDraft(modelRequest, draft);
         draft = removePeripheralEndgameCitations(modelRequest, draft);
         List<String> playerFacingRepair = playerFacingRepairFeedback(modelRequest, draft);
         if (!playerFacingRepair.isEmpty()) {
@@ -552,7 +541,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 + "but the current table state is otherwise unknown, answer conditionally instead of assuming the "
                 + "condition or refusing. Preserve relative rules, scope, timing, negation, and exceptions exactly. "
                 + "Remain unanswerable when the excerpts still do not directly resolve the question.";
-        String feedback = hasEvidencedReplenishmentProcedure(modelRequest)
+        String feedback = AnswerReplenishmentPolicy.hasEvidencedProcedure(modelRequest)
                 ? baseFeedback + " DIRECT_REPLENISHMENT_PROCEDURE: A supplied excerpt explicitly gives the sequence for "
                         + "continuing when the named draw or supply area becomes empty. Apply that stated sequence to "
                         + "a question about reaching the required draw amount, and cite its source. Do not abstain merely "
@@ -572,47 +561,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         } finally {
             permit.close();
         }
-    }
-
-    private boolean hasEvidencedReplenishmentProcedure(ModelRequest request) {
-        return request.evidence().stream()
-                .map(EvidenceInput::excerpt)
-                .anyMatch(excerpt -> EVIDENCED_REPLENISHMENT_PROCEDURE.matcher(excerpt).find());
-    }
-
-    private Optional<ModelDraft> directReplenishmentFallback(ModelRequest request) {
-        if (!EXHAUSTED_SOURCE_QUESTION.matcher(request.question()).matches()) {
-            return Optional.empty();
-        }
-        return request.evidence().stream()
-                .map(source -> directChineseReplenishmentFallback(source).orElse(null))
-                .filter(java.util.Objects::nonNull)
-                .findFirst();
-    }
-
-    private ModelDraft replaceMisdirectedReplenishmentDraft(ModelRequest request, ModelDraft draft) {
-        if (!EXHAUSTED_SOURCE_QUESTION.matcher(request.question()).matches()
-                || !hasEvidencedReplenishmentProcedure(request)) {
-            return draft;
-        }
-        return directReplenishmentFallback(request).orElse(draft);
-    }
-
-    private Optional<ModelDraft> directChineseReplenishmentFallback(EvidenceInput source) {
-        java.util.regex.Matcher matcher = DIRECT_CHINESE_REPLENISHMENT_SENTENCE.matcher(source.excerpt());
-        if (!matcher.find()) {
-            return Optional.empty();
-        }
-        String ruling = matcher.group().strip();
-        if (ruling.length() > 240) {
-            return Optional.empty();
-        }
-        return Optional.of(new ModelDraft(
-                ruling,
-                "抽取过程中该区域用尽时，先按这条规则回收，再继续本次抽取。",
-                List.of(source.chunkId()),
-                List.of(),
-                "HIGH"));
     }
 
     private List<String> playerFacingRepairFeedback(ModelRequest request, ModelDraft draft) {
@@ -803,7 +751,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         "Direct replenishment procedure evidence retrieved",
                         () -> visualFacts.search(
                                 context.documentVersionId(),
-                                replenishmentRetrievalQuery(question.normalizedQuestion()),
+                                AnswerReplenishmentPolicy.retrievalQuery(question.normalizedQuestion()),
                                 3),
                         matches -> matches.size() * 80);
                 replenishmentMatches.forEach(match -> visualFactsByPage.merge(
@@ -1114,12 +1062,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 || text.contains("ending the round")
                 || text.contains("轮末")
                 || text.contains("回合结束");
-    }
-
-    private String replenishmentRetrievalQuery(String question) {
-        String prefix = "耗尽 为空 回收 移回 补充 洗混 继续 ";
-        String combined = prefix + question.strip();
-        return combined.length() <= 600 ? combined : combined.substring(0, 600);
     }
 
     private boolean isDirectQuestionIntent(String query, String normalizedQuestion) {
