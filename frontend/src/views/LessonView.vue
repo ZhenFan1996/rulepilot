@@ -1644,7 +1644,7 @@ onUnmounted(() => {
               </nav>
             </section>
 
-            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_19rem]">
+            <div v-if="mediaMode !== 'VIDEO'" class="mt-7 grid items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_19rem]">
               <div class="min-w-0">
                 <section v-if="chapterLeadStep" class="rounded-2xl bg-ink-panel p-4 text-panel-text sm:p-6" aria-labelledby="chapter-core-title">
                   <p class="text-xs font-semibold uppercase tracking-[0.16em] text-copper">先记住这一件事</p>
@@ -1683,12 +1683,12 @@ onUnmounted(() => {
                           <h4 class="font-display text-xl font-semibold leading-7">{{ step.heading || `要点 ${index + 1}` }}</h4>
                           <span class="text-xs font-semibold" :class="moveMeta(step.kind).tone.split(' ')[1]">{{ moveMeta(step.kind).label }}</span>
                         </div>
-                        <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(19rem,26rem)]">
+                        <div v-if="step.kind === 'VISUAL' && step.visualFocus" class="mt-4 min-w-0" data-testid="lesson-visual-step">
                           <div>
-                            <p class="text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
+                            <p class="max-w-3xl text-[0.95rem] leading-7 text-ink/72">{{ step.text }}</p>
                             <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">查看第 {{ step.visualFocus.pageNumber }} 页上下文 ↗</a>
                           </div>
-                          <figure class="overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
+                          <figure class="mt-4 max-w-3xl overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
                             <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" title="打开完整规则书页面">
                               <img :src="focusedPageImageUrl(step.visualFocus)" :alt="`${step.visualFocus.label}，截自规则书第 ${step.visualFocus.pageNumber} 页`" class="block max-h-[30rem] w-full object-contain" loading="lazy">
                             </a>
@@ -1735,7 +1735,7 @@ onUnmounted(() => {
                 </section>
               </div>
 
-              <aside class="min-w-0 rounded-2xl border border-indigo/12 bg-indigo/[0.035] p-4 xl:sticky xl:top-28" aria-label="本节原文与桌面图">
+              <aside class="min-w-0 rounded-2xl border border-indigo/12 bg-indigo/[0.035] p-4 2xl:sticky 2xl:top-28" aria-label="本节原文与桌面图">
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <p class="text-xs font-semibold text-indigo">边看边对照</p>
