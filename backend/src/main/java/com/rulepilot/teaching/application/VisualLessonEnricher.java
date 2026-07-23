@@ -44,6 +44,7 @@ public class VisualLessonEnricher {
     private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualReaderCropPolicy cropPolicy;
+    private final VisualStepRelevancePolicy stepRelevancePolicy;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
     private final int requestParallelism;
@@ -66,6 +67,7 @@ public class VisualLessonEnricher {
         this.locator = locator;
         this.prioritizer = prioritizer;
         this.cropPolicy = new VisualReaderCropPolicy();
+        this.stepRelevancePolicy = new VisualStepRelevancePolicy();
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
         }
@@ -324,7 +326,7 @@ public class VisualLessonEnricher {
             if (rejection == null && !supportsExactStep(region, step)) {
                 rejection = Outcome.REJECTED_STEP_MISMATCH;
             }
-            if (rejection == null && !directlyIllustrates(step, region)) {
+            if (rejection == null && !stepRelevancePolicy.directlyIllustrates(step, region)) {
                 rejection = Outcome.REJECTED_STEP_MISMATCH;
             }
             if (rejection == null) return StepLocation.accepted(region);
@@ -335,51 +337,6 @@ public class VisualLessonEnricher {
 
     private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, LessonStep step) {
         return region.supportedStepPositions().isEmpty() || region.supportedStepPositions().contains(step.position());
-    }
-
-    /**
-     * Reject only clear category errors that a same-page citation cannot catch. This remains a guard rather than a
-     * semantic rule interpreter: vision still decides whether cards, icons, layouts, and examples are useful.
-     */
-    private boolean directlyIllustrates(LessonStep step, VisualRegionLocator.LocatedRegion region) {
-        String heading = step.heading().toLowerCase(java.util.Locale.ROOT);
-        String description = region.visibleDescription().toLowerCase(java.util.Locale.ROOT);
-        String observation = (region.label() + " " + description).toLowerCase(java.util.Locale.ROOT);
-        if (containsAny(heading, "放置", "移动", "移除", "place", "move", "remove")
-                && containsAny(description, "初始设置", "初始布局", "组件总览", "组件摆放", "setup overview", "component overview", "component layout")
-                && !containsAny(description, "已放置", "放入", "放在", "位于格", "箭头", "移除", "placed", "placement", "arrow", "removed")) {
-            return false;
-        }
-        if (containsAny(heading, "玩家板", "个人板", "player board", "player mat")) {
-            return containsAny(observation, "玩家板", "个人板", "棋盘", "网格", "board", "grid", "town");
-        }
-        if (containsAny(heading, "主建筑师", "起始玩家", "master builder", "first player")) {
-            return containsAny(observation, "主建筑师", "起始玩家", "锤", "标记", "master builder", "first player", "hammer", "marker");
-        }
-        if (containsAny(heading, "平局", "同分", "tie-break", "tiebreak")) {
-            return containsAny(
-                    observation,
-                    "平局",
-                    "同分",
-                    "胜者",
-                    "获胜",
-                    "赢家",
-                    "tie",
-                    "winner",
-                    "winning",
-                    "hand",
-                    "手牌",
-                    "情绪卡",
-                    "emotion card");
-        }
-        if (containsAny(heading, "结束", "终局", "game over", "end of game")) {
-            return containsAny(observation, "结束", "终局", "最后", "game over", "end of game", "final");
-        }
-        return true;
-    }
-
-    private boolean containsAny(String value, String... tokens) {
-        return java.util.Arrays.stream(tokens).anyMatch(value::contains);
     }
 
     private Outcome rejectionFor(
