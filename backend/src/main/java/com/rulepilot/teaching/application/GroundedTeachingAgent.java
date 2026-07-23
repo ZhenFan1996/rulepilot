@@ -8,16 +8,13 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
-import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.GeneratedContentCritic;
-import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
-import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
@@ -42,8 +39,6 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -70,10 +65,8 @@ public class GroundedTeachingAgent {
     private final EvidenceVerifier evidenceVerifier;
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
-    private final VisualRulebookPageFacts visualFacts;
     private final TeachingVisualEvidenceResolver visualEvidenceResolver;
-    private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
-    private final TeachingDraftRecoveryPolicy draftRecoveryPolicy = new TeachingDraftRecoveryPolicy();
+    private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy = new TeachingReviewCorrectionPolicy();
     private final int maxToolCalls;
     private final int baseSectionParallelism;
@@ -94,9 +87,10 @@ public class GroundedTeachingAgent {
         this.evidenceVerifier = evidenceVerifier;
         this.critic = critic;
         this.invocations = invocations;
-        this.visualFacts = visualFacts;
         this.visualEvidenceResolver = new TeachingVisualEvidenceResolver(
                 tools, invocations, visualFacts, visualCatalog);
+        this.sectionDraftComposer = new TeachingSectionDraftComposer(
+                model, evidenceVerifier, invocations, visualFacts);
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
     }
@@ -200,7 +194,7 @@ public class GroundedTeachingAgent {
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         List<LessonSection> sections = new ArrayList<>();
-        List<DraftCandidate> reviewCandidates = new ArrayList<>();
+        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         TeachingPlan.PlannedSection first = plan.sections().getFirst();
         SectionOutcome firstOutcome = baseSection(
                 plan,
@@ -303,7 +297,7 @@ public class GroundedTeachingAgent {
             return new SectionOutcome(planned.position(), insufficient(planned), null, resolution.toolCalls());
         }
         try {
-            DraftCandidate composed = composeDraft(
+            TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
                     plan,
                     planned,
                     pacing,
@@ -397,7 +391,7 @@ public class GroundedTeachingAgent {
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         List<LessonSection> sections = new ArrayList<>();
-        List<DraftCandidate> reviewCandidates = new ArrayList<>();
+        List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int toolCalls = 0;
@@ -513,269 +507,9 @@ public class GroundedTeachingAgent {
                         true)));
     }
 
-    private DraftCandidate composeDraft(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            TeachingPacingPolicy.SectionPacing pacing,
-            List<PriorSectionContext> priorSections,
-            List<RuleEvidence> evidence,
-            UUID assistantRunId,
-            int sectionIndex,
-            boolean includeVisualEvidence) {
-        boolean requiresVisualGrounding = includeVisualEvidence
-                || TeachingVisualEvidenceSelector.hasVisualPageEvidence(evidence);
-        List<TeachingLessonModel.PageImageInput> pageImages = requiresVisualGrounding
-                ? TeachingVisualEvidenceSelector.select(
-                        planned, evidence, model.supportsVisualEvidence(plan.createdBy()))
-                : List.of();
-        if (!pageImages.isEmpty()) {
-            log.info(
-                    "Teaching topic {} selected visual evidence pages {}",
-                    planned.topicKey(),
-                    pageImages.stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList());
-        }
-        TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
-                planned.topicKey(),
-                planned.title(),
-                planned.objective(),
-                planned.coverageTags(),
-                plan.playerCount(),
-                plan.beginnerCount(),
-                plan.durationMinutes(),
-                pacing.durationSeconds(),
-                pacing.maxSteps(),
-                priorSections,
-                modelEvidence(plan.documentVersionId(), evidence),
-                pageImages,
-                planned.retrievalQueries(),
-                plan.createdBy(),
-                chapterScope(plan, planned));
-        SectionDraft draft;
-        try {
-            draft = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    operationName("composeTeachingSection", planned.position()),
-                    estimateTokens(modelRequest.toString()),
-                    "Teaching section model output received",
-                    () -> model.compose(modelRequest),
-                    result -> estimateTokens(result.toString()));
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException visualCompositionFailure) {
-            if (draftRecoveryPolicy.canFallbackToCitedText(
-                    !modelRequest.pageImages().isEmpty(), hasOnlyVisualPageEvidence(evidence))) {
-                log.warn(
-                        "Visual teaching composition for topic {} is unavailable; continuing with cited text: {}",
-                        planned.topicKey(),
-                        visualCompositionFailure.getMessage());
-                recordVisualTextFallback(assistantRunId, planned);
-                return fallbackToTextDraft(
-                        plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, 0);
-            }
-            throw visualCompositionFailure;
-        }
-        draft = normalizeDraft(draft, modelRequest);
-        boolean hasPageImages = !modelRequest.pageImages().isEmpty();
-        boolean hasOnlyVisualPageEvidence = hasOnlyVisualPageEvidence(evidence);
-        int maxRepairAttempts = draftRecoveryPolicy.maxRepairAttempts(hasPageImages);
-        for (int repair = 0; ; repair++) {
-            try {
-                LessonSection accepted = validatedSection(
-                        plan, planned, evidence, modelRequest, draft, EvidenceStatus.CITED_DRAFT);
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        repair,
-                        ActivityOutcome.SUCCEEDED,
-                        "CITED_DRAFT_ACCEPTED");
-                return new DraftCandidate(sectionIndex, planned, evidence, modelRequest, draft, accepted);
-            } catch (IllegalArgumentException rejectedDraft) {
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        repair,
-                        ActivityOutcome.REJECTED,
-                        rejectionCategory(rejectedDraft));
-                if (draftRecoveryPolicy.shouldFallbackToCitedText(
-                        hasPageImages, hasOnlyVisualPageEvidence, repair)) {
-                    return fallbackToTextDraft(
-                            plan,
-                            planned,
-                            evidence,
-                            modelRequest,
-                            assistantRunId,
-                            sectionIndex,
-                            repair + 1);
-                }
-                if (repair == maxRepairAttempts) {
-                    throw rejectedDraft;
-                }
-                String diagnostic = rejectedDraft.getMessage() == null
-                        ? "The previous draft failed lesson validation."
-                        : rejectedDraft.getMessage();
-                List<String> feedback = draftRecoveryPolicy.repairFeedback(
-                        diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
-                log.info(
-                        "Teaching topic {} structural repair {}/{}: {}",
-                        planned.topicKey(),
-                        repair + 1,
-                        maxRepairAttempts,
-                        feedback.getFirst());
-                SectionDraft draftToRevise = draft;
-                try {
-                    draft = invocations.invoke(
-                            assistantRunId,
-                            ActivityType.MODEL,
-                            operationName("reviseTeachingSection", planned.position()),
-                            estimateTokens(modelRequest.toString()) + estimateTokens(draftToRevise.toString())
-                                    + estimateTokens(feedback.toString()),
-                            "Teaching section revised from validation feedback",
-                            () -> model.revise(modelRequest, draftToRevise, feedback),
-                            result -> estimateTokens(result.toString()));
-                } catch (AgentExecutionStoppedException stopped) {
-                    throw stopped;
-                } catch (RuntimeException visualRepairFailure) {
-                    if (draftRecoveryPolicy.canFallbackToCitedText(hasPageImages, hasOnlyVisualPageEvidence)) {
-                        log.warn(
-                                "Visual teaching repair for topic {} is unavailable; continuing with cited text: {}",
-                                planned.topicKey(),
-                                visualRepairFailure.getMessage());
-                        recordVisualTextFallback(assistantRunId, planned);
-                        return fallbackToTextDraft(
-                                plan, planned, evidence, modelRequest, assistantRunId, sectionIndex, repair + 1);
-                    }
-                    throw visualRepairFailure;
-                }
-                draft = normalizeDraft(draft, modelRequest);
-            }
-        }
-    }
-
-    private DraftCandidate fallbackToTextDraft(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest visualRequest,
-            UUID assistantRunId,
-            int sectionIndex,
-            int validationAttempt) {
-        TeachingLessonModel.SectionRequest textOnlyRequest = draftRecoveryPolicy.withoutPageImages(visualRequest);
-        SectionDraft textOnlyDraft = invocations.invoke(
-                assistantRunId,
-                ActivityType.MODEL,
-                operationName("fallbackToTextTeachingSection", planned.position()),
-                estimateTokens(textOnlyRequest.toString()),
-                "Visual teaching section recomposed as complete grounded text",
-                () -> model.compose(textOnlyRequest),
-                result -> estimateTokens(result.toString()));
-        textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
-        for (int repair = 0; ; repair++) {
-            try {
-                LessonSection accepted = validatedSection(
-                        plan, planned, evidence, textOnlyRequest, textOnlyDraft, EvidenceStatus.CITED_DRAFT);
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        validationAttempt + repair,
-                        ActivityOutcome.SUCCEEDED,
-                        "TEXT_FALLBACK_ACCEPTED");
-                return new DraftCandidate(
-                        sectionIndex, planned, evidence, textOnlyRequest, textOnlyDraft, accepted);
-            } catch (IllegalArgumentException rejectedFallback) {
-                recordValidation(
-                        assistantRunId,
-                        planned,
-                        validationAttempt + repair,
-                        ActivityOutcome.REJECTED,
-                        "TEXT_FALLBACK_" + rejectionCategory(rejectedFallback));
-                if (repair == draftRecoveryPolicy.maxRepairAttempts(false)) throw rejectedFallback;
-                List<String> repairFeedback = draftRecoveryPolicy.textFallbackFeedback(
-                        rejectedFallback.getMessage() == null
-                                ? "The previous fallback failed lesson validation."
-                                : rejectedFallback.getMessage());
-                SectionDraft draftToRevise = textOnlyDraft;
-                textOnlyDraft = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.MODEL,
-                        operationName("reviseTextTeachingSection", planned.position()),
-                        estimateTokens(textOnlyRequest.toString()) + estimateTokens(draftToRevise.toString())
-                                + estimateTokens(repairFeedback.toString()),
-                        "Text fallback revised from validation feedback",
-                        () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
-                        result -> estimateTokens(result.toString()));
-                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
-                textOnlyDraft = draftRecoveryPolicy.preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
-            }
-        }
-    }
-
-    private boolean isVisualLocalizationFailure(IllegalArgumentException rejection) {
-        return rejectionCategory(rejection).startsWith("VISUAL_");
-    }
-
-    private boolean hasOnlyVisualPageEvidence(List<RuleEvidence> evidence) {
-        return !evidence.isEmpty()
-                && evidence.stream().allMatch(TeachingVisualEvidenceSelector::isVisualPageEvidence);
-    }
-
-    private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        return presentationNormalizer.normalize(draft, request);
-    }
-
-    private LessonSection validatedSection(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest modelRequest,
-            SectionDraft draft,
-            EvidenceStatus evidenceStatus) {
-        LessonDraftValidator.validateDraft(draft, modelRequest);
-
-        Map<UUID, RuleEvidence> allowedEvidence = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(
-                        RuleEvidence::chunkId, Function.identity(), (first, duplicate) -> first));
-        LessonDraftValidator.validateVisualBlockEvidence(draft, modelRequest, allowedEvidence);
-        List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(draft, allowedEvidence);
-        List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(draft, visualCitationIds);
-        List<EvidenceClaim> generatedClaims = reviewClaims.stream()
-                .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))
-                .toList();
-        var verification = evidenceVerifier.verify(new VerificationRequest(
-                plan.documentVersionId(),
-                evidence.stream().map(this::toVerifierEvidence).toList(),
-                generatedClaims));
-        if (!verification.verified()) {
-            throw new IllegalArgumentException(
-                    "Evidence validation failed: " + String.join(", ", verification.issueCodes()));
-        }
-        List<LessonStep> steps = IntStream.range(0, draft.steps().size())
-                .mapToObj(index -> LessonDraftValidator.validatedStep(index + 1, draft.steps().get(index), allowedEvidence))
-                .toList();
-        List<Integer> visualSourcePages = visualCitationIds.stream()
-                .map(allowedEvidence::get)
-                .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
-                .distinct()
-                .sorted()
-                .boxed()
-                .toList();
-        return new LessonSection(
-                planned.position(),
-                planned.topicKey(),
-                planned.coverageTags(),
-                draft.title().strip(),
-                planned.required(),
-                evidenceStatus,
-                draft.visualKind(),
-                draft.visualCaption().strip(),
-                visualSourcePages,
-                visualCitationIds,
-                steps);
-    }
-
     private void reviewPublishedLesson(
             TeachingPlan plan,
-            List<DraftCandidate> candidates,
+            List<TeachingSectionDraftCandidate> candidates,
             List<LessonSection> sections,
             UUID assistantRunId,
             Runnable progressPublisher) {
@@ -790,7 +524,7 @@ public class GroundedTeachingAgent {
 
     private boolean reviewPublishedBatch(
             TeachingPlan plan,
-            List<DraftCandidate> candidates,
+            List<TeachingSectionDraftCandidate> candidates,
             List<LessonSection> sections,
             UUID assistantRunId,
             Runnable progressPublisher,
@@ -819,13 +553,13 @@ public class GroundedTeachingAgent {
         Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
                 .collect(Collectors.groupingBy(issue -> batch.claimOwners()
                         .get(issue.claimPosition()).sectionIndex()));
-        List<DraftCandidate> correctedCandidates = new ArrayList<>();
+        List<TeachingSectionDraftCandidate> correctedCandidates = new ArrayList<>();
         int factualCorrectionsStarted = 0;
         int scopeCorrectionsStarted = 0;
-        for (DraftCandidate candidate : candidates) {
+        for (TeachingSectionDraftCandidate candidate : candidates) {
             List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
                     candidate.sectionIndex(), List.of());
-            recordValidation(
+            sectionDraftComposer.recordValidation(
                     assistantRunId,
                     candidate.planned(),
                     0,
@@ -849,14 +583,14 @@ public class GroundedTeachingAgent {
                 continue;
             }
             try {
-                DraftCandidate reviewed = issues.isEmpty()
-                        ? new DraftCandidate(
+                TeachingSectionDraftCandidate reviewed = issues.isEmpty()
+                        ? new TeachingSectionDraftCandidate(
                                 candidate.sectionIndex(),
                                 candidate.planned(),
                                 candidate.evidence(),
                                 candidate.modelRequest(),
                                 candidate.draft(),
-                                validatedSection(
+                                sectionDraftComposer.validatedSection(
                                 plan,
                                 candidate.planned(),
                                 candidate.evidence(),
@@ -912,9 +646,9 @@ public class GroundedTeachingAgent {
         return true;
     }
 
-    private DraftCandidate correctedPublishedDraft(
+    private TeachingSectionDraftCandidate correctedPublishedDraft(
             TeachingPlan plan,
-            DraftCandidate candidate,
+            TeachingSectionDraftCandidate candidate,
             List<GeneratedContentCritic.Issue> issues,
             UUID assistantRunId) {
         List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
@@ -927,13 +661,13 @@ public class GroundedTeachingAgent {
                 "Published teaching section corrected from whole-lesson review",
                 () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
                 result -> estimateTokens(result.toString()));
-        corrected = normalizeDraft(corrected, candidate.modelRequest());
+        corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
         EvidenceStatus correctionStatus = corrected.equals(candidate.draft())
                 ? EvidenceStatus.CITED_DRAFT
                 : EvidenceStatus.SUPPORTED;
         LessonSection correctedSection;
         try {
-            correctedSection = validatedSection(
+            correctedSection = sectionDraftComposer.validatedSection(
                     plan,
                     candidate.planned(),
                     candidate.evidence(),
@@ -943,7 +677,7 @@ public class GroundedTeachingAgent {
         } catch (IllegalArgumentException invalidCorrection) {
             SectionDraft invalidDraft = corrected;
             List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
-                    feedback, rejectionCategory(invalidCorrection));
+                    feedback, TeachingDraftRejectionCategory.from(invalidCorrection));
             corrected = invocations.invoke(
                     assistantRunId,
                     ActivityType.MODEL,
@@ -953,9 +687,9 @@ public class GroundedTeachingAgent {
                     "Published teaching correction repaired to the section contract",
                     () -> model.revise(candidate.modelRequest(), invalidDraft, structuralRepair),
                     result -> estimateTokens(result.toString()));
-            corrected = normalizeDraft(corrected, candidate.modelRequest());
+            corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
             correctionStatus = corrected.equals(candidate.draft()) ? EvidenceStatus.CITED_DRAFT : EvidenceStatus.SUPPORTED;
-            correctedSection = validatedSection(
+            correctedSection = sectionDraftComposer.validatedSection(
                     plan,
                     candidate.planned(),
                     candidate.evidence(),
@@ -963,13 +697,13 @@ public class GroundedTeachingAgent {
                     corrected,
                     correctionStatus);
         }
-        recordValidation(
+        sectionDraftComposer.recordValidation(
                 assistantRunId,
                 candidate.planned(),
                 1,
                 ActivityOutcome.SUCCEEDED,
                 "POST_PUBLICATION_CORRECTION_APPLIED");
-        return new DraftCandidate(
+        return new TeachingSectionDraftCandidate(
                 candidate.sectionIndex(),
                 candidate.planned(),
                 candidate.evidence(),
@@ -978,87 +712,12 @@ public class GroundedTeachingAgent {
                 correctedSection);
     }
 
-    private static String chapterScope(TeachingPlan plan, TeachingPlan.PlannedSection current) {
-        String chapters = plan.sections().stream()
-                .map(section -> (section.position() == current.position() ? "【当前章节】" : "")
-                        + "第" + section.position() + "章《" + section.title() + "》："
-                        + boundedChapterObjective(section.objective()))
-                .collect(Collectors.joining("\n"));
-        String scope = "完整章节分工（仅界定讲解边界，不是规则事实）：\n" + chapters
-                + "\n当前章节只完整讲解自己的目标。其他章节已经明确负责的机制，只保留本章理解所必需的"
-                + "阶段名、顺序、即时选择或结果；不要复述它们的触发、数量、成本、例外、计算、完整流程或图例映射。";
-        return scope.length() <= 4_000 ? scope : scope.substring(0, 3_999) + "…";
-    }
-
-    private static String boundedChapterObjective(String objective) {
-        String value = objective == null ? "" : objective.strip();
-        return value.length() <= 280 ? value : value.substring(0, 279) + "…";
-    }
-
     static boolean claimsImmediateEndingForEndOfRoundTrigger(String playerText, List<RuleEvidence> citedEvidence) {
         return LessonDraftValidator.claimsImmediateEndingForEndOfRoundTrigger(playerText, citedEvidence);
     }
 
     static boolean defersCitedEndgameCheck(String playerText, List<RuleEvidence> citedEvidence) {
         return LessonDraftValidator.defersCitedEndgameCheck(playerText, citedEvidence);
-    }
-
-    private String rejectionCategory(IllegalArgumentException rejection) {
-        String message = rejection.getMessage() == null ? "" : rejection.getMessage();
-        if (message.startsWith("Evidence validation failed:")) {
-            return "EVIDENCE_POLICY_" + message.substring(message.indexOf(':') + 1)
-                    .replaceAll("[^A-Z0-9_, -]", "")
-                    .strip()
-                    .replaceAll("[, -]+", "+");
-        }
-        if (message.contains("unknown evidence reference")) return "UNKNOWN_EVIDENCE_REFERENCE";
-        if (message.contains("visual cites evidence outside")) return "VISUAL_CITATION_OUTSIDE_SCOPE";
-        if (message.contains("step cites evidence outside")) return "STEP_CITATION_OUTSIDE_SCOPE";
-        if (message.contains("visual caption has no evidence")) return "VISUAL_CITATION_MISSING";
-        if (message.contains("unresolved PDF icon")) return "UNRESOLVED_PDF_MARKER";
-        if (message.contains("emoji icons")) return "UNRESOLVED_EMOJI_ICON";
-        if (message.contains("do not end a rule")) return "STEP_TRUNCATED";
-        if (message.contains("unanswered either/or alternative")) return "STEP_UNRESOLVED_ALTERNATIVE";
-        if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
-        if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
-        if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";
-        if (message.contains("end condition occurs at the end of a round")) return "END_OF_ROUND_TIMING_LOST";
-        if (message.contains("cited end-game check")) return "ENDGAME_CHECK_DEFERRED";
-        if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
-        if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
-        if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";
-        if (message.contains("Every step needs")) return "STEP_METADATA_INVALID";
-        if (message.contains("teaching step is invalid")) return "STEP_CONTENT_INVALID";
-        if (message.contains("visual caption is missing")) return "VISUAL_CAPTION_MISSING";
-        if (message.contains("visual caption is longer")) return "VISUAL_CAPTION_TOO_LONG";
-        if (message.contains("visual caption")) return "VISUAL_CAPTION_INVALID";
-        if (message.contains("title")) return "TITLE_INVALID";
-        if (message.contains("visualKind")) return "VISUAL_KIND_MISSING";
-        if (message.contains("draft is missing")) return "DRAFT_MISSING";
-        return "SCHEMA_OR_POLICY_INVALID";
-    }
-
-    private void recordValidation(
-            UUID runId,
-            TeachingPlan.PlannedSection section,
-            int revision,
-            ActivityOutcome outcome,
-            String category) {
-        invocations.record(
-                runId,
-                ActivityType.VALIDATION,
-                "validateTeachingSection|" + section.position() + "|" + revision,
-                outcome,
-                "Teaching draft " + (outcome == ActivityOutcome.SUCCEEDED ? "accepted: " : "rejected: ") + category);
-    }
-
-    private void recordVisualTextFallback(UUID runId, TeachingPlan.PlannedSection section) {
-        invocations.record(
-                runId,
-                ActivityType.VALIDATION,
-                "fallbackVisualTeachingSection|" + section.position(),
-                ActivityOutcome.SUCCEEDED,
-                "Visual composition unavailable; continuing with cited text");
     }
 
     private void recordPublication(
@@ -1073,14 +732,6 @@ public class GroundedTeachingAgent {
                 outcome,
                 "Teaching section " + (outcome == ActivityOutcome.SUCCEEDED ? "published: " : "withheld: ") + category);
     }
-
-    record DraftCandidate(
-            int sectionIndex,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> evidence,
-            TeachingLessonModel.SectionRequest modelRequest,
-            SectionDraft draft,
-            LessonSection section) {}
 
     private record GenerationMode(
             boolean bindVisualPageEvidence,
@@ -1116,32 +767,8 @@ public class GroundedTeachingAgent {
     private record SectionOutcome(
             int position,
             LessonSection section,
-            DraftCandidate reviewCandidate,
+            TeachingSectionDraftCandidate reviewCandidate,
             int retrievalToolCalls) {}
-
-    private List<EvidenceInput> modelEvidence(UUID documentVersionId, List<RuleEvidence> evidence) {
-        Set<Integer> pages = evidence.stream()
-                .filter(source -> source.pageFrom() == source.pageTo())
-                .map(RuleEvidence::pageFrom)
-                .collect(Collectors.toSet());
-        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
-                .collect(Collectors.toMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText));
-        return evidence.stream().map(source -> toModelEvidence(source, factsByPage)).toList();
-    }
-
-    private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
-        String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
-        String excerpt = visualFact == null ? evidence.excerpt() : evidence.excerpt() + "\n\n" + visualFact;
-        return new EvidenceInput(
-                evidence.chunkId(),
-                evidence.sectionType(),
-                evidence.heading(),
-                excerpt,
-                evidence.pageFrom(),
-                evidence.pageTo());
-    }
 
     private boolean sameEvidence(RuleEvidence first, RuleEvidence second) {
         return first.chunkId().equals(second.chunkId())

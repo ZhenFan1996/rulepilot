@@ -32,11 +32,11 @@ final class LessonReviewPlanner {
 
     private LessonReviewPlanner() {}
 
-    static LessonReviewBatch plan(List<GroundedTeachingAgent.DraftCandidate> candidates, UUID assistantRunId) {
+    static LessonReviewBatch plan(List<TeachingSectionDraftCandidate> candidates, UUID assistantRunId) {
         List<Claim> claims = new ArrayList<>();
-        Map<Integer, GroundedTeachingAgent.DraftCandidate> claimOwners = new LinkedHashMap<>();
+        Map<Integer, TeachingSectionDraftCandidate> claimOwners = new LinkedHashMap<>();
         Map<UUID, RuleEvidence> evidence = new LinkedHashMap<>();
-        for (GroundedTeachingAgent.DraftCandidate candidate : candidates) {
+        for (TeachingSectionDraftCandidate candidate : candidates) {
             reviewEvidence(candidate).forEach(source -> evidence.putIfAbsent(source.chunkId(), source));
             List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(
                     candidate.draft(),
@@ -80,7 +80,7 @@ final class LessonReviewPlanner {
         return new LessonReviewBatch(request, Map.copyOf(claimOwners));
     }
 
-    private static List<RuleEvidence> reviewEvidence(GroundedTeachingAgent.DraftCandidate candidate) {
+    private static List<RuleEvidence> reviewEvidence(TeachingSectionDraftCandidate candidate) {
         Set<UUID> cited = Stream.concat(
                         candidate.draft().visualCitationIds().stream(),
                         candidate.draft().steps().stream().flatMap(step -> step.citationIds().stream()))
@@ -107,5 +107,5 @@ final class LessonReviewPlanner {
 
     record LessonReviewBatch(
             ReviewRequest request,
-            Map<Integer, GroundedTeachingAgent.DraftCandidate> claimOwners) {}
+            Map<Integer, TeachingSectionDraftCandidate> claimOwners) {}
 }
