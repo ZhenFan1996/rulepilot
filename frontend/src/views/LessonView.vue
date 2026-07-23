@@ -7,6 +7,7 @@ import CardOcrCapture from '@/components/CardOcrCapture.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
+import LessonGenerationStatus, { type LessonGenerationActivity } from '@/components/LessonGenerationStatus.vue'
 import {
   useLessonAnswers,
   type ConfirmedRuling,
@@ -43,7 +44,6 @@ import {
   teachingActivityText,
   teachingElapsedLabel,
   teachingRemainingTimeText,
-  type TeachingActivity,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
@@ -276,13 +276,16 @@ const generationProgressWidth = computed(() => `${Math.round(
 const generationRemainingTime = computed(() => plan.value
   ? teachingRemainingTimeText(plan.value, teachingRun.value, generationNow.value)
   : '')
-const recentGenerationActivities = computed(() => generationActivities.value.slice(-3).reverse())
-
-function generationActivityText(activity: TeachingActivity) {
-  return plan.value
-    ? teachingActivityText(plan.value, generationActivities.value, activity)
-    : '正在整理并核对讲解'
-}
+const recentGenerationActivities = computed<LessonGenerationActivity[]>(() => generationActivities.value
+  .slice(-3)
+  .reverse()
+  .map((activity) => ({
+    sequence: activity.sequence,
+    outcome: activity.outcome,
+    text: plan.value
+      ? teachingActivityText(plan.value, generationActivities.value, activity)
+      : '正在整理并核对讲解',
+  })))
 
 function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
@@ -1187,35 +1190,23 @@ onUnmounted(() => {
       <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
         <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
       </div>
-      <section v-if="generationActive" class="border-b border-indigo/15 bg-indigo/5 px-5 py-4">
-        <div class="mx-auto max-w-4xl">
-          <div class="flex items-start justify-between gap-4">
-            <div>
-              <p class="text-sm font-semibold text-indigo" role="status" aria-live="polite" aria-atomic="true">{{ generationStatusUnknown ? '正在确认后台生成状态' : currentGenerationText }}</p>
-              <p class="mt-1 text-xs leading-5 text-ink/55">{{ draftReady ? `完整基础讲解已经可用，共 ${lesson?.sections.length ?? 0} 节；后台只是在核对和修正细节。` : `整本仍在后台生成 · 当前已有 ${lesson?.sections.length ?? 0} 节可以阅读。停在这里不会丢失进度。` }}</p>
-            </div>
-            <span v-if="!generationStatusUnknown" class="shrink-0 font-mono text-sm font-semibold text-indigo" aria-label="已用时">{{ generationElapsed }}</span>
-          </div>
-          <template v-if="!generationStatusUnknown && plan">
-            <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-indigo/10" role="progressbar" :aria-valuemin="0" :aria-valuemax="plan.sections.length" :aria-valuenow="processedGenerationChapters" :aria-label="`已处理 ${processedGenerationChapters} 个章节，共 ${plan.sections.length} 个`">
-              <div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: generationProgressWidth }" />
-            </div>
-            <div class="mt-2 flex flex-wrap justify-between gap-2 text-xs text-ink/55">
-              <span>后台已处理 {{ processedGenerationChapters }}/{{ plan.sections.length }} 节，其中 {{ supportedGenerationChapters }} 节通过核对</span>
-              <span>{{ teachingRun?.budget.usedModelCalls ?? 0 }} 次模型调用</span>
-            </div>
-            <p class="mt-2 text-xs leading-5 text-ink/50">{{ generationRemainingTime }} {{ draftReady ? '你现在就可以从第一节开始。' : '新章节完成后会自动出现在目录里。' }}</p>
-            <ol v-if="recentGenerationActivities.length" class="mt-3 grid gap-1.5 border-t border-indigo/10 pt-3 sm:grid-cols-3" aria-label="最近生成进度">
-              <li v-for="activity in recentGenerationActivities" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
-                <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
-                <span>{{ generationActivityText(activity) }}</span>
-              </li>
-            </ol>
-          </template>
-          <p v-if="generationRefreshError" class="mt-2 text-xs font-semibold text-amber-800" role="status">暂时没有取得最新章节，正在自动重试。现有内容不受影响。</p>
-        </div>
-      </section>
-      <p v-else-if="generationFinishedMessage" class="border-b border-emerald-200 bg-emerald-50 px-5 py-3 text-center text-sm font-semibold text-emerald-800" role="status">{{ generationFinishedMessage }}</p>
+      <LessonGenerationStatus
+        :active="generationActive"
+        :status-unknown="generationStatusUnknown"
+        :status-text="currentGenerationText"
+        :draft-ready="draftReady"
+        :available-section-count="lesson?.sections.length ?? 0"
+        :total-section-count="plan?.sections.length ?? null"
+        :elapsed="generationElapsed"
+        :processed-chapter-count="processedGenerationChapters"
+        :supported-chapter-count="supportedGenerationChapters"
+        :model-call-count="teachingRun?.budget.usedModelCalls ?? 0"
+        :progress-width="generationProgressWidth"
+        :remaining-time="generationRemainingTime"
+        :activities="recentGenerationActivities"
+        :refresh-failed="Boolean(generationRefreshError)"
+        :finished-message="generationFinishedMessage"
+      />
 
       <section v-if="!online && offlineKnowledge.length" class="mx-auto max-w-4xl px-5 pt-7 sm:px-8" aria-labelledby="offline-knowledge-title">
         <div class="rounded-3xl border border-amber-300 bg-amber-50 p-5 sm:p-6">
