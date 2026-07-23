@@ -253,11 +253,26 @@ public class VisualLessonEnrichmentService {
     private String outcomeSummary(VisualLessonEnricher.Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "已找到可核对的局部图示";
+            case ALREADY_PRESENT -> "已有可核对的局部图示，无需重复处理";
+            case NO_CITED_CANDIDATE, NO_PAGE_IMAGE -> "此步骤没有可引用的规则书图片，已保留文字讲解";
+            case LOCATOR_RETURNED_NONE -> "视觉模型未找到可用的局部图示，已保留文字讲解";
+            case MODEL_OVERSIZED_REGION -> "模型只返回了过大的图片范围，未把整页误作局部讲解";
+            case MODEL_SEMANTIC_REJECTED -> "局部图示未通过当前规则步骤的二次核对，未采用";
+            case MODEL_EXPLICIT_NO_REGION -> "未找到能直接对应此步骤的局部图示，已保留文字讲解";
+            case MODEL_MALFORMED_RESPONSE -> "视觉模型没有返回可用截图坐标，已保留文字讲解";
+            case MODEL_UNSUPPORTED_SCOPE -> "视觉模型返回的图片与当前规则页不一致，未采用";
+            case MODEL_INVALID_GEOMETRY -> "视觉模型返回的截图范围无效，未采用";
+            case MODEL_NON_CHINESE_OBSERVATION -> "视觉模型没有给出可读的图中说明，未采用";
             case MODEL_BUSY -> "视觉模型正在处理其他图片；此步可稍后重试";
             case MODEL_TIMEOUT -> "查看图片超时；此步可稍后重试";
             case MODEL_UNAVAILABLE -> "当前没有可用的视觉模型";
             case MODEL_PROVIDER_FAILURE, MODEL_INTERRUPTED -> "视觉模型暂时不可用；已保留文字讲解";
-            default -> "没有采用不够可靠的局部图示";
+            case REJECTED_WHOLE_PAGE -> "模型返回整页而非局部图示，未采用";
+            case REJECTED_TOO_SMALL -> "模型返回的局部图示过小，未采用";
+            case REJECTED_MISSING_OBSERVATION, REJECTED_NON_VISUAL -> "截图没有可核对的图中对象，未采用";
+            case REJECTED_OUTSIDE_CANDIDATE, REJECTED_UNKNOWN_EVIDENCE -> "截图没有对应当前规则的可核对依据，未采用";
+            case REJECTED_DUPLICATE -> "截图与已有讲解重复，未采用";
+            case REJECTED_STEP_MISMATCH -> "截图与当前规则步骤不一致，未采用";
         };
     }
 

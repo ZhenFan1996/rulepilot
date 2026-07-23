@@ -33,6 +33,8 @@ public interface VisualRegionLocator {
     enum Diagnostic {
         FOUND,
         NO_REGION,
+        OVERSIZED_REGION,
+        SEMANTIC_REJECTED,
         MODEL_UNAVAILABLE,
         EXPLICIT_NO_REGION,
         MALFORMED_RESPONSE,

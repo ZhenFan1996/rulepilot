@@ -13,6 +13,7 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import javax.imageio.ImageIO;
@@ -91,6 +92,24 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(options.getModel()).isEqualTo("qwen3-vl-plus");
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+    }
+
+    @Test
+    void gives_qwen_a_compact_exact_step_contract_and_strips_extracted_prose_from_candidates() {
+        var candidates = SpringAiVisualRegionLocator.candidatePromptPayload(
+                List.of(new Candidate(
+                        4,
+                        new Rectangle(600, 500, 300, 200),
+                        "Cited page 4 visual context: a long extracted paragraph that must not distract vision.")),
+                true);
+
+        assertThat(SpringAiVisualRegionLocator.QWEN_SYSTEM)
+                .contains("one exact", "width * height", "not merely nearby prose", "supportedClaimRefs");
+        assertThat(SpringAiVisualRegionLocator.QWEN_CROP_VERIFIER_SYSTEM)
+                .contains("recognise that claim", "need not independently show every procedural word", "different");
+        assertThat(candidates).containsExactly(Map.of(
+                "pageNumber", 4,
+                "hint", "page visual context"));
     }
 
     @Test
@@ -261,6 +280,37 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(SpringAiVisualRegionLocator.acceptedCropReferences(
                         "{\"acceptedCropRefs\":[\"R3\"]}", Set.of("R1", "R2")))
                 .isEmpty();
+    }
+
+    @Test
+    void offers_the_crop_verifier_only_the_exact_step_that_the_crop_claims_to_support() {
+        Claim namedCard = new Claim(UUID.randomUUID(), "步骤 1（打出统治卡）：打出统治卡。", List.of(21), 1);
+        Claim alliance = new Claim(UUID.randomUUID(), "步骤 2（结盟）：与其他玩家结盟。", List.of(21), 2);
+        var request = new VisualLocationRequest(
+                "结束条件", List.of(namedCard, alliance),
+                List.of(new Candidate(21, new Rectangle(0, 0, 1_000, 1_000), "Cited page 21 visual context")),
+                List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(21, "image/png", cardGroupImage())));
+        var region = new LocatedRegion(
+                21, "流浪者结盟步骤", "狐狸与松鼠角色站在一起", 100, 100, 300, 300,
+                List.of(namedCard.evidenceId()), List.of(1));
+
+        assertThat(SpringAiVisualRegionLocator.claimsForExactCrop(request, region))
+                .containsExactly(namedCard);
+    }
+
+    @Test
+    void reserves_qwen_crop_review_for_rules_where_a_neighbouring_visual_would_change_the_meaning() {
+        Claim supply = new Claim(
+                UUID.randomUUID(),
+                "步骤 4（建立物品供应）：摆放物品标记。请注意，完成设置后通过得分决定胜负。",
+                List.of(4),
+                4);
+        Claim dominance = new Claim(UUID.randomUUID(), "步骤 1（打出统治卡）：打出统治卡。", List.of(21), 1);
+        Claim scoring = new Claim(UUID.randomUUID(), "步骤 2（计分）：比较分数。", List.of(11), 2);
+
+        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(supply))).isFalse();
+        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(dominance))).isTrue();
+        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(scoring))).isTrue();
     }
 
     @Test

@@ -368,6 +368,8 @@ public class VisualLessonEnricher {
     private Outcome outcomeFor(VisualRegionLocator.Diagnostic diagnostic) {
         return switch (diagnostic) {
             case NO_REGION -> Outcome.LOCATOR_RETURNED_NONE;
+            case OVERSIZED_REGION -> Outcome.MODEL_OVERSIZED_REGION;
+            case SEMANTIC_REJECTED -> Outcome.MODEL_SEMANTIC_REJECTED;
             case MODEL_UNAVAILABLE -> Outcome.MODEL_UNAVAILABLE;
             case EXPLICIT_NO_REGION -> Outcome.MODEL_EXPLICIT_NO_REGION;
             case MALFORMED_RESPONSE -> Outcome.MODEL_MALFORMED_RESPONSE;
@@ -389,6 +391,8 @@ public class VisualLessonEnricher {
             case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
             case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
             case LOCATOR_RETURNED_NONE -> "第 " + sectionPosition + " 节的视觉模型未找到可靠局部图示";
+            case MODEL_OVERSIZED_REGION -> "第 " + sectionPosition + " 节的视觉模型只返回了整页或过大范围";
+            case MODEL_SEMANTIC_REJECTED -> "第 " + sectionPosition + " 节的局部图示未通过当前规则步骤的二次核对";
             case MODEL_UNAVAILABLE -> "第 " + sectionPosition + " 节没有可用的视觉模型";
             case MODEL_EXPLICIT_NO_REGION -> "第 " + sectionPosition + " 节的视觉模型确认没有合适局部图示";
             case MODEL_MALFORMED_RESPONSE -> "第 " + sectionPosition + " 节的视觉模型没有返回可用坐标";
@@ -463,6 +467,8 @@ public class VisualLessonEnricher {
         NO_CITED_CANDIDATE,
         NO_PAGE_IMAGE,
         LOCATOR_RETURNED_NONE,
+        MODEL_OVERSIZED_REGION,
+        MODEL_SEMANTIC_REJECTED,
         MODEL_UNAVAILABLE,
         MODEL_EXPLICIT_NO_REGION,
         MODEL_MALFORMED_RESPONSE,

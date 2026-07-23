@@ -106,6 +106,49 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             visibleDescription is required and at most 240 characters. supportedClaimRefs must contain only C1, C2, etc.
             """;
 
+    /**
+     * Qwen follows compact object-localization requests more reliably than a long list of exceptional cases. Keep this
+     * contract deliberately narrow: the caller already supplies one exact lesson step and page-scoped candidates.
+     */
+    static final String QWEN_SYSTEM = """
+            You ground one exact board-game rule step in one or two supplied rulebook page images. Return JSON only:
+            {"regions":[{"pageNumber":4,"label":"literal visible item","visibleDescription":"literal visible
+            observation","x":0,"y":0,"width":0,"height":0,"supportedClaimRefs":["C1"]}]}.
+            Find a compact player-facing object that directly helps the supplied C claim: a named component, card,
+            icon group, board state, arrow, quantity, or worked example. The crop must visibly contain that object,
+            not merely nearby prose or decorative art. Crop only the relevant object and its direct labels: do not
+            return a whole page and keep width * height at or below 600000 in the 0-1000 page coordinate system.
+            pageNumber must be supplied and supportedClaimRefs must be only the offered C references whose source page
+            matches the crop. label and visibleDescription describe only literal visible content, never the rule effect.
+            Use concise Simplified Chinese when natural; the page's own language is acceptable for literal names.
+            Return {"regions":[]} only when the page has no concrete visual handle for this exact step.
+            """;
+
+    private static final String CROP_VERIFIER_SYSTEM = """
+            You verify whether an exact rulebook crop is worth showing beside one exact player rule. Inspect only the
+            supplied crop images and their offered claims. Accept a crop only when the crop itself visibly helps that
+            exact claim: it must show the named card, faction, component, icon, condition, score reference, action
+            state, or spatial relationship that distinguishes the claim from a neighbouring rule on the same page. A
+            real but unrelated faction portrait, card, score track, board region, or example is a rejection. In
+            particular, if a claim tells a player to play or activate a named card, the crop must show that card or its
+            literal face, rather than another character or card on the page. A word-only title, printed label, prose
+            box, dotted boundary, or empty background is never enough. Do not infer missing cards, icons, or claim
+            relevance from a crop label. Return one JSON object with acceptedCropRefs as an array containing only the
+            accepted R references.
+            """;
+
+    /** Qwen should judge a crop as a recognition aid, not demand an independent proof of each rule sentence. */
+    static final String QWEN_CROP_VERIFIER_SYSTEM = """
+            You make the final relevance check for a compact board-game rulebook crop. The first pass already checked
+            page, claim reference, and coordinates. Inspect the crop and its one exact claim. Accept it when a player
+            can literally see the component, icon group, card face, board layout, marker group, arrow, score reference,
+            or worked state needed to recognise that claim. The crop need not independently show every procedural word
+            in the claim. Reject only when it is word-only/prose-only/decorative, or visibly belongs to a different
+            named card, faction, component, score example, or rule on the same page. If the claim names a particular
+            card, accept only that card; if it names a component group, accept the literal group. Return JSON only:
+            {"acceptedCropRefs":["R1"]} or {"acceptedCropRefs":[]}.
+            """;
+
     private final RuntimeModelConfiguration models;
 
     public SpringAiVisualRegionLocator(RuntimeModelConfiguration models) {
@@ -137,109 +180,143 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (!first.guide().regions().isEmpty()) {
             List<LocatedRegion> compactFirst = withoutOversizedReaderViewports(first.guide().regions());
             if (!compactFirst.isEmpty()) {
-                return confirmedCatalogedLegendCrops(request, compactFirst, owner);
+                return confirmedExactStepCrops(request, compactFirst, owner);
             }
             log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
             GuideAttempt tightened = locateGuideOnce(request, owner, tightReaderViewportInstruction());
             List<LocatedRegion> compactTightened = withoutOversizedReaderViewports(tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
-                return confirmedCatalogedLegendCrops(request, compactTightened, owner);
+                return confirmedExactStepCrops(request, compactTightened, owner);
             }
-            return LocateGuideResult.unavailable(Diagnostic.NO_REGION);
+            return LocateGuideResult.unavailable(Diagnostic.OVERSIZED_REGION);
         }
         if (!first.retryable()) return first.guide();
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
         GuideAttempt retried = locateGuideOnce(request, owner, retryInstruction(first.rejection()));
         if (retried.guide().regions().isEmpty()) return retried.guide();
-        return confirmedCatalogedLegendCrops(request, retried.guide().regions(), owner);
+        return confirmedExactStepCrops(request, retried.guide().regions(), owner);
     }
 
     /**
-     * Coordinates proposed while viewing a whole page can land on a nearby printed label instead of the card group it
-     * names. For cataloged legends only, inspect the exact server-rendered crop once before publishing it. This keeps
-     * direct visual grounding rather than trusting either OCR or the first whole-page description.
+     * A whole-page locator can identify a real object that belongs to a neighbouring rule. Inspect the exact rendered
+     * crop once more beside its exact claim before publishing it, so a same-page faction, card, or worked example does
+     * not become a misleading illustration for another step.
      */
-    private LocateGuideResult confirmedCatalogedLegendCrops(
+    private LocateGuideResult confirmedExactStepCrops(
             VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
-        List<LocatedRegion> ambiguous = regions.stream()
-                .filter(region -> overlapsAmbiguousCatalogedLegend(region, request.candidates()))
-                .toList();
-        if (ambiguous.isEmpty()) return LocateGuideResult.found(regions);
-        Optional<Set<String>> confirmed = confirmExactCrops(request, ambiguous, owner);
-        if (confirmed.isPresent()) {
-            List<LocatedRegion> retained = new java.util.ArrayList<>();
-            for (int index = 0; index < regions.size(); index++) {
-                LocatedRegion region = regions.get(index);
-                int ambiguousIndex = ambiguous.indexOf(region);
-                if (ambiguousIndex < 0 || confirmed.get().contains("R" + (ambiguousIndex + 1))) {
-                    retained.add(region);
-                }
-            }
-            return retained.isEmpty()
-                    ? LocateGuideResult.unavailable(Diagnostic.NO_REGION)
-                    : LocateGuideResult.found(retained);
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))
+                && !qwenNeedsExactCropReview(claimsForExactCrop(request, regions.getFirst()))) {
+            // The first pass already tied this routine recognition aid to its exact page, evidence, and step. Qwen's
+            // second visual pass is deliberately reserved for rules where a neighbouring card, faction, score, or
+            // outcome image would materially mislead a player.
+            return LocateGuideResult.found(List.of(regions.getFirst()));
         }
-        // Provider trouble must not make a genuine diagram disappear. The fallback only rejects a nearly blank
-        // label-like crop; dense line art, cards, and monochrome diagrams remain eligible for the normal evidence gate.
-        List<LocatedRegion> retained = regions.stream()
-                .filter(region -> !ambiguous.contains(region) || hasEnoughRenderedVisualSignal(request, region))
-                .toList();
-        return retained.isEmpty() ? LocateGuideResult.unavailable(Diagnostic.NO_REGION) : LocateGuideResult.found(retained);
-    }
-
-    private boolean overlapsAmbiguousCatalogedLegend(LocatedRegion region, List<Candidate> candidates) {
-        return candidates.stream()
-                .filter(candidate -> candidate.pageNumber() == region.pageNumber())
-                .filter(candidate -> intersects(candidate, region))
-                .map(Candidate::sourceText)
-                .map(text -> text.toLowerCase(java.util.Locale.ROOT))
-                .anyMatch(text -> text.startsWith("cataloged visual anchor")
-                        && (text.contains("legend") || text.contains("label") || text.contains("标签")
-                                || text.contains("instruction") || text.contains("说明") || text.contains("title")
-                                || text.contains("标题")));
-    }
-
-    private boolean intersects(Candidate candidate, LocatedRegion region) {
-        int left = Math.max(candidate.rectangle().x(), region.x());
-        int top = Math.max(candidate.rectangle().y(), region.y());
-        int right = Math.min(candidate.rectangle().x() + candidate.rectangle().width(), region.x() + region.width());
-        int bottom = Math.min(candidate.rectangle().y() + candidate.rectangle().height(), region.y() + region.height());
-        return right > left && bottom > top;
-    }
-
-    private Optional<Set<String>> confirmExactCrops(
-            VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
         Map<String, CropImage> crops = croppedImages(request, regions);
-        if (crops.size() != regions.size()) return Optional.empty();
+        if (crops.size() == regions.size()) {
+            for (int index = 0; index < regions.size(); index++) {
+                String reference = "R" + (index + 1);
+                Optional<Boolean> confirmed = confirmExactCrop(
+                        request, regions.get(index), reference, crops.get(reference), owner);
+                if (confirmed.isEmpty()) return retainFirstGroundedCrops(request, regions);
+                if (confirmed.get()) return LocateGuideResult.found(List.of(regions.get(index)));
+            }
+            return LocateGuideResult.unavailable(Diagnostic.SEMANTIC_REJECTED);
+        }
+        return retainFirstGroundedCrops(request, regions);
+    }
+
+    private LocateGuideResult retainFirstGroundedCrops(
+            VisualLocationRequest request, List<LocatedRegion> regions) {
+        // The first pass still passed page, claim, geometry, and literal-visual checks. A transient failure in the
+        // optional second opinion must not erase that grounded aid; an explicit verifier rejection is the only signal
+        // that removes it. This keeps the text-first speed boundary while preserving useful visual coverage.
+        log.info("Exact-step crop verification was unavailable for section {}; retaining the first grounded crop", request.sectionTitle());
+        return LocateGuideResult.found(regions);
+    }
+
+    static boolean qwenNeedsExactCropReview(List<VisualRegionLocator.Claim> claims) {
+        String text = claims.stream()
+                .map(VisualRegionLocator.Claim::text)
+                .map(SpringAiVisualRegionLocator::exactStepHeading)
+                .collect(java.util.stream.Collectors.joining(" "))
+                .toLowerCase(java.util.Locale.ROOT);
+        return text.contains("卡牌")
+                || text.contains("统治卡")
+                || text.contains("打出")
+                || text.contains("激活")
+                || text.contains("使用")
+                || text.contains("阵营")
+                || text.contains("计分")
+                || text.contains("分数")
+                || text.contains("胜利")
+                || text.contains("结束")
+                || text.contains("平局")
+                || text.contains("card")
+                || text.contains("play")
+                || text.contains("activate")
+                || text.contains("faction")
+                || text.contains("score")
+                || text.contains("win")
+                || text.contains("end")
+                || text.contains("tie");
+    }
+
+    private static String exactStepHeading(String claim) {
+        if (claim == null || claim.isBlank()) return "high-risk-unreadable-heading";
+        int opening = claim.indexOf('（');
+        int closing = claim.indexOf('）', opening + 1);
+        if (opening >= 0 && closing > opening + 1) return claim.substring(opening + 1, closing);
+        opening = claim.indexOf('(');
+        closing = claim.indexOf(')', opening + 1);
+        return opening >= 0 && closing > opening + 1
+                ? claim.substring(opening + 1, closing)
+                : "high-risk-unreadable-heading";
+    }
+
+    /** One crop and one exact claim per call prevents a vision model from confusing R references across images. */
+    private Optional<Boolean> confirmExactCrop(
+            VisualLocationRequest request,
+            LocatedRegion region,
+            String reference,
+            CropImage crop,
+            String owner) {
         try {
+            boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
             var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-            if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            if (qwen) {
                 prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
             }
             String content = prompt
-                    .system("""
-                            You verify whether an exact rulebook crop is worth showing beside a game rule. Inspect only
-                            the supplied crop images. Accept a crop only if the crop itself visibly contains a
-                            recognisable game component, card face, icon group, board area, arrow/flow, spatial state,
-                            or worked score/example. A word-only title, printed label, prose box, dotted boundary, or
-                            empty background is never enough, even if it names a card or component that exists elsewhere
-                            on the source page. Do not infer missing cards or icons from the crop label. Return one JSON
-                            object with acceptedCropRefs as an array containing only the accepted R references.
-                            """)
+                    .system(qwen ? QWEN_CROP_VERIFIER_SYSTEM : CROP_VERIFIER_SYSTEM)
                     .user(user -> {
-                        user.text("Crop references: {crops}. Return only the JSON object.")
-                                .param("crops", crops.entrySet().stream()
-                                        .map(entry -> Map.of(
-                                                "ref", entry.getKey(),
-                                                "pageNumber", entry.getValue().pageNumber(),
-                                                "label", entry.getValue().label()))
-                                        .toList());
-                        crops.values().forEach(crop -> user.media(
-                                MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(crop.content())));
+                        user.text("Crop reference: {crop}. Return only the JSON object.")
+                                .param("crop", Map.of(
+                                        "ref", reference,
+                                        "pageNumber", crop.pageNumber(),
+                                        "label", crop.label(),
+                                        "claims", claimsForExactCrop(request, region).stream()
+                                                .map(claim -> Map.of(
+                                                        "stepPosition", claim.stepPosition(),
+                                                        "text", claim.text()))
+                                                .toList()));
+                        user.media(MimeTypeUtils.IMAGE_PNG, new ByteArrayResource(crop.content()));
                     })
                     .call()
                     .content();
-            return acceptedCropReferences(content, crops.keySet());
+            Optional<Boolean> verified = acceptedCropReferences(content, Set.of(reference))
+                    .map(accepted -> accepted.contains(reference));
+            if (qwen) {
+                log.info(
+                        "Qwen exact-crop verdict for section {} at page {} ({}, {}, {}, {}): {}",
+                        request.sectionTitle(),
+                        region.pageNumber(),
+                        region.x(),
+                        region.y(),
+                        region.width(),
+                        region.height(),
+                        verified.orElse(null));
+            }
+            return verified;
         } catch (RuntimeException failure) {
             log.info("Exact visual crop verification was unavailable: {}", failure.getClass().getSimpleName());
             return Optional.empty();
@@ -259,6 +336,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             crops.put("R" + (index + 1), new CropImage(region.pageNumber(), region.label(), content));
         }
         return Map.copyOf(crops);
+    }
+
+    static List<VisualRegionLocator.Claim> claimsForExactCrop(
+            VisualLocationRequest request, LocatedRegion region) {
+        Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
+        return request.claims().stream()
+                .filter(claim -> supportedEvidence.contains(claim.evidenceId()))
+                .filter(claim -> region.supportedStepPositions().isEmpty()
+                        || region.supportedStepPositions().contains(claim.stepPosition()))
+                .filter(claim -> sourceIncludes(claim, region.pageNumber()))
+                .toList();
     }
 
     private static byte[] croppedPng(VisualRegionLocator.PageImage page, LocatedRegion region) {
@@ -417,17 +505,18 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
+        boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+        if (qwen) {
             prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
         }
         String content = prompt
-                .system(SYSTEM)
+                .system(qwen ? QWEN_SYSTEM : SYSTEM)
                 .user(user -> {
                     user.text("""
                                     Section: {section}
                                     Claims: {claims}
-                                    Candidate rectangles: {candidates}
+                                    {candidateLabel}: {candidates}
                                     {correction}
                                     Return one JSON object only with a regions array containing one or two objects. Each object
                                     needs pageNumber, label, visibleDescription, x, y, width, height and supportedClaimRefs.
@@ -441,7 +530,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                             "text", request.claims().get(index).text(),
                                             "sourcePages", request.claims().get(index).sourcePages()))
                                     .toList())
-                            .param("candidates", request.candidates())
+                            .param("candidateLabel", qwen
+                                    ? "Candidate pages (visual hints only; choose your own compact crop bounds)"
+                                    : "Candidate rectangles")
+                            .param("candidates", candidatePromptPayload(request.candidates(), qwen))
                             .param("correction", correction);
                     request.pages().forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
@@ -457,6 +549,16 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             return unavailableGuide(Rejection.MALFORMED_JSON, true);
         }
         if (parsed.get().regions().isEmpty()) return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
+        if (qwen) {
+            log.info(
+                    "Qwen visual candidates for section {}: {}",
+                    request.sectionTitle(),
+                    parsed.get().regions().stream()
+                            .map(region -> "p" + region.pageNumber() + "@" + region.x() + "," + region.y()
+                                    + "+" + region.width() + "x" + region.height()
+                                    + "=" + region.supportedClaimRefs())
+                            .toList());
+        }
         List<LocatedRegion> accepted = new java.util.ArrayList<>();
         Rejection rejected = Rejection.NONE;
         for (ModelRegion response : parsed.get().regions()) {
@@ -499,6 +601,26 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (!accepted.isEmpty()) return new GuideAttempt(LocateGuideResult.found(accepted), false, Rejection.NONE);
         log.info("Visual locator returned no supported visual regions for section {}", request.sectionTitle());
         return unavailableGuide(rejected == Rejection.NONE ? Rejection.UNSUPPORTED_SCOPE : rejected, true);
+    }
+
+    /** Avoid feeding Qwen extracted prose or a full-page rectangle it may mechanically repeat as its crop. */
+    static List<Map<String, Object>> candidatePromptPayload(List<Candidate> candidates, boolean compactForQwen) {
+        if (!compactForQwen) {
+            return candidates.stream().map(candidate -> Map.<String, Object>of(
+                            "pageNumber", candidate.pageNumber(),
+                            "rectangle", candidate.rectangle(),
+                            "sourceText", candidate.sourceText()))
+                    .toList();
+        }
+        return candidates.stream().map(candidate -> Map.<String, Object>of(
+                        "pageNumber", candidate.pageNumber(),
+                        "hint", visualHint(candidate.sourceText())))
+                .toList();
+    }
+
+    private static String visualHint(String sourceText) {
+        String normalized = sourceText == null ? "" : sourceText.strip();
+        return normalized.startsWith("Cataloged visual anchor") ? "cataloged visual anchor" : "page visual context";
     }
 
     private GuideAttempt unavailableGuide(Rejection rejection, boolean retryable) {
