@@ -1,0 +1,89 @@
+package com.rulepilot.teaching.application;
+
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
+import com.rulepilot.teaching.domain.TeachingPlan;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
+
+/**
+ * Deterministically selects a small, topic-relevant set of rulebook images for one teaching section.
+ *
+ * <p>This selector only consumes already retrieved evidence. It cannot read pages, inspect an image, or invoke a
+ * teaching model.</p>
+ */
+final class TeachingVisualEvidenceSelector {
+
+    static final String VISUAL_PAGE_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
+    private static final int MAX_PAGE_IMAGES = 2;
+
+    private TeachingVisualEvidenceSelector() {}
+
+    static boolean hasVisualPageEvidence(List<RuleEvidence> evidence) {
+        return evidence.stream().anyMatch(TeachingVisualEvidenceSelector::isVisualPageEvidence);
+    }
+
+    static boolean isVisualPageEvidence(RuleEvidence evidence) {
+        return VISUAL_PAGE_PLACEHOLDER.equals(evidence.excerpt());
+    }
+
+    static List<PageImageInput> select(
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            boolean modelSupportsVisualEvidence) {
+        boolean imageOnlyEvidence = hasVisualPageEvidence(evidence);
+        if ((!planned.visualEvidenceRecommended() && !imageOnlyEvidence) || !modelSupportsVisualEvidence) {
+            return List.of();
+        }
+        Map<Integer, RulePageImage> images = new LinkedHashMap<>();
+        Map<Integer, Integer> scores = new LinkedHashMap<>();
+        Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();
+        Set<String> topicTerms = topicTerms(planned);
+        IntStream.range(0, evidence.size()).forEach(index -> {
+            RuleEvidence source = evidence.get(index);
+            int sourceScore = 100 + topicScore(source, topicTerms) + (source.pageFrom() == source.pageTo() ? 20 : 0);
+            source.pageImages().stream()
+                    .filter(image -> image.pageNumber() >= source.pageFrom()
+                            && image.pageNumber() <= source.pageTo())
+                    .forEach(image -> {
+                        images.putIfAbsent(image.pageNumber(), image);
+                        scores.merge(image.pageNumber(), sourceScore, Integer::max);
+                        firstEvidenceRank.putIfAbsent(image.pageNumber(), index);
+                    });
+        });
+        return images.keySet().stream()
+                .sorted(Comparator
+                        .<Integer>comparingInt(page -> scores.getOrDefault(page, 0))
+                        .reversed()
+                        .thenComparingInt(page -> firstEvidenceRank.getOrDefault(page, Integer.MAX_VALUE))
+                        .thenComparingInt(Integer::intValue))
+                .limit(MAX_PAGE_IMAGES)
+                .map(images::get)
+                .map(image -> new PageImageInput(
+                        image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
+                .toList();
+    }
+
+    private static Set<String> topicTerms(TeachingPlan.PlannedSection planned) {
+        return Stream.concat(
+                        Stream.of(planned.topicKey(), planned.title()),
+                        Stream.concat(planned.coverageTags().stream(), planned.retrievalQueries().stream()))
+                .flatMap(value -> Stream.of(value.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
+                .filter(term -> term.length() >= 3)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static int topicScore(RuleEvidence source, Set<String> topicTerms) {
+        String sourceIdentity = (source.sectionType() + " " + source.heading()).toLowerCase(Locale.ROOT);
+        return (int) topicTerms.stream().filter(sourceIdentity::contains).limit(5).count() * 20;
+    }
+}

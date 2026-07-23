@@ -30,7 +30,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -71,8 +70,6 @@ public class GroundedTeachingAgent {
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
     private static final int MAX_POST_PUBLICATION_REVIEW_CORRECTIONS = 4;
     private static final int MAX_POST_PUBLICATION_SCOPE_CORRECTIONS = 2;
-    private static final String VISUAL_PAGE_PLACEHOLDER =
-            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
@@ -539,7 +536,7 @@ public class GroundedTeachingAgent {
             TeachingPlan.PlannedSection planned,
             List<RuleEvidence> retrieved,
             UUID assistantRunId) {
-        boolean visualPlaceholder = retrieved.stream().anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        boolean visualPlaceholder = TeachingVisualEvidenceSelector.hasVisualPageEvidence(retrieved);
         if (!visualPlaceholder || planned.sourcePageNumbers().isEmpty()) return retrieved;
         try {
             List<RuleEvidence> pageEvidence = invocations.invoke(
@@ -576,7 +573,7 @@ public class GroundedTeachingAgent {
             UUID assistantRunId) {
         Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
         pageEvidence.stream()
-                .filter(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()))
+                .filter(TeachingVisualEvidenceSelector::isVisualPageEvidence)
                 .flatMap(source -> source.pageImages().stream())
                 .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
         List<VisualRulebookPageFacts.PageFact> interpreted = new ArrayList<>();
@@ -621,7 +618,7 @@ public class GroundedTeachingAgent {
     }
 
     private boolean hasUncatalogedVisualPageEvidence(List<RuleEvidence> evidence) {
-        return evidence.stream().anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        return TeachingVisualEvidenceSelector.hasVisualPageEvidence(evidence);
     }
 
     private List<RuleEvidence> enrichVisualPageFacts(
@@ -643,7 +640,7 @@ public class GroundedTeachingAgent {
         return evidence.stream()
                 .map(source -> {
                     String facts = source.pageFrom() == source.pageTo() ? factsByPage.get(source.pageFrom()) : null;
-                    if (facts == null || !VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt())) return source;
+                    if (facts == null || !TeachingVisualEvidenceSelector.isVisualPageEvidence(source)) return source;
                     return new RuleEvidence(
                             source.chunkId(),
                             source.documentVersionId(),
@@ -700,11 +697,18 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             int sectionIndex,
             boolean includeVisualEvidence) {
-        boolean requiresVisualGrounding = includeVisualEvidence || evidence.stream()
-                .anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+        boolean requiresVisualGrounding = includeVisualEvidence
+                || TeachingVisualEvidenceSelector.hasVisualPageEvidence(evidence);
         List<TeachingLessonModel.PageImageInput> pageImages = requiresVisualGrounding
-                ? selectedPageImages(planned, evidence, plan.createdBy())
+                ? TeachingVisualEvidenceSelector.select(
+                        planned, evidence, model.supportsVisualEvidence(plan.createdBy()))
                 : List.of();
+        if (!pageImages.isEmpty()) {
+            log.info(
+                    "Teaching topic {} selected visual evidence pages {}",
+                    planned.topicKey(),
+                    pageImages.stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList());
+        }
         TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
                 planned.topicKey(),
                 planned.title(),
@@ -909,7 +913,7 @@ public class GroundedTeachingAgent {
 
     private boolean hasOnlyVisualPageEvidence(List<RuleEvidence> evidence) {
         return !evidence.isEmpty()
-                && evidence.stream().allMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
+                && evidence.stream().allMatch(TeachingVisualEvidenceSelector::isVisualPageEvidence);
     }
 
     private TeachingLessonModel.SectionRequest withoutPageImages(TeachingLessonModel.SectionRequest request) {
@@ -933,64 +937,6 @@ public class GroundedTeachingAgent {
 
     private SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
         return presentationNormalizer.normalize(draft, request);
-    }
-
-    private List<TeachingLessonModel.PageImageInput> selectedPageImages(
-            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence, String modelConfigurationOwner) {
-        boolean imageOnlyEvidence = evidence.stream()
-                .anyMatch(source -> VISUAL_PAGE_PLACEHOLDER.equals(source.excerpt()));
-        if ((!planned.visualEvidenceRecommended() && !imageOnlyEvidence)
-                || !model.supportsVisualEvidence(modelConfigurationOwner)) return List.of();
-        Map<Integer, com.rulepilot.assistant.AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
-        Map<Integer, Integer> scores = new LinkedHashMap<>();
-        Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();
-        Set<String> topicTerms = visualTopicTerms(planned);
-        IntStream.range(0, evidence.size()).forEach(index -> {
-            RuleEvidence source = evidence.get(index);
-            int sourceScore = 100 + visualTopicScore(source, topicTerms)
-                    + (source.pageFrom() == source.pageTo() ? 20 : 0);
-            source.pageImages().stream()
-                    .filter(image -> image.pageNumber() >= source.pageFrom()
-                            && image.pageNumber() <= source.pageTo())
-                    .forEach(image -> {
-                        images.putIfAbsent(image.pageNumber(), image);
-                        scores.merge(image.pageNumber(), sourceScore, Integer::max);
-                        firstEvidenceRank.putIfAbsent(image.pageNumber(), index);
-                    });
-        });
-        List<TeachingLessonModel.PageImageInput> selected = images.keySet().stream()
-                .sorted(Comparator
-                        .<Integer>comparingInt(page -> scores.getOrDefault(page, 0))
-                        .reversed()
-                        .thenComparingInt(page -> firstEvidenceRank.getOrDefault(page, Integer.MAX_VALUE))
-                        .thenComparingInt(Integer::intValue))
-                .limit(2)
-                .map(images::get)
-                .map(image -> new TeachingLessonModel.PageImageInput(
-                        image.pageNumber(), image.mediaType(), image.content(), image.width(), image.height()))
-                .toList();
-        if (!selected.isEmpty()) {
-            log.info(
-                    "Teaching topic {} selected visual evidence pages {}",
-                    planned.topicKey(),
-                    selected.stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList());
-        }
-        return selected;
-    }
-
-    private Set<String> visualTopicTerms(TeachingPlan.PlannedSection planned) {
-        return Stream.concat(
-                        Stream.of(planned.topicKey(), planned.title()),
-                        Stream.concat(planned.coverageTags().stream(), planned.retrievalQueries().stream()))
-                .flatMap(value -> Stream.of(value.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
-                .filter(term -> term.length() >= 3)
-                .collect(Collectors.toUnmodifiableSet());
-    }
-
-    private int visualTopicScore(RuleEvidence source, Set<String> topicTerms) {
-        String sourceIdentity = (source.sectionType() + " " + source.heading())
-                .toLowerCase(java.util.Locale.ROOT);
-        return (int) topicTerms.stream().filter(sourceIdentity::contains).limit(5).count() * 20;
     }
 
     private LessonSection validatedSection(
