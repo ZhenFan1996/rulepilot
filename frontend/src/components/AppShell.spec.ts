@@ -95,7 +95,9 @@ describe('AppShell', () => {
     await flushPromises()
 
     expect(document.documentElement.classList.contains('dark')).toBe(true)
-    await wrapper.get('button[aria-label="切换到浅色模式"]').trigger('click')
+    const mobileAppearanceControl = wrapper.get('header button[aria-label="切换到浅色模式"]')
+    expect(mobileAppearanceControl.attributes('aria-pressed')).toBe('true')
+    await mobileAppearanceControl.trigger('click')
     expect(document.documentElement.classList.contains('dark')).toBe(false)
     expect(document.documentElement.classList.contains('light')).toBe(true)
     expect(localStorage.getItem('rulepilot:appearance-preference')).toBe('light')

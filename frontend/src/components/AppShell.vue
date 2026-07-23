@@ -219,8 +219,16 @@ onBeforeUnmount(() => {
 
     <header class="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-ink/10 bg-canvas/95 px-4 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" aria-label="RulePilot 首页"><ProductMark /></RouterLink>
-      <RouterLink v-if="username" :to="{ name: 'account' }" class="text-sm font-semibold text-ink/60">{{ username }}</RouterLink>
-      <div v-else class="flex items-center gap-2"><span class="text-sm font-medium text-ink/50">{{ currentTitle }}</span><LanguageSwitcher /></div>
+      <div class="flex items-center gap-2">
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-24 truncate text-sm font-semibold text-ink/60">{{ username }}</RouterLink>
+        <template v-else>
+          <span class="text-sm font-medium text-ink/50">{{ currentTitle }}</span>
+          <LanguageSwitcher />
+        </template>
+        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-lg text-ink/60 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
+          <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
+        </button>
+      </div>
     </header>
 
     <main class="min-h-screen pb-20 lg:pb-0">
