@@ -186,6 +186,11 @@ function confidenceLabel(confidence: PublicAnswer['answer']['confidence']) {
   return { LOW: t('public.answer.low'), MEDIUM: t('public.answer.medium'), HIGH: t('public.answer.high') }[confidence]
 }
 
+function citationPageLabel(citation: RuleCitation) {
+  const pages = citation.pageFrom === citation.pageTo ? String(citation.pageFrom) : `${citation.pageFrom}–${citation.pageTo}`
+  return locale.value === 'en' ? `p. ${pages}` : `第 ${pages} 页`
+}
+
 function answerFailureMessage(answer: PublicAnswer['answer']) {
   if (answer.status === 'CLARIFICATION_REQUIRED') return answer.clarification ?? t('public.answer.clarify')
   if (answer.status === 'MODEL_TIMEOUT') return t('public.answer.timeout')
@@ -324,7 +329,11 @@ watch([locale, planId], () => {
 
                   <div v-if="turn.answer.answer.citations.length" class="mt-5 border-t border-ink/10 pt-4">
                     <p class="text-xs font-semibold uppercase tracking-[0.12em] text-ink/40">{{ t('public.question.evidence') }}</p>
-                    <ul class="mt-2 flex flex-wrap gap-2"><li v-for="citation in turn.answer.answer.citations" :key="`${citation.heading}-${citation.pageFrom}`" class="rounded-xl bg-canvas px-3 py-2 text-xs font-semibold text-indigo">{{ citation.heading }} · {{ locale === 'en' ? `p. ${citation.pageFrom}${citation.pageTo !== citation.pageFrom ? `–${citation.pageTo}` : ''}` : `第 ${citation.pageFrom}${citation.pageTo !== citation.pageFrom ? `–${citation.pageTo}` : ''} 页` }}</li></ul>
+                    <ul class="mt-2 flex flex-wrap gap-2">
+                      <li v-for="citation in turn.answer.answer.citations" :key="`${citation.heading}-${citation.pageFrom}`">
+                        <a :href="sourcePageUrl(citation.pageFrom)" target="_blank" rel="noopener noreferrer" :aria-label="t('public.question.openEvidence', { heading: citation.heading, page: citationPageLabel(citation) })" class="inline-flex min-h-11 items-center rounded-xl bg-canvas px-3 text-xs font-semibold text-indigo transition hover:bg-indigo/10 focus:outline-none focus:ring-4 focus:ring-indigo/15">{{ citation.heading }} · {{ citationPageLabel(citation) }}</a>
+                      </li>
+                    </ul>
                   </div>
 
                   <div v-if="turn.answer.visualAids.length || turn.answer.examples.length" class="mt-5 border-t border-ink/10 pt-4">

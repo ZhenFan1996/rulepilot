@@ -119,6 +119,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
+    expect(wrapper.get('a[aria-label="打开来源：设置，第 2 页"]').attributes('href'))
+      .toBe('/api/public/lessons/plan-1/pages/2/image')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
 
     wrapper.unmount()
