@@ -376,19 +376,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             try {
                 draft = revisePlayerFacingDraft(
                         assistantRunId, username, gameSessionId, modelRequest, draft, playerFacingRepair);
-                boolean inactiveActorRepair = playerFacingRepair.stream().anyMatch(item -> item.startsWith("INACTIVE_ACTOR:"));
-                if ((draft == null || !draft.answerable())
-                        && inactiveActorRepair
-                        && AnswerDraftSafetyPolicy.hasEvidencedSuccessorRule(modelRequest)) {
-                    ModelDraft abstainingDraft = draft == null
-                            ? new ModelDraft(false, "First repair did not produce a draft", null, null, List.of(), List.of(), "LOW")
-                            : draft;
-                    List<String> retryFeedback = new ArrayList<>(playerFacingRepair);
-                    retryFeedback.add("EVIDENCED_SUCCESSOR_RULE: The supplied evidence explicitly contains both the "
-                            + "state-change condition and its replacement or successor actor. Apply that exact "
-                            + "conditional rule directly; do not abstain and do not fall back to the default actor.");
+                if (AnswerRepairOutcomePolicy.shouldRetryWithEvidencedSuccessor(
+                        modelRequest, draft, playerFacingRepair)) {
                     draft = revisePlayerFacingDraft(
-                            assistantRunId, username, gameSessionId, modelRequest, abstainingDraft, retryFeedback);
+                            assistantRunId,
+                            username,
+                            gameSessionId,
+                            modelRequest,
+                            AnswerRepairOutcomePolicy.retryDraft(draft),
+                            AnswerRepairOutcomePolicy.successorRetryFeedback(playerFacingRepair));
                 }
             } catch (RuleAnswerModelTimeoutException exception) {
                 return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "视觉规则消歧超时，可以稍后重试或直接查看规则引用。");
@@ -396,38 +392,19 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答修订结果未通过结构校验。");
             }
             if (draft == null || !draft.answerable()) {
-                boolean inactiveActorRepair = playerFacingRepair.stream().anyMatch(item -> item.startsWith("INACTIVE_ACTOR:"));
-                String message = inactiveActorRepair
-                        ? "现有证据未能确定状态变化后的下一位行动者。"
-                        : "图标对应的规则资源无法从现有证据中可靠确定。";
-                return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, message);
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INSUFFICIENT_EVIDENCE,
+                        AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair));
             }
             draft = AnswerDraftSafetyPolicy.normalizeSingleMappedVisualGlyph(
                     draft, AnswerVisualEvidencePolicy.resolvedComponents(modelRequest, draft));
             draft = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
             draft = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(draft);
-            if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。");
-            }
-            if (AnswerDraftSafetyPolicy.containsResourceCardConflation(draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答混淆了规则资源与手牌数量，未向玩家发布。");
-            }
-            if (AnswerDraftSafetyPolicy.containsInactiveActorContinuation(draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答让已退出当前流程的玩家继续行动，未向玩家发布。");
-            }
-            if (AnswerDraftSafetyPolicy.containsUnaskedUnsupportedRepeatabilityClaim(modelRequest, draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答附加了未被引用支持的次数限制，未向玩家发布。");
-            }
-            if (!AnswerVisualEvidencePolicy.namesEveryResolvedComponent(modelRequest, draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未使用视觉证据确认的组件名称，未向玩家发布。");
-            }
-            if (AnswerVisualEvidencePolicy.hasEvidencedCrossPageIconMapping(modelRequest)
-                    && AnswerDraftSafetyPolicy.containsVisualGlyph(draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答用近似符号替代了规则书组件名称，未向玩家发布。");
-            }
-            if (AnswerVisualEvidencePolicy.requiresIdentityReconciliation(modelRequest, draft)
-                    && AnswerDraftSafetyPolicy.containsUnresolvedVisualSymbol(draft)) {
-                return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "图标对应的规则资源无法从现有证据中可靠确定。");
+            Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =
+                    AnswerRepairOutcomePolicy.publicationFailure(modelRequest, draft);
+            if (failure.isPresent()) {
+                return safe(context.documentVersionId(), failure.get().status(), failure.get().message());
             }
         }
         draft = removePeripheralEndgameCitations(modelRequest, draft);
