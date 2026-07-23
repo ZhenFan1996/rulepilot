@@ -45,27 +45,27 @@ public final class AnswerRetrievalPlanner {
         List<RetrievalIntent> intents = new ArrayList<>();
         String endgameResolutionQuery = endgameResolutionQuery(question.normalizedQuestion());
         if (endgameResolutionQuery != null) {
-            intents.add(new RetrievalIntent(endgameResolutionQuery, Set.of(), null));
+            intents.add(intent(endgameResolutionQuery, RetrievalPurpose.ENDGAME_RESOLUTION));
         }
         String exhaustedSourceQuery = exhaustedSourceQuery(question.normalizedQuestion());
         if (exhaustedSourceQuery != null) {
-            intents.add(new RetrievalIntent(exhaustedSourceQuery, Set.of(), null));
+            intents.add(intent(exhaustedSourceQuery, RetrievalPurpose.EXHAUSTED_SOURCE));
         }
         String endTurnProcedureQuery = endTurnProcedureQuery(question.normalizedQuestion());
         if (endTurnProcedureQuery != null) {
-            intents.add(new RetrievalIntent(endTurnProcedureQuery, Set.of(), null));
+            intents.add(intent(endTurnProcedureQuery, RetrievalPurpose.END_TURN_PROCEDURE));
         }
         String stateTransitionQuery = stateTransitionQuery(question.normalizedQuestion());
         if (stateTransitionQuery != null) {
-            intents.add(new RetrievalIntent(stateTransitionQuery, Set.of(), null));
+            intents.add(intent(stateTransitionQuery, RetrievalPurpose.STATE_TRANSITION));
         }
         String roundResetQuery = roundResetQuery(question.normalizedQuestion());
         if (roundResetQuery != null) {
-            intents.add(new RetrievalIntent(roundResetQuery, Set.of(), null));
+            intents.add(intent(roundResetQuery, RetrievalPurpose.ROUND_RESET));
         }
         String deferredTurnQuery = deferredTurnQuery(question.normalizedQuestion());
         if (deferredTurnQuery != null) {
-            intents.add(new RetrievalIntent(deferredTurnQuery, Set.of(), null));
+            intents.add(intent(deferredTurnQuery, RetrievalPurpose.DEFERRED_TURN));
         }
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
@@ -166,8 +166,8 @@ public final class AnswerRetrievalPlanner {
 
     private static String endgameResolutionTerms(String question) {
         if (!isEndgameResolutionQuestion(question)) return null;
-        return "end game end of round cleanup end-game check fame scoring winner tie gold "
-                + "pledged cargo final resolution 游戏结束 轮末 清理 结束检查 名声 声望 计分 胜者 平局 金币";
+        return "end game end condition end of round final scoring winner tie resolution "
+                + "游戏结束 结束条件 轮末 最终计分 胜者 平局 结算";
     }
 
     private static String endgameResolutionQuery(String question) {
@@ -177,11 +177,9 @@ public final class AnswerRetrievalPlanner {
 
     private static boolean isEndgameResolutionQuestion(String question) {
         boolean mentionsEndTrigger = containsAny(
-                question,
-                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+                question, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
         boolean mentionsResolution = containsAny(
-                question,
-                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+                question, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
         return mentionsEndTrigger && mentionsResolution;
     }
 
@@ -270,12 +268,16 @@ public final class AnswerRetrievalPlanner {
 
     private static String stateTransitionQuery(String question) {
         boolean actorExits = containsAny(
-                question, "out of cards", "empty hand", "no cards", "runs out of cards", "出完", "无牌", "没有手牌", "手牌为零");
+                question,
+                "leaves play", "becomes inactive", "cannot continue", "runs out", "out of cards", "empty hand", "no cards",
+                "退出", "失去行动资格", "无法继续", "用完", "出完", "无牌", "没有手牌", "手牌为零");
         boolean asksNextActor = containsAny(
-                question, "next trick", "who leads", "who starts", "下一墩", "谁领出", "谁开始", "由谁");
+                question,
+                "who acts next", "who starts", "who leads", "next trick", "turn order", "next player",
+                "谁行动", "谁开始", "谁领出", "下一墩", "下一位", "由谁");
         if (!actorExits || !asksNextActor) return null;
-        return bounded(question + " state transition successor actor replacement active player skipped "
-                + "after hand empty next trick lead exception 状态变化 后继行动者 替代玩家 无牌 跳过 下一墩 领出 例外");
+        return bounded(question + " state transition successor actor replacement active player skipped turn order "
+                + "状态变化 后继行动者 替代玩家 跳过 行动顺序 例外");
     }
 
     private static String exhaustedSourceQuery(String question) {
@@ -343,9 +345,8 @@ public final class AnswerRetrievalPlanner {
                 "事件",
                 "牌");
         if (!asksAfterTurn || !asksForEventProcedure) return null;
-        return bounded("completed turn draw reveal resolve event alert card effect next player procedure "
-                + "完成回合后 从牌堆抽取事件或警报 执行并结算卡牌效果 然后下一位玩家 回合结束 警报 结算 "
-                + question);
+        return bounded("completed turn draw reveal resolve event effect next player procedure "
+                + "完成回合后 抽取 展示 执行 结算 事件 效果 下一位玩家 流程 " + question);
     }
 
     private static String roundResetQuery(String question) {
@@ -353,18 +354,20 @@ public final class AnswerRetrievalPlanner {
                 question, "end of round", "round ends", "round end", "一轮结束", "轮次结束", "回合结束", "轮结束");
         boolean asksReset = containsAny(question, "recover", "return", "reset", "回收", "归还", "回到", "重置", "拿回");
         if (!asksRoundEnd || !asksReset) return null;
-        return bounded(question + " end of round recover dice only reset active pieces return students conditional "
-                + "round reset state transition 一轮结束 回收骰子 学生 条件 返回 重置");
+        return bounded(question + " end of round recover return reset refresh used pieces conditional "
+                + "round reset state transition 一轮结束 回收 返回 重置 刷新 条件");
     }
 
     private static String deferredTurnQuery(String question) {
         boolean asksLaterTurn = containsAny(
                 question, "next time", "next turn", "later turn", "下一次轮到", "下次轮到", "之后轮到");
         boolean asksAboutRemainingPieces = containsAny(
-                question, "remaining dice", "unused dice", "active dice", "剩下的骰子", "剩余骰子", "未用骰子", "活跃骰子");
+                question,
+                "remaining pieces", "unused pieces", "remaining actions", "unused actions", "remaining dice", "unused dice",
+                "剩余组件", "未用组件", "剩余行动", "未用行动", "剩下的骰子", "剩余骰子", "未用骰子");
         if (!asksLaterTurn || !asksAboutRemainingPieces) return null;
-        return bounded(question + " worked example player turn ends remaining active dice later turn spend one or more "
-                + "round ends all dice spent turn sequence 示例回合 剩余骰子 下次回合 使用一颗或多颗骰子");
+        return bounded(question + " worked example player turn ends remaining pieces later turn use action "
+                + "round ends turn sequence 示例回合 剩余组件 下次回合 使用 行动顺序");
     }
 
     private static String bounded(String value) {
@@ -374,16 +377,38 @@ public final class AnswerRetrievalPlanner {
                 : normalized.substring(0, MAX_QUERY_LENGTH).strip();
     }
 
+    private static RetrievalIntent intent(String query, RetrievalPurpose purpose) {
+        return new RetrievalIntent(query, Set.of(), null, false, purpose);
+    }
+
+    public enum RetrievalPurpose {
+        GENERAL,
+        ENDGAME_RESOLUTION,
+        EXHAUSTED_SOURCE,
+        END_TURN_PROCEDURE,
+        STATE_TRANSITION,
+        ROUND_RESET,
+        DEFERRED_TURN
+    }
+
     public record RetrievalIntent(
-            String query, Set<String> sectionTypes, String currentSectionType, boolean directQuestion) {
+            String query,
+            Set<String> sectionTypes,
+            String currentSectionType,
+            boolean directQuestion,
+            RetrievalPurpose purpose) {
 
         public RetrievalIntent(String query, Set<String> sectionTypes, String currentSectionType) {
-            this(query, sectionTypes, currentSectionType, false);
+            this(query, sectionTypes, currentSectionType, false, RetrievalPurpose.GENERAL);
+        }
+
+        public RetrievalIntent(String query, Set<String> sectionTypes, String currentSectionType, boolean directQuestion) {
+            this(query, sectionTypes, currentSectionType, directQuestion, RetrievalPurpose.GENERAL);
         }
 
         public RetrievalIntent {
             if (query == null || query.isBlank() || query.length() > MAX_QUERY_LENGTH
-                    || sectionTypes == null || sectionTypes.size() > MAX_SECTION_FILTERS) {
+                    || sectionTypes == null || sectionTypes.size() > MAX_SECTION_FILTERS || purpose == null) {
                 throw new IllegalArgumentException("answer retrieval intent is invalid");
             }
             query = query.strip();

@@ -746,7 +746,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void repairsASetupCheckThatClaimsDrawnTokensStillAllRemainInTheBag() {
+    void doesNotApplyABagSpecificValidationRuleToAnOtherwiseCitedSetupCheck() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
@@ -773,8 +773,8 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(revisions).hasValue(1);
-        assertThat(lesson.sections().getFirst().steps().getLast().text()).contains("其余").doesNotContain("所有");
+        assertThat(revisions).hasValue(0);
+        assertThat(lesson.sections().getFirst().steps().getLast().text()).contains("所有野生动物标记");
     }
 
     @Test

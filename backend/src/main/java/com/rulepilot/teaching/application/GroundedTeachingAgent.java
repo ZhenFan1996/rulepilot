@@ -117,11 +117,6 @@ public class GroundedTeachingAgent {
                     + "(?:(?:已提供的|当前|现有)\\s*(?:检索(?:结果|内容|证据)|证据)|检索(?:结果|内容|证据))"
                     + "(?!\\s*(?:中|里)?\\s*(?:没有|未|并未))\\s*(?:中|里)?\\s*"
                     + "(?:显示|表明|说明|可知|可见|来看)?\\s*[，,:：]*");
-    private static final Pattern DRAW_FROM_BAG = Pattern.compile(
-            "(?i)(?:从.{0,12}(?:布袋|袋中|bag).{0,24}(?:抽|取|draw)|(?:抽|取|draw).{0,24}(?:布袋|袋中|bag))");
-    private static final Pattern FINAL_CHECK_CLAIMS_ALL_IN_BAG = Pattern.compile(
-            "(?i)(?:(?:所有|全部|all).{0,24}(?:标记|token).{0,24}(?:布袋|袋中|bag)|"
-                    + "(?:布袋|袋中|bag).{0,24}(?:所有|全部|all).{0,24}(?:标记|token))");
     private static final Pattern END_OF_ROUND_SOURCE = Pattern.compile(
             "(?i)(?:\\bat\\s+the\\s+end\\s+of\\s+(?:a|the|this|that)\\s+round\\b|"
                     + "\\b(?:when|after)\\s+(?:the|a|this|that)?\\s*round\\s+ends?\\b|"
@@ -1870,18 +1865,6 @@ public class GroundedTeachingAgent {
             throw new IllegalArgumentException(
                     "Do not show players a source gap, pending rule, or request to wait; teach a supported rule directly.");
         }
-        boolean drawsFromBag = draft.steps().stream()
-                .anyMatch(step -> step != null && step.text() != null && DRAW_FROM_BAG.matcher(step.text()).find());
-        boolean finalCheckClaimsAllRemain = draft.steps().stream()
-                .anyMatch(step -> step != null
-                        && step.kind() == TeachingMove.CHECK
-                        && step.text() != null
-                        && FINAL_CHECK_CLAIMS_ALL_IN_BAG.matcher(step.text()).find());
-        if (drawsFromBag && finalCheckClaimsAllRemain) {
-            throw new IllegalArgumentException(
-                    "The final setup check cannot say all tokens remain in the bag after tokens were drawn from it; "
-                            + "describe only the remaining supply.");
-        }
     }
 
     private String rejectionCategory(IllegalArgumentException rejection) {
@@ -1903,7 +1886,6 @@ public class GroundedTeachingAgent {
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";
-        if (message.contains("all tokens remain in the bag")) return "FINAL_SUPPLY_STATE_CONTRADICTION";
         if (message.contains("end condition occurs at the end of a round")) return "END_OF_ROUND_TIMING_LOST";
         if (message.contains("cited end-game check")) return "ENDGAME_CHECK_DEFERRED";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";

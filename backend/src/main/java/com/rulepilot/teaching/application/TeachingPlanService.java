@@ -70,21 +70,21 @@ public class TeachingPlanService {
                     + "每位玩家|发给|获得|拿取|放置|面前|屏风后|初始资源");
     private static final List<ChapterOwnershipDomain> CHAPTER_OWNERSHIP_DOMAINS = List.of(
             new ChapterOwnershipDomain(
-                    "cost or imprint procedure",
-                    List.of("cost", "payment", "imprint", "memory", "费用", "成本", "支付", "铭刻", "记忆"),
+                    "cost or payment procedure",
+                    List.of("cost", "payment", "费用", "成本", "支付"),
                     List.of("cost", "pay", "payment", "spend", "discount", "extra cost", "费用", "成本", "支付", "花费", "折扣", "额外成本")),
             new ChapterOwnershipDomain(
-                    "emotion-card procedure",
-                    List.of("emotion", "card", "feel", "情感", "情绪", "卡牌", "拿牌"),
-                    List.of("face-up", "draw", "take a card", "matching card", "bonus", "面朝上", "抽牌", "拿取", "额外抽", "奖励")),
+                    "card or option procedure",
+                    List.of("card", "deck", "hand", "option", "effect", "卡牌", "牌堆", "手牌", "选择", "效果"),
+                    List.of("face-up", "draw", "take a card", "play", "discard", "bonus", "面朝上", "抽牌", "拿取", "打出", "弃牌", "奖励")),
             new ChapterOwnershipDomain(
                     "cleanup procedure",
                     List.of("cleanup", "discard", "refill", "清理", "弃牌", "补充"),
                     List.of("hand limit", "discard pile", "refill", "replenish", "手牌上限", "弃牌堆", "补牌", "补充")),
             new ChapterOwnershipDomain(
                     "game-end trigger",
-                    List.of("end of game", "game end", "finish", "inner compass", "游戏结束", "终局", "指南针"),
-                    List.of("game end", "end trigger", "finish the game", "inner compass", "游戏结束", "结束触发", "终局", "内心指南针")),
+                    List.of("end of game", "game end", "end condition", "finish", "游戏结束", "结束条件", "终局"),
+                    List.of("game end", "end condition", "end trigger", "finish the game", "游戏结束", "结束条件", "结束触发", "终局")),
             new ChapterOwnershipDomain(
                     "final scoring or tie breaker",
                     List.of("final scoring", "tie", "winner", "最终计分", "平局", "胜者"),

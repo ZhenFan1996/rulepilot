@@ -89,10 +89,12 @@ class AnswerRetrievalPlannerTest {
                 List.of("end game pledged cargo scoring tie breaker", "fame end gold tie"));
 
         assertThat(intents.getFirst().query()).contains(
-                "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？", "end game end of round cleanup");
+                "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？", "end condition", "final scoring");
+        assertThat(intents.getFirst().purpose())
+                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.ENDGAME_RESOLUTION);
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .contains("有人到30名声后立刻结束吗", "承诺货物何时计分", "平局怎么处理")
-                .anyMatch(query -> query.contains("end game end of round cleanup") && query.contains("pledged cargo"));
+                .anyMatch(query -> query.contains("end condition") && query.contains("final scoring"));
     }
 
     @Test
@@ -154,7 +156,9 @@ class AnswerRetrievalPlannerTest {
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
         assertThat(intents).hasSize(4);
-        assertThat(intents.getFirst().query()).contains("end game end of round cleanup");
+        assertThat(intents.getFirst().query()).contains("end condition", "final scoring", "tie");
+        assertThat(intents.getFirst().purpose())
+                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.ENDGAME_RESOLUTION);
         assertThat(intents.get(1).query()).isEqualTo("when does the game end");
         assertThat(intents.get(2).query()).isEqualTo("how are ties resolved");
         assertThat(intents.get(3).sectionTypes())
@@ -296,6 +300,8 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.getFirst().query())
                 .contains("state transition", "successor actor", "我出完所有手牌")
                 .doesNotContain("next player to the left");
+        assertThat(intents.getFirst().purpose())
+                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.STATE_TRANSITION);
         assertThat(intents).anySatisfy(intent -> {
             assertThat(intent.query()).contains("state transition", "successor actor", "例外");
             assertThat(intent.sectionTypes()).isEmpty();
@@ -320,7 +326,9 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains("end of round", "recover dice", "学生");
+        assertThat(intents.getFirst().query()).contains("end of round", "recover", "reset", "学生");
+        assertThat(intents.getFirst().purpose())
+                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.ROUND_RESET);
         assertThat(intents.getFirst().sectionTypes()).isEmpty();
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
     }
@@ -340,7 +348,9 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains("worked example", "remaining active dice", "示例回合");
+        assertThat(intents.getFirst().query()).contains("worked example", "remaining pieces", "示例回合");
+        assertThat(intents.getFirst().purpose())
+                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.DEFERRED_TURN);
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
     }
 }

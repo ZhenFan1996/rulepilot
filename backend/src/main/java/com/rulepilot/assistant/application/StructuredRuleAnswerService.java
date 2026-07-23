@@ -31,6 +31,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.AnswerRetrievalPlanner.RetrievalIntent;
+import com.rulepilot.assistant.application.AnswerRetrievalPlanner.RetrievalPurpose;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -75,7 +76,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v57-boundary-timed-endgame-evidence";
+    private static final String ANSWER_POLICY_VERSION = "answer-v58-document-scoped-resolution-evidence";
     private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
             "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
@@ -159,18 +160,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
             "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
                     + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final String END_TURN_PROCEDURE_INTENT_MARKER =
-            "completed turn draw reveal resolve event alert card effect next player procedure";
     private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
-            "(?isu)(?=.*(?:\\bend\\s+game\\b|\\bgame\\s+ends?\\b|游戏结束|"
-                    + "\\bat\\s+least[^\\p{L}\\p{N}]{0,8}\\d{1,3}[^\\p{L}\\p{N}]{0,8}fame\\b|"
-                    + "至少[^\\p{L}\\p{N}]{0,8}\\d{1,3}[^\\p{L}\\p{N}]{0,8}(?:名声|声望)))"
-                    + "(?=.*(?:\\bif\\b|\\bwhen\\b|若|如果|当))"
-                    + ".*(?:\\bfame\\b|名声|声望)");
-    private static final Pattern EVIDENCED_ENDGAME_CARGO = Pattern.compile(
-            "(?iu)(?:pledged\\s+cargo|cargo.{0,80}(?:score|scoring)|承诺.{0,24}货物|货物.{0,40}(?:计分|得分))");
+            "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
+                    + "游戏结束|结束条件|终局))"
+                    + "(?=.*(?:\\bif\\b|\\bwhen\\b|\\bafter\\b|若|如果|当|达到|至少)).*");
+    private static final Pattern EVIDENCED_ENDGAME_SCORING = Pattern.compile(
+            "(?iu)(?:score|scoring|points?|winner|wins?|计分|得分|分数|获胜|胜者)");
     private static final Pattern EVIDENCED_ENDGAME_TIE = Pattern.compile(
-            "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:gold|winner)|平局.{0,80}(?:金币|获胜)|同分.{0,80}(?:金币|获胜))");
+            "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:winner|wins?|break)|平局.{0,80}(?:获胜|胜者|比较|决胜)|同分.{0,80}(?:获胜|胜者|比较|决胜))");
     private static final Pattern TITLE_CASED_ENGLISH_LABEL = Pattern.compile(
             "\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,3}\\b");
     private static final String VISUAL_PAGE_PLACEHOLDER =
@@ -707,8 +704,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (requiresEndgameResolutionCitation(request) && !citesEndgameResolution(request, draft)) {
             feedback.add("ENDGAME_RESOLUTION_CITATION: The question asks about an end trigger, end-of-round timing, "
                     + "final scoring, winner, or tie. Cite the supplied excerpt that states the actual end-game "
-                    + "condition and resolution sequence. A component or inventory excerpt that merely names Cargo, "
-                    + "a marker, or a resource cannot support that timing, scoring, or tie ruling. Preserve the "
+                    + "condition and resolution sequence. A component or inventory excerpt that merely names a "
+                    + "marker, card, or resource cannot support that timing, scoring, or tie ruling. Preserve the "
                     + "printed order, including any numbered cleanup check, and do not invent a separate phase.");
         }
         if (containsUncitedEnglishTitleLabel(request, draft)) {
@@ -799,28 +796,28 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private boolean requiresEndgameResolutionCitation(ModelRequest request) {
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
         boolean mentionsEndTrigger = containsAny(
-                question,
-                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+                question, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
         boolean mentionsResolution = containsAny(
-                question,
-                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+                question, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
         return mentionsEndTrigger && mentionsResolution
                 && request.evidence().stream().anyMatch(source -> hasRequiredEndgameResolution(request, source));
     }
 
     private boolean citesEndgameResolution(ModelRequest request, ModelDraft draft) {
         Set<UUID> citations = Set.copyOf(draft.citationIds());
-        return request.evidence().stream()
+        List<EvidenceInput> cited = request.evidence().stream()
                 .filter(source -> citations.contains(source.chunkId()))
-                .anyMatch(source -> hasRequiredEndgameResolution(request, source));
+                .toList();
+        return hasRequiredEndgameResolution(request, cited);
     }
 
     private ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
         if (!isEndgameTimingAndTieSummary(request) || draft.citationIds().isEmpty()) return draft;
         Set<UUID> cited = Set.copyOf(draft.citationIds());
-        List<UUID> decisive = request.evidence().stream()
+        List<EvidenceInput> citedEvidence = request.evidence().stream()
                 .filter(source -> cited.contains(source.chunkId()))
-                .filter(source -> hasRequiredEndgameResolution(request, source))
+                .toList();
+        List<UUID> decisive = requiredEndgameEvidence(request, citedEvidence).stream()
                 .map(EvidenceInput::chunkId)
                 .distinct()
                 .toList();
@@ -851,12 +848,44 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private boolean hasRequiredEndgameResolution(ModelRequest request, EvidenceInput source) {
-        if (!hasEvidencedEndgameResolution(source)) return false;
+        return hasRequiredEndgameResolution(request, List.of(source));
+    }
+
+    private boolean hasRequiredEndgameResolution(ModelRequest request, List<EvidenceInput> sources) {
+        if (sources.stream().noneMatch(this::hasEvidencedEndgameResolution)) return false;
         String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        String excerpt = source.excerpt();
-        if (containsAny(question, "cargo", "货物") && !EVIDENCED_ENDGAME_CARGO.matcher(excerpt).find()) return false;
-        return !containsAny(question, "tie", "tied", "平局", "同分")
-                || EVIDENCED_ENDGAME_TIE.matcher(excerpt).find();
+        boolean asksScoring = containsAny(question, "score", "scoring", "point", "计分", "得分", "分数");
+        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        boolean citesScoring = sources.stream()
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(excerpt -> EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find());
+        boolean citesTie = sources.stream()
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(excerpt -> EVIDENCED_ENDGAME_TIE.matcher(excerpt).find());
+        return (!asksScoring || citesScoring) && (!asksTie || citesTie);
+    }
+
+    private List<EvidenceInput> requiredEndgameEvidence(ModelRequest request, List<EvidenceInput> sources) {
+        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
+        boolean asksScoring = containsAny(question, "score", "scoring", "point", "计分", "得分", "分数");
+        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        LinkedHashSet<EvidenceInput> required = new LinkedHashSet<>();
+        sources.stream().filter(this::hasEvidencedEndgameResolution).findFirst().ifPresent(required::add);
+        if (asksScoring) {
+            sources.stream()
+                    .filter(source -> source.excerpt() != null && EVIDENCED_ENDGAME_SCORING.matcher(source.excerpt()).find())
+                    .findFirst()
+                    .ifPresent(required::add);
+        }
+        if (asksTie) {
+            sources.stream()
+                    .filter(source -> source.excerpt() != null && EVIDENCED_ENDGAME_TIE.matcher(source.excerpt()).find())
+                    .findFirst()
+                    .ifPresent(required::add);
+        }
+        return List.copyOf(required);
     }
 
     private boolean hasEvidencedEndgameResolution(HybridEvidenceHit hit) {
@@ -874,7 +903,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (!hasEvidencedEndgameResolution(hit)) return 0;
         String excerpt = hit.evidence().excerpt();
         int score = 10;
-        if (EVIDENCED_ENDGAME_CARGO.matcher(excerpt).find()) score += 10;
+        if (EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find()) score += 10;
         if (EVIDENCED_ENDGAME_TIE.matcher(excerpt).find()) score += 10;
         if (excerpt.toLowerCase(Locale.ROOT).contains("clean up") || excerpt.contains("清理")) score += 4;
         String heading = hit.evidence().heading().toLowerCase(Locale.ROOT);
@@ -904,16 +933,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             if (value.contains(candidate)) return true;
         }
         return false;
-    }
-
-    private boolean isEndTurnProcedureIntent(String query) {
-        return query != null && query.contains(END_TURN_PROCEDURE_INTENT_MARKER);
-    }
-
-    private boolean isEndgameResolutionIntent(String query) {
-        return query != null
-                && query.contains("end-game check")
-                && query.contains("pledged cargo");
     }
 
     private boolean hasEvidencedEndTurnProcedure(HybridEvidenceHit hit) {
@@ -1078,11 +1097,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return EVIDENCED_SUCCESSOR_RULE.matcher(combinedEvidence).find();
     }
 
-    private boolean isSuccessorTransitionIntent(String query) {
-        String normalized = query.toLowerCase(Locale.ROOT);
-        return normalized.contains("state transition") && normalized.contains("successor actor");
-    }
-
     private ModelDraft normalizeSingleMappedVisualGlyph(ModelRequest request, ModelDraft draft) {
         List<String> components = resolvedVisualComponents(request, draft);
         if (components.size() != 1 || !containsVisualGlyph(draft)) return draft;
@@ -1223,7 +1237,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         boolean conflicting = false;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
-        if (EXHAUSTED_SOURCE_QUESTION.matcher(question.normalizedQuestion()).matches()) {
+        if (intents.stream().anyMatch(intent -> intent.purpose() == RetrievalPurpose.EXHAUSTED_SOURCE)) {
             List<PageFactMatch> replenishmentMatches = invocations.invoke(
                     assistantRunId,
                     ActivityType.TOOL,
@@ -1252,19 +1266,22 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                 context.documentVersionId(),
                                 intent.query(),
                                 new RetrievalOptions(
-                                        isEndgameResolutionIntent(intent.query()) ? 20 : 3,
+                                        intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION ? 20 : 3,
                                         intent.sectionTypes(),
                                         intent.currentSectionType())),
                         this::evidenceTokens);
                 boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
-                if (!retrieved.isEmpty() && !supplementaryIntent && isSuccessorTransitionIntent(intent.query())) {
+                if (!retrieved.isEmpty() && !supplementaryIntent
+                        && intent.purpose() == RetrievalPurpose.STATE_TRANSITION) {
                     retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
-                } else if (!retrieved.isEmpty() && !supplementaryIntent && isEndgameResolutionIntent(intent.query())) {
+                } else if (!retrieved.isEmpty() && !supplementaryIntent
+                        && intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION) {
                     HybridEvidenceHit directResolution = retrieved.stream()
                             .max(Comparator.comparingInt(this::endgameResolutionDetailScore))
                             .orElse(retrieved.getFirst());
                     intentAnchors.putIfAbsent(directResolution.evidence().chunkId(), directResolution);
-                } else if (!retrieved.isEmpty() && !supplementaryIntent && isEndTurnProcedureIntent(intent.query())) {
+                } else if (!retrieved.isEmpty() && !supplementaryIntent
+                        && intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
                     HybridEvidenceHit directProcedure = retrieved.stream()
                             .filter(this::hasEvidencedEndTurnProcedure)
                             .findFirst()
@@ -1376,14 +1393,31 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     .limit(1)
                     .toList();
             if (!decisiveEvidence.isEmpty()) {
+                LinkedHashMap<UUID, HybridEvidenceHit> complementaryEvidence = new LinkedHashMap<>();
+                decisiveEvidence.forEach(hit -> complementaryEvidence.put(hit.evidence().chunkId(), hit));
+                String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
+                if (containsAny(normalizedQuestion, "score", "scoring", "point", "计分", "得分", "分数")) {
+                    selectedEvidence.stream()
+                            .filter(hit -> hit.evidence().excerpt() != null
+                                    && EVIDENCED_ENDGAME_SCORING.matcher(hit.evidence().excerpt()).find())
+                            .findFirst()
+                            .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
+                }
+                if (containsAny(normalizedQuestion, "tie", "tied", "平局", "同分")) {
+                    selectedEvidence.stream()
+                            .filter(hit -> hit.evidence().excerpt() != null
+                                    && EVIDENCED_ENDGAME_TIE.matcher(hit.evidence().excerpt()).find())
+                            .findFirst()
+                            .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
+                }
                 UUID decisiveId = decisiveEvidence.getFirst().evidence().chunkId();
                 List<HybridEvidenceHit> timingEvidence = selectedEvidence.stream()
                         .filter(this::hasEvidencedEndgameTiming)
                         .filter(hit -> !decisiveId.equals(hit.evidence().chunkId()))
                         .limit(1)
                         .toList();
-                selectedEvidence = java.util.stream.Stream.concat(decisiveEvidence.stream(), timingEvidence.stream())
-                        .toList();
+                timingEvidence.forEach(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
+                selectedEvidence = complementaryEvidence.values().stream().toList();
             }
             String pages = selectedEvidence.stream()
                     .map(hit -> Integer.toString(hit.evidence().pageFrom()))
@@ -1497,11 +1531,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private boolean isEndgameResolutionQuestion(String question) {
         String normalized = question == null ? "" : question.toLowerCase(Locale.ROOT);
         boolean mentionsEndTrigger = containsAny(
-                normalized,
-                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+                normalized, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
         boolean mentionsResolution = containsAny(
-                normalized,
-                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+                normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
         return mentionsEndTrigger && mentionsResolution;
     }
 
