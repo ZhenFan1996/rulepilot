@@ -5,6 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setLocale } from '@/lib/locale'
 import PublicLessonView from './PublicLessonView.vue'
 
+const shellRoutes = [
+  { path: '/teach', name: 'teach', component: { template: '<div />' } },
+  { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+  { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+  { path: '/account', name: 'account', component: { template: '<div />' } },
+  { path: '/login', name: 'login', component: { template: '<div />' } },
+]
+
 describe('PublicLessonView', () => {
   afterEach(() => {
     setLocale('zh-CN')
@@ -13,7 +21,9 @@ describe('PublicLessonView', () => {
   })
 
   it('renders a no-login lesson with cited visual crops and an official source link', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/session')) return new Response(null, { status: 401 })
+      return Response.json({
       teachingPlanId: 'plan-1',
       documentVersionId: 'version-1',
       rulebookTitle: 'Wingspan Rules',
@@ -30,13 +40,15 @@ describe('PublicLessonView', () => {
           }],
         }],
       },
-    })))
+      })
+    }))
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
       ],
     })
     await router.push('/read/plan-1')
@@ -45,6 +57,10 @@ describe('PublicLessonView', () => {
     const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
 
+    const sidebar = wrapper.get('aside.fixed')
+    expect(sidebar.classes()).toContain('lg:flex')
+    expect(wrapper.findAll('header')).toHaveLength(1)
+    expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-ink'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com/wingspan.jpg')
     expect(wrapper.text()).toContain('放置玩家板')
@@ -66,6 +82,7 @@ describe('PublicLessonView', () => {
       },
     }
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (String(_input).includes('/api/auth/session')) return new Response(null, { status: 401 })
       if (init?.method === 'POST') {
         return Response.json({
           answer: {
@@ -85,6 +102,7 @@ describe('PublicLessonView', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
       ],
     })
     await router.push('/read/plan-1')
@@ -124,6 +142,7 @@ describe('PublicLessonView', () => {
     }
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
       if (init?.method === 'POST') {
         return Response.json({
           answer: {
@@ -141,6 +160,7 @@ describe('PublicLessonView', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
       ],
     })
     await router.push('/read/plan-1')

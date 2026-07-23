@@ -42,7 +42,11 @@ const navigation = [
 ] as const
 const mobileNavigation = navigation.filter((item) => item.name !== 'account')
 
-const currentNavigationName = computed(() => route.name === 'catalog-manage' ? 'catalog' : route.name)
+const currentNavigationName = computed(() => {
+  if (route.name === 'catalog-manage') return 'catalog'
+  if (route.name === 'public-lesson') return 'public-library'
+  return route.name
+})
 const currentTitle = computed(() => {
   const item = navigation.find((candidate) => candidate.name === currentNavigationName.value)
   return item ? t(item.labelKey) : 'RulePilot'
