@@ -56,6 +56,8 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('公开讲解')
     expect(wrapper.text()).toContain('我的讲解')
     expect(wrapper.findAll('[aria-label="1 份讲解正在生成"]')).toHaveLength(2)
+    expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('中文')
+    expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('EN')
 
     vi.advanceTimersByTime(5000)
     await flushPromises()
