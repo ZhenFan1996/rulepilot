@@ -65,8 +65,6 @@ public class GroundedTeachingAgent {
      * but must not turn a usable first read into an unbounded rewrite job.
      */
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
-    private static final int MAX_POST_PUBLICATION_REVIEW_CORRECTIONS = 4;
-    private static final int MAX_POST_PUBLICATION_SCOPE_CORRECTIONS = 2;
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
@@ -76,6 +74,7 @@ public class GroundedTeachingAgent {
     private final TeachingVisualEvidenceResolver visualEvidenceResolver;
     private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
     private final TeachingDraftRecoveryPolicy draftRecoveryPolicy = new TeachingDraftRecoveryPolicy();
+    private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy = new TeachingReviewCorrectionPolicy();
     private final int maxToolCalls;
     private final int baseSectionParallelism;
 
@@ -831,16 +830,16 @@ public class GroundedTeachingAgent {
                     candidate.planned(),
                     0,
                     issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
-                    issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : criticDiagnostic(issues));
-            boolean scopeOnly = issues.stream().allMatch(
-                    issue -> issue.type() == GeneratedContentCritic.IssueType.CHAPTER_SCOPE_DUPLICATION);
-            boolean correctionBudgetExhausted = scopeOnly
-                    ? scopeCorrectionsStarted >= MAX_POST_PUBLICATION_SCOPE_CORRECTIONS
-                    : factualCorrectionsStarted >= MAX_POST_PUBLICATION_REVIEW_CORRECTIONS;
+                    issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : reviewCorrectionPolicy.criticDiagnostic(issues));
+            TeachingReviewCorrectionPolicy.CorrectionKind correctionKind = reviewCorrectionPolicy.correctionKind(issues);
+            boolean correctionBudgetExhausted = reviewCorrectionPolicy.correctionBudgetExhausted(
+                    correctionKind, factualCorrectionsStarted, scopeCorrectionsStarted);
             if (!issues.isEmpty() && correctionBudgetExhausted) {
                 log.info(
                         "Whole-lesson review defers {} correction for topic {} after its immediate budget",
-                        scopeOnly ? "chapter-scope" : "factual",
+                        correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE
+                                ? "chapter-scope"
+                                : "factual",
                         candidate.planned().topicKey());
                 recordPublication(
                         assistantRunId,
@@ -866,7 +865,7 @@ public class GroundedTeachingAgent {
                                 EvidenceStatus.SUPPORTED))
                         : correctedPublishedDraft(plan, candidate, issues, assistantRunId);
                 if (!issues.isEmpty()) {
-                    if (scopeOnly) {
+                    if (correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE) {
                         scopeCorrectionsStarted++;
                     } else {
                         factualCorrectionsStarted++;
@@ -918,15 +917,7 @@ public class GroundedTeachingAgent {
             DraftCandidate candidate,
             List<GeneratedContentCritic.Issue> issues,
             UUID assistantRunId) {
-        List<String> feedback = List.of("Whole-lesson objective coverage review found: " + issues.stream()
-                .map(issue -> issue.type() + " evidence=" + issue.evidenceIds() + " - " + issue.summary())
-                .collect(Collectors.joining("; "))
-                + ". Correct only from the supplied evidence and audit the entire revised section for new claims. "
-                + chapterScopeCorrectionInstruction(issues)
-                + "If any issue touches a worked example whose concrete species, component, quantity, pairing, or "
-                + "board state is not directly stated in evidence, delete that concrete example or replace it with "
-                + "a neutral procedure; do not invent a different example. Recount setup inventory against items "
-                + "already moved out of a supply. Do not add a new factual sentence merely to replace a removed one.");
+        List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
         SectionDraft corrected = invocations.invoke(
                 assistantRunId,
                 ActivityType.MODEL,
@@ -951,10 +942,8 @@ public class GroundedTeachingAgent {
                     correctionStatus);
         } catch (IllegalArgumentException invalidCorrection) {
             SectionDraft invalidDraft = corrected;
-            List<String> structuralRepair = new ArrayList<>(feedback);
-            structuralRepair.add("The prior correction was structurally invalid: " + rejectionCategory(invalidCorrection)
-                    + ". Return a complete replacement section with a short heading, teaching kind, text, and valid "
-                    + "citations for every step. Preserve the requested correction; do not restore the removed claim.");
+            List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
+                    feedback, rejectionCategory(invalidCorrection));
             corrected = invocations.invoke(
                     assistantRunId,
                     ActivityType.MODEL,
@@ -987,17 +976,6 @@ public class GroundedTeachingAgent {
                 candidate.modelRequest(),
                 corrected,
                 correctedSection);
-    }
-
-    private String chapterScopeCorrectionInstruction(List<GeneratedContentCritic.Issue> issues) {
-        boolean hasScopeDuplication = issues.stream()
-                .anyMatch(issue -> issue.type() == GeneratedContentCritic.IssueType.CHAPTER_SCOPE_DUPLICATION);
-        if (!hasScopeDuplication) return "";
-        return "For CHAPTER_SCOPE_DUPLICATION, retain the player-visible stage, order, or decision that this chapter "
-                + "owns, but remove the nested cost, reward, exception, calculation, or component detail explicitly "
-                + "assigned to a later chapter. Do not remove the stage altogether and do not replace it with a vague "
-                + "promise; the later chapter remains responsible for the full detail. Remove the named duplicated "
-                + "claim rather than paraphrasing the same full procedure more briefly. ";
     }
 
     private static String chapterScope(TeachingPlan plan, TeachingPlan.PlannedSection current) {
@@ -1058,24 +1036,6 @@ public class GroundedTeachingAgent {
         if (message.contains("visualKind")) return "VISUAL_KIND_MISSING";
         if (message.contains("draft is missing")) return "DRAFT_MISSING";
         return "SCHEMA_OR_POLICY_INVALID";
-    }
-
-    private String criticDiagnostic(List<GeneratedContentCritic.Issue> issues) {
-        String diagnostic = "CRITIC_" + issues.stream()
-                .collect(Collectors.groupingBy(
-                        GeneratedContentCritic.Issue::type,
-                        java.util.TreeMap::new,
-                        Collectors.mapping(
-                                GeneratedContentCritic.Issue::claimPosition,
-                                Collectors.collectingAndThen(
-                                        Collectors.toCollection(java.util.TreeSet::new),
-                                        positions -> positions.stream()
-                                                .map(String::valueOf)
-                                                .collect(Collectors.joining(","))))))
-                .entrySet().stream()
-                .map(entry -> entry.getKey() + "@" + entry.getValue())
-                .collect(Collectors.joining("+"));
-        return diagnostic.length() <= 180 ? diagnostic : diagnostic.substring(0, 180);
     }
 
     private void recordValidation(
