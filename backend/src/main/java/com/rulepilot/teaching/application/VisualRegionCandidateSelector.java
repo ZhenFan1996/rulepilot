@@ -239,12 +239,21 @@ public final class VisualRegionCandidateSelector {
         return terms.stream();
     }
 
-    public record Candidate(int pageNumber, Rectangle rectangle, String sourceText) {
+    /**
+     * A cataloged anchor is an image-reading observation, never a rule claim. Keeping it distinct from ordinary
+     * layout candidates lets a later exact-step crop review reuse that observation after the primary locator has
+     * abstained, instead of losing a real icon or worked-state signal to OCR-only retrieval.
+     */
+    public record Candidate(int pageNumber, Rectangle rectangle, String sourceText, VisualAnchor catalogedAnchor) {
         public Candidate {
             if (pageNumber < 1 || rectangle == null || sourceText == null || sourceText.isBlank()) {
                 throw new IllegalArgumentException("visual region candidate is invalid");
             }
             sourceText = sourceText.strip();
+        }
+
+        public Candidate(int pageNumber, Rectangle rectangle, String sourceText) {
+            this(pageNumber, rectangle, sourceText, null);
         }
 
         private static Candidate from(PageBlock block) {
@@ -257,7 +266,8 @@ public final class VisualRegionCandidateSelector {
                     match.pageNumber(),
                     new Rectangle(anchor.x(), anchor.y(), anchor.width(), anchor.height()),
                     "Cataloged visual anchor (verify against the attached image): "
-                            + anchor.kind() + " — " + anchor.label() + ". " + anchor.visibleDescription());
+                            + anchor.kind() + " — " + anchor.label() + ". " + anchor.visibleDescription(),
+                    anchor);
         }
     }
 

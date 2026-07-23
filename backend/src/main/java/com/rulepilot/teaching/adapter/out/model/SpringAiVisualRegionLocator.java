@@ -180,21 +180,78 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (!first.guide().regions().isEmpty()) {
             List<LocatedRegion> compactFirst = withoutOversizedReaderViewports(first.guide().regions());
             if (!compactFirst.isEmpty()) {
-                return confirmedExactStepCrops(request, compactFirst, owner);
+                return withCatalogedAnchorFallback(
+                        request, owner, confirmedExactStepCrops(request, compactFirst, owner));
             }
             log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
             GuideAttempt tightened = locateGuideOnce(request, owner, tightReaderViewportInstruction());
             List<LocatedRegion> compactTightened = withoutOversizedReaderViewports(tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
-                return confirmedExactStepCrops(request, compactTightened, owner);
+                return withCatalogedAnchorFallback(
+                        request, owner, confirmedExactStepCrops(request, compactTightened, owner));
             }
-            return LocateGuideResult.unavailable(Diagnostic.OVERSIZED_REGION);
+            return withCatalogedAnchorFallback(request, owner, LocateGuideResult.unavailable(Diagnostic.OVERSIZED_REGION));
         }
-        if (!first.retryable()) return first.guide();
+        if (!first.retryable()) return withCatalogedAnchorFallback(request, owner, first.guide());
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
         GuideAttempt retried = locateGuideOnce(request, owner, retryInstruction(first.rejection()));
-        if (retried.guide().regions().isEmpty()) return retried.guide();
-        return confirmedExactStepCrops(request, retried.guide().regions(), owner);
+        if (retried.guide().regions().isEmpty()) return withCatalogedAnchorFallback(request, owner, retried.guide());
+        return withCatalogedAnchorFallback(
+                request, owner, confirmedExactStepCrops(request, retried.guide().regions(), owner));
+    }
+
+    /**
+     * Page catalogs are built from the rendered rulebook image and retain compact literal anchors. They used to act
+     * only as a search hint: an otherwise useful icon or worked state disappeared whenever the broad page locator
+     * abstained or returned malformed coordinates. Reusing an anchor is safe only after the original crop itself is
+     * shown to the exact-step verifier; an anchor can never become a player-facing rule merely because it was stored.
+     */
+    private LocateGuideResult withCatalogedAnchorFallback(
+            VisualLocationRequest request, String owner, LocateGuideResult original) {
+        if (!original.regions().isEmpty()) return original;
+        for (Candidate candidate : request.candidates()) {
+            Optional<LocatedRegion> anchorRegion = catalogedAnchorRegion(request, candidate);
+            if (anchorRegion.isEmpty()) continue;
+            LocatedRegion region = anchorRegion.get();
+            if (requiresTighterReaderViewport(region) || !hasEnoughRenderedVisualSignal(request, region)) continue;
+            VisualRegionLocator.PageImage page = request.pages().stream()
+                    .filter(image -> image.pageNumber() == region.pageNumber())
+                    .findFirst()
+                    .orElse(null);
+            byte[] crop = croppedPng(page, region);
+            if (crop == null) continue;
+            Optional<Boolean> verified = confirmExactCrop(
+                    request, region, "R1", new CropImage(region.pageNumber(), region.label(), crop), owner);
+            if (verified.orElse(false)) {
+                log.info(
+                        "Recovered a verified cataloged visual anchor for section {} on page {}",
+                        request.sectionTitle(),
+                        region.pageNumber());
+                return LocateGuideResult.found(List.of(region));
+            }
+        }
+        return original;
+    }
+
+    static Optional<LocatedRegion> catalogedAnchorRegion(VisualLocationRequest request, Candidate candidate) {
+        if (request == null || candidate == null || candidate.catalogedAnchor() == null) return Optional.empty();
+        var anchor = candidate.catalogedAnchor();
+        List<VisualRegionLocator.Claim> supportedClaims = request.claims().stream()
+                .filter(claim -> sourceIncludes(claim, candidate.pageNumber()))
+                .toList();
+        if (supportedClaims.isEmpty() || supportedClaims.stream().anyMatch(claim -> claim.stepPosition() < 1)) {
+            return Optional.empty();
+        }
+        return Optional.of(new LocatedRegion(
+                candidate.pageNumber(),
+                anchor.label(),
+                anchor.visibleDescription(),
+                anchor.x(),
+                anchor.y(),
+                anchor.width(),
+                anchor.height(),
+                supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).distinct().toList(),
+                supportedClaims.stream().map(VisualRegionLocator.Claim::stepPosition).distinct().toList()));
     }
 
     /**

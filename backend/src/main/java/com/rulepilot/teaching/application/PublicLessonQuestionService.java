@@ -44,8 +44,8 @@ public class PublicLessonQuestionService {
         return new PublicAnswer(
                 creation.assistantRunId(),
                 creation.answer(),
-                visualAids(lesson, citedPages),
-                examples(lesson, citedPages));
+                visualAids(lesson, citedPages, creation.citedEvidenceIds()),
+                examples(lesson, citedPages, creation.citedEvidenceIds()));
     }
 
     private Set<Integer> citedPages(RuleAnswering.Answer answer) {
@@ -58,26 +58,34 @@ public class PublicLessonQuestionService {
         return Set.copyOf(pages);
     }
 
-    private List<VisualAid> visualAids(PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages) {
+    private List<VisualAid> visualAids(
+            PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages, Set<UUID> citedEvidenceIds) {
         return lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .filter(step -> step.visualFocus() != null)
                 .filter(step -> citedPages.contains(step.visualFocus().pageNumber()))
+                .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
                 .map(step -> new VisualAid(step.visualFocus(), step.heading()))
                 .distinct()
                 .limit(2)
                 .toList();
     }
 
-    private List<Example> examples(PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages) {
+    private List<Example> examples(
+            PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages, Set<UUID> citedEvidenceIds) {
         return lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .filter(step -> step.kind() == TeachingMove.EXAMPLE)
                 .filter(step -> step.sourcePages().stream().anyMatch(citedPages::contains))
+                .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
                 .map(step -> new Example(step.heading(), step.text(), citedSourcePages(step, citedPages)))
                 .distinct()
                 .limit(2)
                 .toList();
+    }
+
+    private boolean sharesCitedEvidence(LessonStep step, Set<UUID> citedEvidenceIds) {
+        return !citedEvidenceIds.isEmpty() && step.sourceChunkIds().stream().anyMatch(citedEvidenceIds::contains);
     }
 
     private List<Integer> citedSourcePages(LessonStep step, Set<Integer> citedPages) {

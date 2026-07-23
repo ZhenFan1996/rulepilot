@@ -8,13 +8,16 @@ import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
+import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
 import com.rulepilot.retrieval.HybridRuleSearch;
@@ -59,6 +62,32 @@ class StructuredRuleAnswerServiceTest {
             assertThat(citation.pageFrom()).isEqualTo(8);
         });
         assertThat(answer.official()).isFalse();
+    }
+
+    @Test
+    void preservesInternalCitationIdentityForAVisualAidWithoutExposingItInTheReadableCitation() {
+        UUID chunkId = UUID.randomUUID();
+        StructuredRuleAnswer answer = new StructuredRuleAnswer(
+                versionId,
+                AnswerStatus.ANSWERED,
+                "先放置标记。",
+                "把标记放到起始区域。",
+                List.of(new RuleCitation(chunkId, versionId, "SETUP", "设置", "放置标记。", 2, 2)),
+                List.of(),
+                AnswerConfidence.HIGH,
+                false,
+                null,
+                null,
+                null);
+
+        RuleAnswering.AnswerResult publicResult = StructuredRuleAnswerService.toPublicReaderAnswer(
+                new StructuredRuleAnswerService.AnswerCreation(UUID.randomUUID(), answer));
+
+        assertThat(publicResult.citedEvidenceIds()).containsExactly(chunkId);
+        assertThat(publicResult.answer().citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.heading()).isEqualTo("设置");
+            assertThat(citation.pageFrom()).isEqualTo(2);
+        });
     }
 
     @Test

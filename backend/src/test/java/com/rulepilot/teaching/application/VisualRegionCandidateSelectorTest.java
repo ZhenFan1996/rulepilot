@@ -162,6 +162,8 @@ class VisualRegionCandidateSelectorTest {
             assertThat(candidate.pageNumber()).isEqualTo(8);
             assertThat(candidate.rectangle()).isEqualTo(new Rectangle(80, 100, 280, 220));
             assertThat(candidate.sourceText()).contains("Cataloged visual anchor").contains("Bear scoring");
+            assertThat(candidate.catalogedAnchor()).isEqualTo(
+                    new VisualAnchor("score group", "Bear scoring", "熊卡牌旁的计分示例。", 80, 100, 280, 220));
         });
         assertThat(selected).allSatisfy(candidate ->
                 assertThat(candidate.sourceText()).doesNotContain("Cited page 8 visual context"));

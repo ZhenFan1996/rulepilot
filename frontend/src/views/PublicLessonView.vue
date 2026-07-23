@@ -234,7 +234,7 @@ onMounted(() => { void load() })
                   <div v-if="turn.answer.visualAids.length" class="mt-3 grid gap-3 sm:grid-cols-2">
                     <a v-for="aid in turn.answer.visualAids" :key="`${aid.visualFocus.pageNumber}-${aid.visualFocus.x}-${aid.visualFocus.y}`" :href="sourcePageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-2xl border border-ink/10 bg-canvas transition hover:border-indigo/35">
                       <img :src="cropUrl(aid.visualFocus)" :alt="`${aid.visualFocus.label}（规则书第 ${aid.visualFocus.pageNumber} 页）`" class="aspect-[4/3] w-full object-contain">
-                      <span class="block border-t border-ink/10 px-3 py-2 text-xs font-semibold text-indigo">同页图例 · {{ aid.relatedStep }}</span>
+                      <span class="block border-t border-ink/10 px-3 py-2 text-xs font-semibold text-indigo">支持这段答案的规则图例 · {{ aid.relatedStep }}</span>
                     </a>
                   </div>
                   <ul v-if="turn.answer.examples.length" class="mt-3 space-y-2"><li v-for="example in turn.answer.examples" :key="`${example.heading}-${example.text}`" class="rounded-2xl bg-copper/[0.07] px-4 py-3"><p class="text-sm font-semibold text-copper">照这个例子走：{{ example.heading }}</p><p class="mt-1 text-sm leading-6 text-ink/70">{{ example.text }}</p><p v-if="example.sourcePages.length" class="mt-2 text-xs text-ink/45">同样来自第 {{ example.sourcePages.join('、') }} 页</p></li></ul>

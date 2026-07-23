@@ -270,6 +270,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 new QuestionContext(documentVersionId, currentLessonSection, null, null, Set.of(), previousQuestion, null),
                 "public-reader",
                 null);
+        return toPublicReaderAnswer(creation);
+    }
+
+    static RuleAnswering.AnswerResult toPublicReaderAnswer(AnswerCreation creation) {
         StructuredRuleAnswer answer = creation.answer();
         return new RuleAnswering.AnswerResult(
                 creation.assistantRunId(),
@@ -283,7 +287,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                 .toList(),
                         answer.exceptions(),
                         answer.confidence().name(),
-                        answer.clarification()));
+                        answer.clarification()),
+                answer.citations().stream()
+                        .map(RuleCitation::chunkId)
+                        .collect(Collectors.toUnmodifiableSet()));
     }
 
     public AnswerCreation evaluateWithRun(

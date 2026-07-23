@@ -6,6 +6,7 @@ import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import java.awt.Color;
@@ -270,6 +271,52 @@ class SpringAiVisualRegionLocatorTest {
         List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(3, List.of(), List.of(setup));
 
         assertThat(rebound).containsExactly(setup);
+    }
+
+    @Test
+    void derives_a_page_scoped_exact_step_region_from_a_cataloged_visual_anchor() {
+        Claim setup = new Claim(UUID.randomUUID(), "步骤 2（摆放资源）：把资源放到公共供应区。", List.of(3), 2);
+        VisualAnchor anchor = new VisualAnchor(
+                "component group", "公共供应区资源", "四种彩色资源标记排在公共供应区旁。", 120, 330, 280, 180);
+        var request = new VisualLocationRequest(
+                "开局设置",
+                List.of(setup),
+                List.of(new Candidate(
+                        3,
+                        new Rectangle(120, 330, 280, 180),
+                        "Cataloged visual anchor (verify against the attached image): component group — 公共供应区资源。",
+                        anchor)),
+                List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(3, "image/png", cardGroupImage())));
+
+        assertThat(SpringAiVisualRegionLocator.catalogedAnchorRegion(request, request.candidates().getFirst()))
+                .contains(new LocatedRegion(
+                        3,
+                        "公共供应区资源",
+                        "四种彩色资源标记排在公共供应区旁。",
+                        120,
+                        330,
+                        280,
+                        180,
+                        List.of(setup.evidenceId()),
+                        List.of(2)));
+    }
+
+    @Test
+    void never_derives_a_cataloged_anchor_for_a_page_the_exact_step_does_not_cite() {
+        Claim setup = new Claim(UUID.randomUUID(), "步骤 2（摆放资源）：把资源放到公共供应区。", List.of(3), 2);
+        VisualAnchor anchor = new VisualAnchor(
+                "component group", "公共供应区资源", "四种彩色资源标记排在公共供应区旁。", 120, 330, 280, 180);
+        var request = new VisualLocationRequest(
+                "开局设置",
+                List.of(setup),
+                List.of(new Candidate(
+                        4,
+                        new Rectangle(120, 330, 280, 180),
+                        "Cataloged visual anchor (verify against the attached image): component group — 公共供应区资源。",
+                        anchor)),
+                List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(4, "image/png", cardGroupImage())));
+
+        assertThat(SpringAiVisualRegionLocator.catalogedAnchorRegion(request, request.candidates().getFirst())).isEmpty();
     }
 
     @Test
