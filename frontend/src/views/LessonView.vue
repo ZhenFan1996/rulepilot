@@ -6,6 +6,14 @@ import AppShell from '@/components/AppShell.vue'
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
+import {
+  useLessonAnswers,
+  type ConfirmedRuling,
+  type CsrfResponse,
+  type LearningIntent,
+  type RuleCitation,
+  type StructuredRuleAnswer,
+} from '@/composables/useLessonAnswers'
 import { buildCardQuestion } from '@/lib/cardOcr'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import {
@@ -169,57 +177,6 @@ interface MediaConsistencyReport {
   }>
 }
 
-interface StructuredRuleAnswer {
-  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
-  shortVerdict: string
-  explanation: string
-  citations: RuleCitation[]
-  exceptions: string[]
-  confidence: 'HIGH' | 'MEDIUM' | 'LOW'
-  official: boolean
-  confirmedRulingId: string | null
-  confirmedRulingVersion: number | null
-  clarification: string | null
-}
-
-interface AnswerCreation {
-  assistantRunId: string
-  answer: StructuredRuleAnswer
-}
-
-interface AnswerTurn {
-  question: string
-  answer: StructuredRuleAnswer
-  learningIntent: LearningIntent | null
-}
-
-type LearningIntent = 'SIMPLIFY' | 'EXAMPLE' | 'WHY' | 'EXCEPTIONS'
-
-interface RuleCitation {
-  chunkId: string
-  sectionType: string
-  heading: string
-  excerpt: string
-  pageFrom: number
-  pageTo: number
-}
-
-interface ConfirmedRuling {
-  id: string
-  shortVerdict: string
-  explanation: string
-  citations: RuleCitation[]
-  exceptions: string[]
-  confidence: StructuredRuleAnswer['confidence']
-  status: 'CONFIRMED' | 'SUPERSEDED'
-  version: number
-}
-
-interface CsrfResponse {
-  headerName: string
-  token: string
-}
-
 interface VideoChapter {
   position: number
   type: string
@@ -271,13 +228,6 @@ const narrationPlaying = ref(false)
 const narrationRate = ref(1)
 const narrationRestoreTarget = ref<number | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
-const question = ref('')
-const answer = ref<StructuredRuleAnswer | null>(null)
-const answeredQuestion = ref('')
-const answerTurns = ref<AnswerTurn[]>([])
-const activeLearningIntent = ref<LearningIntent | null>(null)
-const answerLoading = ref(false)
-const answerError = ref('')
 const ruling = ref<ConfirmedRuling | null>(null)
 const rulingSaving = ref(false)
 const rulingError = ref('')
@@ -301,10 +251,58 @@ let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let visualRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let lessonViewDisposed = false
 let latestLessonLoad = 0
-let latestAnswerRequest = 0
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const {
+  question,
+  answer,
+  answeredQuestion,
+  answerTurns,
+  activeLearningIntent,
+  answerLoading,
+  answerError,
+  clearAnswerFeedback,
+  resetConversation,
+  submitQuestion,
+} = useLessonAnswers({
+  currentContext: () => {
+    const activePlan = plan.value
+    const section = currentSection.value
+    if (!activePlan || !section || !online.value) return null
+    return {
+      planId: planId.value,
+      documentVersionId: activePlan.documentVersionId,
+      playerCount: activePlan.playerCount,
+      section,
+      locale: locale.value,
+    }
+  },
+  currentLessonRequest: () => latestLessonLoad,
+  isCurrentLessonLoad,
+  requestLogin: () => router.push({ name: 'login' }),
+  onReceived: (context, text, received) => {
+    if (received.status === 'ANSWERED') {
+      cacheOfflineAnswer(context.planId, text, context.section.title, received)
+      refreshOfflineKnowledge()
+    }
+    if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
+      applyRuling({
+        id: received.confirmedRulingId,
+        shortVerdict: received.shortVerdict,
+        explanation: received.explanation,
+        citations: received.citations,
+        exceptions: received.exceptions,
+        confidence: received.confidence,
+        status: 'CONFIRMED',
+        version: received.confirmedRulingVersion,
+      })
+    } else {
+      ruling.value = null
+    }
+    rulingConflict.value = false
+  },
+})
 const chapterLeadStep = computed(() => {
   const steps = currentSection.value?.steps ?? []
   return steps.find((step) => step.kind === 'UNDERSTAND')
@@ -499,12 +497,7 @@ function isCurrentLessonLoad(request: number, targetPlanId: string) {
   return !lessonViewDisposed && request === latestLessonLoad && targetPlanId === planId.value
 }
 
-function isCurrentAnswerRequest(answerRequest: number, lessonRequest: number, targetPlanId: string) {
-  return answerRequest === latestAnswerRequest && isCurrentLessonLoad(lessonRequest, targetPlanId)
-}
-
 function resetLessonReader() {
-  latestAnswerRequest++
   narrationPlayer.value?.pause()
   plan.value = null
   lesson.value = null
@@ -512,13 +505,7 @@ function resetLessonReader() {
   localizationStatus.value = null
   localizationPreparing.value = false
   progress.value = initialLessonProgress()
-  question.value = ''
-  answer.value = null
-  answeredQuestion.value = ''
-  answerTurns.value = []
-  activeLearningIntent.value = null
-  answerLoading.value = false
-  answerError.value = ''
+  resetConversation(true)
   ruling.value = null
   rulingSaving.value = false
   rulingError.value = ''
@@ -909,11 +896,7 @@ async function refreshGeneration() {
 function selectSection(index: number) {
   waitingForNextChapter.value = false
   progress.value = { ...progress.value, currentIndex: index }
-  question.value = ''
-  answer.value = null
-  answeredQuestion.value = ''
-  answerTurns.value = []
-  answerError.value = ''
+  resetConversation(true)
   ruling.value = null
   rulingError.value = ''
   rulingConflict.value = false
@@ -995,91 +978,11 @@ function learningPrompt(intent: LearningIntent) {
   }[intent]
 }
 
-function currentLessonContext() {
-  const section = currentSection.value
-  if (!section) return null
-  return [section.topicKey, section.title, ...section.coverageTags].join(' ')
-}
-
 function focusQuestionPanel() {
   const input = document.getElementById('lesson-question') as HTMLTextAreaElement | null
   if (!input) return
   input.scrollIntoView({ behavior: 'smooth', block: 'center' })
   window.setTimeout(() => input.focus(), 250)
-}
-
-async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
-  if (!text || !plan.value || !currentSection.value || answerLoading.value || !online.value) return
-  const targetPlanId = planId.value
-  const lessonRequest = latestLessonLoad
-  const answerRequest = ++latestAnswerRequest
-  answerLoading.value = true
-  activeLearningIntent.value = learningIntent
-  answerError.value = ''
-  answer.value = null
-  try {
-    const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
-    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
-    if (csrfResponse.status === 401) {
-      await router.push({ name: 'login' })
-      return
-    }
-    if (!csrfResponse.ok) throw new Error('无法建立安全会话，请稍后重试。')
-    const csrf = (await csrfResponse.json()) as CsrfResponse
-    const previousTurn = answerTurns.value[answerTurns.value.length - 1]
-    const response = await fetch(`/api/v1/document-versions/${plan.value.documentVersionId}/answers`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({
-        question: text,
-        currentLessonSection: currentLessonContext(),
-        playerCount: plan.value.playerCount,
-        previousQuestion: previousTurn?.question,
-        learningIntent,
-        language: locale.value,
-      }),
-    })
-    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
-    if (response.status === 401) {
-      await router.push({ name: 'login' })
-      return
-    }
-    if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
-    const creation = (await response.json()) as AnswerCreation
-    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
-    const received = creation.answer
-    answer.value = received
-    answeredQuestion.value = text
-    answerTurns.value.push({ question: text, answer: received, learningIntent })
-    if (received.status === 'ANSWERED') {
-      cacheOfflineAnswer(planId.value, text, currentSection.value.title, received)
-      refreshOfflineKnowledge()
-    }
-    if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
-      applyRuling({
-        id: received.confirmedRulingId,
-        shortVerdict: received.shortVerdict,
-        explanation: received.explanation,
-        citations: received.citations,
-        exceptions: received.exceptions,
-        confidence: received.confidence,
-        status: 'CONFIRMED',
-        version: received.confirmedRulingVersion,
-      })
-    } else {
-      ruling.value = null
-    }
-    rulingConflict.value = false
-  } catch (error) {
-    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
-    answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
-  } finally {
-    if (isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) {
-      answerLoading.value = false
-      activeLearningIntent.value = null
-    }
-  }
 }
 
 async function askCurrentSection() {
@@ -1095,14 +998,12 @@ async function requestLearningHelp(intent: LearningIntent) {
 function useCardText(text: string) {
   question.value = buildCardQuestion(text)
   cardOcrOpen.value = false
-  answer.value = null
-  answerError.value = ''
+  clearAnswerFeedback()
 }
 
 function useVoiceTranscript(text: string) {
   question.value = mergeVoiceQuestion(question.value, text)
-  answer.value = null
-  answerError.value = ''
+  clearAnswerFeedback()
 }
 
 async function csrfToken() {
@@ -1434,10 +1335,7 @@ onMounted(() => {
 })
 
 watch(locale, () => {
-  latestAnswerRequest++
-  answer.value = null
-  answerTurns.value = []
-  answerError.value = ''
+  resetConversation()
   if (locale.value === 'en' && mediaMode.value !== 'TEXT') {
     mediaMode.value = 'TEXT'
     addMediaWarning('English reading uses the text guide; narration and video remain in the source language.')
