@@ -21,7 +21,20 @@ interface ActiveTeachingRun { id: string; subjectId: string }
 const route = useRoute()
 const router = useRouter()
 const { t } = useLocale()
-const isDark = ref(document.documentElement.classList.contains('dark'))
+type Appearance = 'light' | 'dark'
+
+const APPEARANCE_PREFERENCE_KEY = 'rulepilot:appearance-preference'
+
+function preferredAppearance(): Appearance {
+  const storedPreference = localStorage.getItem(APPEARANCE_PREFERENCE_KEY)
+  if (storedPreference === 'light' || storedPreference === 'dark') return storedPreference
+  if (document.documentElement.classList.contains('light')) return 'light'
+  if (document.documentElement.classList.contains('dark')) return 'dark'
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+const appearance = ref<Appearance>(preferredAppearance())
+const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
@@ -62,9 +75,15 @@ const completedTeachingText = computed(() => {
   return t('shell.lesson.manyFinished', { count: completedTeaching.value.length })
 })
 
+function applyAppearance(nextAppearance: Appearance, persist = true) {
+  appearance.value = nextAppearance
+  document.documentElement.classList.toggle('dark', nextAppearance === 'dark')
+  document.documentElement.classList.toggle('light', nextAppearance === 'light')
+  if (persist) localStorage.setItem(APPEARANCE_PREFERENCE_KEY, nextAppearance)
+}
+
 function toggleTheme() {
-  isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
+  applyAppearance(isDark.value ? 'light' : 'dark')
 }
 
 async function loadSession() {
@@ -152,6 +171,7 @@ async function logout() {
   await router.push({ name: 'login' })
 }
 
+onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
 onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
 onBeforeUnmount(() => {

@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import AppShell from './AppShell.vue'
 
-describe('AppShell background teaching status', () => {
+describe('AppShell', () => {
   afterEach(() => {
     sessionStorage.clear()
+    localStorage.clear()
+    document.documentElement.classList.remove('dark', 'light')
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -66,6 +68,49 @@ describe('AppShell background teaching status', () => {
     await wrapper.get('button[aria-label="关闭讲解完成提醒"]').trigger('click')
     expect(wrapper.text()).not.toContain('后台处理已经结束')
     wrapper.unmount()
+  })
+
+  it('keeps an explicit light choice when the device prefers dark appearance', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' },
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+    await wrapper.get('button[aria-label="切换到浅色模式"]').trigger('click')
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(localStorage.getItem('rulepilot:appearance-preference')).toBe('light')
+
+    wrapper.unmount()
+    document.documentElement.classList.remove('dark', 'light')
+    const remounted = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' },
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    remounted.unmount()
   })
 })
 
