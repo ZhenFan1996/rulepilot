@@ -59,6 +59,9 @@ interface PublicAnswer {
 
 interface PublicAnswerTurn { question: string; answer: PublicAnswer }
 
+const PUBLIC_ANSWER_HISTORY_LIMIT = 6
+const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:'
+
 const route = useRoute()
 const { locale, t } = useLocale()
 const loading = ref(true)
@@ -73,6 +76,84 @@ const planId = computed(() => typeof route.params.planId === 'string' ? route.pa
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
+
+function answerThreadStorageKey() {
+  return `${PUBLIC_ANSWER_STORAGE_PREFIX}${planId.value}:${locale.value}`
+}
+
+function restorePublicAnswerTurns() {
+  try {
+    const stored = sessionStorage.getItem(answerThreadStorageKey())
+    const parsed = stored ? JSON.parse(stored) : []
+    publicAnswerTurns.value = Array.isArray(parsed)
+      ? parsed.filter(isPublicAnswerTurn).slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+      : []
+  } catch {
+    publicAnswerTurns.value = []
+  }
+}
+
+function rememberPublicAnswerTurns() {
+  try {
+    sessionStorage.setItem(answerThreadStorageKey(), JSON.stringify(publicAnswerTurns.value))
+  } catch {
+    // A private browser mode may not expose storage; the current on-page thread remains usable.
+  }
+}
+
+function isPublicAnswerTurn(value: unknown): value is PublicAnswerTurn {
+  if (!isRecord(value) || typeof value.question !== 'string' || value.question.trim().length === 0 || value.question.length > 800) return false
+  return isPublicAnswer(value.answer)
+}
+
+function isPublicAnswer(value: unknown): value is PublicAnswer {
+  if (!isRecord(value) || !isRecord(value.answer)) return false
+  const answer = value.answer
+  return isAnswerStatus(answer.status)
+    && typeof answer.shortVerdict === 'string'
+    && (typeof answer.explanation === 'string' || answer.explanation === null)
+    && Array.isArray(answer.citations) && answer.citations.every(isCitation)
+    && Array.isArray(answer.exceptions) && answer.exceptions.every((exception) => typeof exception === 'string')
+    && isConfidence(answer.confidence)
+    && (typeof answer.clarification === 'string' || answer.clarification === null)
+    && Array.isArray(value.visualAids) && value.visualAids.every(isVisualAid)
+    && Array.isArray(value.examples) && value.examples.every(isExample)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
+  return value === 'ANSWERED' || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
+    || value === 'INVALID_MODEL_OUTPUT' || value === 'MODEL_TIMEOUT'
+}
+
+function isConfidence(value: unknown): value is PublicAnswer['answer']['confidence'] {
+  return value === 'LOW' || value === 'MEDIUM' || value === 'HIGH'
+}
+
+function isCitation(value: unknown): value is RuleCitation {
+  return isRecord(value) && typeof value.heading === 'string' && Number.isInteger(value.pageFrom) && Number.isInteger(value.pageTo)
+}
+
+function isVisualAid(value: unknown): value is PublicAnswer['visualAids'][number] {
+  return isRecord(value) && typeof value.relatedStep === 'string' && isVisualFocus(value.visualFocus)
+}
+
+function isVisualFocus(value: unknown): value is VisualFocus {
+  return isRecord(value)
+    && typeof value.label === 'string'
+    && [value.pageNumber, value.x, value.y, value.width, value.height].every(Number.isFinite)
+}
+
+function isExample(value: unknown): value is PublicAnswer['examples'][number] {
+  return isRecord(value)
+    && typeof value.heading === 'string'
+    && typeof value.text === 'string'
+    && Array.isArray(value.sourcePages)
+    && value.sourcePages.every(Number.isInteger)
+}
 
 function sourcePageUrl(pageNumber: number) {
   return `/api/public/lessons/${encodeURIComponent(planId.value)}/pages/${pageNumber}/image`
@@ -140,7 +221,8 @@ async function submitPublicQuestion() {
     if (response.status === 404) throw new Error(t('public.answer.missing'))
     if (!response.ok) throw new Error(t('public.answer.failed'))
     const received = await response.json() as PublicAnswer
-    publicAnswerTurns.value.push({ question, answer: received })
+    publicAnswerTurns.value = [...publicAnswerTurns.value, { question, answer: received }].slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
+    rememberPublicAnswerTurns()
     publicQuestion.value = ''
   } catch (error) {
     publicAnswerError.value = error instanceof Error ? error.message : t('public.answer.fallback')
@@ -149,10 +231,13 @@ async function submitPublicQuestion() {
   }
 }
 
-onMounted(() => { void load() })
+onMounted(() => {
+  restorePublicAnswerTurns()
+  void load()
+})
 
-watch(locale, () => {
-  publicAnswerTurns.value = []
+watch([locale, planId], () => {
+  restorePublicAnswerTurns()
   publicQuestion.value = ''
   publicAnswerError.value = ''
   void load()

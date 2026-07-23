@@ -17,6 +17,7 @@ describe('PublicLessonView', () => {
   afterEach(() => {
     setLocale('zh-CN')
     localStorage.clear()
+    sessionStorage.clear()
     vi.unstubAllGlobals()
   })
 
@@ -119,6 +120,14 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
+
+    wrapper.unmount()
+    const restored = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(restored.text()).toContain('玩家板先放哪里？')
+    expect(restored.text()).toContain('先把玩家板放到自己面前。')
+    expect(restored.text()).toContain('支持这段答案的规则图例')
   })
 
   it('switches a public guide and its question request to an available English localization', async () => {
