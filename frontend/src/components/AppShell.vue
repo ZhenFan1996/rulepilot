@@ -9,6 +9,7 @@ import {
   reconcileBackgroundTeaching,
   type BackgroundTeachingItem,
 } from '@/lib/backgroundTeachingStatus'
+import { playerFacingTitle } from '@/lib/lessonPresentation'
 
 const props = withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
 
@@ -32,7 +33,7 @@ const navigation = [
   { name: 'home', path: '/', label: '首页', icon: 'compass' },
   { name: 'public-library', path: '/library', label: '公开讲解', icon: 'library' },
   { name: 'teach', path: '/teach', label: '添加规则书', icon: 'rulebook' },
-  { name: 'lessons', path: '/lessons', label: '我的讲解', icon: 'spark' },
+  { name: 'lessons', path: '/lessons', label: '我的讲解', icon: 'cards' },
   { name: 'catalog', path: '/catalog', label: '我的游戏', icon: 'meeple' },
   { name: 'account', path: '/account', label: '我的', icon: 'players' },
 ] as const
@@ -94,7 +95,7 @@ async function refreshTeachingStatus() {
       const plansResponse = await fetch('/api/v1/teaching-plans', { credentials: 'include' })
       if (!plansResponse.ok) throw new Error('background teaching titles are unavailable')
       const plans = await plansResponse.json() as TeachingPlanSummary[]
-      for (const plan of plans) teachingTitles.set(plan.id, plan.gameTitle)
+      for (const plan of plans) teachingTitles.set(plan.id, playerFacingTitle(plan.gameTitle))
     }
     const active = runs.map((run) => ({
       runId: run.id,

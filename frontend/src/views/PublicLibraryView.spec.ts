@@ -33,4 +33,45 @@ describe('PublicLibraryView', () => {
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com')
     expect(wrapper.get('a[href="/read/plan-1"]')).toBeTruthy()
   })
+
+  it('uses player-readable names, keeps the better duplicate, and lets a player search', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json([
+      {
+        teachingPlanId: 'root-old', rulebookTitle: 'Root Learning to Play Corpus Replay', officialSourceUrl: '',
+        gameCover: null, sectionCount: 10, stepCount: 55,
+      },
+      {
+        teachingPlanId: 'root-best', rulebookTitle: 'Root: Learning to Play Rules', officialSourceUrl: '',
+        gameCover: { gameName: 'Root: Learning to Play Rules', imageUrl: 'https://images.example/root.jpg', attributionUrl: 'https://boardgamegeek.com/root', attributionLabel: 'BoardGameGeek' },
+        sectionCount: 14, stepCount: 63,
+      },
+      {
+        teachingPlanId: 'fort', rulebookTitle: 'Fort Rules', officialSourceUrl: '',
+        gameCover: null, sectionCount: 12, stepCount: 60,
+      },
+    ])))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: PublicLibraryView },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/library')
+    await router.isReady()
+    const wrapper = mount(PublicLibraryView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('2 款游戏可直接阅读')
+    expect(wrapper.text()).not.toContain('Corpus Replay')
+    expect(wrapper.findAll('a[href="/read/root-best"]')).toHaveLength(1)
+    expect(wrapper.find('a[href="/read/root-old"]').exists()).toBe(false)
+    expect(wrapper.find('.lesson-cover').exists()).toBe(true)
+
+    await wrapper.get('input[placeholder="搜索游戏"]').setValue('fort')
+    expect(wrapper.find('a[href="/read/fort"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/read/root-best"]').exists()).toBe(false)
+  })
 })

@@ -12,6 +12,8 @@ export interface ShelfCatalogEntry {
   } | null
 }
 
+import { playerFacingTitle } from '@/lib/lessonPresentation'
+
 export interface ShelfDocument {
   document: { id: string; gameEditionId: string | null; title: string; officialCoverUrl?: string | null }
   latestVersion: { id: string; status: string }
@@ -61,7 +63,7 @@ export function buildPersonalShelf(
     const planMatches = plans.filter((plan) => plan.documentVersionId === document.latestVersion.id)
     planMatches.forEach((plan) => seenPlanIds.add(plan.id))
     const existing = items.get(key)
-    const title = assignment?.entry.game.name ?? planMatches[0]?.gameTitle ?? document.document.title
+    const title = playerFacingTitle(assignment?.entry.game.name ?? planMatches[0]?.gameTitle ?? document.document.title)
     const metadata = assignment?.entry.bggMetadata ?? null
     const next: ShelfItem = existing ?? {
       id: key,
@@ -90,7 +92,7 @@ export function buildPersonalShelf(
     const key = `plan:${plan.id}`
     items.set(key, {
       id: key,
-      title: plan.gameTitle,
+      title: playerFacingTitle(plan.gameTitle),
       coverUrl: null,
       coverAttributionUrl: null,
       editionLabel: null,

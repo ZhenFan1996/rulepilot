@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { playerFacingTitle } from '@/lib/lessonPresentation'
 import {
   mergeTeachingRunProgress,
   processedTeachingChapterCount,
@@ -94,6 +95,10 @@ function stateClass(planId: string) {
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
   if (state === 'FAILED') return 'bg-red-50 text-red-800'
   return 'bg-amber-50 text-amber-800'
+}
+
+function displayPlanTitle(plan: TeachingPlan) {
+  return playerFacingTitle(plan.gameTitle)
 }
 
 function elapsedLabel(plan: TeachingPlan) {
@@ -259,7 +264,7 @@ async function launch(planId: string) {
 
 async function deletePlan(plan: TeachingPlan) {
   if (deletingPlanId.value || cleanupLoading.value) return
-  if (!window.confirm(`删除“${plan.gameTitle}”的这份讲解吗？规则书会保留，你之后可以重新生成。`)) return
+  if (!window.confirm(`删除“${displayPlanTitle(plan)}”的这份讲解吗？规则书会保留，你之后可以重新生成。`)) return
   deletingPlanId.value = plan.id
   errorMessage.value = ''
   try {
@@ -363,7 +368,7 @@ onBeforeUnmount(() => {
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
-              <h2 class="mt-2 font-display text-2xl font-semibold">{{ plan.gameTitle }}</h2>
+              <h2 class="mt-2 font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
             </div>
             <span :class="stateClass(plan.id)" class="rounded-full px-3 py-1.5 text-xs font-semibold">{{ stateLabel(plan.id) }}</span>
           </div>

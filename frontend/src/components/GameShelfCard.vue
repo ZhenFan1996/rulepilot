@@ -66,7 +66,7 @@ const status = computed(() => ({
 
       <div class="mt-5 flex flex-wrap gap-x-4 gap-y-2 text-sm text-ink/60">
         <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="rulebook" :size="17" class="text-copper" />{{ item.documentCount }} 本规则书</span>
-        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="spark" :size="17" class="text-copper" />{{ item.lessonCount ? `${item.lessonCount} 份讲解` : '还没生成讲解' }}</span>
+        <span class="inline-flex items-center gap-1.5"><TabletopGlyph name="cards" :size="17" class="text-copper" />{{ item.lessonCount ? `${item.lessonCount} 份讲解` : '还没生成讲解' }}</span>
         <span v-if="item.expansionCount" class="inline-flex items-center gap-1.5"><TabletopGlyph name="cards" :size="17" class="text-copper" />{{ item.expansionCount }} 个扩展</span>
       </div>
 

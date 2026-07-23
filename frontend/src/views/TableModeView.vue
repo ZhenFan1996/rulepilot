@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { playerFacingTitle } from '@/lib/lessonPresentation'
 
 interface TeachingPlan {
   id: string
@@ -71,6 +72,7 @@ let elapsedTimer: number | undefined
 
 const latestTurn = computed(() => turns.value[turns.value.length - 1] ?? null)
 const earlierTurns = computed(() => turns.value.slice(0, -1).reverse())
+const displayPlanTitle = computed(() => plan.value ? playerFacingTitle(plan.value.gameTitle) : '')
 const stageMessage = computed(() => {
   if (elapsedSeconds.value < 3) return '正在理解问题和当前局面…'
   if (elapsedSeconds.value < 8) return '正在规则书里查找相关条目…'
@@ -241,7 +243,7 @@ onUnmounted(() => {
         <div class="mx-auto flex max-w-3xl items-center justify-between gap-3">
           <RouterLink :to="{ name: 'lesson', params: { planId } }" class="min-h-11 py-3 text-sm font-semibold text-amber-200">← 返回讲解</RouterLink>
           <div v-if="plan" class="min-w-0 text-right">
-            <p class="truncate font-display font-semibold">{{ plan.gameTitle }}</p>
+            <p class="truncate font-display font-semibold">{{ displayPlanTitle }}</p>
             <p class="text-xs text-panel-text/55">桌边快速裁定</p>
           </div>
         </div>

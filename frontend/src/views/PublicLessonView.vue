@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
+import { publicLessonTitle } from '@/lib/lessonPresentation'
+
 interface VisualFocus {
   pageNumber: number
   label: string
@@ -63,6 +65,7 @@ const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
+const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
 
 function sourcePageUrl(pageNumber: number) {
   return `/api/public/lessons/${encodeURIComponent(planId.value)}/pages/${pageNumber}/image`
@@ -162,13 +165,13 @@ onMounted(() => { void load() })
     <article v-else-if="publicLesson" class="mx-auto max-w-4xl px-5 py-10 sm:px-8 lg:py-14">
       <div class="border-b border-ink/10 pb-8">
         <div class="flex items-start gap-5 sm:gap-7">
-          <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="`查看 ${publicLesson.gameCover.gameName} 的${publicLesson.gameCover.attributionLabel}`">
-            <img :src="publicLesson.gameCover.imageUrl" :alt="`${publicLesson.gameCover.gameName} 的游戏封面`" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
+          <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="`查看 ${displayTitle} 的${publicLesson.gameCover.attributionLabel}`">
+            <img :src="publicLesson.gameCover.imageUrl" :alt="`${displayTitle} 的游戏封面`" class="aspect-[3/4] h-full w-full object-cover" referrerpolicy="no-referrer">
           </a>
           <div>
             <p class="text-sm font-semibold text-copper">从规则书到开桌</p>
-            <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ publicLesson.gameCover?.gameName ?? publicLesson.rulebookTitle }}</h1>
-            <p v-if="publicLesson.gameCover && publicLesson.gameCover.gameName !== publicLesson.rulebookTitle" class="mt-2 text-sm font-medium text-ink/50">{{ publicLesson.rulebookTitle }}</p>
+            <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ displayTitle }}</h1>
+            <p v-if="publicLesson.rulebookTitle !== displayTitle" class="mt-2 text-sm font-medium text-ink/50">规则书：{{ publicLesson.rulebookTitle }}</p>
             <p class="mt-4 max-w-2xl leading-7 text-ink/60">这是一份公开的逐步讲解。先照着完成当前动作；需要核对时，可打开每一步的来源页。</p>
           </div>
         </div>

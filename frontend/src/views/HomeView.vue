@@ -3,6 +3,13 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import PublicLessonCover from '@/components/PublicLessonCover.vue'
+import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import {
+  deduplicatePublicLessons,
+  groupPlansForReading,
+  playerFacingTitle,
+} from '@/lib/lessonPresentation'
 
 interface TeachingPlan {
   id: string
@@ -32,13 +39,15 @@ interface PublicLessonPreview {
 
 const username = ref('')
 const plans = ref<TeachingPlan[]>([])
-const recentPlans = computed(() => plans.value.slice(0, 3))
-const latestPlan = computed(() => recentPlans.value[0] ?? null)
+const latestPlan = computed(() => plans.value[0] ?? null)
+const latestPlanTitle = computed(() => latestPlan.value ? playerFacingTitle(latestPlan.value.gameTitle) : '')
+const recentPlans = computed(() => groupPlansForReading(plans.value).slice(0, 3))
 const hotGames = ref<HotGame[]>([])
 const hotGamesLoading = ref(true)
 const hotGamesUnavailable = ref(false)
 const showingPersonalShelf = ref(false)
 const publicLessons = ref<PublicLessonPreview[]>([])
+const featuredPublicLessons = computed(() => deduplicatePublicLessons(publicLessons.value).slice(0, 3))
 
 function createdLabel(value: string) {
   const date = new Date(value)
@@ -97,7 +106,7 @@ async function loadHotGames() {
 
 async function loadPublicLessons() {
   try {
-    const response = await fetch('/api/public/lessons?limit=3')
+    const response = await fetch('/api/public/lessons?limit=12')
     if (response.ok) publicLessons.value = await response.json() as PublicLessonPreview[]
   } catch {
     publicLessons.value = []
@@ -110,25 +119,37 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
 <template>
   <AppShell>
     <div class="mx-auto max-w-7xl px-5 py-6 sm:px-8 sm:py-10 lg:px-12 lg:py-12">
-      <section class="relative isolate min-h-[32rem] overflow-hidden rounded-2xl bg-[#1b130e] text-white shadow-xl shadow-ink/10 sm:min-h-[35rem]">
-        <img src="/tabletop-hero.jpg" alt="木桌上的原创策略桌游组件" class="absolute inset-0 h-full w-full object-cover object-[62%_center] sm:object-center">
-        <div class="absolute inset-0 bg-gradient-to-r from-black/90 via-black/60 to-black/10" />
-        <div class="relative flex min-h-[32rem] max-w-2xl flex-col justify-end px-6 py-9 sm:min-h-[35rem] sm:px-10 sm:py-12 lg:px-14">
-          <p class="text-sm font-semibold tracking-wide text-amber-300">{{ username ? `${username} 的规则桌` : '今晚玩什么？' }}</p>
-          <h1 v-if="latestPlan" class="mt-4 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-6xl">继续玩<br>{{ latestPlan.gameTitle }}</h1>
-          <h1 v-else class="mt-4 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-6xl">拿起规则书，<br>开始玩。</h1>
-          <p class="mt-5 max-w-xl text-base leading-8 text-white/72">{{ latestPlan ? '从上次读到的地方继续；需要时，随时回到原规则书核对。' : '选一个 PDF，就能先看到设置、第一轮、结束和计分。' }}</p>
-          <div class="mt-7 flex flex-wrap gap-3">
-            <RouterLink v-if="latestPlan" :to="{ name: 'lesson', params: { planId: latestPlan.id } }" class="inline-flex min-h-12 items-center rounded-lg bg-copper px-5 font-semibold text-white hover:bg-copper-dark">继续阅读</RouterLink>
-            <RouterLink v-else :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center rounded-lg bg-copper px-5 font-semibold text-white hover:bg-copper-dark">上传规则书</RouterLink>
-            <RouterLink v-if="latestPlan" :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center rounded-lg border border-white/30 bg-black/20 px-5 font-semibold text-white backdrop-blur-sm hover:bg-black/35">上传新规则书</RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center rounded-lg border border-white/30 bg-black/20 px-5 font-semibold text-white backdrop-blur-sm hover:bg-black/35">读公开讲解</RouterLink>
+      <section class="home-table relative overflow-hidden rounded-[2rem] bg-ink px-6 py-8 text-canvas shadow-xl shadow-ink/10 sm:px-10 sm:py-10 lg:px-14">
+        <div class="pointer-events-none absolute -right-6 -top-8 text-canvas/[0.07] sm:right-12"><TabletopGlyph name="meeple" :size="180" /></div>
+        <div class="relative max-w-3xl">
+          <p class="text-sm font-semibold tracking-wide text-copper">{{ username ? `${username} 的规则桌` : '今晚玩什么？' }}</p>
+          <h1 v-if="latestPlan" class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">继续这一局</h1>
+          <h1 v-else class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">把规则讲清楚，<br>再开桌。</h1>
+          <p class="mt-4 max-w-xl text-base leading-8 text-canvas/70">{{ latestPlan ? '从你上次读到的地方接着讲；卡住时，随时打开原规则书核对。' : '选一个 PDF，就能先看到设置、第一轮、结束和计分。' }}</p>
+
+          <div v-if="latestPlan" class="mt-7 flex flex-col gap-4 rounded-2xl border border-canvas/15 bg-canvas/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">上次打开</p>
+              <h2 class="mt-2 truncate font-display text-2xl font-semibold">{{ latestPlanTitle }}</h2>
+              <p class="mt-1 text-sm text-canvas/60">{{ latestPlan.playerCount }} 人 · 约 {{ latestPlan.durationMinutes }} 分钟讲解</p>
+            </div>
+            <RouterLink :to="{ name: 'lesson', params: { planId: latestPlan.id } }" class="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark">继续阅读 <TabletopGlyph name="arrow" :size="18" /></RouterLink>
           </div>
-          <p class="mt-6 text-sm text-white/55">{{ latestPlan ? `${latestPlan.playerCount} 人 · 约 ${latestPlan.durationMinutes} 分钟讲解` : '不用先创建游戏；标题也可以稍后再改。' }}</p>
+
+          <div v-else class="mt-7 flex flex-wrap gap-3">
+            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark"><TabletopGlyph name="plus" :size="18" /> 上传规则书</RouterLink>
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-canvas/25 px-5 font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="library" :size="18" /> 读公开讲解</RouterLink>
+          </div>
+
+          <div v-if="latestPlan" class="mt-4 flex flex-wrap gap-3">
+            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-4 text-sm font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="plus" :size="17" /> 上传新规则书</RouterLink>
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-4 text-sm font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="library" :size="17" /> 读公开讲解</RouterLink>
+          </div>
+          <p class="mt-5 text-sm text-canvas/50">{{ latestPlan ? '讲解与原规则书都保留在这里。' : '不用先创建游戏；标题也可以稍后再改。' }}</p>
         </div>
       </section>
 
-      <section v-if="publicLessons.length" class="border-b border-ink/10 py-12">
+      <section v-if="featuredPublicLessons.length" class="border-b border-ink/10 py-12">
         <div class="flex items-end justify-between gap-4">
           <div>
             <p class="text-sm font-medium text-copper">先看看别人怎么开桌</p>
@@ -137,13 +158,12 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
           <RouterLink :to="{ name: 'public-library' }" class="shrink-0 text-sm font-semibold text-indigo">全部讲解 →</RouterLink>
         </div>
         <div class="-mx-5 mt-6 flex gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0">
-          <RouterLink v-for="lesson in publicLessons" :key="lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: lesson.teachingPlanId } }" class="group w-52 shrink-0 sm:w-auto">
+          <RouterLink v-for="(entry, index) in featuredPublicLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group w-52 shrink-0 sm:w-auto">
             <div class="relative aspect-[16/10] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
-              <img v-if="lesson.gameCover" :src="lesson.gameCover.imageUrl" :alt="`${lesson.gameCover.gameName} 的游戏封面`" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer" @error="hideBrokenImage">
-              <div v-else class="flex h-full items-end bg-[linear-gradient(145deg,#282018,#604531)] p-4 text-paper"><span class="font-display text-xl font-semibold leading-tight">{{ lesson.rulebookTitle }}</span></div>
+              <PublicLessonCover :title="entry.title" :image-url="entry.lesson.gameCover?.imageUrl" :alt="`${entry.title} 的游戏封面`" :index="index" />
             </div>
-            <h3 class="mt-3 line-clamp-2 font-semibold leading-5">{{ lesson.gameCover?.gameName ?? lesson.rulebookTitle }}</h3>
-            <p class="mt-1 text-xs text-ink/45">{{ lesson.sectionCount }} 章 · {{ lesson.stepCount }} 步</p>
+            <h3 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h3>
+            <p class="mt-1 text-xs text-ink/45">{{ entry.lesson.sectionCount }} 章 · {{ entry.lesson.stepCount }} 步</p>
           </RouterLink>
         </div>
       </section>
@@ -185,10 +205,10 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">查看全部</RouterLink>
         </div>
         <ol class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
-          <li v-for="plan in recentPlans" :key="plan.id">
-            <RouterLink :to="{ name: 'lesson', params: { planId: plan.id } }" class="group grid gap-1 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
-              <span class="font-semibold">{{ plan.gameTitle }}</span>
-              <span class="text-sm text-ink/45">{{ plan.playerCount }} 人 · {{ plan.durationMinutes }} 分钟 · {{ createdLabel(plan.createdAt) }} →</span>
+          <li v-for="entry in recentPlans" :key="entry.plan.id">
+            <RouterLink :to="{ name: 'lesson', params: { planId: entry.plan.id } }" class="group grid gap-1 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
+              <span class="font-semibold">{{ entry.title }}<span v-if="entry.count > 1" class="ml-2 text-xs font-medium text-ink/45">· {{ entry.count }} 份讲解</span></span>
+              <span class="text-sm text-ink/45">{{ entry.plan.playerCount }} 人 · {{ entry.plan.durationMinutes }} 分钟 · {{ createdLabel(entry.plan.createdAt) }} →</span>
             </RouterLink>
           </li>
         </ol>
@@ -201,3 +221,10 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
     </div>
   </AppShell>
 </template>
+
+<style scoped>
+.home-table {
+  background-image: radial-gradient(rgba(245, 240, 232, 0.08) 0.7px, transparent 0.7px);
+  background-size: 13px 13px;
+}
+</style>

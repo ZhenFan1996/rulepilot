@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
+
+import PublicLessonCover from '@/components/PublicLessonCover.vue'
+import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import { deduplicatePublicLessons } from '@/lib/lessonPresentation'
 
 interface PublicLessonEntry {
   teachingPlanId: string
@@ -14,6 +18,13 @@ interface PublicLessonEntry {
 const lessons = ref<PublicLessonEntry[]>([])
 const loading = ref(true)
 const errorMessage = ref('')
+const search = ref('')
+const presentedLessons = computed(() => deduplicatePublicLessons(lessons.value))
+const visibleLessons = computed(() => {
+  const keyword = search.value.trim().toLocaleLowerCase()
+  if (!keyword) return presentedLessons.value
+  return presentedLessons.value.filter((entry) => entry.title.toLocaleLowerCase().includes(keyword))
+})
 
 async function load() {
   loading.value = true
@@ -45,9 +56,19 @@ onMounted(() => { void load() })
     </header>
 
     <section class="mx-auto max-w-6xl px-5 py-12 sm:px-8 lg:py-16">
-      <p class="text-sm font-semibold text-copper">挑一本，今晚开桌</p>
-      <h1 class="mt-2 max-w-3xl font-display text-4xl font-semibold tracking-tight sm:text-5xl">从规则书到第一局</h1>
-      <p class="mt-4 max-w-2xl leading-7 text-ink/60">每份讲解保留来源页，原规则书始终回到出版方。先按步骤开局；卡住时再核对原文。</p>
+      <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p class="text-sm font-semibold text-copper">挑一本，今晚开桌</p>
+          <h1 class="mt-2 max-w-3xl font-display text-4xl font-semibold tracking-tight sm:text-5xl">从规则书到第一局</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-ink/60">每份讲解保留来源页，原规则书始终回到出版方。先按步骤开局；卡住时再核对原文。</p>
+        </div>
+        <label class="relative block w-full sm:w-72">
+          <span class="sr-only">搜索公开讲解</span>
+          <TabletopGlyph name="compass" :size="18" class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink/45" />
+          <input v-model="search" type="search" placeholder="搜索游戏" class="min-h-11 w-full rounded-xl border border-ink/12 bg-paper py-3 pl-11 pr-4 text-sm outline-none transition placeholder:text-ink/40 focus:border-indigo focus:ring-2 focus:ring-indigo/15">
+        </label>
+      </div>
+      <p v-if="!loading && !errorMessage && presentedLessons.length" class="mt-6 text-sm text-ink/45">{{ presentedLessons.length }} 款游戏可直接阅读</p>
 
       <div v-if="loading" class="mt-10 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5" aria-label="正在读取公开讲解">
         <div v-for="index in 10" :key="index" class="animate-pulse">
@@ -61,17 +82,21 @@ onMounted(() => { void load() })
         <button type="button" class="mt-4 min-h-11 rounded-lg border border-red-300 px-4 font-semibold" @click="load">重新尝试</button>
       </div>
 
-      <div v-else-if="lessons.length" class="mt-10 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
-        <RouterLink v-for="lesson in lessons" :key="lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: lesson.teachingPlanId } }" class="group min-w-0">
+      <div v-else-if="visibleLessons.length" class="mt-8 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
+        <RouterLink v-for="(entry, index) in visibleLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group min-w-0">
           <div class="relative aspect-[3/4] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition duration-200 group-hover:-translate-y-1 group-hover:shadow-lg">
-            <img v-if="lesson.gameCover" :src="lesson.gameCover.imageUrl" :alt="`${lesson.gameCover.gameName} 的游戏封面`" class="h-full w-full object-cover" loading="lazy" referrerpolicy="no-referrer">
-            <div v-else class="flex h-full items-end bg-[linear-gradient(145deg,#282018,#604531)] p-4 text-paper">
-              <span class="font-display text-2xl font-semibold leading-tight">{{ lesson.rulebookTitle }}</span>
-            </div>
+            <PublicLessonCover :title="entry.title" :image-url="entry.lesson.gameCover?.imageUrl" :alt="`${entry.title} 的游戏封面`" :index="index" />
           </div>
-          <h2 class="mt-3 line-clamp-2 font-semibold leading-5">{{ lesson.gameCover?.gameName ?? lesson.rulebookTitle }}</h2>
-          <p class="mt-1 text-xs text-ink/45">{{ lesson.sectionCount }} 章 · {{ lesson.stepCount }} 步</p>
+          <h2 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h2>
+          <p class="mt-1 text-xs text-ink/45">{{ entry.lesson.sectionCount }} 章 · {{ entry.lesson.stepCount }} 步</p>
         </RouterLink>
+      </div>
+
+      <div v-else-if="lessons.length" class="mt-10 rounded-xl border border-dashed border-ink/20 bg-paper p-8 text-center">
+        <TabletopGlyph name="compass" :size="30" class="mx-auto text-indigo" />
+        <h2 class="mt-4 font-display text-2xl font-semibold">没有找到这款游戏</h2>
+        <p class="mt-3 text-ink/60">试试英文原名，或清空搜索看看全部讲解。</p>
+        <button type="button" class="mt-4 min-h-11 text-sm font-semibold text-indigo" @click="search = ''">清空搜索</button>
       </div>
 
       <div v-else class="mt-10 rounded-xl border border-dashed border-ink/15 bg-paper p-8 text-center">

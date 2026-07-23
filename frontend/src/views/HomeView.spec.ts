@@ -68,7 +68,7 @@ describe('HomeView', () => {
       if (path.includes('/api/v1/teaching-plans')) {
         return new Response(JSON.stringify([{
           id: 'plan-1',
-          gameTitle: '翼展翅膀',
+          gameTitle: 'CATAN Base Game Rules Corpus Replay',
           premise: '你要在四轮中建立得分最高的鸟类保护区。',
           playerCount: 4,
           durationMinutes: 25,
@@ -88,7 +88,9 @@ describe('HomeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('player 的规则桌')
-    expect(wrapper.text()).toContain('继续玩翼展翅膀')
+    expect(wrapper.text()).toContain('继续这一局')
+    expect(wrapper.text()).toContain('CATAN')
+    expect(wrapper.text()).not.toContain('Corpus Replay')
     expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
     expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
   })
@@ -110,5 +112,22 @@ describe('HomeView', () => {
 
     expect(wrapper.text()).toContain('公开讲解')
     expect(wrapper.get('a[href="/read/public-plan-1"]').text()).toContain('Wingspan')
+  })
+
+  it('groups repeated continuation names on the compact home list without deleting plans', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/v1/teaching-plans')) return Response.json([
+        { id: 'plan-1', gameTitle: 'CATAN Base Game Rules Corpus Replay', playerCount: 4, durationMinutes: 25, createdAt: '2026-07-20T12:00:00Z' },
+        { id: 'plan-2', gameTitle: 'Catan', playerCount: 4, durationMinutes: 35, createdAt: '2026-07-19T12:00:00Z' },
+      ])
+      if (String(input).includes('/api/auth/session')) return Response.json({ username: 'player' })
+      return new Response(null, { status: 404 })
+    }))
+
+    const wrapper = await mountHome()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('2 份讲解')
+    expect(wrapper.text()).not.toContain('Corpus Replay')
   })
 })
