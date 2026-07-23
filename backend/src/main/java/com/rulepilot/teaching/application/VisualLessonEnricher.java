@@ -2,7 +2,6 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
-import com.rulepilot.ingestion.layout.RulebookUnderstanding.Rectangle;
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.PageImage;
@@ -37,11 +36,6 @@ import org.springframework.stereotype.Service;
 public class VisualLessonEnricher {
 
     private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
-    private static final int MIN_READER_VIEWPORT_WIDTH = 180;
-    private static final int MIN_READER_VIEWPORT_HEIGHT = 120;
-    // A useful in-context aid must be materially smaller than its source page. Larger regions make the reader scan
-    // the rulebook again instead of letting the matched rule explain one recognizable visual relationship.
-    private static final long MAX_READER_CROP_AREA = 600_000L;
 
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
@@ -49,6 +43,7 @@ public class VisualLessonEnricher {
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
+    private final VisualReaderCropPolicy cropPolicy;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
     private final int requestParallelism;
@@ -70,6 +65,7 @@ public class VisualLessonEnricher {
         this.candidates = candidates;
         this.locator = locator;
         this.prioritizer = prioritizer;
+        this.cropPolicy = new VisualReaderCropPolicy();
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
         }
@@ -151,7 +147,7 @@ public class VisualLessonEnricher {
                 .flatMap(section -> section.steps().stream())
                 .map(LessonStep::visualFocus)
                 .filter(java.util.Objects::nonNull)
-                .filter(focus -> !needsTighterReaderCrop(focus))
+                .filter(focus -> !cropPolicy.needsTighterReaderCrop(focus))
                 .collect(Collectors.toCollection(ArrayList::new));
         List<SectionResult> sectionResults = new ArrayList<>();
         List<LessonSection> currentSections = new ArrayList<>(readerReadyLesson.sections());
@@ -189,7 +185,7 @@ public class VisualLessonEnricher {
             String modelConfigurationOwner,
             VisualProgressListener progress) {
         int existingVisualSteps = (int) section.steps().stream()
-                .filter(step -> step.kind() == TeachingMove.VISUAL && !needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.kind() == TeachingMove.VISUAL && !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .count();
         if (existingVisualSteps >= maxVisualStepsPerSection) {
             return result(section, Outcome.ALREADY_PRESENT);
@@ -197,7 +193,7 @@ public class VisualLessonEnricher {
         List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
         Outcome rejected = null;
         int availableStepSlots = (int) section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .count();
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
         List<LessonStep> targets = visualTargets(section, limit);
@@ -259,7 +255,7 @@ public class VisualLessonEnricher {
      */
     private List<LessonStep> visualTargets(LessonSection section, int limit) {
         return section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(step.visualFocus()))
+                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
                 .sorted(java.util.Comparator.comparingInt(this::visualAffinity).reversed()
                         .thenComparingInt(LessonStep::position))
@@ -317,12 +313,12 @@ public class VisualLessonEnricher {
         Outcome rejected = null;
         for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
             VisualRegionLocator.LocatedRegion region = candidate;
-            if (needsReaderViewport(region)) {
-                if (!canExpandIntoReaderViewport(region)) {
+            if (cropPolicy.needsReaderViewport(region)) {
+                if (!cropPolicy.canExpandIntoReaderViewport(region)) {
                     rejected = Outcome.REJECTED_TOO_SMALL;
                     continue;
                 }
-                region = expandIntoReaderViewport(region);
+                region = cropPolicy.expandIntoReaderViewport(region);
             }
             Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
             if (rejection == null && !supportsExactStep(region, step)) {
@@ -390,11 +386,11 @@ public class VisualLessonEnricher {
             VisualRegionLocator.LocatedRegion region,
             List<VisualRegionCandidateSelector.Candidate> attachedCandidates,
             Set<UUID> evidenceIds) {
-        if (!isCompactReaderCrop(region)) return Outcome.REJECTED_WHOLE_PAGE;
-        if (!isReadableForPlayer(region)) return Outcome.REJECTED_TOO_SMALL;
+        if (!cropPolicy.isCompactReaderCrop(region)) return Outcome.REJECTED_WHOLE_PAGE;
+        if (!cropPolicy.isReadableForPlayer(region)) return Outcome.REJECTED_TOO_SMALL;
         if (region.visibleDescription().isBlank()) return Outcome.REJECTED_MISSING_OBSERVATION;
-        if (!isUsefulPlayerVisual(region)) return Outcome.REJECTED_NON_VISUAL;
-        if (!intersectsCandidate(region, attachedCandidates)) return Outcome.REJECTED_OUTSIDE_CANDIDATE;
+        if (!cropPolicy.isUsefulPlayerVisual(region)) return Outcome.REJECTED_NON_VISUAL;
+        if (!cropPolicy.intersectsCandidate(region, attachedCandidates)) return Outcome.REJECTED_OUTSIDE_CANDIDATE;
         if (!evidenceIds.containsAll(region.supportedEvidenceIds())) return Outcome.REJECTED_UNKNOWN_EVIDENCE;
         return null;
     }
@@ -559,39 +555,6 @@ public class VisualLessonEnricher {
         return body.length() <= remaining ? prefix + body : prefix + body.substring(0, remaining);
     }
 
-    private boolean intersectsCandidate(
-            VisualRegionLocator.LocatedRegion region, List<VisualRegionCandidateSelector.Candidate> candidates) {
-        return candidates.stream().anyMatch(candidate -> candidate.pageNumber() == region.pageNumber()
-                && intersects(candidate.rectangle(), region.x(), region.y(), region.width(), region.height()));
-    }
-
-    private boolean isCompactReaderCrop(VisualRegionLocator.LocatedRegion region) {
-        return (region.x() != 0 || region.y() != 0 || region.width() != 1_000 || region.height() != 1_000)
-                && (long) region.width() * region.height() <= MAX_READER_CROP_AREA
-                && !isNarrowScoreExampleViewport(region.label() + " " + region.visibleDescription(), region.width(), region.height());
-    }
-
-    private boolean needsTighterReaderCrop(VisualFocus focus) {
-        return focus != null
-                && ((long) focus.width() * focus.height() > MAX_READER_CROP_AREA || isNarrowScoreExampleViewport(focus));
-    }
-
-    /**
-     * The persisted focus no longer has the model's full observation, so use its literal label and geometry to revisit
-     * the one known risky shape: a tall score-example strip. This lets later enrichment repair an old crop that
-     * actually stacks neighbouring examples, while keeping portrait component cards intact.
-     */
-    private boolean isNarrowScoreExampleViewport(VisualFocus focus) {
-        return focus != null && isNarrowScoreExampleViewport(focus.label(), focus.width(), focus.height());
-    }
-
-    private boolean isNarrowScoreExampleViewport(String description, int width, int height) {
-        String normalized = description.toLowerCase(java.util.Locale.ROOT);
-        boolean scoreExample = containsAny(normalized, "计分", "得分", "分数", "score", "scoring", "points")
-                && containsAny(normalized, "示例", "example");
-        return scoreExample && width <= 340 && height * 4 > width * 3;
-    }
-
     /**
      * A near-full page is worse than no image: it duplicates the manual without showing what the rule wants the
      * player to notice. Restore the cited rule prose first, then let this run add a replacement only if vision finds
@@ -603,7 +566,7 @@ public class VisualLessonEnricher {
         for (LessonSection section : lesson.sections()) {
             List<LessonStep> steps = new ArrayList<>();
             for (LessonStep step : section.steps()) {
-                if (step.kind() == TeachingMove.VISUAL && needsTighterReaderCrop(step.visualFocus())) {
+                if (step.kind() == TeachingMove.VISUAL && cropPolicy.needsTighterReaderCrop(step.visualFocus())) {
                     steps.add(new LessonStep(
                             step.position(), step.heading(), TeachingMove.DO, originalRuleText(step),
                             step.sourcePages(), step.sourceChunkIds()));
@@ -632,124 +595,6 @@ public class VisualLessonEnricher {
                 lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
     }
 
-    private boolean isReadableForPlayer(VisualRegionLocator.LocatedRegion region) {
-        if (region.width() >= 80 && region.height() >= 60) return true;
-        // A focused icon group may be small only before it is expanded into a reader-sized viewport.
-        return region.width() >= 32 && region.height() >= 32 && hasCompactVisualHandle(region);
-    }
-
-    private boolean needsReaderViewport(VisualRegionLocator.LocatedRegion region) {
-        return region.width() < 80 || region.height() < 60;
-    }
-
-    private boolean canExpandIntoReaderViewport(VisualRegionLocator.LocatedRegion region) {
-        return !isTextOnlyFocus(region) && hasCompactVisualHandle(region);
-    }
-
-    /**
-     * Vision commonly finds the exact icon first. Keep that literal observation, but show players enough surrounding
-     * card, legend, arrow, or board state to recognise it without having to cross-reference a microscopic crop.
-     */
-    private VisualRegionLocator.LocatedRegion expandIntoReaderViewport(VisualRegionLocator.LocatedRegion region) {
-        int width = Math.max(MIN_READER_VIEWPORT_WIDTH, region.width());
-        int height = Math.max(MIN_READER_VIEWPORT_HEIGHT, region.height());
-        int x = centeredAndBounded(region.x(), region.width(), width);
-        int y = centeredAndBounded(region.y(), region.height(), height);
-        return new VisualRegionLocator.LocatedRegion(
-                region.pageNumber(),
-                region.label(),
-                region.visibleDescription(),
-                x,
-                y,
-                width,
-                height,
-                region.supportedEvidenceIds(),
-                region.supportedStepPositions());
-    }
-
-    private int centeredAndBounded(int origin, int focusSize, int viewportSize) {
-        int centered = origin + (focusSize - viewportSize) / 2;
-        return Math.max(0, Math.min(1_000 - viewportSize, centered));
-    }
-
-    private boolean isUsefulPlayerVisual(VisualRegionLocator.LocatedRegion region) {
-        String description = region.visibleDescription().toLowerCase(java.util.Locale.ROOT);
-        String label = region.label().toLowerCase(java.util.Locale.ROOT);
-        return !description.contains("section header")
-                && !description.contains("page title")
-                && !description.contains("introduction paragraph")
-                && !description.contains("text for")
-                && !description.contains("list of")
-                && !description.contains("段落")
-                && !description.contains("文字描述")
-                && !description.contains("介绍性段落")
-                && !description.contains("章节标题")
-                && !description.contains("页面标题")
-                && !isTextOnlyFocus(region)
-                && !label.contains("section header")
-                && !label.contains("段落")
-                && !label.matches(".*\\b(text|header|paragraph)\\b.*");
-    }
-
-    private boolean hasCompactVisualHandle(VisualRegionLocator.LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        return observation.contains("图标")
-                || observation.contains("符号")
-                || observation.contains("令牌")
-                || observation.contains("标记")
-                || observation.contains("骰子")
-                || observation.contains("箭头")
-                || observation.contains("指示物")
-                || observation.contains("花色")
-                || observation.contains("卡牌")
-                || observation.contains("棋子")
-                || observation.contains("板块")
-                || observation.contains("轨道")
-                || observation.contains("地图")
-                || observation.matches(".*\\b(icon|symbol|token|marker|die|dice|meeple|card|board|track|map|component)\\b.*");
-    }
-
-    private boolean isTextOnlyFocus(VisualRegionLocator.LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        if (isStructuredPlayerReference(observation)) return false;
-        return observation.contains("文字")
-                || observation.contains("文本")
-                || observation.contains("规则框")
-                || observation.contains("词语")
-                || observation.contains("标签文字")
-                || observation.contains("组件列表")
-                || observation.contains("配件清单")
-                || observation.matches(".*\\b(word|text|printed label|label only|text box|rule box|contents|table of contents|component list|parts list)\\b.*");
-    }
-
-    /**
-     * A scorepad, turn-order table, or icon legend is a visual reference even when it contains printed labels.
-     * It gives a player a compact relationship to inspect; a prose rule box still does not.
-     */
-    private boolean isStructuredPlayerReference(String observation) {
-        return observation.contains("计分表")
-                || observation.contains("分数表")
-                || observation.contains("对照表")
-                || observation.contains("流程图")
-                || observation.contains("顺序表")
-                || observation.contains("阶段表")
-                || observation.contains("表格")
-                || observation.matches(".*\\b(scorepad|score table|scoring table|reference table|flowchart|sequence chart)\\b.*");
-    }
-
-    private boolean isIconFocused(VisualRegionLocator.LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        return observation.contains("图标")
-                || observation.contains("符号")
-                || observation.contains("图例")
-                || observation.matches(".*\\b(icon|symbol|legend)\\b.*");
-    }
-
-    private boolean intersects(Rectangle candidate, int x, int y, int width, int height) {
-        return candidate.x() < x + width && x < candidate.x() + candidate.width()
-                && candidate.y() < y + height && y < candidate.y() + candidate.height();
-    }
-
     /**
      * A crop is a reading aid, not decorative repetition. Keep the first grounded use of a substantially identical
      * viewport and leave later steps as their original rule prose so a player does not see the same diagram twice.
@@ -767,10 +612,10 @@ public class VisualLessonEnricher {
         for (LessonStep step : candidate.section().steps()) {
             LessonStep originalStep = originalSteps.get(step.position());
             boolean newlyVisual = originalStep != null
-                    && (originalStep.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(originalStep.visualFocus()))
+                    && (originalStep.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(originalStep.visualFocus()))
                     && step.kind() == TeachingMove.VISUAL
                     && step.visualFocus() != null;
-            if (newlyVisual && acceptedVisuals.stream().anyMatch(existing -> overlapsSubstantially(
+            if (newlyVisual && acceptedVisuals.stream().anyMatch(existing -> cropPolicy.overlapsSubstantially(
                     existing, step.visualFocus()))) {
                 filtered.add(originalStep);
                 duplicate = true;
@@ -800,23 +645,12 @@ public class VisualLessonEnricher {
                 original.position(), Outcome.ADDED, addedSummary(original.position(), added)));
     }
 
-    private boolean overlapsSubstantially(VisualFocus first, VisualFocus second) {
-        if (first.pageNumber() != second.pageNumber()) return false;
-        int overlapWidth = Math.max(0, Math.min(first.x() + first.width(), second.x() + second.width())
-                - Math.max(first.x(), second.x()));
-        int overlapHeight = Math.max(0, Math.min(first.y() + first.height(), second.y() + second.height())
-                - Math.max(first.y(), second.y()));
-        long overlapArea = (long) overlapWidth * overlapHeight;
-        long smallerArea = Math.min((long) first.width() * first.height(), (long) second.width() * second.height());
-        return smallerArea > 0 && overlapArea * 100 >= smallerArea * 75;
-    }
-
     private MergedVisualSection mergeVisualIntoSupportedSteps(
             LessonSection section, List<VisualRegionLocator.LocatedRegion> regions) {
         List<LessonStep> steps = new ArrayList<>(section.steps());
         Set<Integer> availableIndexes = java.util.stream.IntStream.range(0, steps.size())
                 .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL
-                        || needsTighterReaderCrop(steps.get(index).visualFocus()))
+                        || cropPolicy.needsTighterReaderCrop(steps.get(index).visualFocus()))
                 .boxed()
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<Integer> sourcePages = section.visualSourcePages();
@@ -837,7 +671,7 @@ public class VisualLessonEnricher {
             }
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
             String observation = stripTrailingPunctuation(region.visibleDescription());
-            String visualText = visualText(observation, originalRuleText(supportedStep), isIconFocused(region));
+            String visualText = visualText(observation, originalRuleText(supportedStep), cropPolicy.isIconFocused(region));
             String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
             steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
