@@ -72,6 +72,7 @@ const selectedSectionPosition = ref<number | null>(null)
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
+let latestLoadRequest = 0
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
@@ -167,18 +168,24 @@ function cropUrl(focus: VisualFocus) {
 }
 
 async function load() {
+  const requestedPlanId = planId.value
+  const requestedLocale = locale.value
+  const request = ++latestLoadRequest
   loading.value = true
   errorMessage.value = ''
   try {
-    if (!planId.value) throw new Error(t('public.error.missing'))
-    const response = await fetch(`/api/public/lessons/${encodeURIComponent(planId.value)}?language=${encodeURIComponent(locale.value)}`)
+    if (!requestedPlanId) throw new Error(t('public.error.missing'))
+    const response = await fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`)
     if (response.status === 404) throw new Error(t('public.error.unpublished'))
     if (!response.ok) throw new Error(t('public.error.open'))
-    publicLesson.value = await response.json() as PublicLessonResponse
+    const received = await response.json() as PublicLessonResponse
+    if (request !== latestLoadRequest) return
+    publicLesson.value = received
   } catch (error) {
+    if (request !== latestLoadRequest) return
     errorMessage.value = error instanceof Error ? error.message : t('public.error.open')
   } finally {
-    loading.value = false
+    if (request === latestLoadRequest) loading.value = false
   }
 }
 

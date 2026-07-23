@@ -193,4 +193,44 @@ describe('PublicLessonView', () => {
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ language: 'en', question: 'Where does my mat go?' })
     expect(wrapper.text()).toContain('Place the mat in front of you.')
   })
+
+  it('keeps the latest public guide when an earlier navigation resolves late', async () => {
+    let resolveFirstLesson: ((response: Response) => void) | undefined
+    const firstLesson = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'First Rules', officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [] },
+    }
+    const secondLesson = {
+      teachingPlanId: 'plan-2', documentVersionId: 'version-2', rulebookTitle: 'Second Rules', officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-2', status: 'COMPLETE', sections: [] },
+    }
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.includes('/plan-1')) return new Promise<Response>((resolve) => { resolveFirstLesson = resolve })
+      return Promise.resolve(Response.json(secondLesson))
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await router.push('/read/plan-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Second Rules')
+
+    resolveFirstLesson!(Response.json(firstLesson))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Second Rules')
+    expect(wrapper.text()).not.toContain('First Rules')
+  })
 })
