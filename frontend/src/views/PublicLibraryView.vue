@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import AppShell from '@/components/AppShell.vue'
 import PublicLessonCover from '@/components/PublicLessonCover.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
@@ -47,17 +47,7 @@ onMounted(() => { void load() })
 </script>
 
 <template>
-  <main class="min-h-screen bg-canvas text-ink">
-    <header class="border-b border-ink/10 bg-paper/95">
-      <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-        <RouterLink :to="{ name: 'home' }" class="font-display text-xl font-semibold tracking-tight">RulePilot</RouterLink>
-        <div class="flex items-center gap-4">
-          <RouterLink :to="{ name: 'teach' }" class="text-sm font-semibold text-indigo">{{ t('library.upload') }}</RouterLink>
-          <span class="hidden text-sm text-ink/50 sm:inline">{{ t('library.title') }}</span><LanguageSwitcher />
-        </div>
-      </div>
-    </header>
-
+  <AppShell>
     <section class="mx-auto max-w-6xl px-5 py-12 sm:px-8 lg:py-16">
       <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
@@ -107,5 +97,5 @@ onMounted(() => { void load() })
         <p class="mt-3 text-ink/60">{{ t('library.empty.detail') }}</p>
       </div>
     </section>
-  </main>
+  </AppShell>
 </template>

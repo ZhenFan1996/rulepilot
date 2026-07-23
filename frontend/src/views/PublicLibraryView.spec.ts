@@ -19,6 +19,10 @@ describe('PublicLibraryView', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: PublicLibraryView },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
       ],
     })
@@ -31,6 +35,9 @@ describe('PublicLibraryView', () => {
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('8 章 · 51 步')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toContain('cf.geekdo-images.com')
+    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').classes()).toContain('object-contain')
+    expect(wrapper.text()).toContain('首页')
+    expect(wrapper.text()).toContain('我的讲解')
     expect(wrapper.get('a[href="/read/plan-1"]')).toBeTruthy()
   })
 
@@ -56,6 +63,10 @@ describe('PublicLibraryView', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: PublicLibraryView },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
       ],
     })

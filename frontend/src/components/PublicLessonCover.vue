@@ -25,6 +25,6 @@ const tone = computed(() => [
     <div class="absolute inset-3 rounded-xl border border-current/35" aria-hidden="true" />
     <TabletopGlyph name="meeple" :size="52" class="absolute right-3 top-4 opacity-80" />
     <span class="absolute bottom-3 left-4 font-display text-3xl font-semibold tracking-tight" aria-hidden="true">{{ initials }}</span>
-    <img v-if="imageUrl && !imageUnavailable" :src="imageUrl" :alt="alt" class="absolute inset-0 size-full object-cover" loading="lazy" referrerpolicy="no-referrer" @error="imageUnavailable = true">
+    <img v-if="imageUrl && !imageUnavailable" :src="imageUrl" :alt="alt" class="absolute inset-0 size-full bg-paper p-1.5 object-contain" loading="lazy" referrerpolicy="no-referrer" @error="imageUnavailable = true">
   </div>
 </template>
