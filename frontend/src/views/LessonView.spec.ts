@@ -223,6 +223,75 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
+  it('keeps a video chapter selected while an older audio timeupdate arrives', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', '视频讲解'),
+          sections: [
+            { position: 1, title: '第一节', visualEvidenceRecommended: true },
+            { position: 2, title: '第二节', visualEvidenceRecommended: true },
+          ],
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, '第一节'), section(2, '第二节')] })
+      }
+      if (path.endsWith('/narration/playback')) {
+        return Response.json({
+          provider: 'test', durationMillis: 20_000,
+          script: {
+            id: 'narration-1', status: 'READY', chapters: [
+              { position: 1, type: 'SETUP', title: '第一节', supported: true, segments: [{ position: 1, text: '第一节字幕', sourcePages: [1] }] },
+              { position: 2, type: 'TURN', title: '第二节', supported: true, segments: [{ position: 1, text: '第二节字幕', sourcePages: [2] }] },
+            ],
+          },
+          cues: [
+            { chapterPosition: 1, segmentPosition: 1, startMillis: 0, endMillis: 9_999 },
+            { chapterPosition: 2, segmentPosition: 1, startMillis: 10_000, endMillis: 20_000 },
+          ],
+        })
+      }
+      if (path.endsWith('/video')) {
+        return Response.json({
+          id: 'video-1', status: 'READY', durationMillis: 20_000, chapters: [
+            { position: 1, type: 'SETUP', title: '第一节', evidenceStatus: 'SUPPORTED', visualKind: 'FLOW_DIAGRAM', visualCaption: '第一节画面', startMillis: 0, endMillis: 9_999, frames: [{ segmentPosition: 1, startMillis: 0, endMillis: 9_999, subtitle: '第一节字幕', sourcePages: [1] }] },
+            { position: 2, type: 'TURN', title: '第二节', evidenceStatus: 'SUPPORTED', visualKind: 'FLOW_DIAGRAM', visualCaption: '第二节画面', startMillis: 10_000, endMillis: 20_000, frames: [{ segmentPosition: 1, startMillis: 10_000, endMillis: 20_000, subtitle: '第二节字幕', sourcePages: [2] }] },
+          ],
+        })
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          AppShell: { template: '<div><slot /></div>' },
+          CardOcrCapture: true,
+          VoiceQuestionCapture: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '视频')!.trigger('click')
+    const videoPanel = wrapper.get('[aria-label="分章节视频"]')
+    await videoPanel.findAll('button').find((button) => button.text().includes('2. 第二节'))!.trigger('click')
+    await flushPromises()
+    Object.defineProperty(wrapper.get('audio').element, 'currentTime', { configurable: true, value: 0 })
+    await wrapper.get('audio').trigger('timeupdate')
+
+    expect(wrapper.text()).toContain('第 2 / 2 节')
+    expect(videoPanel.text()).toContain('第二节字幕')
+    wrapper.unmount()
+  })
+
   it('keeps the latest private guide when an earlier navigation resolves late', async () => {
     let resolveFirstPlan: ((response: Response) => void) | undefined
     let resolveFirstLesson: ((response: Response) => void) | undefined

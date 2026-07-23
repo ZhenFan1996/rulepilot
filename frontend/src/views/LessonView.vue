@@ -8,6 +8,7 @@ import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus, { type LessonGenerationActivity } from '@/components/LessonGenerationStatus.vue'
+import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
   type ConfirmedRuling,
@@ -1053,7 +1054,7 @@ function seekToSegment(segmentPosition: number) {
 function seekToCue(cue: SpeechCue | undefined, play = false) {
   const player = narrationPlayer.value
   if (!player || !cue) return
-  narrationRestoreTarget.value = null
+  narrationRestoreTarget.value = cue.startMillis
   player.currentTime = cue.startMillis / 1_000
   narrationMillis.value = cue.startMillis
   saveNarrationPosition()
@@ -1074,14 +1075,17 @@ function cycleNarrationRate() {
   if (narrationPlayer.value) narrationPlayer.value.playbackRate = narrationRate.value
 }
 
-function seekNarration(event: Event) {
+function seekNarration(millis: number) {
   const player = narrationPlayer.value
   if (!player) return
-  const millis = Number((event.target as HTMLInputElement).value)
   narrationRestoreTarget.value = null
   player.currentTime = millis / 1_000
   narrationMillis.value = millis
   saveNarrationPosition()
+}
+
+function seekNarrationInput(event: Event) {
+  seekNarration(Number((event.target as HTMLInputElement).value))
 }
 
 function formatDuration(millis: number) {
@@ -1399,45 +1403,25 @@ onUnmounted(() => {
               @error="onNarrationError"
             >浏览器不支持音频播放。</audio>
 
-            <section v-if="mediaMode === 'VIDEO' && currentVideoChapter && activeVideoFrame" class="mt-7" aria-label="分章节视频">
-              <div class="relative aspect-[4/3] overflow-hidden rounded-3xl bg-ink-panel text-panel-text shadow-xl sm:aspect-video">
-                <div class="relative flex h-full flex-col justify-between p-5 sm:p-8">
-                  <div class="flex items-start justify-between gap-4">
-                    <div>
-                      <p class="text-xs font-semibold text-panel-text/55">{{ visualKindLabel(currentVideoChapter.visualKind) }}</p>
-                      <h3 class="mt-2 font-display text-2xl font-semibold sm:text-4xl">{{ currentVideoChapter.title }}</h3>
-                    </div>
-                    <span class="rounded-full border border-panel-text/20 px-3 py-1 text-xs">第 {{ currentVideoChapter.position }} 章</span>
-                  </div>
-                  <div class="mx-auto flex w-full max-w-md items-center justify-center gap-3" aria-hidden="true">
-                    <span v-for="frame in Math.min(currentVideoChapter.frames.length, 5)" :key="frame" class="grid size-12 place-items-center rounded-2xl border border-panel-text/25 bg-panel-text/8 font-display text-lg font-semibold">{{ frame }}</span>
-                  </div>
-                  <div>
-                    <p class="rounded-2xl bg-black/35 px-4 py-3 text-center text-sm leading-6 sm:text-base">{{ activeVideoFrame.subtitle }}</p>
-                    <p v-if="activeVideoFrame.sourcePages.length" class="mt-2 text-center text-xs text-panel-text/60">规则书第 {{ activeVideoFrame.sourcePages.join('、') }} 页</p>
-                  </div>
-                </div>
-              </div>
-              <p class="mt-3 text-sm text-ink/55">{{ currentVideoChapter.visualCaption }}</p>
-              <input class="mt-4 w-full accent-copper" type="range" min="0" :max="video?.durationMillis ?? 0" :value="narrationMillis" aria-label="视频播放位置" @input="seekNarration">
-              <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45"><span>{{ formatDuration(narrationMillis) }}</span><span>{{ formatDuration(video?.durationMillis ?? 0) }}</span></div>
-              <div class="mt-3 grid grid-cols-3 gap-2">
-                <button :disabled="!audioAvailable" class="min-h-11 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:opacity-35" @click="toggleNarration">{{ audioAvailable ? (narrationPlaying ? '暂停视频' : '播放视频') : '音轨不可用' }}</button>
-                <button :disabled="!audioAvailable" class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="replayCurrentSegment">重播画面</button>
-                <button :disabled="!audioAvailable" class="min-h-11 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="cycleNarrationRate">{{ narrationRate }}×</button>
-              </div>
-              <nav class="mt-4 flex gap-2 overflow-x-auto pb-2" aria-label="视频章节跳转">
-                <button
-                  v-for="(chapter, index) in video?.chapters"
-                  :key="chapter.position"
-                  class="shrink-0 rounded-full border px-3 py-2 text-xs font-semibold"
-                  :class="index === progress.currentIndex ? 'border-copper bg-copper/10 text-copper' : 'border-ink/10 text-ink/50'"
-                  @click="selectSection(index)"
-                >
-                  {{ chapter.position }}. {{ chapter.title }}
-                </button>
-              </nav>
-            </section>
+            <LessonVideoPanel
+              v-if="mediaMode === 'VIDEO'"
+              :chapter="currentVideoChapter"
+              :active-frame="activeVideoFrame"
+              :chapters="video?.chapters ?? []"
+              :active-chapter-index="progress.currentIndex"
+              :duration-millis="video?.durationMillis ?? 0"
+              :playback-millis="narrationMillis"
+              :playing="narrationPlaying"
+              :playback-rate="narrationRate"
+              :audio-available="audioAvailable"
+              :format-duration="formatDuration"
+              :visual-kind-label="visualKindLabel"
+              @seek="seekNarration"
+              @toggle-playback="toggleNarration"
+              @replay="replayCurrentSegment"
+              @cycle-rate="cycleNarrationRate"
+              @select-chapter="selectSection"
+            />
 
             <div v-if="mediaMode !== 'VIDEO'" class="mt-7 grid items-start gap-8 2xl:grid-cols-[minmax(0,1fr)_19rem]">
               <div class="min-w-0">
@@ -1575,7 +1559,7 @@ onUnmounted(() => {
                   :max="narrationDurationMillis"
                   :value="narrationMillis"
                   aria-label="解说播放位置"
-                  @input="seekNarration"
+                  @input="seekNarrationInput"
                 >
                 <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45">
                   <span>{{ formatDuration(narrationMillis) }}</span>
