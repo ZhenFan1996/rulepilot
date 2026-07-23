@@ -22,8 +22,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -35,8 +33,6 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class VisualLessonEnricher {
 
-    private static final Logger log = LoggerFactory.getLogger(VisualLessonEnricher.class);
-
     private final RulebookUnderstandingCatalog understanding;
     private final DocumentPageImages pageImages;
     private final VisualRulebookPageFacts visualPageFacts;
@@ -44,6 +40,7 @@ public class VisualLessonEnricher {
     private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualReaderCropPolicy cropPolicy;
+    private final VisualLessonMergePolicy mergePolicy;
     private final VisualStepRelevancePolicy stepRelevancePolicy;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
@@ -67,6 +64,7 @@ public class VisualLessonEnricher {
         this.locator = locator;
         this.prioritizer = prioritizer;
         this.cropPolicy = new VisualReaderCropPolicy();
+        this.mergePolicy = new VisualLessonMergePolicy(cropPolicy);
         this.stepRelevancePolicy = new VisualStepRelevancePolicy();
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
@@ -142,7 +140,7 @@ public class VisualLessonEnricher {
             VisualProgressListener progress) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
-        IllustratedLesson readerReadyLesson = discardOverlyBroadVisuals(lesson);
+        IllustratedLesson readerReadyLesson = mergePolicy.discardOverlyBroadVisuals(lesson);
         Set<Integer> selectedPositions = prioritizer.positions(
                 readerReadyLesson.sections(), maxSections, maxVisualStepsPerSection);
         List<VisualFocus> acceptedVisuals = readerReadyLesson.sections().stream()
@@ -212,7 +210,7 @@ public class VisualLessonEnricher {
             }
         }
         if (accepted.isEmpty()) return result(section, rejected == null ? Outcome.LOCATOR_RETURNED_NONE : rejected);
-        MergedVisualSection merged = mergeVisualIntoSupportedSteps(section, accepted);
+        VisualLessonMergePolicy.MergedVisualSection merged = mergePolicy.mergeVisualIntoSupportedSteps(section, accepted);
         if (merged.addedCount() == 0) return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
         return new SectionResult(merged.section(), new SectionOutcome(
                 section.position(), Outcome.ADDED, addedSummary(section.position(), merged.addedCount())));
@@ -513,46 +511,6 @@ public class VisualLessonEnricher {
     }
 
     /**
-     * A near-full page is worse than no image: it duplicates the manual without showing what the rule wants the
-     * player to notice. Restore the cited rule prose first, then let this run add a replacement only if vision finds
-     * a genuine local aid.
-     */
-    private IllustratedLesson discardOverlyBroadVisuals(IllustratedLesson lesson) {
-        boolean changed = false;
-        List<LessonSection> sections = new ArrayList<>();
-        for (LessonSection section : lesson.sections()) {
-            List<LessonStep> steps = new ArrayList<>();
-            for (LessonStep step : section.steps()) {
-                if (step.kind() == TeachingMove.VISUAL && cropPolicy.needsTighterReaderCrop(step.visualFocus())) {
-                    steps.add(new LessonStep(
-                            step.position(), step.heading(), TeachingMove.DO, originalRuleText(step),
-                            step.sourcePages(), step.sourceChunkIds()));
-                    changed = true;
-                } else {
-                    steps.add(step);
-                }
-            }
-            Set<Integer> retainedVisualPages = steps.stream()
-                    .filter(step -> step.kind() == TeachingMove.VISUAL && step.visualFocus() != null)
-                    .map(step -> step.visualFocus().pageNumber())
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            Set<UUID> retainedVisualChunks = steps.stream()
-                    .filter(step -> step.kind() == TeachingMove.VISUAL)
-                    .flatMap(step -> step.sourceChunkIds().stream())
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            sections.add(new LessonSection(
-                    section.position(), section.topicKey(), section.coverageTags(), section.title(), section.required(),
-                    section.evidenceStatus(), section.visualKind(), section.visualCaption(),
-                    section.visualSourcePages().stream().filter(retainedVisualPages::contains).toList(),
-                    section.visualSourceChunkIds().stream().filter(retainedVisualChunks::contains).toList(),
-                    steps));
-        }
-        if (!changed) return lesson;
-        return new IllustratedLesson(
-                lesson.id(), lesson.teachingPlanId(), lesson.status(), sections, lesson.generatorVersion(), lesson.createdAt());
-    }
-
-    /**
      * A crop is a reading aid, not decorative repetition. Keep the first grounded use of a substantially identical
      * viewport and leave later steps as their original rule prose so a player does not see the same diagram twice.
      */
@@ -561,142 +519,13 @@ public class VisualLessonEnricher {
             SectionResult candidate,
             List<VisualFocus> acceptedVisuals) {
         if (candidate.outcome() == null || candidate.outcome().outcome() != Outcome.ADDED) return candidate;
-        Map<Integer, LessonStep> originalSteps = original.steps().stream()
-                .collect(Collectors.toMap(LessonStep::position, step -> step));
-        List<LessonStep> filtered = new ArrayList<>();
-        int added = 0;
-        boolean duplicate = false;
-        for (LessonStep step : candidate.section().steps()) {
-            LessonStep originalStep = originalSteps.get(step.position());
-            boolean newlyVisual = originalStep != null
-                    && (originalStep.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(originalStep.visualFocus()))
-                    && step.kind() == TeachingMove.VISUAL
-                    && step.visualFocus() != null;
-            if (newlyVisual && acceptedVisuals.stream().anyMatch(existing -> cropPolicy.overlapsSubstantially(
-                    existing, step.visualFocus()))) {
-                filtered.add(originalStep);
-                duplicate = true;
-                continue;
-            }
-            filtered.add(step);
-            if (newlyVisual) {
-                acceptedVisuals.add(step.visualFocus());
-                added++;
-            }
-        }
-        if (!duplicate) return candidate;
-        if (added == 0) return result(original, Outcome.REJECTED_DUPLICATE);
-        List<Integer> visualPages = original.visualSourcePages();
-        List<UUID> visualChunks = original.visualSourceChunkIds();
-        for (LessonStep step : filtered) {
-            if (step.kind() == TeachingMove.VISUAL && step.visualFocus() != null) {
-                visualPages = distinct(visualPages, step.visualFocus().pageNumber());
-                visualChunks = distinct(visualChunks, step.sourceChunkIds());
-            }
-        }
-        LessonSection distinct = new LessonSection(
-                original.position(), original.topicKey(), original.coverageTags(), original.title(), original.required(),
-                original.evidenceStatus(), original.visualKind(), original.visualCaption(),
-                visualPages, visualChunks, filtered);
-        return new SectionResult(distinct, new SectionOutcome(
-                original.position(), Outcome.ADDED, addedSummary(original.position(), added)));
+        VisualLessonMergePolicy.DistinctVisualSection distinct =
+                mergePolicy.keepDistinctVisuals(original, candidate.section(), acceptedVisuals);
+        if (!distinct.hadDuplicate()) return candidate;
+        if (distinct.addedCount() == 0) return result(original, Outcome.REJECTED_DUPLICATE);
+        return new SectionResult(distinct.section(), new SectionOutcome(
+                original.position(), Outcome.ADDED, addedSummary(original.position(), distinct.addedCount())));
     }
-
-    private MergedVisualSection mergeVisualIntoSupportedSteps(
-            LessonSection section, List<VisualRegionLocator.LocatedRegion> regions) {
-        List<LessonStep> steps = new ArrayList<>(section.steps());
-        Set<Integer> availableIndexes = java.util.stream.IntStream.range(0, steps.size())
-                .filter(index -> steps.get(index).kind() != TeachingMove.VISUAL
-                        || cropPolicy.needsTighterReaderCrop(steps.get(index).visualFocus()))
-                .boxed()
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<Integer> sourcePages = section.visualSourcePages();
-        List<UUID> sourceChunkIds = section.visualSourceChunkIds();
-        int added = 0;
-        for (VisualRegionLocator.LocatedRegion region : regions) {
-            if (availableIndexes.isEmpty()) break;
-            Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
-            java.util.Optional<Integer> supportedStepIndex = availableIndexes.stream()
-                    .filter(index -> region.supportedStepPositions().isEmpty()
-                            || region.supportedStepPositions().contains(steps.get(index).position()))
-                    .filter(index -> steps.get(index).sourcePages().contains(region.pageNumber()))
-                    .filter(index -> steps.get(index).sourceChunkIds().stream().anyMatch(supportedEvidence::contains))
-                    .findFirst();
-            if (supportedStepIndex.isEmpty()) {
-                log.info("Skipped visual region because no rule step shares its cited page {}", region.pageNumber());
-                continue;
-            }
-            LessonStep supportedStep = steps.get(supportedStepIndex.get());
-            String observation = stripTrailingPunctuation(region.visibleDescription());
-            String visualText = visualText(observation, originalRuleText(supportedStep), cropPolicy.isIconFocused(region));
-            String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
-            steps.set(supportedStepIndex.get(), new LessonStep(
-                    supportedStep.position(),
-                    supportedStep.heading(),
-                    TeachingMove.VISUAL,
-                    visualText,
-                    distinct(supportedStep.sourcePages(), region.pageNumber()),
-                    distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
-                    new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
-            sourcePages = distinct(sourcePages, region.pageNumber());
-            sourceChunkIds = distinct(sourceChunkIds, region.supportedEvidenceIds());
-            availableIndexes.remove(supportedStepIndex.get());
-            added++;
-        }
-        LessonSection enriched = new LessonSection(
-                section.position(), section.topicKey(), section.coverageTags(), section.title(), section.required(),
-                section.evidenceStatus(), section.visualKind(), section.visualCaption(),
-                sourcePages, sourceChunkIds, steps);
-        return new MergedVisualSection(enriched, added);
-    }
-
-    private String visualText(String observation, String ruleText, boolean iconCluster) {
-        String prefix = iconCluster
-                ? "图中图标提示：" + observation + "。先认出这组图标，再按规则处理："
-                : (startsWithImageIntroducer(observation) ? observation : "图中可见" + observation) + "。结合图片完成这一步：";
-        String combined = prefix + ruleText;
-        return combined.length() <= 600 ? combined : ruleText;
-    }
-
-    private boolean startsWithImageIntroducer(String observation) {
-        String normalized = observation == null ? "" : observation.strip();
-        return normalized.startsWith("图中") || normalized.startsWith("这张图") || normalized.startsWith("此图");
-    }
-
-    private String originalRuleText(LessonStep step) {
-        if (step.kind() != TeachingMove.VISUAL) return step.text();
-        for (String connector : List.of("。结合图片完成这一步：", "。先认出这组图标，再按规则处理：")) {
-            int boundary = step.text().indexOf(connector);
-            if (boundary >= 0) {
-                String text = step.text().substring(boundary + connector.length()).strip();
-                if (!text.isBlank()) return text;
-            }
-        }
-        return step.text();
-    }
-
-    private boolean containsHan(String text) {
-        return text != null && text.codePoints().anyMatch(codePoint -> Character.UnicodeScript.of(codePoint)
-                == Character.UnicodeScript.HAN);
-    }
-
-    private <T> List<T> distinct(List<T> existing, T addition) {
-        LinkedHashSet<T> values = new LinkedHashSet<>(existing);
-        values.add(addition);
-        return List.copyOf(values);
-    }
-
-    private <T> List<T> distinct(List<T> existing, List<T> additions) {
-        LinkedHashSet<T> values = new LinkedHashSet<>(existing);
-        values.addAll(additions);
-        return List.copyOf(values);
-    }
-
-    private String stripTrailingPunctuation(String text) {
-        return text == null ? "" : text.strip().replaceFirst("[。.!！?？]+$", "");
-    }
-
-    private record MergedVisualSection(LessonSection section, int addedCount) {}
 
     private record StepLocation(VisualRegionLocator.LocatedRegion region, Outcome rejection) {
         static StepLocation accepted(VisualRegionLocator.LocatedRegion region) {
