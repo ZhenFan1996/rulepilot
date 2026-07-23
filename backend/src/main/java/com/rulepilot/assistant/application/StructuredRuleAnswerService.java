@@ -815,67 +815,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         visualPagePriority.addAll(requiredVisualFactPages);
         Set<UUID> visualEvidenceIds = mergeVisualPageEvidence(
                 assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, visualPagePriority);
-        Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
-        List<HybridEvidenceHit> selectedVisualEvidence = visualEvidenceIds.stream()
-                .map(evidenceById::get)
-                .filter(java.util.Objects::nonNull)
-                .sorted(Comparator.comparingDouble(HybridEvidenceHit::score)
-                        .reversed()
-                        .thenComparing(hit -> hit.evidence().chunkId()))
-                .toList();
-        List<HybridEvidenceHit> selectedIntentAnchors = intentAnchors.values().stream()
-                .map(hit -> evidenceById.get(hit.evidence().chunkId()))
-                .filter(java.util.Objects::nonNull)
-                .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
-                .toList();
-        boolean visualEvidencePriority = AnswerEvidencePolicy.visualEvidencePriority(question.normalizedQuestion());
-        if (visualEvidencePriority) {
-            selectedVisualEvidence.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-            selectedIntentAnchors.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-        } else {
-            selectedIntentAnchors.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-            selectedVisualEvidence.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-        }
-        if (selected.size() < 3) {
-            evidenceById.values().stream()
-                    .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
-                    .sorted(Comparator.comparingDouble(HybridEvidenceHit::score)
-                            .reversed()
-                            .thenComparing(hit -> hit.evidence().chunkId()))
-                    .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
-        }
-        List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(5).toList();
+        List<HybridEvidenceHit> selectedEvidence = AnswerEvidenceSelectionPolicy.select(
+                question.normalizedQuestion(), evidenceById, intentAnchors.values(), visualEvidenceIds);
         if (AnswerEvidencePolicy.isEndgameResolutionQuestion(question.normalizedQuestion())) {
-            List<HybridEvidenceHit> decisiveEvidence = selectedEvidence.stream()
-                    .filter(AnswerEvidencePolicy::hasEndgameResolution)
-                    .sorted(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore).reversed())
-                    .limit(1)
-                    .toList();
-            if (!decisiveEvidence.isEmpty()) {
-                LinkedHashMap<UUID, HybridEvidenceHit> complementaryEvidence = new LinkedHashMap<>();
-                decisiveEvidence.forEach(hit -> complementaryEvidence.put(hit.evidence().chunkId(), hit));
-                String normalizedQuestion = question.normalizedQuestion().toLowerCase(Locale.ROOT);
-                if (AnswerEvidencePolicy.asksScoring(normalizedQuestion)) {
-                    selectedEvidence.stream()
-                            .filter(hit -> AnswerEvidencePolicy.hasEndgameScoring(hit.evidence().excerpt()))
-                            .findFirst()
-                            .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
-                }
-                if (AnswerEvidencePolicy.asksTie(normalizedQuestion)) {
-                    selectedEvidence.stream()
-                            .filter(hit -> AnswerEvidencePolicy.hasEndgameTie(hit.evidence().excerpt()))
-                            .findFirst()
-                            .ifPresent(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
-                }
-                UUID decisiveId = decisiveEvidence.getFirst().evidence().chunkId();
-                List<HybridEvidenceHit> timingEvidence = selectedEvidence.stream()
-                        .filter(this::hasEvidencedEndgameTiming)
-                        .filter(hit -> !decisiveId.equals(hit.evidence().chunkId()))
-                        .limit(1)
-                        .toList();
-                timingEvidence.forEach(hit -> complementaryEvidence.putIfAbsent(hit.evidence().chunkId(), hit));
-                selectedEvidence = complementaryEvidence.values().stream().toList();
-            }
             String pages = selectedEvidence.stream()
                     .map(hit -> Integer.toString(hit.evidence().pageFrom()))
                     .distinct()
@@ -936,7 +878,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     .max(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore));
             if (decisive.isPresent()) {
                 Optional<HybridEvidenceHit> timing = evidenceById.values().stream()
-                        .filter(this::hasEvidencedEndgameTiming)
+                        .filter(AnswerEvidenceSelectionPolicy::hasEvidencedEndgameTiming)
                         .filter(hit -> hit.evidence().chunkId().equals(decisive.get().evidence().chunkId())
                                 || hit.evidence().pageFrom() == decisive.get().evidence().pageFrom())
                         .filter(hit -> !hit.evidence().chunkId().equals(decisive.get().evidence().chunkId()))
@@ -970,17 +912,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 || text.contains("end of the round")
                 || text.contains("ending the round")
                 || text.contains("游戏结束")
-                || text.contains("轮末")
-                || text.contains("回合结束");
-    }
-
-    private boolean hasEvidencedEndgameTiming(HybridEvidenceHit hit) {
-        if (hit == null) return false;
-        String text = (hit.evidence().heading() + "\n" + hit.evidence().excerpt()).toLowerCase(Locale.ROOT);
-        return text.contains("when the round ends")
-                || text.contains("end of a round")
-                || text.contains("end of the round")
-                || text.contains("ending the round")
                 || text.contains("轮末")
                 || text.contains("回合结束");
     }
