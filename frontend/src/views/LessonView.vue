@@ -300,6 +300,8 @@ let generationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let visualRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let lessonViewDisposed = false
+let latestLessonLoad = 0
+let latestAnswerRequest = 0
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -493,6 +495,46 @@ function refreshOfflineKnowledge(targetPlanId = planId.value) {
   offlineKnowledge.value = loadOfflineKnowledge(targetPlanId)
 }
 
+function isCurrentLessonLoad(request: number, targetPlanId: string) {
+  return !lessonViewDisposed && request === latestLessonLoad && targetPlanId === planId.value
+}
+
+function isCurrentAnswerRequest(answerRequest: number, lessonRequest: number, targetPlanId: string) {
+  return answerRequest === latestAnswerRequest && isCurrentLessonLoad(lessonRequest, targetPlanId)
+}
+
+function resetLessonReader() {
+  latestAnswerRequest++
+  narrationPlayer.value?.pause()
+  plan.value = null
+  lesson.value = null
+  sourceLesson.value = null
+  localizationStatus.value = null
+  localizationPreparing.value = false
+  progress.value = initialLessonProgress()
+  question.value = ''
+  answer.value = null
+  answeredQuestion.value = ''
+  answerTurns.value = []
+  activeLearningIntent.value = null
+  answerLoading.value = false
+  answerError.value = ''
+  ruling.value = null
+  rulingSaving.value = false
+  rulingError.value = ''
+  rulingConflict.value = false
+  editingRuling.value = false
+  editedVerdict.value = ''
+  editedExplanation.value = ''
+  offlineKnowledge.value = []
+  cardOcrOpen.value = false
+  failedComprehensionImages.value = []
+  resumingLesson.value = false
+  mediaMode.value = 'TEXT'
+  narrationPlaying.value = false
+  narrationRestoreTarget.value = null
+}
+
 async function optionalFetch(url: string) {
   try {
     return await fetch(url, { credentials: 'include' })
@@ -522,7 +564,8 @@ function scheduleLocalizationRefresh() {
   }, 3000)
 }
 
-async function applySelectedLocale() {
+async function applySelectedLocale(targetPlanId = planId.value, request = latestLessonLoad) {
+  if (!isCurrentLessonLoad(request, targetPlanId)) return
   clearLocalizationRefresh()
   const source = sourceLesson.value
   if (!source) return
@@ -532,41 +575,51 @@ async function applySelectedLocale() {
     return
   }
   try {
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest/localizations/en`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/localizations/en`, { credentials: 'include' })
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (response.status === 401) {
       await router.push({ name: 'login' })
       return
     }
     if (!response.ok) throw new Error('English guide is unavailable.')
     const localized = await response.json() as LocalizationView
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     localizationStatus.value = localized.status
     lesson.value = localized.status === 'READY' && localized.lesson ? localized.lesson : source
   } catch {
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     localizationStatus.value = 'FAILED'
     lesson.value = source
   } finally {
-    scheduleLocalizationRefresh()
+    if (isCurrentLessonLoad(request, targetPlanId)) scheduleLocalizationRefresh()
   }
 }
 
 async function prepareEnglishGuide() {
   if (!sourceLesson.value || localizationPreparing.value) return
+  const targetPlanId = planId.value
+  const request = latestLessonLoad
   localizationPreparing.value = true
   try {
     const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest/localizations/en`, {
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    const response = await fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/localizations/en`, {
       method: 'POST',
       credentials: 'include',
       headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error('English guide could not be queued.')
     const localized = await response.json() as LocalizationView
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     localizationStatus.value = localized.status
   } catch {
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     localizationStatus.value = 'FAILED'
   } finally {
-    localizationPreparing.value = false
-    scheduleLocalizationRefresh()
+    if (isCurrentLessonLoad(request, targetPlanId)) {
+      localizationPreparing.value = false
+      scheduleLocalizationRefresh()
+    }
   }
 }
 
@@ -587,9 +640,12 @@ function clearSupportingContent() {
   narrationDurationMillis.value = 0
   narrationCues.value = []
   narrationMillis.value = 0
+  narrationPlaying.value = false
+  narrationRestoreTarget.value = null
 }
 
-async function loadSupportingContent(targetPlanId: string) {
+async function loadSupportingContent(targetPlanId: string, request = latestLessonLoad) {
+  if (!isCurrentLessonLoad(request, targetPlanId)) return
   clearSupportingContent()
   const [qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
     optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`),
@@ -598,23 +654,32 @@ async function loadSupportingContent(targetPlanId: string) {
     optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
     optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
   ])
+  if (!isCurrentLessonLoad(request, targetPlanId)) return
   if ([qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse]
     .some((response) => response?.status === 401)) {
     await router.push({ name: 'login' })
     return
   }
-  if (qualityResponse?.ok) {
-    quality.value = (await qualityResponse.json()) as LessonQualityReport
+  const [loadedQuality, loadedComprehension, loadedNarration, loadedVideo, loadedConsistency] = await Promise.all([
+    qualityResponse?.ok ? qualityResponse.json() as Promise<LessonQualityReport> : Promise.resolve(null),
+    comprehensionResponse?.ok ? comprehensionResponse.json() as Promise<LessonComprehensionReport> : Promise.resolve(null),
+    narrationResponse?.ok ? narrationResponse.json() as Promise<NarrationPlayback> : Promise.resolve(null),
+    videoResponse?.ok ? videoResponse.json() as Promise<ChapterVideo> : Promise.resolve(null),
+    consistencyResponse?.ok ? consistencyResponse.json() as Promise<MediaConsistencyReport> : Promise.resolve(null),
+  ])
+  if (!isCurrentLessonLoad(request, targetPlanId)) return
+  if (loadedQuality) {
+    quality.value = loadedQuality
   } else {
     addMediaWarning('讲解诊断暂不可用，不影响继续阅读。')
   }
-  if (comprehensionResponse?.ok) {
-    comprehension.value = (await comprehensionResponse.json()) as LessonComprehensionReport
+  if (loadedComprehension) {
+    comprehension.value = loadedComprehension
   } else {
     comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
   }
-  if (narrationResponse?.ok) {
-    const playback = (await narrationResponse.json()) as NarrationPlayback
+  if (loadedNarration) {
+    const playback = loadedNarration
     narration.value = playback.script
     narrationProvider.value = playback.provider
     narrationDurationMillis.value = playback.durationMillis
@@ -623,14 +688,12 @@ async function loadSupportingContent(targetPlanId: string) {
   } else {
     addMediaWarning('语音暂不可用，已保留完整图文讲解。')
   }
-  if (videoResponse?.ok) {
-    video.value = (await videoResponse.json()) as ChapterVideo
+  if (loadedVideo) {
+    video.value = loadedVideo
   } else {
     addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
   }
-  if (consistencyResponse?.ok) {
-    mediaConsistency.value = (await consistencyResponse.json()) as MediaConsistencyReport
-  }
+  mediaConsistency.value = loadedConsistency
   const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
   if (
     Number.isFinite(restoredNarration) &&
@@ -643,10 +706,14 @@ async function loadSupportingContent(targetPlanId: string) {
 }
 
 async function loadLesson() {
+  const targetPlanId = planId.value
+  const request = ++latestLessonLoad
   clearGenerationRefresh()
   clearVisualRefresh()
+  clearLocalizationRefresh()
   loading.value = true
   errorMessage.value = ''
+  resetLessonReader()
   teachingRun.value = null
   visualEnrichmentRun.value = null
   generationStatusUnknown.value = false
@@ -654,10 +721,9 @@ async function loadLesson() {
   generationFinishedMessage.value = ''
   waitingForNextChapter.value = false
   clearSupportingContent()
-  const targetPlanId = planId.value
   if (!targetPlanId) {
     await router.replace({ name: 'lessons' })
-    loading.value = false
+    if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
     return
   }
   refreshOfflineKnowledge(targetPlanId)
@@ -668,6 +734,7 @@ async function loadLesson() {
       optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
     ])
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
       await router.push({ name: 'login' })
       return
@@ -675,12 +742,20 @@ async function loadLesson() {
     if (!planResponse.ok || !lessonResponse.ok) {
       throw new Error('无法读取这份讲解，请重新生成。')
     }
-    plan.value = (await planResponse.json()) as TeachingPlan
-    sourceLesson.value = (await lessonResponse.json()) as IllustratedLesson
+    const [loadedPlan, loadedLesson, loadedRun, loadedVisualRun] = await Promise.all([
+      planResponse.json() as Promise<TeachingPlan>,
+      lessonResponse.json() as Promise<IllustratedLesson>,
+      runResponse?.ok ? runResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
+      visualRunResponse?.ok ? visualRunResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
+    ])
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    plan.value = loadedPlan
+    sourceLesson.value = loadedLesson
     lesson.value = sourceLesson.value
-    await applySelectedLocale()
-    teachingRun.value = runResponse?.ok ? await runResponse.json() as TeachingRunProgress : null
-    visualEnrichmentRun.value = visualRunResponse?.ok ? await visualRunResponse.json() as TeachingRunProgress : null
+    await applySelectedLocale(targetPlanId, request)
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    teachingRun.value = loadedRun
+    visualEnrichmentRun.value = loadedVisualRun
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = '暂时无法确认后台生成状态。'
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
@@ -692,12 +767,14 @@ async function loadLesson() {
       paused: false,
     }
     if (generationActive.value) scheduleGenerationRefresh()
-    else await loadSupportingContent(targetPlanId)
+    else await loadSupportingContent(targetPlanId, request)
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (visualEnrichmentActive.value) scheduleVisualRefresh()
   } catch (error) {
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
   } finally {
-    loading.value = false
+    if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
   }
 }
 
@@ -722,16 +799,25 @@ function scheduleVisualRefresh(delay = 2500) {
 
 async function refreshVisualEnrichment() {
   if (!online.value || lessonViewDisposed) return
+  const targetPlanId = planId.value
+  const request = latestLessonLoad
+  let retryDelay = 2500
   try {
-    const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(planId.value)}`)
+    const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`)
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (response?.status === 401) {
       await router.push({ name: 'login' })
       return
     }
-    if (response?.ok) visualEnrichmentRun.value = await response.json() as TeachingRunProgress
-    scheduleVisualRefresh()
+    if (response?.ok) {
+      const incomingRun = await response.json() as TeachingRunProgress
+      if (!isCurrentLessonLoad(request, targetPlanId)) return
+      visualEnrichmentRun.value = incomingRun
+    }
   } catch {
-    scheduleVisualRefresh(5000)
+    retryDelay = 5000
+  } finally {
+    if (isCurrentLessonLoad(request, targetPlanId)) scheduleVisualRefresh(retryDelay)
   }
 }
 
@@ -755,13 +841,16 @@ function terminalGenerationMessage(state: string) {
 
 async function refreshGeneration() {
   if (!generationActive.value || !online.value || lessonViewDisposed) return
+  const targetPlanId = planId.value
+  const request = latestLessonLoad
   const wasActive = generationActive.value
   const activityCursor = teachingActivityCursor(teachingRun.value)
   try {
     const [runResponse, lessonResponse] = await Promise.all([
-      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(planId.value)}${activityCursor}`, { credentials: 'include' }),
-      fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest`, { credentials: 'include' }),
+      fetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}${activityCursor}`, { credentials: 'include' }),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
     ])
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (runResponse.status === 401 || lessonResponse.status === 401) {
       await router.push({ name: 'login' })
       return
@@ -770,16 +859,20 @@ async function refreshGeneration() {
       throw new Error('暂时没有取得最新章节。')
     }
 
-    const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
+    const [incomingRun, incomingLesson] = await Promise.all([
+      runResponse.ok ? runResponse.json() as Promise<TeachingRunProgress> : Promise.resolve(null),
+      lessonResponse.json() as Promise<IllustratedLesson>,
+    ])
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     const acceptedRun = mergeTeachingRunProgress(teachingRun.value, incomingRun)
-    const incomingLesson = await lessonResponse.json() as IllustratedLesson
     const previousLesson = sourceLesson.value
     const previousCount = previousLesson?.sections.length ?? 0
     const acceptedLesson = acceptProgressiveLesson(previousLesson, incomingLesson)
     const lessonReplaced = previousLesson !== null && acceptedLesson.id !== previousLesson.id
     sourceLesson.value = acceptedLesson
     lesson.value = acceptedLesson
-    await applySelectedLocale()
+    await applySelectedLocale(targetPlanId, request)
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     teachingRun.value = acceptedRun
     generationStatusUnknown.value = false
     generationRefreshError.value = ''
@@ -801,13 +894,15 @@ async function refreshGeneration() {
 
     if (wasActive && !generationActive.value) {
       generationFinishedMessage.value = terminalGenerationMessage(acceptedRun?.run.state ?? '')
-      await loadSupportingContent(planId.value)
+      await loadSupportingContent(targetPlanId, request)
+      if (!isCurrentLessonLoad(request, targetPlanId)) return
       await refreshVisualEnrichment()
     }
   } catch (error) {
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     generationRefreshError.value = error instanceof Error ? error.message : '暂时没有取得最新章节。'
   } finally {
-    scheduleGenerationRefresh()
+    if (isCurrentLessonLoad(request, targetPlanId)) scheduleGenerationRefresh()
   }
 }
 
@@ -915,12 +1010,16 @@ function focusQuestionPanel() {
 
 async function submitQuestion(text: string, learningIntent: LearningIntent | null) {
   if (!text || !plan.value || !currentSection.value || answerLoading.value || !online.value) return
+  const targetPlanId = planId.value
+  const lessonRequest = latestLessonLoad
+  const answerRequest = ++latestAnswerRequest
   answerLoading.value = true
   activeLearningIntent.value = learningIntent
   answerError.value = ''
   answer.value = null
   try {
     const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
+    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
     if (csrfResponse.status === 401) {
       await router.push({ name: 'login' })
       return
@@ -941,12 +1040,14 @@ async function submitQuestion(text: string, learningIntent: LearningIntent | nul
         language: locale.value,
       }),
     })
+    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
     if (response.status === 401) {
       await router.push({ name: 'login' })
       return
     }
     if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
     const creation = (await response.json()) as AnswerCreation
+    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
     const received = creation.answer
     answer.value = received
     answeredQuestion.value = text
@@ -971,10 +1072,13 @@ async function submitQuestion(text: string, learningIntent: LearningIntent | nul
     }
     rulingConflict.value = false
   } catch (error) {
+    if (!isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) return
     answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
   } finally {
-    answerLoading.value = false
-    activeLearningIntent.value = null
+    if (isCurrentAnswerRequest(answerRequest, lessonRequest, targetPlanId)) {
+      answerLoading.value = false
+      activeLearningIntent.value = null
+    }
   }
 }
 
@@ -1330,6 +1434,7 @@ onMounted(() => {
 })
 
 watch(locale, () => {
+  latestAnswerRequest++
   answer.value = null
   answerTurns.value = []
   answerError.value = ''
@@ -1338,6 +1443,10 @@ watch(locale, () => {
     addMediaWarning('English reading uses the text guide; narration and video remain in the source language.')
   }
   void applySelectedLocale()
+})
+
+watch(planId, () => {
+  void loadLesson()
 })
 
 onUnmounted(() => {

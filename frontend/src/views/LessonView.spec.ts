@@ -222,7 +222,126 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).not.toContain('等待下一节')
     wrapper.unmount()
   })
+
+  it('keeps the latest private guide when an earlier navigation resolves late', async () => {
+    let resolveFirstPlan: ((response: Response) => void) | undefined
+    let resolveFirstLesson: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return new Promise<Response>((resolve) => { resolveFirstPlan = resolve })
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        return new Promise<Response>((resolve) => { resolveFirstLesson = resolve })
+      }
+      if (path === '/api/v1/teaching-plans/plan-2') {
+        return Promise.resolve(Response.json(planFixture('plan-2', '第二份规则')))
+      }
+      if (path === '/api/v1/teaching-plans/plan-2/illustrated-lessons/latest') {
+        return Promise.resolve(Response.json({ id: 'lesson-2', status: 'COMPLETE', sections: [section(1, '第二份讲解')] }))
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) return Promise.resolve(new Response(null, { status: 404 }))
+      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'player', roles: ['USER'] }))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          AppShell: { template: '<div><slot /></div>' },
+          CardOcrCapture: true,
+          VoiceQuestionCapture: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await router.push('/lesson/plan-2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第二份讲解')
+
+    resolveFirstPlan!(Response.json(planFixture('plan-1', '第一份规则')))
+    resolveFirstLesson!(Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, '第一份讲解')] }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第二份讲解')
+    expect(wrapper.text()).not.toContain('第一份讲解')
+    wrapper.unmount()
+  })
+
+  it('does not attach an answer from the previous guide after navigating away', async () => {
+    let resolveAnswer: ((response: Response) => void) | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Promise.resolve(Response.json(planFixture('plan-1', '第一份规则')))
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        return Promise.resolve(Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, '第一份讲解')] }))
+      }
+      if (path === '/api/v1/teaching-plans/plan-2') return Promise.resolve(Response.json(planFixture('plan-2', '第二份规则')))
+      if (path === '/api/v1/teaching-plans/plan-2/illustrated-lessons/latest') {
+        return Promise.resolve(Response.json({ id: 'lesson-2', status: 'COMPLETE', sections: [section(1, '第二份讲解')] }))
+      }
+      if (path === '/api/auth/csrf') return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        return new Promise<Response>((resolve) => { resolveAnswer = resolve })
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) return Promise.resolve(new Response(null, { status: 404 }))
+      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'player', roles: ['USER'] }))
+      return Promise.resolve(new Response(null, { status: 404 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          AppShell: { template: '<div><slot /></div>' },
+          CardOcrCapture: true,
+          VoiceQuestionCapture: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('#lesson-question').setValue('第一份规则里的问题')
+    await wrapper.get('#lesson-question-panel form').trigger('submit')
+    await flushPromises()
+
+    await router.push('/lesson/plan-2')
+    await flushPromises()
+    resolveAnswer!(Response.json({
+      assistantRunId: 'answer-run-1',
+      answer: {
+        status: 'ANSWERED', shortVerdict: '陈旧答案', explanation: '不应出现在第二份讲解中。', citations: [], exceptions: [],
+        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null, clarification: null,
+      },
+    }))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第二份讲解')
+    expect(wrapper.text()).not.toContain('陈旧答案')
+    wrapper.unmount()
+  })
 })
+
+function planFixture(id: string, gameTitle: string) {
+  return {
+    id,
+    documentVersionId: `version-${id}`,
+    playerCount: 4,
+    beginnerCount: 2,
+    durationMinutes: 30,
+    gameTitle,
+    premise: '测试讲解切换',
+    sections: [{ position: 1, title: '第一节', visualEvidenceRecommended: true }],
+  }
+}
 
 function section(position: number, title: string) {
   return {
