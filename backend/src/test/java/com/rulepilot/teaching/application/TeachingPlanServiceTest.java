@@ -143,7 +143,7 @@ class TeachingPlanServiceTest {
                                 "回合结束清理",
                                 "说明手牌上限和弃牌。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("玩家回合流程", "印记记忆的费用与奖励", "回合结束清理", "Keep the bridge"));
     }
@@ -157,15 +157,15 @@ class TeachingPlanServiceTest {
                         detailedTopic("turn-flow", "玩家回合流程", "说明阶段顺序、额外行动和手牌限制。"),
                         detailedTopic("end", "游戏结束", "说明结束条件和胜者。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline)).isEmpty();
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline)).isEmpty();
     }
 
     @Test
     void skipsASecondOwnershipRevisionWhenCoverageKeptTheSameOutline() {
         OutlineDraft outline = new OutlineDraft("Game", "Premise", List.of(topic("setup", false, List.of(2))));
 
-        assertThat(TeachingPlanService.requiresChapterOwnershipRerun(outline, outline)).isFalse();
-        assertThat(TeachingPlanService.requiresChapterOwnershipRerun(
+        assertThat(TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(outline, outline)).isFalse();
+        assertThat(TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(
                         outline,
                         new OutlineDraft("Game", "Premise", List.of(topic("setup", false, List.of(2, 3))))))
                 .isTrue();
@@ -186,7 +186,7 @@ class TeachingPlanServiceTest {
                                 "游戏结束与最终计分",
                                 "说明内心指南针的结束触发、最后一轮与计分。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("获得启蒙点", "游戏结束与最终计分", "game-end trigger"));
     }
@@ -206,7 +206,7 @@ class TeachingPlanServiceTest {
                                 "放置价值标记",
                                 "说明放置价值标记，并在放完两个后再次完成一行时触发游戏结束。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("放置价值标记", "游戏结束与最终计分", "game-end trigger"));
     }
@@ -221,7 +221,7 @@ class TeachingPlanServiceTest {
                         detailedTopic("game-end", "游戏结束与最终计分", "说明结束触发、最终计分和平局。"),
                         detailedTopic("cleanup", "回合结束清理", "说明手牌上限、弃牌与补牌。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("回合结束清理", "游戏结束与最终计分", "before game end and final scoring"));
     }
@@ -236,7 +236,7 @@ class TeachingPlanServiceTest {
                         detailedTopic("game-end", "游戏结束与最终计分", "说明结束触发、最终计分和平局。"),
                         detailedTopic("quality-scoring", "品质瓷砖计分", "说明每个品质瓷砖的得分条件。")));
 
-        assertThat(TeachingPlanService.chapterOwnershipRevisionFeedback(outline))
+        assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("品质瓷砖计分", "游戏结束与最终计分", "scoring detail before the end/final-scoring conclusion"));
     }
@@ -256,7 +256,7 @@ class TeachingPlanServiceTest {
                         List.of("setup"),
                         List.of(2))));
 
-        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(
+        assertThat(TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(
                         outline,
                         List.of(
                                 new PageInput(1, "INNER COMPASS"),
@@ -300,7 +300,7 @@ class TeachingPlanServiceTest {
                         List.of("ACTION", "ICONS"))));
 
         assertThat(merged.getLast().text()).contains("◆ ◆", "[Visual page catalog;", "ACTION ICONS");
-        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(outline, merged))
+        assertThat(TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(outline, merged))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
                         .contains("Page 3", "ACTION ICONS", "Visual page catalog")
                         .doesNotContain("◆ ◆"));
@@ -314,7 +314,7 @@ class TeachingPlanServiceTest {
                 List.of(page(2, "SETUP Give each player a board."), page(3, "")),
                 List.of());
 
-        assertThat(TeachingPlanService.sourcePageCoverageRevisionFeedback(outline, pages)).isEmpty();
+        assertThat(TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(outline, pages)).isEmpty();
     }
 
     @Test
