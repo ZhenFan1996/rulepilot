@@ -84,9 +84,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "|(?:哪个|哪种|哪一种|什么|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)"
                     + "|(?:图标|符号).{0,36}(?:表示|代表|对应|是什么|含义)"
                     + "|(?:支付|花费|消耗|获得).{0,18}(?:什么|哪种|哪一种|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)");
-    private static final Pattern INTERNAL_EVIDENCE_REFERENCE = Pattern.compile(
-            "(?iu)[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|\\bchunk(?:id)?\\b"
-                    + "|(?:证据|引用|evidence|source)\\s*\\[?E\\d+\\]?|\\[E\\d+\\]|\\[[0-9a-f]{8}\\]");
     private static final Pattern EVIDENCED_CROSS_PAGE_ICON_MAPPING = Pattern.compile(
             "(?iu)(?:visually identical|same icon|exact visual match|视觉完全相同|同一图标)"
                     + ".{0,240}(?:labeled|component name|标为|标签|组件名)");
@@ -96,49 +93,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private static final Pattern RESOLVED_VISUAL_REFERENCE_PAGE = Pattern.compile(
             "(?iu)(?:visually identical|same icon|exact visual match|视觉完全相同|同一图标)"
                     + ".{0,280}?on page\\s*(\\d{1,4})");
-    private static final Pattern RESOURCE_CARD_CONFLATION = Pattern.compile(
-            "(?iu)(?:icon|symbol|图标|符号|\\p{So})[^。；;\\n]{0,60}"
-                    + "(?:means|represents|corresponds|表示|代表|对应|是)[^。；;\\n]{0,40}"
-                    + "(?:cards?|hand|手牌|张[^，。；\\n]{0,20}牌)"
-                    + "|(?:at least|至少|需要)[^。；;\\n]{0,32}(?:cards?|张[^，。；\\n]{0,20}牌)"
-                    + "[^。；;\\n]{0,120}(?:activate|use|发动|使用|前提)"
-                    + "|(?:activate|use|发动|使用|前提)[^。；;\\n]{0,80}(?:at least|至少|需要)"
-                    + "[^。；;\\n]{0,32}(?:cards?|张[^，。；\\n]{0,20}牌)");
-    private static final Pattern UNASKED_REPEATABILITY_CLAIM = Pattern.compile(
-            "(?iu)(?:each\\s+(?:reward|effect|action).{0,32}(?:once|twice)|"
-                    + "(?:may|can|only|at most).{0,32}(?:once|twice)|"
-                    + "每个(?:奖励|效果|行动).{0,32}(?:仅|只|最多|可).{0,16}(?:一次|两次)|"
-                    + "(?:最多|只能).{0,28}(?:领取|执行|获得).{0,20}(?:一次|两次)|无限循环)");
-    private static final Pattern REPEATABILITY_QUESTION = Pattern.compile(
-            "(?iu)\\b(?:again|repeat|repeated|how many times|once|twice|unlimited)\\b"
-                    + "|次数|几次|重复|再次|还能|多次|反复|无限");
-    private static final Pattern EVIDENCED_REPEATABILITY = Pattern.compile(
-            "(?iu)(?:each\\s+(?:reward|effect|action).{0,48}(?:once|twice)|"
-                    + "(?:only|at most).{0,32}(?:once|twice)|"
-                    + "每个(?:奖励|效果|行动).{0,48}(?:一次|两次)|"
-                    + "每回合.{0,28}(?:只能|最多).{0,28}(?:一次|两次)|"
-                    + "(?:最多|只能).{0,36}(?:领取|执行|获得).{0,24}(?:一次|两次)|无限循环)");
-    private static final Pattern NEGATED_CARD_REQUIREMENT = Pattern.compile(
-            "(?iu)(?:不需要|无需|无须|不必|并非|不是|不要求|没有).{0,40}(?:cards?|hand|手牌|张[^，。；\\n]{0,20}牌)"
-                    + "|(?:does not|doesn't|do not|don't|need not|no need to|not required|without)"
-                    + ".{0,40}(?:cards?|hand)");
-    private static final Pattern VISUAL_GLYPH = Pattern.compile("\\p{So}");
-    private static final Pattern PLAYER_LEFT_ACTIVE_PLAY = Pattern.compile(
-            "(?iu)(?:out of cards|empty hand|no cards left|finished (?:their|your) hand|"
-                    + "出完[^。；;\\n]{0,16}手牌|手牌[^。；;\\n]{0,8}(?:为空|为零|没了)|无牌|退出[^。；;\\n]{0,12}(?:本轮|游戏))");
-    private static final Pattern SAME_INACTIVE_ACTOR_CONTINUES = Pattern.compile(
-            "(?iu)(?:you|same player)\\s+(?:(?:still|then|will)\\s+)?(?:lead|start)[^。；;\\n]{0,20}next trick"
-                    + "|(?:下一墩|下一轮)[^。；;\\n]{0,20}(?:由你(?!左手边|右手边)|由该玩家)[^。；;\\n]{0,12}(?:领出|开始)"
-                    + "|(?:你(?!左手边|右手边)|该玩家)(?:仍然?|继续|将|会|来)?(?:负责)?(?:领出|开始)"
-                    + "[^。；;\\n]{0,8}(?:下一墩|下一轮)");
-    private static final Pattern NEGATED_INACTIVE_ACTOR_CONTINUATION = Pattern.compile(
-            "(?iu)(?:not|never|no longer|instead|不由|不会由|不该由|不再|不是|并非|不能|不应|改由)");
-    private static final Pattern EVIDENCED_SUCCESSOR_RULE = Pattern.compile(
-            "(?iu)(?:if|when|若|如果)[\\s\\S]{0,180}(?:out of cards|empty hand|no cards|无牌|手牌已空)"
-                    + "[\\s\\S]{0,220}(?:next|another|remaining|active|player to the (?:left|right)|"
-                    + "clockwise|counterclockwise|dealer|first player|previous player|下一位|其他|仍在游戏|"
-                    + "左手边|右手边|顺时针|逆时针|庄家|起始玩家|上一位)"
-                    + "[\\s\\S]{0,100}(?:starts|leads|开始|领出)");
     private static final Pattern EVIDENCED_REPLENISHMENT_PROCEDURE = Pattern.compile(
             "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
                     + "(?=.*(?:empty|no\\s+(?:dice|cards?|tokens?)|无(?:骰|牌|令牌)|没有(?:骰|牌|令牌)|为空|耗尽))"
@@ -152,8 +106,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
             "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
                     + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final Pattern TITLE_CASED_ENGLISH_LABEL = Pattern.compile(
-            "\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,3}\\b");
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
@@ -461,7 +413,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 boolean inactiveActorRepair = playerFacingRepair.stream().anyMatch(item -> item.startsWith("INACTIVE_ACTOR:"));
                 if ((draft == null || !draft.answerable())
                         && inactiveActorRepair
-                        && hasEvidencedSuccessorRule(modelRequest)) {
+                        && AnswerDraftSafetyPolicy.hasEvidencedSuccessorRule(modelRequest)) {
                     ModelDraft abstainingDraft = draft == null
                             ? new ModelDraft(false, "First repair did not produce a draft", null, null, List.of(), List.of(), "LOW")
                             : draft;
@@ -484,25 +436,26 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         : "图标对应的规则资源无法从现有证据中可靠确定。";
                 return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, message);
             }
-            draft = normalizeSingleMappedVisualGlyph(modelRequest, draft);
-            draft = normalizeDanglingPunctuation(draft);
-            draft = normalizeInternalEvidenceReferences(draft);
-            if (containsInternalEvidenceReference(draft)) {
+            draft = AnswerDraftSafetyPolicy.normalizeSingleMappedVisualGlyph(
+                    draft, resolvedVisualComponents(modelRequest, draft));
+            draft = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
+            draft = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(draft);
+            if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。");
             }
-            if (containsResourceCardConflation(draft)) {
+            if (AnswerDraftSafetyPolicy.containsResourceCardConflation(draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答混淆了规则资源与手牌数量，未向玩家发布。");
             }
-            if (containsInactiveActorContinuation(draft)) {
+            if (AnswerDraftSafetyPolicy.containsInactiveActorContinuation(draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答让已退出当前流程的玩家继续行动，未向玩家发布。");
             }
-            if (containsUnaskedUnsupportedRepeatabilityClaim(modelRequest, draft)) {
+            if (AnswerDraftSafetyPolicy.containsUnaskedUnsupportedRepeatabilityClaim(modelRequest, draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答附加了未被引用支持的次数限制，未向玩家发布。");
             }
             if (!namesEveryResolvedVisualComponent(modelRequest, draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未使用视觉证据确认的组件名称，未向玩家发布。");
             }
-            if (hasEvidencedCrossPageIconMapping(modelRequest) && containsVisualGlyph(draft)) {
+            if (hasEvidencedCrossPageIconMapping(modelRequest) && AnswerDraftSafetyPolicy.containsVisualGlyph(draft)) {
                 return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答用近似符号替代了规则书组件名称，未向玩家发布。");
             }
             if (requiresVisualIdentityReconciliation(modelRequest, draft)
@@ -692,7 +645,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "marker, card, or resource cannot support that timing, scoring, or tie ruling. Preserve the "
                     + "printed order, including any numbered cleanup check, and do not invent a separate phase.");
         }
-        if (containsUncitedEnglishTitleLabel(request, draft)) {
+        if (AnswerDraftSafetyPolicy.containsUncitedEnglishTitleLabel(request, draft)) {
             feedback.add("EXACT_PHASE_NAME: The draft uses an English multi-word phase label that does not appear in "
                     + "its cited excerpts. Remove it rather than inventing a phase. If the source has a numbered "
                     + "end-game check within cleanup, state that evidenced check and its order directly.");
@@ -709,12 +662,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "term in player-facing text and emit no icon glyph. If one mapping is not directly supportable, "
                     + "set answerable to false.");
         }
-        if (containsInternalEvidenceReference(draft)) {
+        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(draft)) {
             feedback.add("PLAYER_FACING_OUTPUT: Remove UUIDs, chunk IDs, E-number evidence labels, retrieval wording, "
                     + "and other internal references. Teach the rule directly while preserving the same citations in "
                     + "the structured citationIds field.");
         }
-        if (hasEvidencedCrossPageIconMapping(request) && containsResourceCardConflation(draft)) {
+        if (hasEvidencedCrossPageIconMapping(request) && AnswerDraftSafetyPolicy.containsResourceCardConflation(draft)) {
             feedback.add("RESOURCE_CARD_CONFLATION: Cross-page evidence maps the missing inline icon to a named "
                     + "token, point, or other component. Remove every claim that turns that same icon prerequisite "
                     + "into cards in hand, a minimum card count, or a numeric card value. A consequence that the "
@@ -729,19 +682,19 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "a faithful Chinese translation if useful. Do not negate that mapped label or replace it with "
                     + "another component from the reference page.");
         }
-        if (hasEvidencedCrossPageIconMapping(request) && containsVisualGlyph(draft)) {
+        if (hasEvidencedCrossPageIconMapping(request) && AnswerDraftSafetyPolicy.containsVisualGlyph(draft)) {
             feedback.add("MAPPED_COMPONENT_GLYPH: Remove every emoji or improvised symbol from the player-facing "
                     + "answer. A visually similar glyph can depict a different rulebook component. Use only the "
                     + "exact printed component label resolved by the supplied cross-page evidence; the UI will "
                     + "show the original cited page image.");
         }
-        if (containsInactiveActorContinuation(draft)) {
+        if (AnswerDraftSafetyPolicy.containsInactiveActorContinuation(draft)) {
             feedback.add("INACTIVE_ACTOR: The draft says an actor has emptied their hand or left active play, but "
                     + "also assigns that same actor the next action. Do not apply the default next-actor rule across "
                     + "that state change. Use the supplied evidence's explicit replacement, skip, or successor rule; "
                     + "if the evidence does not resolve the successor, set answerable to false.");
         }
-        if (containsUnaskedUnsupportedRepeatabilityClaim(request, draft)) {
+        if (AnswerDraftSafetyPolicy.containsUnaskedUnsupportedRepeatabilityClaim(request, draft)) {
             feedback.add("UNASKED_REPEATABILITY: The answer adds a once-only, twice-only, repeatability, or "
                     + "loop-prevention restriction that the player did not ask about and the draft's own cited "
                     + "evidence does not establish for this ruling. Remove that peripheral restriction. Keep a "
@@ -749,19 +702,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "governs the same action.");
         }
         return List.copyOf(feedback);
-    }
-
-    private boolean containsUnaskedUnsupportedRepeatabilityClaim(ModelRequest request, ModelDraft draft) {
-        if (REPEATABILITY_QUESTION.matcher(request.question()).find()
-                || !UNASKED_REPEATABILITY_CLAIM.matcher(playerFacingText(draft)).find()) {
-            return false;
-        }
-        Set<UUID> citationIds = Set.copyOf(draft.citationIds());
-        return request.evidence().stream()
-                .filter(source -> citationIds.contains(source.chunkId()))
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .noneMatch(excerpt -> EVIDENCED_REPEATABILITY.matcher(excerpt).find());
     }
 
     private boolean requiresEndTurnProcedureCitation(ModelRequest request) {
@@ -860,24 +800,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         return List.copyOf(required);
     }
-
-    private boolean containsUncitedEnglishTitleLabel(ModelRequest request, ModelDraft draft) {
-        String playerText = playerFacingText(draft);
-        if (playerText.isBlank()) return false;
-        Set<UUID> citations = Set.copyOf(draft.citationIds());
-        String citedText = request.evidence().stream()
-                .filter(source -> citations.contains(source.chunkId()))
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.joining("\n"))
-                .toLowerCase(Locale.ROOT);
-        var matcher = TITLE_CASED_ENGLISH_LABEL.matcher(playerText);
-        while (matcher.find()) {
-            if (!citedText.contains(matcher.group().toLowerCase(Locale.ROOT))) return true;
-        }
-        return false;
-    }
-
 
     private ModelDraft revisePlayerFacingDraft(
             UUID assistantRunId,
@@ -989,126 +911,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private boolean containsUnresolvedVisualSymbol(ModelDraft draft) {
-        return AnswerEvidencePolicy.hasUnresolvedVisualSymbol(playerFacingText(draft));
-    }
-
-    private boolean containsResourceCardConflation(ModelDraft draft) {
-        String text = playerFacingText(draft);
-        var matcher = RESOURCE_CARD_CONFLATION.matcher(text);
-        while (matcher.find()) {
-            int contextStart = Math.max(0, matcher.start() - 48);
-            int contextEnd = Math.min(text.length(), matcher.end() + 48);
-            if (!NEGATED_CARD_REQUIREMENT.matcher(text.substring(contextStart, contextEnd)).find()) return true;
-        }
-        return false;
-    }
-
-    private boolean containsVisualGlyph(ModelDraft draft) {
-        return VISUAL_GLYPH.matcher(playerFacingText(draft)).find();
-    }
-
-    private boolean containsInactiveActorContinuation(ModelDraft draft) {
-        String text = playerFacingText(draft);
-        if (!PLAYER_LEFT_ACTIVE_PLAY.matcher(text).find()) return false;
-        var matcher = SAME_INACTIVE_ACTOR_CONTINUES.matcher(text);
-        while (matcher.find()) {
-            int contextStart = Math.max(0, matcher.start() - 16);
-            int contextEnd = Math.min(text.length(), matcher.end() + 16);
-            if (!NEGATED_INACTIVE_ACTOR_CONTINUATION.matcher(text.substring(contextStart, contextEnd)).find()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean hasEvidencedSuccessorRule(ModelRequest request) {
-        String combinedEvidence = request.evidence().stream()
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.joining("\n"));
-        return EVIDENCED_SUCCESSOR_RULE.matcher(combinedEvidence).find();
-    }
-
-    private ModelDraft normalizeSingleMappedVisualGlyph(ModelRequest request, ModelDraft draft) {
-        List<String> components = resolvedVisualComponents(request, draft);
-        if (components.size() != 1 || !containsVisualGlyph(draft)) return draft;
-        String component = components.getFirst();
-        return new ModelDraft(
-                draft.answerable(),
-                draft.insufficiencyReason(),
-                normalizeVisualGlyphs(draft.shortVerdict(), component),
-                normalizeVisualGlyphs(draft.explanation(), component),
-                draft.citationIds(),
-                draft.exceptions().stream().map(value -> normalizeVisualGlyphs(value, component)).toList(),
-                draft.confidence());
-    }
-
-    private String normalizeVisualGlyphs(String value, String component) {
-        if (value == null || value.isBlank()) return value;
-        var matcher = VISUAL_GLYPH.matcher(value);
-        StringBuffer normalized = new StringBuffer();
-        while (matcher.find()) {
-            int contextStart = Math.max(0, matcher.start() - component.length() - 8);
-            String prefix = value.substring(contextStart, matcher.start());
-            boolean alreadyNamed = prefix.matches(
-                    "(?iu).*" + Pattern.quote(component) + "[\\s,，:：(/（-]*$");
-            matcher.appendReplacement(normalized, alreadyNamed ? "" : " " + java.util.regex.Matcher.quoteReplacement(component) + " ");
-        }
-        matcher.appendTail(normalized);
-        return normalized.toString()
-                .replaceAll("([（(])\\s*[，,]\\s*", "$1")
-                .replaceAll("[ \\t]{2,}", " ")
-                .strip();
-    }
-
-    private ModelDraft normalizeInternalEvidenceReferences(ModelDraft draft) {
-        if (!containsInternalEvidenceReference(draft)) return draft;
-        return new ModelDraft(
-                draft.answerable(),
-                draft.insufficiencyReason(),
-                normalizeInternalEvidenceReferences(draft.shortVerdict()),
-                normalizeInternalEvidenceReferences(draft.explanation()),
-                draft.citationIds(),
-                draft.exceptions().stream().map(this::normalizeInternalEvidenceReferences).toList(),
-                draft.confidence());
-    }
-
-    private ModelDraft normalizeDanglingPunctuation(ModelDraft draft) {
-        return new ModelDraft(
-                draft.answerable(),
-                draft.insufficiencyReason(),
-                normalizeDanglingPunctuation(draft.shortVerdict()),
-                normalizeDanglingPunctuation(draft.explanation()),
-                draft.citationIds(),
-                draft.exceptions().stream().map(this::normalizeDanglingPunctuation).toList(),
-                draft.confidence());
-    }
-
-    private String normalizeDanglingPunctuation(String value) {
-        if (value == null || value.isBlank()) return value;
-        return value.replaceAll("([（(])\\s*[，,]\\s*", "$1");
-    }
-
-    private String normalizeInternalEvidenceReferences(String value) {
-        if (value == null || value.isBlank()) return value;
-        return INTERNAL_EVIDENCE_REFERENCE.matcher(value)
-                .replaceAll("")
-                .replaceAll("\\(\\s*\\)|（\\s*）", "")
-                .replaceAll("[ \\t]+([，。；,.!?！？])", "$1")
-                .replaceAll("[ \\t]{2,}", " ")
-                .strip();
-    }
-
-    private boolean containsInternalEvidenceReference(ModelDraft draft) {
-        return INTERNAL_EVIDENCE_REFERENCE.matcher(playerFacingText(draft)).find();
-    }
-
-    private String playerFacingText(ModelDraft draft) {
-        return java.util.stream.Stream.concat(
-                        java.util.stream.Stream.of(draft.shortVerdict(), draft.explanation()),
-                        draft.exceptions().stream())
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.joining("\n"));
+        return AnswerDraftSafetyPolicy.containsUnresolvedVisualSymbol(draft);
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
@@ -1660,7 +1463,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         String completeAnswer = draft.shortVerdict() + "\n" + draft.explanation() + "\n"
                 + String.join("\n", draft.exceptions());
-        if (INTERNAL_EVIDENCE_REFERENCE.matcher(completeAnswer).find()) {
+        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)) {
             throw new IllegalArgumentException("player-facing answer contains internal evidence references");
         }
         var verification = evidenceVerifier.verify(new VerificationRequest(
