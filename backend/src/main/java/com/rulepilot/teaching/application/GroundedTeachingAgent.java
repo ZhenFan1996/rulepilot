@@ -74,7 +74,7 @@ public class GroundedTeachingAgent {
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final VisualRulebookPageFacts visualFacts;
-    private final VisualRulebookPageCatalogModel visualCatalog;
+    private final TeachingVisualEvidenceResolver visualEvidenceResolver;
     private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
     private final int maxToolCalls;
     private final int baseSectionParallelism;
@@ -96,7 +96,8 @@ public class GroundedTeachingAgent {
         this.critic = critic;
         this.invocations = invocations;
         this.visualFacts = visualFacts;
-        this.visualCatalog = visualCatalog;
+        this.visualEvidenceResolver = new TeachingVisualEvidenceResolver(
+                tools, invocations, visualFacts, visualCatalog);
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
     }
@@ -363,7 +364,7 @@ public class GroundedTeachingAgent {
                 ? List.of()
                 : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
         if (bindVisualPageEvidence) {
-            evidence = visualPageBoundEvidence(plan, planned, evidence, assistantRunId);
+            evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
         }
         if (evidence.isEmpty()) {
             return new EvidenceResolution(List.of(), toolCalls, EvidenceState.EMPTY);
@@ -511,129 +512,6 @@ public class GroundedTeachingAgent {
                         null,
                         true,
                         true)));
-    }
-
-    private List<RuleEvidence> visualPageBoundEvidence(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> retrieved,
-            UUID assistantRunId) {
-        boolean visualPlaceholder = TeachingVisualEvidenceSelector.hasVisualPageEvidence(retrieved);
-        if (!visualPlaceholder || planned.sourcePageNumbers().isEmpty()) return retrieved;
-        try {
-            List<RuleEvidence> pageEvidence = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    operationName("readRuleEvidencePages", planned.position()),
-                    planned.sourcePageNumbers().size(),
-                    "Planner-selected visual rulebook pages retrieved",
-                    () -> tools.readRuleEvidencePages(
-                            plan.documentVersionId(), new LinkedHashSet<>(planned.sourcePageNumbers()), true),
-                    this::evidenceTokens);
-            if (!pageEvidence.isEmpty()) {
-                log.info(
-                        "Teaching topic {} is bound to visual source pages {}",
-                        planned.topicKey(), planned.sourcePageNumbers());
-                List<RuleEvidence> enriched = enrichVisualPageFacts(plan.documentVersionId(), pageEvidence, List.of());
-                if (!hasUncatalogedVisualPageEvidence(enriched) || !visualCatalog.available(plan.createdBy())) {
-                    return enriched;
-                }
-                return enrichWithRequiredVisualPageFacts(
-                        plan, planned, pageEvidence, enriched, assistantRunId);
-            }
-        } catch (RuntimeException failure) {
-            log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
-        }
-        return retrieved;
-    }
-
-    private List<RuleEvidence> enrichWithRequiredVisualPageFacts(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            List<RuleEvidence> pageEvidence,
-            List<RuleEvidence> enriched,
-            UUID assistantRunId) {
-        Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
-        pageEvidence.stream()
-                .filter(TeachingVisualEvidenceSelector::isVisualPageEvidence)
-                .flatMap(source -> source.pageImages().stream())
-                .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
-        List<VisualRulebookPageFacts.PageFact> interpreted = new ArrayList<>();
-        for (AssistantReadTools.RulePageImage image : images.values()) {
-            try {
-                var request = new VisualRulebookPageCatalogModel.CatalogRequest(
-                        List.of(new com.rulepilot.teaching.TeachingOutlineModel.PageImageInput(
-                                image.pageNumber(), image.mediaType(), image.content())),
-                        plan.createdBy(),
-                        plan.gameTitle());
-                var catalog = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.MODEL,
-                        "inspectRequiredVisualPage|" + planned.position() + "|" + image.pageNumber(),
-                        800,
-                        "Required visual rulebook page interpreted for grounded teaching",
-                        () -> visualCatalog.summarize(request),
-                        result -> estimateTokens(result.toString()));
-                interpreted.addAll(catalog.pages().stream()
-                        .map(summary -> new VisualRulebookPageFacts.PageFact(
-                                summary.pageNumber(),
-                                summary.printedTerms(),
-                                summary.factualSummary(),
-                                summary.keywords(),
-                                summary.visualAnchors()))
-                        .toList());
-            } catch (RuntimeException failure) {
-                log.warn(
-                        "Required visual page interpretation failed for topic {} page {}: {}",
-                        planned.topicKey(),
-                        image.pageNumber(),
-                        failure.getMessage());
-            }
-        }
-        if (interpreted.isEmpty()) return enriched;
-        visualFacts.merge(plan.documentVersionId(), interpreted);
-        log.info(
-                "Teaching topic {} added on-demand visual facts for pages {}",
-                planned.topicKey(),
-                interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
-        return enrichVisualPageFacts(plan.documentVersionId(), pageEvidence, interpreted);
-    }
-
-    private boolean hasUncatalogedVisualPageEvidence(List<RuleEvidence> evidence) {
-        return TeachingVisualEvidenceSelector.hasVisualPageEvidence(evidence);
-    }
-
-    private List<RuleEvidence> enrichVisualPageFacts(
-            UUID documentVersionId,
-            List<RuleEvidence> evidence,
-            List<VisualRulebookPageFacts.PageFact> supplementalFacts) {
-        Set<Integer> pages = evidence.stream()
-                .filter(source -> source.pageFrom() == source.pageTo())
-                .map(RuleEvidence::pageFrom)
-                .collect(Collectors.toUnmodifiableSet());
-        if (pages.isEmpty()) return evidence;
-        Map<Integer, String> factsByPage = Stream.concat(
-                        visualFacts.find(documentVersionId, pages).stream(), supplementalFacts.stream())
-                .collect(Collectors.toUnmodifiableMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText,
-                        (existing, supplied) -> supplied));
-        if (factsByPage.isEmpty()) return evidence;
-        return evidence.stream()
-                .map(source -> {
-                    String facts = source.pageFrom() == source.pageTo() ? factsByPage.get(source.pageFrom()) : null;
-                    if (facts == null || !TeachingVisualEvidenceSelector.isVisualPageEvidence(source)) return source;
-                    return new RuleEvidence(
-                            source.chunkId(),
-                            source.documentVersionId(),
-                            source.sectionType(),
-                            source.heading(),
-                            facts,
-                            source.pageFrom(),
-                            source.pageTo(),
-                            source.pageImages());
-                })
-                .toList();
     }
 
     private DraftCandidate composeDraft(
