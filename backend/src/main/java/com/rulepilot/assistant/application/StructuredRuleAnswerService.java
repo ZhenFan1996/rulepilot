@@ -1,9 +1,6 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.EvidenceVerifier;
-import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
-import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
-import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
@@ -58,7 +55,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,7 +77,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final RuleAnswerRateLimiter rateLimiter;
     private final RuleDataVersion ruleDataVersion;
     private final ConfirmedRulingLookup confirmedRulings;
-    private final EvidenceVerifier evidenceVerifier;
+    private final AnswerPublicationValidator publicationValidator;
     private final GeneratedContentCritic critic;
     private final AssistantRuns runs;
     private final AuditedAgentInvocations invocations;
@@ -118,7 +114,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.rateLimiter = rateLimiter;
         this.ruleDataVersion = ruleDataVersion;
         this.confirmedRulings = confirmedRulings;
-        this.evidenceVerifier = evidenceVerifier;
+        this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
         this.critic = critic;
         this.runs = runs;
         this.invocations = invocations;
@@ -327,8 +323,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (evidence.isEmpty()) {
             return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
         }
-        var evidenceVerification = evidenceVerifier.verify(new VerificationRequest(
-                context.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()));
+        var evidenceVerification = publicationValidator.verifySources(context.documentVersionId(), evidence);
         if (evidenceVerification.status() == VerificationStatus.VERSION_CONFLICT) {
             return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
         }
@@ -420,7 +415,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         draft = AnswerVisualEvidencePolicy.includeReferenceCitations(modelRequest, draft);
         StructuredRuleAnswer answer;
         try {
-            answer = validate(context.documentVersionId(), draft, evidence);
+            answer = publicationValidator.publish(context.documentVersionId(), draft, evidence);
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
@@ -496,7 +491,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (revised == null || !revised.answerable()) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
-        return validate(documentVersionId, revised, evidence);
+        return publicationValidator.publish(documentVersionId, revised, evidence);
     }
 
     private ModelDraft reviseEvidenceBackedAbstention(
@@ -1036,52 +1031,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         .map(hit -> new EvidenceInput(
                                 hit.chunkId(), hit.sectionType(), hit.heading(), hit.excerpt(), hit.pageFrom(), hit.pageTo()))
                         .toList());
-    }
-
-    private StructuredRuleAnswer validate(UUID versionId, ModelDraft draft, List<HybridEvidenceHit> evidence) {
-        if (draft.shortVerdict() == null || draft.shortVerdict().isBlank() || draft.shortVerdict().length() > 240
-                || draft.explanation() == null || draft.explanation().isBlank() || draft.explanation().length() > 1500
-                || draft.citationIds().isEmpty() || draft.exceptions().size() > 6
-                || draft.exceptions().stream()
-                        .anyMatch(exception -> exception == null || exception.isBlank() || exception.length() > 400)) {
-            throw new IllegalArgumentException("model draft is incomplete");
-        }
-        String completeAnswer = draft.shortVerdict() + "\n" + draft.explanation() + "\n"
-                + String.join("\n", draft.exceptions());
-        if (AnswerDraftSafetyPolicy.containsInternalEvidenceReference(completeAnswer)) {
-            throw new IllegalArgumentException("player-facing answer contains internal evidence references");
-        }
-        var verification = evidenceVerifier.verify(new VerificationRequest(
-                versionId,
-                evidence.stream().map(this::toVerifierEvidence).toList(),
-                List.of(new EvidenceClaim(completeAnswer, draft.citationIds()))));
-        if (!verification.verified()) {
-            throw new IllegalArgumentException("answer evidence did not pass policy verification");
-        }
-        Map<UUID, HybridEvidenceHit> allowed = evidence.stream()
-                .collect(Collectors.toUnmodifiableMap(
-                        hit -> hit.evidence().chunkId(), Function.identity(), (first, duplicate) -> first));
-        List<RuleCitation> citations = draft.citationIds().stream().distinct().map(id -> {
-            HybridEvidenceHit hit = allowed.get(id);
-            if (hit == null || !versionId.equals(hit.evidence().documentVersionId())) {
-                throw new IllegalArgumentException("model cited evidence outside the allowed scope");
-            }
-            var source = hit.evidence();
-            return new RuleCitation(
-                    source.chunkId(), source.documentVersionId(), source.sectionType(), source.heading(),
-                    source.excerpt(), source.pageFrom(), source.pageTo());
-        }).toList();
-        AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
-        return new StructuredRuleAnswer(
-                versionId, AnswerStatus.ANSWERED, draft.shortVerdict(), draft.explanation(), citations,
-                draft.exceptions(), confidence, false, null, null, null);
-    }
-
-    private EvidenceSource toVerifierEvidence(HybridEvidenceHit hit) {
-        var source = hit.evidence();
-        return new EvidenceSource(
-                source.chunkId(), source.documentVersionId(), source.sectionType(), source.excerpt(),
-                source.pageFrom(), source.pageTo());
     }
 
     private RunSnapshot finishRun(RunSnapshot run, StructuredRuleAnswer answer) {

@@ -1,0 +1,91 @@
+package com.rulepilot.assistant.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.rulepilot.assistant.EvidenceVerifier;
+import com.rulepilot.assistant.EvidenceVerifier.Verification;
+import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
+import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+class AnswerPublicationValidatorTest {
+
+    private final UUID versionId = UUID.randomUUID();
+    private final UUID chunkId = UUID.randomUUID();
+
+    @Test
+    void publishesOnlyCurrentVersionCitationsAfterVerifiedClaims() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+
+        var answer = validator.publish(versionId, draft(List.of(chunkId), "HIGH"), List.of(evidence(versionId)));
+
+        assertThat(answer.confidence()).isEqualTo(AnswerConfidence.HIGH);
+        assertThat(answer.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.chunkId()).isEqualTo(chunkId);
+            assertThat(citation.documentVersionId()).isEqualTo(versionId);
+            assertThat(citation.pageFrom()).isEqualTo(4);
+        });
+    }
+
+    @Test
+    void rejectsDraftsThatLeakInternalEvidenceReferencesToPlayers() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        ModelDraft leaking = new ModelDraft(
+                "按规则执行。", "请参阅 chunk " + chunkId + "。", List.of(chunkId), List.of(), "HIGH");
+
+        assertThatThrownBy(() -> validator.publish(versionId, leaking, List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("internal evidence");
+    }
+
+    @Test
+    void rejectsCitationsOutsideTheRetrievedCurrentVersionScope() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+
+        assertThatThrownBy(() -> validator.publish(
+                        versionId, draft(List.of(UUID.randomUUID()), "HIGH"), List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the allowed scope");
+        assertThatThrownBy(() -> validator.publish(
+                        versionId, draft(List.of(chunkId), "HIGH"), List.of(evidence(UUID.randomUUID()))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the allowed scope");
+    }
+
+    @Test
+    void refusesPublicationWhenEvidenceVerificationDoesNotAcceptTheClaim() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(request ->
+                new Verification(VerificationStatus.INSUFFICIENT_EVIDENCE, List.of("CLAIM_UNSUPPORTED")));
+
+        assertThatThrownBy(() -> validator.publish(versionId, draft(List.of(chunkId), "HIGH"), List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("did not pass policy verification");
+    }
+
+    private EvidenceVerifier verified() {
+        return request -> new Verification(VerificationStatus.VERIFIED, List.of());
+    }
+
+    private ModelDraft draft(List<UUID> citations, String confidence) {
+        return new ModelDraft(
+                "按规则执行。", "满足列出的条件后执行该规则。", citations, List.of("扩展规则可能另有说明。"), confidence);
+    }
+
+    private HybridEvidenceHit evidence(UUID sourceVersionId) {
+        return new HybridEvidenceHit(new RuleEvidenceHit(
+                chunkId,
+                sourceVersionId,
+                "RULES",
+                "行动",
+                "满足列出的条件后执行该规则。",
+                4,
+                4,
+                0.9), 0.9, 1, null, false);
+    }
+}
