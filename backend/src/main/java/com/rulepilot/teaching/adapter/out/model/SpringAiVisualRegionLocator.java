@@ -12,12 +12,6 @@ import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
-import java.awt.Color;
-import java.awt.image.RasterFormatException;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -26,7 +20,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.IntStream;
-import javax.imageio.ImageIO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -41,10 +34,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final long MAX_READER_CROP_AREA = 600_000L;
-    private static final int CROP_SAMPLE_EDGE = 160;
-    private static final int CROP_FOREGROUND_DISTANCE = 40;
-    private static final double MIN_CATALOGED_LEGEND_SIGNAL = 0.22;
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
@@ -178,14 +167,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         GuideAttempt first = locateGuideOnce(request, owner, "");
         if (!first.guide().regions().isEmpty()) {
-            List<LocatedRegion> compactFirst = withoutOversizedReaderViewports(first.guide().regions());
+            List<LocatedRegion> compactFirst = VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
+                    first.guide().regions());
             if (!compactFirst.isEmpty()) {
                 return withCatalogedAnchorFallback(
                         request, owner, confirmedExactStepCrops(request, compactFirst, owner));
             }
             log.info("Retrying visual locator to tighten a broad reader crop for section {}", request.sectionTitle());
-            GuideAttempt tightened = locateGuideOnce(request, owner, tightReaderViewportInstruction());
-            List<LocatedRegion> compactTightened = withoutOversizedReaderViewports(tightened.guide().regions());
+            GuideAttempt tightened = locateGuideOnce(
+                    request, owner, VisualCropAcceptancePolicy.tightReaderViewportInstruction());
+            List<LocatedRegion> compactTightened = VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
+                    tightened.guide().regions());
             if (!compactTightened.isEmpty()) {
                 return withCatalogedAnchorFallback(
                         request, owner, confirmedExactStepCrops(request, compactTightened, owner));
@@ -210,15 +202,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             VisualLocationRequest request, String owner, LocateGuideResult original) {
         if (!original.regions().isEmpty()) return original;
         for (Candidate candidate : request.candidates()) {
-            Optional<LocatedRegion> anchorRegion = catalogedAnchorRegion(request, candidate);
+            Optional<LocatedRegion> anchorRegion =
+                    VisualCropAcceptancePolicy.catalogedAnchorRegion(request, candidate);
             if (anchorRegion.isEmpty()) continue;
             LocatedRegion region = anchorRegion.get();
-            if (requiresTighterReaderViewport(region) || !hasEnoughRenderedVisualSignal(request, region)) continue;
+            if (VisualCropAcceptancePolicy.requiresTighterReaderViewport(region)
+                    || !VisualCropAcceptancePolicy.hasEnoughRenderedVisualSignal(request, region)) continue;
             VisualRegionLocator.PageImage page = request.pages().stream()
                     .filter(image -> image.pageNumber() == region.pageNumber())
                     .findFirst()
                     .orElse(null);
-            byte[] crop = croppedPng(page, region);
+            byte[] crop = VisualCropAcceptancePolicy.croppedPng(page, region);
             if (crop == null) continue;
             Optional<Boolean> verified = confirmExactCrop(
                     request, region, "R1", new CropImage(region.pageNumber(), region.label(), crop), owner);
@@ -233,27 +227,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return original;
     }
 
-    static Optional<LocatedRegion> catalogedAnchorRegion(VisualLocationRequest request, Candidate candidate) {
-        if (request == null || candidate == null || candidate.catalogedAnchor() == null) return Optional.empty();
-        var anchor = candidate.catalogedAnchor();
-        List<VisualRegionLocator.Claim> supportedClaims = request.claims().stream()
-                .filter(claim -> sourceIncludes(claim, candidate.pageNumber()))
-                .toList();
-        if (supportedClaims.isEmpty() || supportedClaims.stream().anyMatch(claim -> claim.stepPosition() < 1)) {
-            return Optional.empty();
-        }
-        return Optional.of(new LocatedRegion(
-                candidate.pageNumber(),
-                anchor.label(),
-                anchor.visibleDescription(),
-                anchor.x(),
-                anchor.y(),
-                anchor.width(),
-                anchor.height(),
-                supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).distinct().toList(),
-                supportedClaims.stream().map(VisualRegionLocator.Claim::stepPosition).distinct().toList()));
-    }
-
     /**
      * A whole-page locator can identify a real object that belongs to a neighbouring rule. Inspect the exact rendered
      * crop once more beside its exact claim before publishing it, so a same-page faction, card, or worked example does
@@ -262,7 +235,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     private LocateGuideResult confirmedExactStepCrops(
             VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))
-                && !qwenNeedsExactCropReview(claimsForExactCrop(request, regions.getFirst()))) {
+                && !qwenNeedsExactCropReview(
+                        VisualCropAcceptancePolicy.claimsForExactCrop(request, regions.getFirst()))) {
             // The first pass already tied this routine recognition aid to its exact page, evidence, and step. Qwen's
             // second visual pass is deliberately reserved for rules where a neighbouring card, faction, score, or
             // outcome image would materially mislead a player.
@@ -351,7 +325,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                         "ref", reference,
                                         "pageNumber", crop.pageNumber(),
                                         "label", crop.label(),
-                                        "claims", claimsForExactCrop(request, region).stream()
+                                        "claims", VisualCropAcceptancePolicy.claimsForExactCrop(request, region).stream()
                                                 .map(claim -> Map.of(
                                                         "stepPosition", claim.stepPosition(),
                                                         "text", claim.text()))
@@ -388,39 +362,11 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         for (int index = 0; index < regions.size(); index++) {
             LocatedRegion region = regions.get(index);
             VisualRegionLocator.PageImage page = pages.get(region.pageNumber());
-            byte[] content = croppedPng(page, region);
+            byte[] content = VisualCropAcceptancePolicy.croppedPng(page, region);
             if (content == null) return Map.of();
             crops.put("R" + (index + 1), new CropImage(region.pageNumber(), region.label(), content));
         }
         return Map.copyOf(crops);
-    }
-
-    static List<VisualRegionLocator.Claim> claimsForExactCrop(
-            VisualLocationRequest request, LocatedRegion region) {
-        Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
-        return request.claims().stream()
-                .filter(claim -> supportedEvidence.contains(claim.evidenceId()))
-                .filter(claim -> region.supportedStepPositions().isEmpty()
-                        || region.supportedStepPositions().contains(claim.stepPosition()))
-                .filter(claim -> sourceIncludes(claim, region.pageNumber()))
-                .toList();
-    }
-
-    private static byte[] croppedPng(VisualRegionLocator.PageImage page, LocatedRegion region) {
-        if (page == null) return null;
-        try (var input = new ByteArrayInputStream(page.content()); var output = new ByteArrayOutputStream()) {
-            BufferedImage source = ImageIO.read(input);
-            if (source == null) return null;
-            int x = region.x() * source.getWidth() / 1_000;
-            int y = region.y() * source.getHeight() / 1_000;
-            int right = Math.min(source.getWidth(), Math.max(x + 1, (region.x() + region.width()) * source.getWidth() / 1_000));
-            int bottom = Math.min(source.getHeight(), Math.max(y + 1, (region.y() + region.height()) * source.getHeight() / 1_000));
-            BufferedImage crop = source.getSubimage(x, y, right - x, bottom - y);
-            if (!ImageIO.write(crop, "png", output)) return null;
-            return output.toByteArray();
-        } catch (IOException | RasterFormatException unreadable) {
-            return null;
-        }
     }
 
     static Optional<Set<String>> acceptedCropReferences(String content, Set<String> offeredReferences) {
@@ -445,60 +391,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
     }
 
-    static boolean hasEnoughRenderedVisualSignal(VisualLocationRequest request, LocatedRegion region) {
-        VisualRegionLocator.PageImage page = request.pages().stream()
-                .filter(candidate -> candidate.pageNumber() == region.pageNumber())
-                .findFirst()
-                .orElse(null);
-        byte[] content = croppedPng(page, region);
-        if (content == null) return true;
-        try (var input = new ByteArrayInputStream(content)) {
-            BufferedImage image = ImageIO.read(input);
-            if (image == null) return true;
-            return foregroundShare(image) >= MIN_CATALOGED_LEGEND_SIGNAL;
-        } catch (IOException unreadable) {
-            return true;
-        }
-    }
-
-    private static double foregroundShare(BufferedImage image) {
-        int stepX = Math.max(1, image.getWidth() / CROP_SAMPLE_EDGE);
-        int stepY = Math.max(1, image.getHeight() / CROP_SAMPLE_EDGE);
-        int[] histogram = new int[16 * 16 * 16];
-        int samples = 0;
-        for (int y = 0; y < image.getHeight(); y += stepY) {
-            for (int x = 0; x < image.getWidth(); x += stepX) {
-                histogram[quantizedRgb(image.getRGB(x, y))]++;
-                samples++;
-            }
-        }
-        if (samples == 0) return 1.0;
-        int dominant = 0;
-        for (int index = 1; index < histogram.length; index++) {
-            if (histogram[index] > histogram[dominant]) dominant = index;
-        }
-        int red = ((dominant >> 8) & 15) * 16;
-        int green = ((dominant >> 4) & 15) * 16;
-        int blue = (dominant & 15) * 16;
-        int foreground = 0;
-        int threshold = CROP_FOREGROUND_DISTANCE * CROP_FOREGROUND_DISTANCE;
-        for (int y = 0; y < image.getHeight(); y += stepY) {
-            for (int x = 0; x < image.getWidth(); x += stepX) {
-                Color color = new Color(image.getRGB(x, y));
-                int distance = (color.getRed() - red) * (color.getRed() - red)
-                        + (color.getGreen() - green) * (color.getGreen() - green)
-                        + (color.getBlue() - blue) * (color.getBlue() - blue);
-                if (distance > threshold) foreground++;
-            }
-        }
-        return (double) foreground / samples;
-    }
-
-    private static int quantizedRgb(int rgb) {
-        Color color = new Color(rgb);
-        return (color.getRed() >> 4) * 256 + (color.getGreen() >> 4) * 16 + (color.getBlue() >> 4);
-    }
-
     private record CropImage(int pageNumber, String label, byte[] content) {
         private CropImage {
             content = content.clone();
@@ -508,57 +400,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         public byte[] content() {
             return content.clone();
         }
-    }
-
-    /**
-     * A tall icon crop normally means the model included an adjacent numbered rule paragraph below a horizontal legend.
-     * Asking once for a tighter retry is cheaper and safer than trimming coordinates heuristically and cutting off a
-     * diagram whose visual content happens to be vertical.
-     */
-    static List<LocatedRegion> withoutOversizedIconLegends(List<LocatedRegion> regions) {
-        return regions.stream().filter(region -> !requiresTighterIconViewport(region)).toList();
-    }
-
-    static List<LocatedRegion> withoutOversizedReaderViewports(List<LocatedRegion> regions) {
-        return regions.stream().filter(region -> !requiresTighterReaderViewport(region)).toList();
-    }
-
-    static boolean requiresTighterReaderViewport(LocatedRegion region) {
-        return requiresTighterIconViewport(region)
-                || requiresTighterScoreExampleViewport(region)
-                || (long) region.width() * region.height() > MAX_READER_CROP_AREA;
-    }
-
-    static boolean requiresTighterIconViewport(LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        boolean iconLegend = observation.contains("图例")
-                || observation.contains("对照")
-                || (observation.contains("图标") && observation.contains("名称"))
-                || observation.matches(".*\\b(legend|icon group)\\b.*");
-        return iconLegend && region.height() * 10 > region.width() * 14;
-    }
-
-    /**
-     * A nearly square or portrait score-example column is often a stack of several animals' cards, not the one scoring
-     * pattern named by the current rule. Ask vision to split it before publishing a misleading "example" crop.
-     * Portrait cards without score-example language remain valid reader aids.
-     */
-    static boolean requiresTighterScoreExampleViewport(LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        boolean scoreExample = (observation.contains("计分")
-                        || observation.contains("得分")
-                        || observation.contains("分数")
-                        || observation.matches(".*\\b(score|scoring|points)\\b.*"))
-                && (observation.contains("示例") || observation.matches(".*\\bexample\\b.*"));
-        return scoreExample && region.width() <= 340 && region.height() * 4 > region.width() * 3;
-    }
-
-    static String tightIconViewportInstruction() {
-        return "The previous icon crop was too tall and likely included unrelated numbered prose. Return a tighter rectangle around only the literal icons and their direct labels. Do not include adjacent steps, paragraphs, component counts, or a page footer. If that tight icon crop is not available, return an empty regions array.";
-    }
-
-    static String tightReaderViewportInstruction() {
-        return "The previous crop occupied too much of the page, was a portrait strip spanning neighbouring score examples, or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, one score reference, or worked state that directly helps the cited step. If the claim names one scoring pattern, include only that pattern's card row or compact group; do not include another animal's examples or partial rows above or below. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
@@ -624,7 +465,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     .filter(java.util.Objects::nonNull)
                     .distinct()
                     .toList();
-            List<VisualRegionLocator.Claim> supportedClaims = pageScopedClaims(
+            List<VisualRegionLocator.Claim> supportedClaims = VisualCropAcceptancePolicy.pageScopedClaims(
                     response.pageNumber(), referencedClaims, request.claims());
             List<UUID> supported = supportedClaims.stream().map(VisualRegionLocator.Claim::evidenceId).toList();
             List<Integer> supportedStepPositions = supportedClaims.stream()
@@ -638,7 +479,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 continue;
             }
             try {
-                ModelRegion normalizedResponse = normalizedGeometry(response);
+                ModelRegion normalizedResponse = VisualCropAcceptancePolicy.normalizedGeometry(response);
                 LocatedRegion region = new LocatedRegion(
                         normalizedResponse.pageNumber(),
                         normalizedResponse.label(),
@@ -692,53 +533,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 && first.height() == second.height();
     }
 
-    static ModelRegion normalizedGeometry(ModelRegion region) {
-        int x = Math.max(0, Math.min(980, region.x()));
-        int y = Math.max(0, Math.min(980, region.y()));
-        int width = Math.max(20, Math.min(region.width(), 1_000 - x));
-        int height = Math.max(20, Math.min(region.height(), 1_000 - y));
-        return new ModelRegion(
-                region.pageNumber(),
-                region.label(),
-                region.visibleDescription(),
-                x,
-                y,
-                width,
-                height,
-                region.supportedClaimRefs());
-    }
-
     private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
         if (reference == null || !reference.matches("C[1-9][0-9]*")) return null;
         int index = Integer.parseInt(reference.substring(1)) - 1;
         return index >= 0 && index < request.claims().size() ? request.claims().get(index) : null;
-    }
-
-    /**
-     * Claim references from a visual model are a relevance hint, not an authority to attach a crop across pages.
-     * A crop can only enhance a rule whose source page contains that crop. If the model names a neighbouring claim,
-     * recovery is safe only when exactly one supplied lesson step belongs to the crop page; otherwise attaching the
-     * crop would silently turn a useful image into an explanation for the wrong rule.
-     */
-    static List<VisualRegionLocator.Claim> pageScopedClaims(
-            int pageNumber,
-            List<VisualRegionLocator.Claim> referencedClaims,
-            List<VisualRegionLocator.Claim> availableClaims) {
-        List<VisualRegionLocator.Claim> samePageReferences = referencedClaims.stream()
-                .filter(claim -> sourceIncludes(claim, pageNumber))
-                .toList();
-        if (!samePageReferences.isEmpty()) return samePageReferences;
-        List<VisualRegionLocator.Claim> pageClaims = availableClaims.stream()
-                .filter(claim -> sourceIncludes(claim, pageNumber))
-                .toList();
-        // A single-step request has one unambiguous page-scoped claim. Some vision providers omit C1 even while
-        // returning a correct literal crop, so recover that safe association instead of spending another full image
-        // request on formatting. Never make this inference when two neighbouring lesson steps share a page.
-        return pageClaims.size() == 1 ? pageClaims : List.of();
-    }
-
-    private static boolean sourceIncludes(VisualRegionLocator.Claim claim, int pageNumber) {
-        return claim.sourcePages().isEmpty() || claim.sourcePages().contains(pageNumber);
     }
 
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {

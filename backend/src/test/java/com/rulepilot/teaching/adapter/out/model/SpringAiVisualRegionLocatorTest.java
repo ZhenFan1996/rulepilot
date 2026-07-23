@@ -154,7 +154,7 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void clampsARegionThatSlightlyOverrunsTheModelsNormalizedPageBoundary() {
-        var normalized = SpringAiVisualRegionLocator.normalizedGeometry(
+        var normalized = VisualCropAcceptancePolicy.normalizedGeometry(
                 new SpringAiVisualRegionLocator.ModelRegion(
                         1, "card detail", "可见卡牌图标", 960, 970, 100, 100, java.util.List.of("C1")));
 
@@ -176,12 +176,12 @@ class SpringAiVisualRegionLocatorTest {
         var verticalCard = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 3, "纪念碑卡牌解剖图", "一张竖版卡牌标出标题、插画、资源图案和能力区域", 650, 308, 350, 692, List.of(UUID.randomUUID()));
 
-        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(tallLegend)).isTrue();
-        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(workedDiagram)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.requiresTighterIconViewport(verticalCard)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.withoutOversizedIconLegends(List.of(tallLegend, workedDiagram)))
+        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(tallLegend)).isTrue();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(workedDiagram)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(verticalCard)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.withoutOversizedIconLegends(List.of(tallLegend, workedDiagram)))
                 .containsExactly(workedDiagram);
-        assertThat(SpringAiVisualRegionLocator.tightIconViewportInstruction())
+        assertThat(VisualCropAcceptancePolicy.tightIconViewportInstruction())
                 .contains("tighter rectangle", "numbered prose");
     }
 
@@ -192,12 +192,12 @@ class SpringAiVisualRegionLocatorTest {
         var compactWorkedState = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 3, "放置示例", "一块栖息地板块与相邻的野生动物标记", 100, 420, 400, 300, List.of(UUID.randomUUID()));
 
-        assertThat(SpringAiVisualRegionLocator.requiresTighterReaderViewport(broadComponentOverview)).isTrue();
-        assertThat(SpringAiVisualRegionLocator.requiresTighterReaderViewport(compactWorkedState)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.withoutOversizedReaderViewports(
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(broadComponentOverview)).isTrue();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(compactWorkedState)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
                         List.of(broadComponentOverview, compactWorkedState)))
                 .containsExactly(compactWorkedState);
-        assertThat(SpringAiVisualRegionLocator.tightReaderViewportInstruction())
+        assertThat(VisualCropAcceptancePolicy.tightReaderViewportInstruction())
                 .contains("too much", "compact rectangle");
     }
 
@@ -231,13 +231,13 @@ class SpringAiVisualRegionLocatorTest {
                 180,
                 List.of(UUID.randomUUID()));
 
-        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(stackedScoreExamples)).isTrue();
-        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(portraitCard)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.requiresTighterScoreExampleViewport(compactScoreRow)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.withoutOversizedReaderViewports(
+        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(stackedScoreExamples)).isTrue();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(portraitCard)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(compactScoreRow)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
                         List.of(stackedScoreExamples, compactScoreRow, portraitCard)))
                 .containsExactly(compactScoreRow, portraitCard);
-        assertThat(SpringAiVisualRegionLocator.tightReaderViewportInstruction())
+        assertThat(VisualCropAcceptancePolicy.tightReaderViewportInstruction())
                 .contains("neighbouring score examples", "another animal's examples");
     }
 
@@ -246,7 +246,7 @@ class SpringAiVisualRegionLocatorTest {
         Claim overview = new Claim(UUID.randomUUID(), "游戏目标", List.of(2));
         Claim cardAnatomy = new Claim(UUID.randomUUID(), "文物卡的构成", List.of(3));
 
-        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(
+        List<Claim> rebound = VisualCropAcceptancePolicy.pageScopedClaims(
                 3, List.of(overview), List.of(overview, cardAnatomy));
 
         assertThat(rebound).containsExactly(cardAnatomy);
@@ -258,7 +258,7 @@ class SpringAiVisualRegionLocatorTest {
         Claim playerBoard = new Claim(UUID.randomUUID(), "发给每位玩家玩家板", List.of(3), 2);
         Claim supply = new Claim(UUID.randomUUID(), "创建公共供应区", List.of(3), 3);
 
-        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(
+        List<Claim> rebound = VisualCropAcceptancePolicy.pageScopedClaims(
                 3, List.of(overview), List.of(overview, playerBoard, supply));
 
         assertThat(rebound).isEmpty();
@@ -268,7 +268,7 @@ class SpringAiVisualRegionLocatorTest {
     void binds_a_crop_without_a_claim_reference_when_one_step_unambiguously_cites_its_page() {
         Claim setup = new Claim(UUID.randomUUID(), "发给每位玩家玩家板", List.of(3), 2);
 
-        List<Claim> rebound = SpringAiVisualRegionLocator.pageScopedClaims(3, List.of(), List.of(setup));
+        List<Claim> rebound = VisualCropAcceptancePolicy.pageScopedClaims(3, List.of(), List.of(setup));
 
         assertThat(rebound).containsExactly(setup);
     }
@@ -288,7 +288,7 @@ class SpringAiVisualRegionLocatorTest {
                         anchor)),
                 List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(3, "image/png", cardGroupImage())));
 
-        assertThat(SpringAiVisualRegionLocator.catalogedAnchorRegion(request, request.candidates().getFirst()))
+        assertThat(VisualCropAcceptancePolicy.catalogedAnchorRegion(request, request.candidates().getFirst()))
                 .contains(new LocatedRegion(
                         3,
                         "公共供应区资源",
@@ -316,7 +316,7 @@ class SpringAiVisualRegionLocatorTest {
                         anchor)),
                 List.of(new com.rulepilot.teaching.VisualRegionLocator.PageImage(4, "image/png", cardGroupImage())));
 
-        assertThat(SpringAiVisualRegionLocator.catalogedAnchorRegion(request, request.candidates().getFirst())).isEmpty();
+        assertThat(VisualCropAcceptancePolicy.catalogedAnchorRegion(request, request.candidates().getFirst())).isEmpty();
     }
 
     @Test
@@ -341,7 +341,7 @@ class SpringAiVisualRegionLocatorTest {
                 21, "流浪者结盟步骤", "狐狸与松鼠角色站在一起", 100, 100, 300, 300,
                 List.of(namedCard.evidenceId()), List.of(1));
 
-        assertThat(SpringAiVisualRegionLocator.claimsForExactCrop(request, region))
+        assertThat(VisualCropAcceptancePolicy.claimsForExactCrop(request, region))
                 .containsExactly(namedCard);
     }
 
@@ -365,8 +365,8 @@ class SpringAiVisualRegionLocatorTest {
         LocatedRegion crop = new LocatedRegion(
                 1, "抽牌区", "三组卡牌", 0, 0, 1_000, 1_000, List.of(UUID.randomUUID()));
 
-        assertThat(SpringAiVisualRegionLocator.hasEnoughRenderedVisualSignal(request(labelOnlyImage()), crop)).isFalse();
-        assertThat(SpringAiVisualRegionLocator.hasEnoughRenderedVisualSignal(request(cardGroupImage()), crop)).isTrue();
+        assertThat(VisualCropAcceptancePolicy.hasEnoughRenderedVisualSignal(request(labelOnlyImage()), crop)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.hasEnoughRenderedVisualSignal(request(cardGroupImage()), crop)).isTrue();
     }
 
     private VisualLocationRequest request(byte[] page) {
