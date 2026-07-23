@@ -778,24 +778,6 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void removesEnglishQuestionFillerWithoutDroppingRetrievalConditions() {
-        GroundedTeachingAgent agent = new GroundedTeachingAgent(
-                request -> List.of(),
-                request -> null,
-                new PolicyEvidenceVerifier(),
-                acceptedCritic(),
-                new ImmediateAuditedAgentInvocations(),
-                4);
-
-        assertThat(agent.focusedRetrievalQuery(
-                        "What is the cost to launch a probe and what is the default limit on probes in space?"))
-                .isEqualTo("cost launch probe default limit on probes in space");
-        assertThat(agent.focusedRetrievalQuery(
-                        "When landing on a planet that already has an orbiter, what is the cost reduction?"))
-                .isEqualTo("landing on planet that already has orbiter cost reduction");
-    }
-
-    @Test
     void reusesPreviouslyVerifiedTopicsAndRetriesOnlyIncompleteOnes() {
         UUID versionId = UUID.randomUUID();
         TeachingPlan plan = plan(versionId);

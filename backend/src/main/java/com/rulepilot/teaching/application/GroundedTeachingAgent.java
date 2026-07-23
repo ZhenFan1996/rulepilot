@@ -41,7 +41,6 @@ import java.util.concurrent.Future;
 import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -60,7 +59,6 @@ public class GroundedTeachingAgent {
     static final String GENERATOR_VERSION = "adaptive-teaching-v35-endgame-check-fidelity";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
-    private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private static final int EVIDENCE_PER_INTENT = 3;
     private static final int MAX_DRAFT_REPAIR_ATTEMPTS = 3;
     /*
@@ -70,10 +68,6 @@ public class GroundedTeachingAgent {
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
     private static final int MAX_POST_PUBLICATION_REVIEW_CORRECTIONS = 4;
     private static final int MAX_POST_PUBLICATION_SCOPE_CORRECTIONS = 2;
-    private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
-    private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
-            "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
-            "with", "you", "your");
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
     private final EvidenceVerifier evidenceVerifier;
@@ -339,7 +333,7 @@ public class GroundedTeachingAgent {
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
         boolean conflictingEvidence = false;
         int toolCalls = 0;
-        for (String query : retrievalQueries(planned, queryBudget)) {
+        for (String query : TeachingEvidenceRetrievalPolicy.queries(planned, queryBudget)) {
             toolCalls++;
             try {
                 List<RuleEvidence> retrieved = invocations.invoke(
@@ -365,7 +359,9 @@ public class GroundedTeachingAgent {
             }
             if (conflictingEvidence) break;
         }
-        List<RuleEvidence> evidence = conflictingEvidence ? List.of() : balancedEvidence(evidenceByIntent);
+        List<RuleEvidence> evidence = conflictingEvidence
+                ? List.of()
+                : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
         if (bindVisualPageEvidence) {
             evidence = visualPageBoundEvidence(plan, planned, evidence, assistantRunId);
         }
@@ -509,26 +505,12 @@ public class GroundedTeachingAgent {
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {
         return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
                         documentVersionId,
-                        focusedRetrievalQuery(query),
+                        TeachingEvidenceRetrievalPolicy.focusedQuery(query),
                         EVIDENCE_PER_INTENT,
                         Set.of(),
                         null,
                         true,
                         true)));
-    }
-
-    String focusedRetrievalQuery(String query) {
-        String focused = Stream.of(RETRIEVAL_QUERY_SEPARATOR.split(query.strip()))
-                .filter(token -> !token.isBlank())
-                .filter(token -> !ENGLISH_RETRIEVAL_FILLER.contains(token.toLowerCase(java.util.Locale.ROOT)))
-                .collect(Collectors.joining(" "));
-        return focused.isBlank() ? query.strip() : focused;
-    }
-
-    private List<String> retrievalQueries(TeachingPlan.PlannedSection topic, int limit) {
-        Stream<String> queries = Stream.concat(
-                topic.retrievalQueries().stream(), objectiveQueries(topic.objective()).stream());
-        return queries.map(String::strip).filter(query -> !query.isBlank()).distinct().limit(limit).toList();
     }
 
     private List<RuleEvidence> visualPageBoundEvidence(
@@ -652,40 +634,6 @@ public class GroundedTeachingAgent {
                             source.pageImages());
                 })
                 .toList();
-    }
-
-    private List<String> objectiveQueries(String objective) {
-        int maxLength = 480;
-        if (objective.length() <= maxLength) return List.of(objective);
-        String head = objective.substring(0, maxLength);
-        int lastSpace = head.lastIndexOf(' ');
-        if (lastSpace > 0) head = head.substring(0, lastSpace);
-        String tail = objective.substring(Math.max(0, objective.length() - maxLength));
-        int firstSpace = tail.indexOf(' ');
-        if (firstSpace >= 0) tail = tail.substring(firstSpace + 1);
-        return List.of(head, tail);
-    }
-
-    private List<RuleEvidence> balancedEvidence(List<List<RuleEvidence>> evidenceByIntent) {
-        Map<UUID, RuleEvidence> merged = new LinkedHashMap<>();
-        for (int rank = 0; merged.size() < MAX_EVIDENCE_PER_SECTION; rank++) {
-            boolean candidateAtRank = false;
-            for (List<RuleEvidence> intentEvidence : evidenceByIntent) {
-                if (rank >= intentEvidence.size()) {
-                    continue;
-                }
-                candidateAtRank = true;
-                RuleEvidence candidate = intentEvidence.get(rank);
-                merged.putIfAbsent(candidate.chunkId(), candidate);
-                if (merged.size() == MAX_EVIDENCE_PER_SECTION) {
-                    break;
-                }
-            }
-            if (!candidateAtRank) {
-                break;
-            }
-        }
-        return List.copyOf(merged.values());
     }
 
     private DraftCandidate composeDraft(
