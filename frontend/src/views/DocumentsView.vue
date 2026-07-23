@@ -9,6 +9,7 @@ import {
   rememberPendingRulebookLesson,
   type PendingRulebookLesson,
 } from '@/lib/pendingRulebookLesson'
+import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
@@ -35,8 +36,11 @@ interface ModelConfigurationResponse {
   assignments: { teaching: string; visual: string }
 }
 
+class PreparationFailedError extends Error {}
+
 const router = useRouter()
 const route = useRoute()
+const { t } = useLocale()
 const username = ref('')
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
@@ -76,28 +80,31 @@ const visualVisionCapable = computed(() => visualProvider.value?.visionCapable =
 
 function documentStatusLabel(status: string) {
   return {
-    UPLOADED: '等待读取', EXTRACTING: '正在读取', READY: '可以开始讲解', FAILED: '读取失败',
-  }[status] ?? '正在处理'
+    UPLOADED: t('documents.status.uploaded'),
+    EXTRACTING: t('documents.status.extracting'),
+    READY: t('documents.status.ready'),
+    FAILED: t('documents.status.failed'),
+  }[status] ?? t('documents.status.processing')
 }
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
   if (response.status === 401) {
     await router.push({ name: 'login' })
-    throw new Error('请先登录。')
+    throw new Error(t('documents.login'))
   }
   return response
 }
 
 async function csrfToken() {
   const response = await checkedFetch('/api/auth/csrf')
-  if (!response.ok) throw new Error('无法建立安全会话。')
+  if (!response.ok) throw new Error(t('documents.error'))
   return await response.json() as CsrfResponse
 }
 
 async function loadDocuments() {
   const response = await checkedFetch('/api/v1/documents')
-  if (!response.ok) throw new Error('无法读取规则书。')
+  if (!response.ok) throw new Error(t('documents.error'))
   documents.value = await response.json() as DocumentResponse[]
 }
 
@@ -110,8 +117,8 @@ async function load() {
       checkedFetch('/api/v1/games'),
       checkedFetch('/api/v1/model-configuration'),
     ])
-    if (!sessionResponse.ok) throw new Error('无法读取登录状态。')
-    if (!catalogResponse.ok) throw new Error('无法读取游戏目录。')
+    if (!sessionResponse.ok) throw new Error(t('documents.error'))
+    if (!catalogResponse.ok) throw new Error(t('documents.error'))
     username.value = ((await sessionResponse.json()) as { username: string }).username
     games.value = await catalogResponse.json() as GameResponse[]
     if (modelResponse.ok) modelConfiguration.value = await modelResponse.json() as ModelConfigurationResponse
@@ -120,7 +127,7 @@ async function load() {
     await loadDocuments()
     await recoverPendingHandoff()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '加载失败。'
+    errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     loading.value = false
   }
@@ -133,7 +140,7 @@ function selectFile(event: Event) {
 }
 
 function titleFromFile(selected: File) {
-  return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || '规则书'
+  return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || t('documents.titleFallback')
 }
 
 function currentPreferences(versionId: string): PendingRulebookLesson {
@@ -146,7 +153,7 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
 }
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
-  if (preferences.beginnerCount > preferences.playerCount) throw new Error('新手人数不能超过玩家人数。')
+  if (preferences.beginnerCount > preferences.playerCount) throw new Error(t('documents.error'))
   beginPreparation(versionId, 'RECEIVED')
   try {
     const csrf = await csrfToken()
@@ -159,7 +166,7 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
         durationMinutes: preferences.durationMinutes,
       }),
     })
-    if (!planResponse.ok) throw new Error('暂时无法开始讲解，请确认规则书已经读取完成。')
+    if (!planResponse.ok) throw new Error(t('documents.error'))
     const launch = await planResponse.json() as TeachingPreparationLaunch
     await waitForTeachingPreparation(launch.assistantRunId, preferences, csrf)
   } finally {
@@ -188,27 +195,27 @@ function updatePreparationMessage(state: string, activities: TeachingPreparation
   if (active?.operation.startsWith('inspectRulebookVisualBatch')) {
     const batch = active.operation.split('|')[1]
     message.value = batch
-      ? `正在识别第 ${batch} 组页面里的组件、图标和示例。`
-      : '正在识别页面里的组件、图标和示例。'
+      ? t('documents.prepare.visualBatch', { batch })
+      : t('documents.prepare.visual')
     return
   }
   if (active?.operation.startsWith('organizeTeachingOutline')) {
-    message.value = '页面要点已经读完，正在安排讲解顺序。'
+    message.value = t('documents.prepare.outline')
     return
   }
   message.value = {
-    RECEIVED: '已经收到，马上开始整理讲解。',
-    DOCUMENT_READINESS: '正在确认规则书页面和图片。',
-    LESSON_PLANNING: '正在阅读图文并组织讲解顺序。',
-    COMPLETED: '讲解目录已准备好，正在打开可读内容。',
-  }[state] ?? '正在准备讲解，后台工作仍在继续。'
+    RECEIVED: t('documents.prepare.received'),
+    DOCUMENT_READINESS: t('documents.prepare.readiness'),
+    LESSON_PLANNING: t('documents.prepare.planning'),
+    COMPLETED: t('documents.prepare.completed'),
+  }[state] ?? t('documents.prepare.default')
 }
 
 function preparationElapsedLabel() {
   const seconds = preparationElapsedSeconds.value
-  if (seconds < 60) return `已用时 ${seconds} 秒`
+  if (seconds < 60) return t('documents.elapsed.seconds', { seconds })
   const minutes = Math.floor(seconds / 60)
-  return `已用时 ${minutes} 分 ${String(seconds % 60).padStart(2, '0')} 秒`
+  return t('documents.elapsed.minutes', { minutes, seconds: String(seconds % 60).padStart(2, '0') })
 }
 
 async function waitForTeachingPreparation(
@@ -222,7 +229,7 @@ async function waitForTeachingPreparation(
     try {
       if (!snapshot) {
         const response = await checkedFetch(`/api/v1/assistant-runs/${runId}`)
-        if (!response.ok) throw new Error('暂时无法读取讲解准备进度。')
+        if (!response.ok) throw new Error(t('documents.error'))
         snapshot = await response.json() as TeachingPreparationRun
       }
       updatePreparationMessage(snapshot.run.state, snapshot.activities)
@@ -231,11 +238,11 @@ async function waitForTeachingPreparation(
         return
       }
       if (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED') {
-        throw new Error('讲解准备没有完成。你可以稍后重新开始，规则书无需再次上传。')
+        throw new PreparationFailedError(t('documents.error'))
       }
     } catch (error) {
-      if (error instanceof Error && error.message.includes('没有完成')) throw error
-      message.value = '暂时没拿到最新进度，正在自动重连；后台准备不会停止。'
+      if (error instanceof PreparationFailedError) throw error
+      message.value = t('documents.prepare.reconnect')
     }
     snapshot = undefined
     await new Promise((resolve) => setTimeout(resolve, 1200))
@@ -246,13 +253,13 @@ async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: Csrf
   const latestResponse = await checkedFetch(
     `/api/v1/document-versions/${preferences.versionId}/teaching-plans/latest`,
   )
-  if (!latestResponse.ok) throw new Error('讲解目录已经完成，但暂时无法打开。请稍后从“我的讲解”进入。')
+  if (!latestResponse.ok) throw new Error(t('documents.prepare.openLater'))
   const plan = await latestResponse.json() as TeachingPlanResponse
-  message.value = '基础讲解已开始生成，可以离开此页。'
+  message.value = t('documents.prepare.started')
   const lessonResponse = await checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons`, {
     method: 'POST', headers: { [csrf.headerName]: csrf.token },
   })
-  if (!lessonResponse.ok) throw new Error('讲解任务没有启动，请稍后重试。')
+  if (!lessonResponse.ok) throw new Error(t('documents.error'))
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
   localStorage.setItem('rulepilot:last-plan-id', plan.id)
   await router.push({ name: 'lessons', query: { started: plan.id } })
@@ -270,7 +277,7 @@ async function resumeOrStartLesson(pending: PendingRulebookLesson) {
   }
   if (snapshot && (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED')) {
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-    throw new Error('上次讲解准备没有完成。规则书已经保留，可以点击“开始讲解”重试。')
+    throw new Error(t('documents.error'))
   }
   if (snapshot) {
     beginPreparation(pending.versionId, snapshot.run.state)
@@ -310,7 +317,7 @@ function watchProgress(pending: PendingRulebookLesson) {
     }
     progressRetryAttempts.set(versionId, 0)
     progress.value = { ...progress.value, [versionId]: snapshot }
-    message.value = `正在读取规则书：${snapshot.percentage}%`
+    message.value = t('documents.progress.reading', { percentage: snapshot.percentage })
     if (snapshot.complete) {
       void handleTerminalProgress(pending, snapshot.stage)
     }
@@ -329,12 +336,12 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
     await resumeOrStartLesson(pending).catch((error: unknown) => {
-      errorMessage.value = error instanceof Error ? error.message : '无法生成讲解。'
+      errorMessage.value = error instanceof Error ? error.message : t('documents.error')
     })
     return
   }
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-  errorMessage.value = '规则书读取失败，没有启动讲解。你可以重新上传，或稍后重试处理。'
+  errorMessage.value = t('documents.progress.failed')
 }
 
 async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) {
@@ -348,12 +355,12 @@ async function reconcileProgressAfterDisconnect(pending: PendingRulebookLesson) 
     if (!status) {
       if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
       processingVersionId.value = ''
-      errorMessage.value = '这次规则书读取记录已经不存在，没有启动讲解。'
+      errorMessage.value = t('documents.progress.missing')
       return
     }
-    message.value = '暂时没有收到最新读取进度，正在重新连接；后台处理不会停止。'
+    message.value = t('documents.progress.reconnect')
   } catch {
-    message.value = '暂时无法确认读取进度，正在重新连接；后台处理不会停止。'
+    message.value = t('documents.progress.reconnect')
   }
   scheduleProgressReconnect(pending)
 }
@@ -407,7 +414,7 @@ async function recoverPendingHandoff() {
 async function uploadRulebook() {
   if (!file.value) return
   uploading.value = true
-  message.value = '正在上传规则书…'
+  message.value = t('documents.uploading')
   errorMessage.value = ''
   try {
     const selectedFile = file.value
@@ -423,7 +430,7 @@ async function uploadRulebook() {
     const response = await checkedFetch(path, {
       method: 'POST', headers: { [csrf.headerName]: csrf.token }, body: form,
     })
-    if (!response.ok) throw new Error('上传失败，请确认文件是 50 MiB 以内的 PDF。')
+    if (!response.ok) throw new Error(t('documents.error'))
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
     const pending = currentPreferences(result.version.id)
     if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
@@ -436,11 +443,11 @@ async function uploadRulebook() {
     } else if (result.version.status === 'FAILED') {
       await handleTerminalProgress(pending, 'FAILED')
     } else {
-      message.value = result.duplicate ? '已找到这本规则书，继续等待读取完成…' : '上传完成，正在读取页面和图片…'
+      message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
       watchProgress(pending)
     }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '上传失败。'
+    errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     uploading.value = false
   }
@@ -448,7 +455,7 @@ async function uploadRulebook() {
 
 async function deleteRulebook(entry: DocumentResponse) {
   if (deletingDocumentId.value || preparingVersionId.value) return
-  const confirmed = window.confirm(`删除“${entry.document.title}”吗？这会同时删除本地规则书、页面图片和由它生成的讲解，无法恢复。`)
+  const confirmed = window.confirm(t('documents.delete.confirm', { title: entry.document.title }))
   if (!confirmed) return
   deletingDocumentId.value = entry.document.id
   errorMessage.value = ''
@@ -457,16 +464,16 @@ async function deleteRulebook(entry: DocumentResponse) {
     const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(entry.document.id)}`, {
       method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
     })
-    if (!response.ok) throw new Error('规则书暂时无法删除，请稍后重试。')
+    if (!response.ok) throw new Error(t('documents.error'))
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, entry.latestVersion.id)
     if (processingVersionId.value === entry.latestVersion.id) {
       closeProgressConnection(entry.latestVersion.id)
       processingVersionId.value = ''
     }
     await loadDocuments()
-    message.value = '规则书和它生成的讲解已经删除。'
+    message.value = t('documents.deleted')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '规则书暂时无法删除。'
+    errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     deletingDocumentId.value = ''
   }
@@ -490,54 +497,54 @@ onBeforeUnmount(() => {
   <AppShell>
     <main class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
       <section class="mx-auto max-w-2xl text-center">
-        <p class="text-sm font-medium text-copper">开始一份讲解</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">上传规则书</h1>
-        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">只需选择 PDF。游戏信息、来源和讲解偏好都可以稍后再补。</p>
+        <p class="text-sm font-medium text-copper">{{ t('documents.heading.eyebrow') }}</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('documents.heading.title') }}</h1>
+        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">{{ t('documents.heading.description') }}</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <label for="rulebook-file" class="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-ink/25 bg-canvas px-6 py-8 text-center hover:border-copper/60">
-            <span class="font-display text-xl font-semibold">{{ file?.name ?? '选择 PDF 规则书' }}</span>
-            <span class="mt-2 text-sm text-ink/45">{{ file ? '点击可以换一本' : '点击选择 · 最大 50 MiB' }}</span>
+            <span class="font-display text-xl font-semibold">{{ file?.name ?? t('documents.file.choose') }}</span>
+            <span class="mt-2 text-sm text-ink/45">{{ file ? t('documents.file.change') : t('documents.file.limit') }}</span>
           </label>
           <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
 
-          <label class="mt-4 block text-sm font-semibold">想自己起标题？ <span class="font-normal text-ink/40">（可选）</span>
-            <input v-model="title" maxlength="160" placeholder="例如：翼展规则书" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+          <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
+            <input v-model="title" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
           </label>
 
           <details class="mt-4 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-ink/55">可选：关联游戏、官方链接和讲解偏好</summary>
+            <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
             <div class="mt-4 space-y-4">
-              <label class="block text-sm font-semibold">官方原文链接
+              <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
                 <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
-                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">填写出版方网页或 PDF 后，公开讲解会链接回这里。</span>
+                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
               </label>
 
-              <label v-if="editionOptions.length" class="block text-sm font-semibold">关联到已有游戏
+              <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
                 <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal">
-                  <option value="">暂不关联</option>
+                  <option value="">{{ t('documents.game.none') }}</option>
                   <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
                 </select>
               </label>
-              <p v-else class="text-sm leading-6 text-ink/55">还没有添加游戏？不影响上传。需要时再去 <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">我的游戏</RouterLink> 整理。</p>
+              <p v-else class="text-sm leading-6 text-ink/55">{{ t('documents.game.missing') }} <RouterLink :to="{ name: 'catalog' }" class="font-semibold text-indigo underline">{{ t('documents.game.organize') }}</RouterLink>{{ t('documents.game.missingTail') }}</p>
 
               <div v-if="modelConfiguration && !visualVisionCapable" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-                <p><span class="font-semibold">当前设置不会读取规则书图片。</span>文字讲解仍可开始；想识别图标、组件或版图，可以换用支持图片的模型。</p>
-                <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">前往模型设置</RouterLink>
+                <p><span class="font-semibold">{{ t('documents.visual.warningLead') }}</span>{{ t('documents.visual.warningBody') }}</p>
+                <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">{{ t('documents.visual.settings') }}</RouterLink>
               </div>
 
               <div class="grid gap-4 sm:grid-cols-3">
                 <template v-if="editionId">
-                  <label class="text-sm font-semibold">玩家<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                  <label class="text-sm font-semibold">新手<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                  <label class="text-sm font-semibold">分钟<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                  <label class="text-sm font-semibold">{{ t('documents.players') }}<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                  <label class="text-sm font-semibold">{{ t('documents.beginners') }}<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
+                  <label class="text-sm font-semibold">{{ t('documents.minutes') }}<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
                 </template>
-                <label class="text-sm font-semibold" :class="editionId ? 'sm:col-span-3' : ''">这是什么资料？
+                <label class="text-sm font-semibold" :class="editionId ? 'sm:col-span-3' : ''">{{ t('documents.sourceType') }}
                   <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
-                    <option value="BASE_RULEBOOK">基础规则书</option>
-                    <option value="EXPANSION_RULEBOOK">扩展规则书</option>
-                    <option value="OFFICIAL_FAQ">官方 FAQ</option>
-                    <option value="OFFICIAL_ERRATA">官方勘误</option>
+                    <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
+                    <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
+                    <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
+                    <option value="OFFICIAL_ERRATA">{{ t('documents.type.errata') }}</option>
                   </select>
                 </label>
               </div>
@@ -545,7 +552,7 @@ onBeforeUnmount(() => {
           </details>
 
           <button :disabled="!canUpload" class="mt-5 w-full rounded-lg bg-copper px-5 py-3.5 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40">
-            {{ preparingVersionId ? '正在开始讲解…' : uploading ? '正在上传…' : '上传并生成讲解' }}
+            {{ preparingVersionId ? t('documents.submitPreparing') : uploading ? t('documents.submitUploading') : t('documents.submit') }}
           </button>
         </form>
 
@@ -553,12 +560,12 @@ onBeforeUnmount(() => {
         <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
           <div class="flex items-start justify-between gap-4">
             <div>
-              <p class="font-semibold text-ink">正在组织讲解</p>
+              <p class="font-semibold text-ink">{{ t('documents.organizing') }}</p>
               <p class="mt-1 text-sm leading-6 text-ink/60">{{ message }}</p>
             </div>
             <span class="shrink-0 text-xs font-medium text-indigo">{{ preparationElapsedLabel() }}</span>
           </div>
-          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">你可以离开这里，处理会在后台继续；回来后会自动接上。</p>
+          <p class="mt-3 border-t border-indigo/10 pt-3 text-xs leading-5 text-ink/45">{{ t('documents.background') }}</p>
         </div>
         <p v-if="errorMessage" class="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
         <div v-if="processingVersionId" class="mx-auto mt-4 h-1.5 max-w-md overflow-hidden rounded-full bg-ink/10">
@@ -569,15 +576,15 @@ onBeforeUnmount(() => {
       <section class="mt-14 border-t border-ink/10 pt-8">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="font-display text-2xl font-semibold">已上传的规则书</h2>
-            <p class="mt-1 text-sm text-ink/45">读完后直接开始讲解；游戏信息需要时再整理。</p>
+            <h2 class="font-display text-2xl font-semibold">{{ t('documents.list.title') }}</h2>
+            <p class="mt-1 text-sm text-ink/45">{{ t('documents.list.description') }}</p>
           </div>
-          <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">管理游戏</RouterLink>
+          <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('documents.list.manage') }}</RouterLink>
         </div>
-        <p v-if="loading" class="mt-5 text-sm text-ink/45">正在读取…</p>
+        <p v-if="loading" class="mt-5 text-sm text-ink/45">{{ t('documents.list.loading') }}</p>
         <div v-else-if="documents.length === 0" class="mt-5 rounded-xl border border-dashed border-ink/20 p-8 text-center">
-          <p class="font-semibold">还没有规则书</p>
-          <p class="mt-2 text-sm text-ink/45">直接在上方选一个 PDF，不用先准备其他资料。</p>
+          <p class="font-semibold">{{ t('documents.empty.title') }}</p>
+          <p class="mt-2 text-sm text-ink/45">{{ t('documents.empty.description') }}</p>
         </div>
         <ul v-else class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
           <li v-for="entry in documents" :key="entry.document.id" class="py-5">
@@ -589,8 +596,8 @@ onBeforeUnmount(() => {
                 </p>
               </div>
               <div class="flex shrink-0 flex-wrap gap-2">
-                <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : '无法生成讲解。')">开始讲解</button>
-                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? '正在删除…' : '删除' }}</button>
+                <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
+                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>
             </div>
           </li>

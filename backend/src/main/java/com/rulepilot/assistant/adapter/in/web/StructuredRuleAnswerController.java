@@ -9,6 +9,7 @@ import com.rulepilot.assistant.domain.AnswerFeedback.Rating;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.gamesession.GameSessionContextLookup;
+import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
@@ -61,7 +62,8 @@ public class StructuredRuleAnswerController {
                         session == null ? request.playerCount() : session.playerCount(),
                         session == null ? request.activeExpansions() : session.expansionIds(),
                         previousQuestion,
-                        request.learningIntent()),
+                        request.learningIntent(),
+                        PlayerLocale.fromRequest(request.language())),
                 username,
                 request.gameSessionId());
         GameSessionConversationTurn turn = session == null
@@ -113,7 +115,8 @@ public class StructuredRuleAnswerController {
             Set<UUID> activeExpansions,
             UUID gameSessionId,
             String previousQuestion,
-            com.rulepilot.assistant.domain.LearningIntent learningIntent) {}
+            com.rulepilot.assistant.domain.LearningIntent learningIntent,
+            String language) {}
 
     record AnswerResponse(
             UUID assistantRunId,

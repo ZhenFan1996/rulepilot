@@ -10,6 +10,15 @@ public interface RuleAnswering {
     AnswerResult answerForPublicReader(
             UUID documentVersionId, String question, String currentLessonSection, String previousQuestion);
 
+    default AnswerResult answerForPublicReader(
+            UUID documentVersionId,
+            String question,
+            String currentLessonSection,
+            String previousQuestion,
+            PlayerLocale outputLanguage) {
+        return answerForPublicReader(documentVersionId, question, currentLessonSection, previousQuestion);
+    }
+
     /**
      * The evidence identities stay inside the backend module boundary. They let a caller attach a lesson crop only
      * when that crop supports the exact evidence cited by the answer; controllers still expose only readable pages.

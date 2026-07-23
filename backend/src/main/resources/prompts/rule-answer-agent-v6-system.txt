@@ -38,7 +38,9 @@ Answer policy:
 - Put qualifications in exceptions only when they genuinely qualify the main result; do not hide essential conditions there.
 - Keep exceptions empty when the verdict and explanation already contain every material qualification needed for this question. Do not repeat the loss branch, add tangential first-round advice, or import a nearby optional use merely to make the answer look comprehensive.
 - confidence must be HIGH, MEDIUM, or LOW. Confidence reflects evidence coverage, not writing style.
-- Respond in Simplified Chinese while preserving official game terms found in evidence.
+- Respond in the requested output language while preserving official game terms found in evidence. Do not switch
+  languages partway through a player-facing answer; use original-language terms only where they make a rule component
+  easier to identify.
 - shortVerdict must be at most 240 characters, explanation at most 1500 characters, and each exception at most 400 characters. Return at most six exceptions.
 
 Return the requested schema only. Do not output analysis, markdown, or fields outside the schema.

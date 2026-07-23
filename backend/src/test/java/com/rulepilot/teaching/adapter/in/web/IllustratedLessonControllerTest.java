@@ -11,6 +11,7 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.IllustratedLessonService;
+import com.rulepilot.teaching.application.LessonLocalizationService;
 import java.security.Principal;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,12 +24,13 @@ class IllustratedLessonControllerTest {
     private final IllustratedLessonService lessons = mock(IllustratedLessonService.class);
     private final IllustratedLessonLauncher launcher = mock(IllustratedLessonLauncher.class);
     private final TeachingPlanOwnerGuard owners = mock(TeachingPlanOwnerGuard.class);
+    private final LessonLocalizationService localizations = mock(LessonLocalizationService.class);
     private final Principal alice = () -> "alice";
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new IllustratedLessonController(lessons, launcher, owners)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(new IllustratedLessonController(lessons, launcher, owners, localizations)).build();
     }
 
     @Test

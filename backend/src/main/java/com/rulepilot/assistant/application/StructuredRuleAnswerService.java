@@ -44,6 +44,7 @@ import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
+import com.rulepilot.assistant.PlayerLocale;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
@@ -265,9 +266,27 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     @Override
     public RuleAnswering.AnswerResult answerForPublicReader(
             UUID documentVersionId, String question, String currentLessonSection, String previousQuestion) {
+        return answerForPublicReader(documentVersionId, question, currentLessonSection, previousQuestion, PlayerLocale.ZH_CN);
+    }
+
+    @Override
+    public RuleAnswering.AnswerResult answerForPublicReader(
+            UUID documentVersionId,
+            String question,
+            String currentLessonSection,
+            String previousQuestion,
+            PlayerLocale outputLanguage) {
         AnswerCreation creation = answerWithRun(
                 question,
-                new QuestionContext(documentVersionId, currentLessonSection, null, null, Set.of(), previousQuestion, null),
+                new QuestionContext(
+                        documentVersionId,
+                        currentLessonSection,
+                        null,
+                        null,
+                        Set.of(),
+                        previousQuestion,
+                        null,
+                        outputLanguage),
                 "public-reader",
                 null);
         return toPublicReaderAnswer(creation);
@@ -1027,7 +1046,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         String conversationScopedQuestion = context.previousQuestion() == null
                 ? question.normalizedQuestion()
                 : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
-        conversationScopedQuestion = ANSWER_POLICY_VERSION + ":" + conversationScopedQuestion;
+        conversationScopedQuestion = ANSWER_POLICY_VERSION + ":" + context.outputLanguage().name() + ":" + conversationScopedQuestion;
         if (gameSessionId != null) {
             conversationScopedQuestion = "LIVE_TABLE:" + conversationScopedQuestion;
         }
@@ -1038,7 +1057,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return Optional.of(new AnswerCacheKey(
                     context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
                     conversationScopedQuestion, context.currentLessonSection(),
-                    context.gamePhase(), context.playerCount(), context.activeExpansions()));
+                    context.gamePhase(), context.playerCount(), context.activeExpansions(), context.outputLanguage()));
         } catch (IllegalArgumentException unavailableRuleDataVersion) {
             LOGGER.warn(
                     "Rule data version is unavailable for document version {}; bypassing answer cache",
@@ -1361,7 +1380,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         context.playerCount(),
                         context.activeExpansions().size(),
                         context.previousQuestion(),
-                        context.learningIntent()),
+                        context.learningIntent(),
+                        context.outputLanguage()),
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
                         .map(hit -> new EvidenceInput(

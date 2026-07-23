@@ -23,6 +23,8 @@ public class VersionedAgentPrompts {
     private final String objectiveCoverageCriticSystem;
     private final String criticUser;
     private final String structuredOutputRepair;
+    private final String lessonLocalizationSystem;
+    private final String lessonLocalizationUser;
 
     public VersionedAgentPrompts(
             @Value("classpath:prompts/teaching-agent-v16-system.txt") Resource teachingSystem,
@@ -57,7 +59,9 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
-            @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair)
+            @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
+            @Value("classpath:prompts/lesson-localization-v1-system.txt") Resource lessonLocalizationSystem,
+            @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
             throws IOException {
         this.teachingSystem = combined(
                 teachingSystem,
@@ -93,6 +97,8 @@ public class VersionedAgentPrompts {
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
+        this.lessonLocalizationSystem = read(lessonLocalizationSystem);
+        this.lessonLocalizationUser = read(lessonLocalizationUser);
     }
 
     public String teachingSystem() {
@@ -149,6 +155,14 @@ public class VersionedAgentPrompts {
 
     public String structuredOutputRepair() {
         return structuredOutputRepair;
+    }
+
+    public String lessonLocalizationSystem() {
+        return lessonLocalizationSystem;
+    }
+
+    public String lessonLocalizationUser() {
+        return lessonLocalizationUser;
     }
 
     private static String read(Resource resource) throws IOException {

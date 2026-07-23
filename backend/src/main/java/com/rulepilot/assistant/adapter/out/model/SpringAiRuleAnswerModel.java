@@ -166,6 +166,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                         .param("activeExpansionCount", request.context().activeExpansionCount())
                         .param("previousQuestion", request.context().previousQuestion())
                         .param("learningIntent", request.context().learningIntentForPrompt())
+                        .param("outputLanguage", request.context().outputLanguageForPrompt())
                         .param("evidence", request.evidence())
                         .param("repair", repairInstruction))
                 .call()

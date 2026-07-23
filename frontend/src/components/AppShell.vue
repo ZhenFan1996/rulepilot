@@ -4,12 +4,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import {
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
   type BackgroundTeachingItem,
 } from '@/lib/backgroundTeachingStatus'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
+import { useLocale } from '@/lib/locale'
 
 const props = withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
 
@@ -18,6 +20,7 @@ interface ActiveTeachingRun { id: string; subjectId: string }
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useLocale()
 const isDark = ref(document.documentElement.classList.contains('dark'))
 const username = ref('')
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
@@ -30,26 +33,29 @@ let disposed = false
 const teachingTitles = new Map<string, string>()
 
 const navigation = [
-  { name: 'home', path: '/', label: '首页', icon: 'compass' },
-  { name: 'public-library', path: '/library', label: '公开讲解', icon: 'library' },
-  { name: 'teach', path: '/teach', label: '添加规则书', icon: 'rulebook' },
-  { name: 'lessons', path: '/lessons', label: '我的讲解', icon: 'cards' },
-  { name: 'catalog', path: '/catalog', label: '我的游戏', icon: 'meeple' },
-  { name: 'account', path: '/account', label: '我的', icon: 'players' },
+  { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
+  { name: 'public-library', path: '/library', labelKey: 'nav.library', icon: 'library' },
+  { name: 'teach', path: '/teach', labelKey: 'nav.rulebook', icon: 'rulebook' },
+  { name: 'lessons', path: '/lessons', labelKey: 'nav.lessons', icon: 'cards' },
+  { name: 'catalog', path: '/catalog', labelKey: 'nav.games', icon: 'meeple' },
+  { name: 'account', path: '/account', labelKey: 'nav.account', icon: 'players' },
 ] as const
 const mobileNavigation = navigation.filter((item) => item.name !== 'account')
 
 const currentNavigationName = computed(() => route.name === 'catalog-manage' ? 'catalog' : route.name)
-const currentTitle = computed(() => navigation.find((item) => item.name === currentNavigationName.value)?.label ?? 'RulePilot')
+const currentTitle = computed(() => {
+  const item = navigation.find((candidate) => candidate.name === currentNavigationName.value)
+  return item ? t(item.labelKey) : 'RulePilot'
+})
 const detailedTeachingRoute = computed(() => route.name === 'lessons' || route.name === 'lesson')
 const backgroundStatusVisible = computed(() => !props.immersive && !detailedTeachingRoute.value)
 const activeTeachingText = computed(() => {
-  if (activeTeaching.value.length === 1) return `《${activeTeaching.value[0]!.gameTitle}》仍在后台准备`
-  return `${activeTeaching.value.length} 份讲解仍在后台准备`
+  if (activeTeaching.value.length === 1) return t('shell.lesson.oneActive', { title: activeTeaching.value[0]!.gameTitle })
+  return t('shell.lesson.manyActive', { count: activeTeaching.value.length })
 })
 const completedTeachingText = computed(() => {
-  if (completedTeaching.value.length === 1) return `《${completedTeaching.value[0]!.gameTitle}》的后台处理已经结束`
-  return `${completedTeaching.value.length} 份讲解的后台处理已经结束`
+  if (completedTeaching.value.length === 1) return t('shell.lesson.oneFinished', { title: completedTeaching.value[0]!.gameTitle })
+  return t('shell.lesson.manyFinished', { count: completedTeaching.value.length })
 })
 
 function toggleTheme() {
@@ -100,7 +106,7 @@ async function refreshTeachingStatus() {
     const active = runs.map((run) => ({
       runId: run.id,
       planId: run.subjectId,
-      gameTitle: teachingTitles.get(run.subjectId) ?? '一份讲解',
+      gameTitle: teachingTitles.get(run.subjectId) ?? t('shell.lesson.unavailable'),
     }))
     const previous = parseBackgroundTeachingItems(sessionStorage.getItem(ACTIVE_TEACHING_KEY))
     const transition = reconcileBackgroundTeaching(previous, active)
@@ -167,8 +173,8 @@ onBeforeUnmount(() => {
           :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
         >
           <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" />
-          <span>{{ item.label }}</span>
-          <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="`${activeTeaching.length} 份讲解正在生成`">{{ activeTeaching.length }}</span>
+          <span>{{ t(item.labelKey) }}</span>
+          <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
         </RouterLink>
       </nav>
 
@@ -177,19 +183,20 @@ onBeforeUnmount(() => {
           <span class="grid h-7 w-7 place-items-center rounded-full bg-ink text-xs text-canvas">{{ username.slice(0, 1).toUpperCase() }}</span>
           <span class="truncate">{{ username }}</span>
         </RouterLink>
-        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? '切换到浅色模式' : '切换到深色模式'" @click="toggleTheme">
-          <span>{{ isDark ? '浅色外观' : '深色外观' }}</span>
+        <div class="mb-2 px-1"><LanguageSwitcher /></div>
+        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
+          <span>{{ isDark ? t('shell.theme.light') : t('shell.theme.dark') }}</span>
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
-        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" @click="logout">退出登录</button>
-        <RouterLink v-else :to="{ name: 'login' }" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink">登录</RouterLink>
+        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
+        <RouterLink v-else :to="{ name: 'login' }" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
     <header class="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-ink/10 bg-canvas/95 px-4 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" aria-label="RulePilot 首页"><ProductMark /></RouterLink>
       <RouterLink v-if="username" :to="{ name: 'account' }" class="text-sm font-semibold text-ink/60">{{ username }}</RouterLink>
-      <span v-else class="text-sm font-medium text-ink/50">{{ currentTitle }}</span>
+      <div v-else class="flex items-center gap-2"><span class="text-sm font-medium text-ink/50">{{ currentTitle }}</span><LanguageSwitcher /></div>
     </header>
 
     <main class="min-h-screen pb-20 lg:pb-0">
@@ -200,17 +207,17 @@ onBeforeUnmount(() => {
       <div v-if="completedTeaching.length" class="flex items-start gap-3">
         <div class="min-w-0 flex-1">
           <p class="font-semibold">{{ completedTeachingText }}</p>
-          <p class="mt-1 text-sm leading-6 text-ink/55">可能已经完整，也可能保留了可读章节；打开讲解中心查看实际结果。</p>
-          <RouterLink :to="{ name: 'lessons' }" class="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-indigo">查看结果 →</RouterLink>
+          <p class="mt-1 text-sm leading-6 text-ink/55">{{ t('shell.lesson.finishedDetail') }}</p>
+          <RouterLink :to="{ name: 'lessons' }" class="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-indigo">{{ t('shell.lesson.viewResult') }}</RouterLink>
         </div>
-        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" aria-label="关闭讲解完成提醒" @click="dismissCompletedTeaching">×</button>
+        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.lesson.closeNotice')" @click="dismissCompletedTeaching">×</button>
       </div>
       <div v-else class="flex items-center justify-between gap-4" role="status">
         <div class="min-w-0">
           <p class="truncate font-semibold">{{ activeTeachingText }}</p>
-          <p class="mt-1 text-sm text-ink/50">可以继续浏览，任务不会因为离开页面而停止。</p>
+          <p class="mt-1 text-sm text-ink/50">{{ t('shell.lesson.activeDetail') }}</p>
         </div>
-        <RouterLink :to="{ name: 'lessons' }" class="shrink-0 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">看进度</RouterLink>
+        <RouterLink :to="{ name: 'lessons' }" class="shrink-0 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('shell.lesson.viewProgress') }}</RouterLink>
       </div>
     </aside>
 
@@ -223,8 +230,8 @@ onBeforeUnmount(() => {
         :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/55'"
       >
         <TabletopGlyph :name="item.icon" :size="18" />
-        <span>{{ item.label }}</span>
-        <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-1 inline-grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] font-bold text-white" :aria-label="`${activeTeaching.length} 份讲解正在生成`">{{ activeTeaching.length }}</span>
+        <span>{{ t(item.labelKey) }}</span>
+        <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-1 inline-grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
       </RouterLink>
     </nav>
   </div>

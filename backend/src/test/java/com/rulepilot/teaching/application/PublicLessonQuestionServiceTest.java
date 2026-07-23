@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.assistant.RuleAnswering;
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.time.Instant;
 import java.util.List;
@@ -32,7 +33,8 @@ class PublicLessonQuestionServiceTest {
         RuleAnswering.Answer answer = new RuleAnswering.Answer(
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
-        when(answers.answerForPublicReader(eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null)))
+        when(answers.answerForPublicReader(
+                        eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.ZH_CN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", 1, null));
@@ -56,7 +58,8 @@ class PublicLessonQuestionServiceTest {
         RuleAnswering.Answer answer = new RuleAnswering.Answer(
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
-        when(answers.answerForPublicReader(eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null)))
+        when(answers.answerForPublicReader(
+                        eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.ZH_CN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
 
         var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", 1, null));
@@ -71,12 +74,43 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
+    void requestsAnEnglishAnswerFromFreshRulebookEvidence() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID citedChunk = UUID.randomUUID();
+        when(lessons.find(planId)).thenReturn(Optional.of(publicLesson(planId, versionId, citedChunk)));
+        RuleAnswering.Answer answer = new RuleAnswering.Answer(
+                "ANSWERED", "Place the marker first.", "Then resolve its effect.",
+                List.of(new RuleAnswering.Citation("Setup", 2, 2)), List.of(), "HIGH", null);
+        when(answers.answerForPublicReader(
+                        eq(versionId), eq("Where does the marker go?"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.EN)))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
+
+        var result = service.answer(
+                planId,
+                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", 1, null, "en"));
+
+        assertThat(result).hasValueSatisfying(value -> {
+            assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");
+            assertThat(value.visualAids()).singleElement().satisfies(aid -> {
+                assertThat(aid.relatedStep()).isEqualTo("Cited rulebook illustration");
+                assertThat(aid.visualFocus().label()).isEqualTo("Rulebook illustration");
+            });
+            assertThat(value.examples()).singleElement().satisfies(example -> {
+                assertThat(example.heading()).isEqualTo("Cited rulebook example");
+                assertThat(example.text()).isEqualTo("The answer above is grounded in the illustrated example on the cited page.");
+            });
+        });
+    }
+
+    @Test
     void doesNotAnswerForAPlanThatIsNotPubliclyReadable() {
         UUID planId = UUID.randomUUID();
         when(lessons.find(planId)).thenReturn(Optional.empty());
 
         assertThat(service.answer(planId, new PublicLessonQuestionService.QuestionRequest("能做什么？", null, null))).isEmpty();
         verify(answers, never()).answerForPublicReader(
+                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),

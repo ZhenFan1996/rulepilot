@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.RuleAnswering;
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
@@ -33,19 +34,24 @@ public class PublicLessonQuestionService {
     }
 
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
+        PlayerLocale language = PlayerLocale.fromRequest(request.language());
         String lessonContext = lesson.lesson().sections().stream()
                 .filter(section -> request.sectionPosition() != null && section.position() == request.sectionPosition())
                 .findFirst()
                 .map(section -> String.join(" ", section.topicKey(), section.title(), String.join(" ", section.coverageTags())))
                 .orElse(null);
         var creation = answers.answerForPublicReader(
-                lesson.documentVersionId(), request.question().strip(), lessonContext, request.previousQuestion());
+                lesson.documentVersionId(),
+                request.question().strip(),
+                lessonContext,
+                request.previousQuestion(),
+                language);
         Set<Integer> citedPages = citedPages(creation.answer());
         return new PublicAnswer(
                 creation.assistantRunId(),
                 creation.answer(),
-                visualAids(lesson, citedPages, creation.citedEvidenceIds()),
-                examples(lesson, citedPages, creation.citedEvidenceIds()));
+                visualAids(lesson, citedPages, creation.citedEvidenceIds(), language),
+                examples(lesson, citedPages, creation.citedEvidenceIds(), language));
     }
 
     private Set<Integer> citedPages(RuleAnswering.Answer answer) {
@@ -59,29 +65,49 @@ public class PublicLessonQuestionService {
     }
 
     private List<VisualAid> visualAids(
-            PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages, Set<UUID> citedEvidenceIds) {
+            PublicLessonReader.PublicLesson lesson,
+            Set<Integer> citedPages,
+            Set<UUID> citedEvidenceIds,
+            PlayerLocale language) {
         return lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .filter(step -> step.visualFocus() != null)
                 .filter(step -> citedPages.contains(step.visualFocus().pageNumber()))
                 .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
-                .map(step -> new VisualAid(step.visualFocus(), step.heading()))
+                .map(step -> new VisualAid(visibleFocus(step.visualFocus(), language), visibleStepLabel(step, language)))
                 .distinct()
                 .limit(2)
                 .toList();
     }
 
     private List<Example> examples(
-            PublicLessonReader.PublicLesson lesson, Set<Integer> citedPages, Set<UUID> citedEvidenceIds) {
+            PublicLessonReader.PublicLesson lesson,
+            Set<Integer> citedPages,
+            Set<UUID> citedEvidenceIds,
+            PlayerLocale language) {
         return lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .filter(step -> step.kind() == TeachingMove.EXAMPLE)
                 .filter(step -> step.sourcePages().stream().anyMatch(citedPages::contains))
                 .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
-                .map(step -> new Example(step.heading(), step.text(), citedSourcePages(step, citedPages)))
+                .map(step -> language == PlayerLocale.EN
+                        ? new Example(
+                                "Cited rulebook example",
+                                "The answer above is grounded in the illustrated example on the cited page.",
+                                citedSourcePages(step, citedPages))
+                        : new Example(step.heading(), step.text(), citedSourcePages(step, citedPages)))
                 .distinct()
                 .limit(2)
                 .toList();
+    }
+
+    private VisualFocus visibleFocus(VisualFocus source, PlayerLocale language) {
+        if (language != PlayerLocale.EN) return source;
+        return new VisualFocus(source.pageNumber(), "Rulebook illustration", source.x(), source.y(), source.width(), source.height());
+    }
+
+    private String visibleStepLabel(LessonStep step, PlayerLocale language) {
+        return language == PlayerLocale.EN ? "Cited rulebook illustration" : step.heading();
     }
 
     private boolean sharesCitedEvidence(LessonStep step, Set<UUID> citedEvidenceIds) {
@@ -101,7 +127,11 @@ public class PublicLessonQuestionService {
         }
     }
 
-    public record QuestionRequest(String question, Integer sectionPosition, String previousQuestion) {}
+    public record QuestionRequest(String question, Integer sectionPosition, String previousQuestion, String language) {
+        public QuestionRequest(String question, Integer sectionPosition, String previousQuestion) {
+            this(question, sectionPosition, previousQuestion, "zh-CN");
+        }
+    }
 
     public record PublicAnswer(
             UUID assistantRunId,

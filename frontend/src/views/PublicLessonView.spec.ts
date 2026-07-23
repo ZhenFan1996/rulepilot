@@ -2,10 +2,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import PublicLessonView from './PublicLessonView.vue'
 
 describe('PublicLessonView', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    setLocale('zh-CN')
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
 
   it('renders a no-login lesson with cited visual crops and an official source link', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
@@ -96,5 +101,65 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src')).toContain('/pages/2/image/crop')
+  })
+
+  it('switches a public guide and its question request to an available English localization', async () => {
+    const chinese = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: null, gameCover: null,
+      contentLanguage: 'zh-CN', localizationStatus: 'READY',
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [{
+        position: 1, title: '摆好鸟类保护区', visualCaption: '', steps: [
+          { position: 1, heading: '放置玩家板', kind: 'DO', text: '把玩家板放在自己面前。', sourcePages: [2], visualFocus: null },
+        ],
+      }] },
+    }
+    const english = {
+      ...chinese,
+      contentLanguage: 'en',
+      lesson: { ...chinese.lesson, sections: [{
+        position: 1, title: 'Set up your habitat', visualCaption: '', steps: [
+          { position: 1, heading: 'Place your player mat', kind: 'DO', text: 'Put your player mat in front of you.', sourcePages: [2], visualFocus: null },
+        ],
+      }] },
+    }
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === 'POST') {
+        return Response.json({
+          answer: {
+            status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.',
+            citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', clarification: null,
+          }, visualAids: [], examples: [],
+        })
+      }
+      return Response.json(path.includes('language=en') ? english : chinese)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === 'EN')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Set up your habitat')
+    expect(wrapper.text()).toContain('Place your player mat')
+    expect(wrapper.text()).toContain('Ask the rulebook')
+    await wrapper.get('#public-question').setValue('Where does my mat go?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const request = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ language: 'en', question: 'Where does my mat go?' })
+    expect(wrapper.text()).toContain('Place the mat in front of you.')
   })
 })

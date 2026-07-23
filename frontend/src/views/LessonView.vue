@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { buildCardQuestion } from '@/lib/cardOcr'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
@@ -31,6 +32,7 @@ import {
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
+import { useLocale } from '@/lib/locale'
 
 interface TeachingPlan {
   id: string
@@ -240,11 +242,16 @@ type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
 
 const route = useRoute()
 const router = useRouter()
+const { locale } = useLocale()
 const loading = ref(true)
 const errorMessage = ref('')
 const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
+const sourceLesson = ref<IllustratedLesson | null>(null)
+const localizationStatus = ref<'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null>(null)
+const localizationPreparing = ref(false)
+let localizationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 const quality = ref<LessonQualityReport | null>(null)
 const comprehension = ref<LessonComprehensionReport | null>(null)
 const comprehensionSaving = ref<string | null>(null)
@@ -494,6 +501,75 @@ async function optionalFetch(url: string) {
   }
 }
 
+interface LocalizationView {
+  language: 'ZH_CN' | 'EN'
+  status: 'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null
+  lesson: IllustratedLesson | null
+  failureCode: string | null
+}
+
+function clearLocalizationRefresh() {
+  if (localizationRefreshTimer) clearTimeout(localizationRefreshTimer)
+  localizationRefreshTimer = undefined
+}
+
+function scheduleLocalizationRefresh() {
+  clearLocalizationRefresh()
+  if (lessonViewDisposed || locale.value !== 'en' || !sourceLesson.value || !['PENDING', 'RUNNING'].includes(localizationStatus.value ?? '')) return
+  localizationRefreshTimer = setTimeout(() => {
+    localizationRefreshTimer = undefined
+    void applySelectedLocale()
+  }, 3000)
+}
+
+async function applySelectedLocale() {
+  clearLocalizationRefresh()
+  const source = sourceLesson.value
+  if (!source) return
+  if (locale.value !== 'en') {
+    localizationStatus.value = 'READY'
+    lesson.value = source
+    return
+  }
+  try {
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest/localizations/en`, { credentials: 'include' })
+    if (response.status === 401) {
+      await router.push({ name: 'login' })
+      return
+    }
+    if (!response.ok) throw new Error('English guide is unavailable.')
+    const localized = await response.json() as LocalizationView
+    localizationStatus.value = localized.status
+    lesson.value = localized.status === 'READY' && localized.lesson ? localized.lesson : source
+  } catch {
+    localizationStatus.value = 'FAILED'
+    lesson.value = source
+  } finally {
+    scheduleLocalizationRefresh()
+  }
+}
+
+async function prepareEnglishGuide() {
+  if (!sourceLesson.value || localizationPreparing.value) return
+  localizationPreparing.value = true
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons/latest/localizations/en`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { [csrf.headerName]: csrf.token },
+    })
+    if (!response.ok) throw new Error('English guide could not be queued.')
+    const localized = await response.json() as LocalizationView
+    localizationStatus.value = localized.status
+  } catch {
+    localizationStatus.value = 'FAILED'
+  } finally {
+    localizationPreparing.value = false
+    scheduleLocalizationRefresh()
+  }
+}
+
 function addMediaWarning(message: string) {
   if (!mediaWarnings.value.includes(message)) mediaWarnings.value.push(message)
 }
@@ -600,7 +676,9 @@ async function loadLesson() {
       throw new Error('无法读取这份讲解，请重新生成。')
     }
     plan.value = (await planResponse.json()) as TeachingPlan
-    lesson.value = (await lessonResponse.json()) as IllustratedLesson
+    sourceLesson.value = (await lessonResponse.json()) as IllustratedLesson
+    lesson.value = sourceLesson.value
+    await applySelectedLocale()
     teachingRun.value = runResponse?.ok ? await runResponse.json() as TeachingRunProgress : null
     visualEnrichmentRun.value = visualRunResponse?.ok ? await visualRunResponse.json() as TeachingRunProgress : null
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
@@ -608,7 +686,7 @@ async function loadLesson() {
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = {
       ...restoreLessonProgress(
-        localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
+          localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
         lesson.value.sections.length,
       ),
       paused: false,
@@ -695,11 +773,13 @@ async function refreshGeneration() {
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
     const acceptedRun = mergeTeachingRunProgress(teachingRun.value, incomingRun)
     const incomingLesson = await lessonResponse.json() as IllustratedLesson
-    const previousLesson = lesson.value
+    const previousLesson = sourceLesson.value
     const previousCount = previousLesson?.sections.length ?? 0
     const acceptedLesson = acceptProgressiveLesson(previousLesson, incomingLesson)
     const lessonReplaced = previousLesson !== null && acceptedLesson.id !== previousLesson.id
+    sourceLesson.value = acceptedLesson
     lesson.value = acceptedLesson
+    await applySelectedLocale()
     teachingRun.value = acceptedRun
     generationStatusUnknown.value = false
     generationRefreshError.value = ''
@@ -858,6 +938,7 @@ async function submitQuestion(text: string, learningIntent: LearningIntent | nul
         playerCount: plan.value.playerCount,
         previousQuestion: previousTurn?.question,
         learningIntent,
+        language: locale.value,
       }),
     })
     if (response.status === 401) {
@@ -1248,10 +1329,22 @@ onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
 })
 
+watch(locale, () => {
+  answer.value = null
+  answerTurns.value = []
+  answerError.value = ''
+  if (locale.value === 'en' && mediaMode.value !== 'TEXT') {
+    mediaMode.value = 'TEXT'
+    addMediaWarning('English reading uses the text guide; narration and video remain in the source language.')
+  }
+  void applySelectedLocale()
+})
+
 onUnmounted(() => {
   lessonViewDisposed = true
   clearGenerationRefresh()
   clearVisualRefresh()
+  clearLocalizationRefresh()
   if (generationClockTimer) clearInterval(generationClockTimer)
   generationClockTimer = undefined
   window.removeEventListener('online', updateOnlineStatus)
@@ -1267,6 +1360,7 @@ onUnmounted(() => {
         <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← 我的讲解</RouterLink>
           <div class="flex items-center gap-4">
+            <LanguageSwitcher />
             <RouterLink v-if="lesson" :to="{ name: 'public-lesson', params: { planId } }" class="text-sm font-semibold text-indigo">公开阅读</RouterLink>
             <RouterLink v-if="plan && (!generationActive || draftReady)" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">开始对局</RouterLink>
             <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
@@ -1277,6 +1371,13 @@ onUnmounted(() => {
         </div>
         <div v-if="lesson" class="h-1 bg-ink/8"><div class="h-full bg-copper transition-all" :style="{ width: `${progressPercent}%` }" /></div>
       </header>
+
+      <section v-if="locale === 'en' && lesson && localizationStatus !== 'READY'" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3" role="status">
+        <div class="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 text-sm leading-6 text-indigo">
+          <p>{{ localizationStatus === 'FAILED' ? 'The English guide could not be prepared. The cited Chinese guide is still available.' : 'The English guide is being prepared. The cited Chinese guide remains available while it finishes.' }}</p>
+          <button v-if="!['PENDING', 'RUNNING'].includes(localizationStatus ?? '')" type="button" :disabled="localizationPreparing" class="min-h-10 rounded-xl bg-indigo px-4 text-sm font-semibold text-white disabled:opacity-50" @click="prepareEnglishGuide">{{ localizationPreparing ? 'Preparing…' : 'Prepare English guide' }}</button>
+        </div>
+      </section>
 
       <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；只能查看本地讲解进度、最近答案和已确认裁定，生成式答疑已停用。</p>
       <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">

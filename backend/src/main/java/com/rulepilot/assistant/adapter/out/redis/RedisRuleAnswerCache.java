@@ -84,7 +84,8 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
                 value(key.currentLessonSection()),
                 value(key.gamePhase()),
                 key.playerCount() == null ? "" : key.playerCount().toString(),
-                key.activeExpansions().stream().map(java.util.UUID::toString).sorted().collect(Collectors.joining(",")));
+                key.activeExpansions().stream().map(java.util.UUID::toString).sorted().collect(Collectors.joining(",")),
+                key.outputLanguage().name());
         return KEY_PREFIX + key.ruleDataVersion() + ":" + key.documentVersionId() + ":" + sha256(canonical);
     }
 

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { useLocale } from '@/lib/locale'
 
 interface Session { username: string; roles: string[] }
 interface TeachingPlan { id: string; gameTitle: string; createdAt: string }
@@ -12,6 +13,7 @@ interface ModelSnapshot {
 }
 
 const router = useRouter()
+const { t } = useLocale()
 const session = ref<Session | null>(null)
 const plans = ref<TeachingPlan[]>([])
 const models = ref<ModelSnapshot | null>(null)
@@ -34,12 +36,12 @@ async function load() {
       await router.push({ name: 'login' })
       return
     }
-    if (responses.some((response) => !response.ok)) throw new Error('暂时无法读取账户信息。')
+    if (responses.some((response) => !response.ok)) throw new Error(t('account.error'))
     session.value = await responses[0]!.json() as Session
     plans.value = await responses[1]!.json() as TeachingPlan[]
     models.value = await responses[2]!.json() as ModelSnapshot
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '暂时无法读取账户信息。'
+    errorMessage.value = error instanceof Error ? error.message : t('account.error')
   } finally {
     loading.value = false
   }
@@ -51,11 +53,11 @@ onMounted(load)
 <template>
   <AppShell>
     <section class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
-      <p class="text-sm font-medium text-copper">我的账户</p>
-      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">正在读取你的空间…</div>
+      <p class="text-sm font-medium text-copper">{{ t('account.title') }}</p>
+      <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('account.loading') }}</div>
       <div v-else-if="errorMessage" class="mt-8 rounded-xl bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>
-        <button class="mt-4 font-semibold underline" @click="load">重试</button>
+        <button class="mt-4 font-semibold underline" @click="load">{{ t('account.retry') }}</button>
       </div>
       <template v-else-if="session">
         <header class="mt-5 flex items-center gap-5 border-b border-ink/10 pb-8">
@@ -68,24 +70,24 @@ onMounted(load)
 
         <div class="mt-8 grid gap-5 sm:grid-cols-2">
           <RouterLink :to="{ name: 'lessons' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
-            <p class="text-sm text-ink/45">我的讲解</p>
-            <p class="mt-2 font-display text-3xl font-semibold">{{ plans.length }} 份</p>
-            <p class="mt-4 text-sm text-indigo">查看和继续 →</p>
+            <p class="text-sm text-ink/45">{{ t('account.guides') }}</p>
+            <p class="mt-2 font-display text-3xl font-semibold">{{ t('account.guideCount', { count: plans.length }) }}</p>
+            <p class="mt-4 text-sm text-indigo">{{ t('account.guideAction') }}</p>
           </RouterLink>
           <RouterLink :to="{ name: 'model-settings' }" class="rounded-xl border border-ink/10 bg-paper p-6 hover:border-copper/40">
-            <p class="text-sm text-ink/45">大模型连接</p>
-            <p class="mt-2 font-display text-3xl font-semibold">{{ connectedModels }} 个</p>
-            <p class="mt-4 text-sm text-indigo">配置 API Key 和用途 →</p>
+            <p class="text-sm text-ink/45">{{ t('account.models') }}</p>
+            <p class="mt-2 font-display text-3xl font-semibold">{{ t('account.modelCount', { count: connectedModels }) }}</p>
+            <p class="mt-4 text-sm text-indigo">{{ t('account.modelAction') }}</p>
           </RouterLink>
         </div>
 
         <section class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
-          <h2 class="font-display text-2xl font-semibold">当前模型分工</h2>
+          <h2 class="font-display text-2xl font-semibold">{{ t('account.assignments') }}</h2>
           <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div><dt class="text-ink/45">讲解文字</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
-            <div><dt class="text-ink/45">页面视觉</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
-            <div><dt class="text-ink/45">规则答疑</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
-            <div><dt class="text-ink/45">事实审校</dt><dd class="mt-1 font-semibold">{{ models?.assignments.critic }}</dd></div>
+            <div><dt class="text-ink/45">{{ t('account.teaching') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
+            <div><dt class="text-ink/45">{{ t('account.visual') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
+            <div><dt class="text-ink/45">{{ t('account.answer') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
+            <div><dt class="text-ink/45">{{ t('account.critic') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.critic }}</dd></div>
           </dl>
         </section>
       </template>

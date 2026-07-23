@@ -1,0 +1,148 @@
+package com.rulepilot.teaching.domain;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
+import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
+import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;
+import com.rulepilot.teaching.domain.LessonLocalization.StepTranslation;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+class LessonLocalizationTest {
+
+    @Test
+    void replacesOnlyPlayerVisibleProseWhileKeepingTheCitedStructureAndCrop() {
+        UUID lessonId = UUID.randomUUID();
+        UUID planId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        IllustratedLesson source = new IllustratedLesson(
+                lessonId,
+                planId,
+                IllustratedLesson.LessonStatus.COMPLETE,
+                List.of(new LessonSection(
+                        1,
+                        "setup",
+                        List.of("setup"),
+                        "摆好桌面",
+                        true,
+                        IllustratedLesson.EvidenceStatus.SUPPORTED,
+                        IllustratedLesson.VisualKind.TABLE_LAYOUT,
+                        "看玩家区域。",
+                        List.of(2),
+                        List.of(chunkId),
+                        List.of(new LessonStep(
+                                1,
+                                "放置玩家板",
+                                IllustratedLesson.TeachingMove.VISUAL,
+                                "把玩家板放在自己面前。",
+                                List.of(2),
+                                List.of(chunkId),
+                                new VisualFocus(2, "玩家板", 100, 200, 300, 400))))),
+                "test",
+                Instant.parse("2026-07-23T00:00:00Z"));
+        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
+                .complete(
+                        List.of(new SectionTranslation(
+                                1,
+                                "Set up the table",
+                                "Look at your player area.",
+                                List.of(new StepTranslation(
+                                        1,
+                                        "Place your player mat",
+                                        "Put your player mat in front of you.",
+                                        "Player mat")))),
+                        Instant.now());
+
+        IllustratedLesson localized = localization.applyTo(source);
+        var step = localized.sections().getFirst().steps().getFirst();
+
+        assertThat(localized.sections().getFirst().title()).isEqualTo("Set up the table");
+        assertThat(step.heading()).isEqualTo("Place your player mat");
+        assertThat(step.sourceChunkIds()).containsExactly(chunkId);
+        assertThat(step.sourcePages()).containsExactly(2);
+        assertThat(step.visualFocus()).isEqualTo(new VisualFocus(2, "Player mat", 100, 200, 300, 400));
+    }
+
+    @Test
+    void rejectsATranslationThatDropsASourceStep() {
+        UUID lessonId = UUID.randomUUID();
+        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
+                .complete(
+                        List.of(new SectionTranslation(
+                                1, "Setup", "", List.of(new StepTranslation(1, "Place", "Put it down.", "")))),
+                        Instant.now());
+        IllustratedLesson source = lessonWithTwoSteps(lessonId);
+
+        assertThatThrownBy(() -> localization.applyTo(source))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("localized steps do not match the source section");
+    }
+
+    @Test
+    void keepsTheSourceVisualLabelWhenLaterVisualEnrichmentAddsOrChangesTheFocus() {
+        UUID lessonId = UUID.randomUUID();
+        IllustratedLesson source = new IllustratedLesson(
+                lessonId,
+                UUID.randomUUID(),
+                IllustratedLesson.LessonStatus.COMPLETE,
+                List.of(new LessonSection(
+                        1,
+                        "setup",
+                        List.of(),
+                        "设置",
+                        true,
+                        IllustratedLesson.EvidenceStatus.SUPPORTED,
+                        IllustratedLesson.VisualKind.TABLE_LAYOUT,
+                        "",
+                        List.of(3),
+                        List.of(UUID.randomUUID()),
+                        List.of(new LessonStep(
+                                1,
+                                "查看组件",
+                                IllustratedLesson.TeachingMove.VISUAL,
+                                "查看组件。",
+                                List.of(3),
+                                List.of(UUID.randomUUID()),
+                                new VisualFocus(3, "计分标记", 10, 20, 30, 40))))),
+                "test",
+                Instant.now());
+        LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
+                .complete(
+                        List.of(new SectionTranslation(
+                                1, "Set up", "", List.of(new StepTranslation(1, "Check components", "Check the components.", "")))),
+                        Instant.now());
+
+        assertThat(localization.applyTo(source).sections().getFirst().steps().getFirst().visualFocus().label())
+                .isEqualTo("计分标记");
+    }
+
+    private IllustratedLesson lessonWithTwoSteps(UUID lessonId) {
+        UUID chunkId = UUID.randomUUID();
+        return new IllustratedLesson(
+                lessonId,
+                UUID.randomUUID(),
+                IllustratedLesson.LessonStatus.COMPLETE,
+                List.of(new LessonSection(
+                        1,
+                        "setup",
+                        List.of(),
+                        "设置",
+                        true,
+                        IllustratedLesson.EvidenceStatus.SUPPORTED,
+                        IllustratedLesson.VisualKind.REFERENCE_CARD,
+                        "",
+                        List.of(),
+                        List.of(),
+                        List.of(
+                                new LessonStep(1, "第一步", IllustratedLesson.TeachingMove.DO, "先做这个。", List.of(1), List.of(chunkId)),
+                                new LessonStep(2, "第二步", IllustratedLesson.TeachingMove.DO, "再做那个。", List.of(1), List.of(chunkId))))),
+                "test",
+                Instant.now());
+    }
+}

@@ -5,6 +5,8 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.teaching.application.PublicLessonCatalog;
 import com.rulepilot.teaching.application.PublicLessonReader;
 import com.rulepilot.teaching.application.PublicLessonQuestionService;
+import com.rulepilot.teaching.application.LessonLocalizationService;
+import com.rulepilot.assistant.PlayerLocale;
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
@@ -31,6 +33,7 @@ public class PublicLessonController {
     private final PublicLessonReader lessons;
     private final PublicLessonCatalog catalog;
     private final PublicLessonQuestionService questions;
+    private final LessonLocalizationService localizations;
     private final DocumentPageImages pageImages;
     private final DocumentPageImageCropper crops;
 
@@ -38,11 +41,13 @@ public class PublicLessonController {
             PublicLessonReader lessons,
             PublicLessonCatalog catalog,
             PublicLessonQuestionService questions,
+            LessonLocalizationService localizations,
             DocumentPageImages pageImages,
             DocumentPageImageCropper crops) {
         this.lessons = lessons;
         this.catalog = catalog;
         this.questions = questions;
+        this.localizations = localizations;
         this.pageImages = pageImages;
         this.crops = crops;
     }
@@ -53,8 +58,10 @@ public class PublicLessonController {
     }
 
     @GetMapping("/{planId}")
-    PublicLessonResponse lesson(@PathVariable UUID planId) {
-        return PublicLessonResponse.from(require(planId));
+    PublicLessonResponse lesson(@PathVariable UUID planId, @RequestParam(defaultValue = "zh-CN") String language) {
+        var source = require(planId);
+        var localized = localizations.view(source.lesson(), PlayerLocale.fromRequest(language));
+        return PublicLessonResponse.from(source, localized);
     }
 
     @PostMapping("/{planId}/answers")
@@ -124,15 +131,21 @@ public class PublicLessonController {
             String rulebookTitle,
             String officialSourceUrl,
             PublicLessonReader.PublicCover gameCover,
-            com.rulepilot.teaching.domain.IllustratedLesson lesson) {
-        static PublicLessonResponse from(PublicLessonReader.PublicLesson lesson) {
+            com.rulepilot.teaching.domain.IllustratedLesson lesson,
+            String contentLanguage,
+            String localizationStatus) {
+        static PublicLessonResponse from(
+                PublicLessonReader.PublicLesson source, LessonLocalizationService.LocalizationView localized) {
             return new PublicLessonResponse(
-                    lesson.teachingPlanId(),
-                    lesson.documentVersionId(),
-                    lesson.rulebookTitle(),
-                    lesson.officialSourceUrl(),
-                    lesson.gameCover(),
-                    lesson.lesson());
+                    source.teachingPlanId(),
+                    source.documentVersionId(),
+                    source.rulebookTitle(),
+                    source.officialSourceUrl(),
+                    source.gameCover(),
+                    localized.lesson(),
+                    localized.lesson() == null ? "zh-CN" : localized.language() == PlayerLocale.EN
+                            && localized.status() == com.rulepilot.teaching.domain.LessonLocalization.Status.READY ? "en" : "zh-CN",
+                    localized.status() == null ? "NOT_PREPARED" : localized.status().name());
         }
     }
 }

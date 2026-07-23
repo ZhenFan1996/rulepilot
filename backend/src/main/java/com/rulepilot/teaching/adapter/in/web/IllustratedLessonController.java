@@ -3,8 +3,10 @@ package com.rulepilot.teaching.adapter.in.web;
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
+import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -25,12 +27,17 @@ public class IllustratedLessonController {
     private final IllustratedLessonService lessons;
     private final IllustratedLessonLauncher launcher;
     private final TeachingPlanOwnerGuard owners;
+    private final LessonLocalizationService localizations;
 
     public IllustratedLessonController(
-            IllustratedLessonService lessons, IllustratedLessonLauncher launcher, TeachingPlanOwnerGuard owners) {
+            IllustratedLessonService lessons,
+            IllustratedLessonLauncher launcher,
+            TeachingPlanOwnerGuard owners,
+            LessonLocalizationService localizations) {
         this.lessons = lessons;
         this.launcher = launcher;
         this.owners = owners;
+        this.localizations = localizations;
     }
 
     @PostMapping
@@ -54,5 +61,22 @@ public class IllustratedLessonController {
         owners.requireOwned(planId, principal.getName());
         return lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
+    }
+
+    @PostMapping("/latest/localizations/{language}")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    LessonLocalizationService.LocalizationView prepareLocalization(
+            @PathVariable UUID planId, @PathVariable String language, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
+        return localizations.prepare(planId, principal.getName(), PlayerLocale.fromRequest(language));
+    }
+
+    @GetMapping("/latest/localizations/{language}")
+    LessonLocalizationService.LocalizationView localization(
+            @PathVariable UUID planId, @PathVariable String language, Principal principal) {
+        owners.requireOwned(planId, principal.getName());
+        var source = lessons.latest(planId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
+        return localizations.view(source, PlayerLocale.fromRequest(language));
     }
 }

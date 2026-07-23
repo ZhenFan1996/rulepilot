@@ -16,7 +16,8 @@ public interface QuestionUnderstanding {
             Integer playerCount,
             Set<UUID> activeExpansions,
             String previousQuestion,
-            LearningIntent learningIntent) {
+            LearningIntent learningIntent,
+            PlayerLocale outputLanguage) {
 
         public QuestionContext(
                 UUID documentVersionId,
@@ -24,7 +25,7 @@ public interface QuestionUnderstanding {
                 String gamePhase,
                 Integer playerCount,
                 Set<UUID> activeExpansions) {
-            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, null, null);
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, null, null, PlayerLocale.ZH_CN);
         }
 
         public QuestionContext(
@@ -34,7 +35,18 @@ public interface QuestionUnderstanding {
                 Integer playerCount,
                 Set<UUID> activeExpansions,
                 String previousQuestion) {
-            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, previousQuestion, null);
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, previousQuestion, null, PlayerLocale.ZH_CN);
+        }
+
+        public QuestionContext(
+                UUID documentVersionId,
+                String currentLessonSection,
+                String gamePhase,
+                Integer playerCount,
+                Set<UUID> activeExpansions,
+                String previousQuestion,
+                LearningIntent learningIntent) {
+            this(documentVersionId, currentLessonSection, gamePhase, playerCount, activeExpansions, previousQuestion, learningIntent, PlayerLocale.ZH_CN);
         }
 
         public QuestionContext {
@@ -52,6 +64,7 @@ public interface QuestionUnderstanding {
                     : activeExpansions.stream()
                             .filter(java.util.Objects::nonNull)
                             .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         }
 
         private static String normalize(String value) {

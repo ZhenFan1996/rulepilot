@@ -42,7 +42,9 @@ class VersionedAgentPromptsTest {
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
-                resource("structured-output-repair-v1.txt"));
+                resource("structured-output-repair-v1.txt"),
+                resource("lesson-localization-v1-system.txt"),
+                resource("lesson-localization-v1-user.txt"));
 
         assertThat(prompts.teachingSystem())
                 .contains(
@@ -168,7 +170,10 @@ class VersionedAgentPromptsTest {
                         "loop-prevention rule",
                         "player's wording is not a component definition");
         assertThat(prompts.answerUser())
-                .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}");
+                .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}", "{outputLanguage}");
+        assertThat(prompts.lessonLocalizationSystem())
+                .contains("constrained translation", "exact section and step positions", "Do not add rules");
+        assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");
         assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");
         assertThat(prompts.answerRetrievalRewriteUser()).contains("{question}");
         assertThat(prompts.criticSystem())
