@@ -61,6 +61,7 @@ interface PublicAnswerTurn { question: string; answer: PublicAnswer }
 
 const PUBLIC_ANSWER_HISTORY_LIMIT = 6
 const PUBLIC_ANSWER_STORAGE_PREFIX = 'rulepilot:public-answer-thread:'
+const PUBLIC_ANSWER_READER_KEY = 'rulepilot:public-answer-reader'
 
 const route = useRoute()
 const { locale, t } = useLocale()
@@ -72,6 +73,8 @@ const selectedSectionPosition = ref<number | null>(null)
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
+const readerScope = ref<string | null>(null)
+const readerScopeReady = ref(false)
 let latestLoadRequest = 0
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
@@ -79,12 +82,51 @@ const englishGuidePending = computed(() => locale.value === 'en' && publicLesson
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
 
 function answerThreadStorageKey() {
-  return `${PUBLIC_ANSWER_STORAGE_PREFIX}${planId.value}:${locale.value}`
+  if (!readerScope.value || !planId.value) return null
+  return `${PUBLIC_ANSWER_STORAGE_PREFIX}${readerScope.value}:${planId.value}:${locale.value}`
+}
+
+function anonymousReaderScope() {
+  try {
+    const stored = sessionStorage.getItem(PUBLIC_ANSWER_READER_KEY)
+    if (stored?.startsWith('guest:') && stored.length <= 96) return stored
+    const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const generated = `guest:${randomId}`
+    sessionStorage.setItem(PUBLIC_ANSWER_READER_KEY, generated)
+    return generated
+  } catch {
+    return null
+  }
+}
+
+async function initializeReaderScope() {
+  let resolvedScope = anonymousReaderScope()
+  try {
+    const response = await fetch('/api/auth/session', { credentials: 'include' })
+    if (response.ok) {
+      const session = await response.json() as { username?: unknown }
+      if (typeof session.username === 'string' && session.username.trim()) {
+        resolvedScope = `account:${encodeURIComponent(session.username.trim().toLowerCase())}`
+        sessionStorage.removeItem(PUBLIC_ANSWER_READER_KEY)
+      }
+    }
+  } catch {
+    // Public readers can still ask without an account; their browser-session scope remains in use.
+  } finally {
+    readerScope.value = resolvedScope
+    readerScopeReady.value = true
+    restorePublicAnswerTurns()
+  }
 }
 
 function restorePublicAnswerTurns() {
+  const storageKey = answerThreadStorageKey()
+  if (!storageKey) {
+    publicAnswerTurns.value = []
+    return
+  }
   try {
-    const stored = sessionStorage.getItem(answerThreadStorageKey())
+    const stored = sessionStorage.getItem(storageKey)
     const parsed = stored ? JSON.parse(stored) : []
     publicAnswerTurns.value = Array.isArray(parsed)
       ? parsed.filter(isPublicAnswerTurn).slice(-PUBLIC_ANSWER_HISTORY_LIMIT)
@@ -95,10 +137,23 @@ function restorePublicAnswerTurns() {
 }
 
 function rememberPublicAnswerTurns() {
+  const storageKey = answerThreadStorageKey()
+  if (!storageKey) return
   try {
-    sessionStorage.setItem(answerThreadStorageKey(), JSON.stringify(publicAnswerTurns.value))
+    sessionStorage.setItem(storageKey, JSON.stringify(publicAnswerTurns.value))
   } catch {
     // A private browser mode may not expose storage; the current on-page thread remains usable.
+  }
+}
+
+function clearPublicAnswerTurns() {
+  const storageKey = answerThreadStorageKey()
+  publicAnswerTurns.value = []
+  if (!storageKey) return
+  try {
+    sessionStorage.removeItem(storageKey)
+  } catch {
+    // The visible thread was still cleared even if browser storage is unavailable.
   }
 }
 
@@ -215,7 +270,7 @@ function askAboutSection(section: LessonSection) {
 
 async function submitPublicQuestion() {
   const question = publicQuestion.value.trim()
-  if (!question || publicAnswerLoading.value || !planId.value) return
+  if (!question || publicAnswerLoading.value || !planId.value || !readerScopeReady.value) return
   publicAnswerLoading.value = true
   publicAnswerError.value = ''
   try {
@@ -248,12 +303,13 @@ async function submitPublicQuestion() {
 }
 
 onMounted(() => {
-  restorePublicAnswerTurns()
   void load()
+  void initializeReaderScope()
 })
 
 watch([locale, planId], () => {
-  restorePublicAnswerTurns()
+  if (readerScopeReady.value) restorePublicAnswerTurns()
+  else publicAnswerTurns.value = []
   publicQuestion.value = ''
   publicAnswerError.value = ''
   void load()
@@ -298,8 +354,12 @@ watch([locale, planId], () => {
               <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">{{ t('public.question.eyebrow') }}</p>
               <h2 id="public-question-title" class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ t('public.question.title') }}</h2>
               <p class="mt-2 max-w-2xl leading-7 text-ink/60">{{ t('public.question.description') }}</p>
+              <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
             </div>
-            <span class="w-fit rounded-full bg-paper px-3 py-1.5 text-xs font-semibold text-indigo">{{ t('public.question.noLogin') }}</span>
+            <div class="flex w-fit shrink-0 flex-wrap gap-2">
+              <span class="rounded-full bg-paper px-3 py-1.5 text-xs font-semibold text-indigo">{{ t('public.question.noLogin') }}</span>
+              <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="clearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
+            </div>
           </div>
 
           <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -355,10 +415,10 @@ watch([locale, planId], () => {
 
           <form class="mt-5" @submit.prevent="submitPublicQuestion">
             <label for="public-question" class="sr-only">{{ t('public.question.submit') }}</label>
-            <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
+            <textarea id="public-question" v-model="publicQuestion" rows="3" maxlength="800" :disabled="publicAnswerLoading || !readerScopeReady" :placeholder="t('public.question.placeholder')" class="w-full resize-y rounded-2xl border border-ink/15 bg-paper px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-55" />
             <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
               <p class="text-xs text-ink/45">{{ t('public.question.counter', { count: publicQuestion.length }) }}</p>
-              <button type="submit" :disabled="publicAnswerLoading || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
+              <button type="submit" :disabled="publicAnswerLoading || !readerScopeReady || !publicQuestion.trim()" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40">{{ publicAnswerLoading ? t('public.question.loading') : t('public.question.submit') }}</button>
             </div>
           </form>
         </section>

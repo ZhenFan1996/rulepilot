@@ -134,6 +134,63 @@ describe('PublicLessonView', () => {
     expect(restored.text()).toContain('支持这段答案的规则图例')
   })
 
+  it('isolates a public answer thread by signed-in reader and clears only that reader’s current guide', async () => {
+    const lesson = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [] },
+    }
+    const storedTurn = (question: string, verdict: string) => ({
+      question,
+      answer: {
+        answer: {
+          status: 'ANSWERED', shortVerdict: verdict, explanation: null,
+          citations: [], exceptions: [], confidence: 'HIGH', clarification: null,
+        },
+        visualAids: [], examples: [],
+      },
+    })
+    const aliceKey = 'rulepilot:public-answer-thread:account:alice:plan-1:zh-CN'
+    const bobKey = 'rulepilot:public-answer-thread:account:bob:plan-1:zh-CN'
+    sessionStorage.setItem(aliceKey, JSON.stringify([storedTurn('Alice 的问题', 'Alice 的答复')]))
+    sessionStorage.setItem(bobKey, JSON.stringify([storedTurn('Bob 的问题', 'Bob 的答复')]))
+
+    let username = 'alice'
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/auth/session')) return Response.json({ username, roles: ['USER'] })
+      return Response.json(lesson)
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+
+    const alice = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(alice.text()).toContain('Alice 的问题')
+    expect(alice.text()).not.toContain('Bob 的问题')
+    await alice.get('button[aria-label="清空本次答疑"]').trigger('click')
+    await flushPromises()
+    expect(alice.text()).not.toContain('Alice 的问题')
+    expect(sessionStorage.getItem(aliceKey)).toBeNull()
+    expect(sessionStorage.getItem(bobKey)).not.toBeNull()
+
+    alice.unmount()
+    username = 'bob'
+    const bob = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(bob.text()).toContain('Bob 的问题')
+    expect(bob.text()).not.toContain('Alice 的问题')
+  })
+
   it('switches a public guide and its question request to an available English localization', async () => {
     const chinese = {
       teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules', officialSourceUrl: null, gameCover: null,
