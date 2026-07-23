@@ -72,7 +72,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
     private final RuleEvidenceLookup evidenceLookup;
-    private final RuleAnswerModel model;
+    private final AnswerModelGateway modelGateway;
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
     private final RuleDataVersion ruleDataVersion;
@@ -109,7 +109,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.retrieval = retrieval;
         this.visualFacts = visualFacts;
         this.evidenceLookup = evidenceLookup;
-        this.model = model;
+        this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
         this.cache = cache;
         this.rateLimiter = rateLimiter;
         this.ruleDataVersion = ruleDataVersion;
@@ -332,24 +332,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         }
         ModelDraft draft;
         ModelRequest modelRequest;
-        RuleAnswerRateLimiter.Permit permit =
-                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
         try {
             modelRequest = toRequest(understood, context, evidence);
-            draft = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "composeRuleAnswer",
-                    estimateTokens(modelRequest.toString()),
-                    "Rule answer model output received",
-                    () -> model.compose(modelRequest),
-                    result -> estimateTokens(result.toString()));
+            draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
-        } finally {
-            permit.close();
         }
         if (draft == null) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
@@ -471,23 +460,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             Review review,
             List<HybridEvidenceHit> evidence) {
         List<String> feedback = AnswerCritiquePolicy.revisionFeedback(review);
-        ModelDraft revised;
-        RuleAnswerRateLimiter.Permit permit =
-                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
-        try {
-            revised = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "reviseLearningResponse",
-                    estimateTokens(modelRequest.toString()) + estimateTokens(feedback.toString()),
-                    "Learning response revised from bounded critic feedback",
-                    () -> model.revise(modelRequest, previousDraft, feedback),
-                    result -> estimateTokens(result.toString()));
-        } catch (RuleAnswerModelTimeoutException exception) {
-            throw exception;
-        } finally {
-            permit.close();
-        }
+        ModelDraft revised = modelGateway.revise(
+                assistantRunId,
+                username,
+                gameSessionId,
+                modelRequest,
+                previousDraft,
+                feedback,
+                "reviseLearningResponse",
+                "Learning response revised from bounded critic feedback");
         if (revised == null || !revised.answerable()) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
@@ -514,20 +495,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         + "a question about reaching the required draw amount, and cite its source. Do not abstain merely "
                         + "because the player did not state how many items were present before that area became empty."
                 : baseFeedback;
-        RuleAnswerRateLimiter.Permit permit =
-                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
-        try {
-            return invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "reconsiderEvidenceBackedAbstention",
-                    estimateTokens(modelRequest.toString()) + estimateTokens(feedback),
-                    "Evidence-backed table abstention reconsidered",
-                    () -> model.revise(modelRequest, previousDraft, List.of(feedback)),
-                    result -> estimateTokens(result.toString()));
-        } finally {
-            permit.close();
-        }
+        return modelGateway.revise(
+                assistantRunId,
+                username,
+                gameSessionId,
+                modelRequest,
+                previousDraft,
+                List.of(feedback),
+                "reconsiderEvidenceBackedAbstention",
+                "Evidence-backed table abstention reconsidered");
     }
 
     private ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
@@ -553,20 +529,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             ModelRequest modelRequest,
             ModelDraft previousDraft,
             List<String> feedback) {
-        RuleAnswerRateLimiter.Permit permit =
-                rateLimiter.acquireModel(username, gameSessionId, model.providerId());
-        try {
-            return invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    "repairPlayerFacingRuleAnswer",
-                    estimateTokens(modelRequest.toString()) + estimateTokens(feedback.toString()),
-                    "Ambiguous visual identity or internal evidence language repaired",
-                    () -> model.revise(modelRequest, previousDraft, feedback),
-                    result -> estimateTokens(result.toString()));
-        } finally {
-            permit.close();
-        }
+        return modelGateway.revise(
+                assistantRunId,
+                username,
+                gameSessionId,
+                modelRequest,
+                previousDraft,
+                feedback,
+                "repairPlayerFacingRuleAnswer",
+                "Ambiguous visual identity or internal evidence language repaired");
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
@@ -991,25 +962,18 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (!AnswerEvidencePolicy.requiresCrossLanguageExpansion(question.normalizedQuestion())) {
             return List.of();
         }
-        RuleAnswerRateLimiter.Permit permit = rateLimiter.acquireModel(username, null, model.providerId());
         try {
-            return invocations.invoke(
+            return modelGateway.rewriteRetrievalQueries(
                     assistantRunId,
-                    ActivityType.MODEL,
-                    "rewriteAnswerRetrievalQueries",
-                    estimateTokens(question.normalizedQuestion()),
-                    "Cross-language retrieval phrases prepared",
-                    () -> model.rewriteRetrievalQueries(new RetrievalQueryRequest(
-                            question.normalizedQuestion(), context.previousQuestion(), context.currentLessonSection())),
-                    result -> estimateTokens(result.toString()));
+                    username,
+                    new RetrievalQueryRequest(
+                            question.normalizedQuestion(), context.previousQuestion(), context.currentLessonSection()));
         } catch (RuleAnswerModelTimeoutException exception) {
             LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
             return List.of();
         } catch (RuntimeException exception) {
             LOGGER.info("Cross-language retrieval rewrite unavailable; continuing with the original question");
             return List.of();
-        } finally {
-            permit.close();
         }
     }
 
