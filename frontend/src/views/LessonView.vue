@@ -8,6 +8,7 @@ import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus, { type LessonGenerationActivity } from '@/components/LessonGenerationStatus.vue'
+import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
@@ -150,7 +151,6 @@ const {
   mediaConsistency,
   mediaWarnings,
   audioAvailable,
-  narrationProvider,
   narrationDurationMillis,
   narrationCues,
   narrationMillis,
@@ -331,7 +331,7 @@ const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}
 const activeCue = computed(() =>
   narrationCues.value.find(
     (cue) => narrationMillis.value >= cue.startMillis && narrationMillis.value < cue.endMillis,
-  ),
+  ) ?? null,
 )
 const activeVideoFrame = computed(() => {
   const chapter = currentVideoChapter.value
@@ -1084,10 +1084,6 @@ function seekNarration(millis: number) {
   saveNarrationPosition()
 }
 
-function seekNarrationInput(event: Event) {
-  seekNarration(Number((event.target as HTMLInputElement).value))
-}
-
 function formatDuration(millis: number) {
   const seconds = Math.floor(millis / 1_000)
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
@@ -1531,47 +1527,21 @@ onUnmounted(() => {
               </aside>
             </div>
 
-            <details v-if="currentNarration" v-show="mediaMode === 'AUDIO'" open class="mt-7 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 sm:p-5">
-              <summary class="cursor-pointer list-none font-semibold text-indigo">
-                <span class="flex items-center justify-between gap-3">
-                  <span>本节解说稿</span>
-                  <span class="text-xs">{{ currentNarration.supported ? '可回到原文核对' : '原文不足，跳过这一段' }}</span>
-                </span>
-              </summary>
-              <ol class="mt-4 space-y-3 border-t border-indigo/10 pt-4" aria-label="同步字幕">
-                <li
-                  v-for="segment in currentNarration.segments"
-                  :key="segment.position"
-                  class="rounded-xl border px-3 py-2 text-sm leading-7 transition"
-                  :class="activeCue?.chapterPosition === currentNarration.position && activeCue?.segmentPosition === segment.position ? 'border-copper/40 bg-copper/10 text-ink' : 'border-transparent text-ink/70'"
-                >
-                  <p>{{ segment.text }}</p>
-                  <p v-if="segment.sourcePages.length" class="mt-1 text-xs font-semibold text-indigo">规则书第 {{ segment.sourcePages.join('、') }} 页</p>
-                  <button class="mt-1 text-xs font-semibold text-copper" @click="seekToSegment(segment.position)">从本段播放</button>
-                </li>
-              </ol>
-              <div class="mt-5 border-t border-indigo/10 pt-4">
-                <p class="text-xs leading-5 text-ink/50">当前为 {{ narrationProvider }} 媒体管线测试音轨（非语音）；字幕和音轨共用同一份已验证稿件。</p>
-                <input
-                  class="mt-4 w-full accent-copper"
-                  type="range"
-                  min="0"
-                  :max="narrationDurationMillis"
-                  :value="narrationMillis"
-                  aria-label="解说播放位置"
-                  @input="seekNarrationInput"
-                >
-                <div class="mt-1 flex justify-between text-xs tabular-nums text-ink/45">
-                  <span>{{ formatDuration(narrationMillis) }}</span>
-                  <span>{{ formatDuration(narrationDurationMillis) }}</span>
-                </div>
-                <div class="mt-3 grid grid-cols-3 gap-2">
-                  <button class="min-h-10 rounded-xl bg-indigo px-3 text-sm font-semibold text-white" @click="toggleNarration">{{ narrationPlaying ? '暂停' : '播放' }}</button>
-                  <button class="min-h-10 rounded-xl border border-indigo/20 px-3 text-sm font-semibold text-indigo" @click="replayCurrentSegment">重播本段</button>
-                  <button class="min-h-10 rounded-xl border border-indigo/20 px-3 text-sm font-semibold text-indigo" @click="cycleNarrationRate">{{ narrationRate }}×</button>
-                </div>
-              </div>
-            </details>
+            <LessonNarrationPanel
+              :visible="mediaMode === 'AUDIO'"
+              :chapter="currentNarration"
+              :active-cue="activeCue"
+              :duration-millis="narrationDurationMillis"
+              :playback-millis="narrationMillis"
+              :playing="narrationPlaying"
+              :playback-rate="narrationRate"
+              :format-duration="formatDuration"
+              @seek-segment="seekToSegment"
+              @seek="seekNarration"
+              @toggle-playback="toggleNarration"
+              @replay="replayCurrentSegment"
+              @cycle-rate="cycleNarrationRate"
+            />
 
             <LessonComprehensionPanel
               v-if="!generationActive && progress.currentIndex === lesson.sections.length - 1 && (comprehension || comprehensionError)"
