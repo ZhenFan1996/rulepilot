@@ -1,10 +1,11 @@
+<script setup lang="ts">
+import TabletopGlyph from '@/components/TabletopGlyph.vue'
+</script>
+
 <template>
   <span class="inline-flex items-center gap-3">
-    <span class="grid size-9 grid-cols-2 gap-0.5 rounded-lg border border-ink/15 bg-paper p-2" aria-hidden="true">
-      <span class="rounded-[2px] bg-copper" />
-      <span class="rounded-[2px] bg-ink/20" />
-      <span class="rounded-[2px] bg-ink/20" />
-      <span class="rounded-[2px] bg-ink" />
+    <span class="grid size-9 place-items-center rounded-xl border border-ink/15 bg-paper text-copper shadow-sm" aria-hidden="true">
+      <TabletopGlyph name="meeple" :size="22" />
     </span>
     <span class="font-display text-lg font-semibold tracking-tight">RulePilot</span>
   </span>

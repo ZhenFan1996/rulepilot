@@ -249,9 +249,10 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
   <AppShell>
     <div class="mx-auto grid max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[0.82fr_1.18fr] lg:px-12 lg:py-14">
       <section>
-        <p class="text-sm font-medium text-copper">我的游戏</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">找游戏，或晚点再整理</h1>
-        <p class="mt-4 max-w-xl leading-7 text-ink/55">这里可以从 BGG 搜索桌游、补充封面或记下版本。不影响直接上传规则书并开始讲解。</p>
+        <RouterLink :to="{ name: 'catalog' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← 回到我的游戏</RouterLink>
+        <p class="mt-5 text-sm font-medium text-copper">资料维护</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">游戏资料工作台</h1>
+        <p class="mt-4 max-w-xl leading-7 text-ink/55">从 BGG 导入游戏，或补充版本与扩展。这里只在需要整理资料时使用，不影响直接上传规则书。</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createGame">
           <h2 class="font-display text-xl font-semibold">手动记一个游戏</h2>

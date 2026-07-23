@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import CatalogView from '@/views/CatalogView.vue'
+import GameShelfView from '@/views/GameShelfView.vue'
 import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LessonView from '@/views/LessonView.vue'
@@ -35,6 +36,11 @@ const router = createRouter({
     {
       path: '/catalog',
       name: 'catalog',
+      component: GameShelfView,
+    },
+    {
+      path: '/catalog/manage',
+      name: 'catalog-manage',
       component: CatalogView,
     },
     {

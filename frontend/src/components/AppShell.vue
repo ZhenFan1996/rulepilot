@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
+import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import {
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
@@ -28,16 +29,17 @@ let disposed = false
 const teachingTitles = new Map<string, string>()
 
 const navigation = [
-  { name: 'home', path: '/', label: '首页' },
-  { name: 'public-library', path: '/library', label: '公开讲解' },
-  { name: 'teach', path: '/teach', label: '添加规则书' },
-  { name: 'lessons', path: '/lessons', label: '我的讲解' },
-  { name: 'catalog', path: '/catalog', label: '我的游戏' },
-  { name: 'account', path: '/account', label: '我的' },
+  { name: 'home', path: '/', label: '首页', icon: 'compass' },
+  { name: 'public-library', path: '/library', label: '公开讲解', icon: 'library' },
+  { name: 'teach', path: '/teach', label: '添加规则书', icon: 'rulebook' },
+  { name: 'lessons', path: '/lessons', label: '我的讲解', icon: 'spark' },
+  { name: 'catalog', path: '/catalog', label: '我的游戏', icon: 'meeple' },
+  { name: 'account', path: '/account', label: '我的', icon: 'players' },
 ] as const
-const mobileNavigation = navigation.filter((item) => item.name !== 'catalog')
+const mobileNavigation = navigation.filter((item) => item.name !== 'account')
 
-const currentTitle = computed(() => navigation.find((item) => item.name === route.name)?.label ?? 'RulePilot')
+const currentNavigationName = computed(() => route.name === 'catalog-manage' ? 'catalog' : route.name)
+const currentTitle = computed(() => navigation.find((item) => item.name === currentNavigationName.value)?.label ?? 'RulePilot')
 const detailedTeachingRoute = computed(() => route.name === 'lessons' || route.name === 'lesson')
 const backgroundStatusVisible = computed(() => !props.immersive && !detailedTeachingRoute.value)
 const activeTeachingText = computed(() => {
@@ -160,9 +162,10 @@ onBeforeUnmount(() => {
           v-for="item in navigation"
           :key="item.name"
           :to="item.path"
-          class="flex min-h-11 items-center rounded-lg px-3 text-sm font-medium transition-colors"
-          :class="route.name === item.name ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
+          class="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors"
+          :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
         >
+          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" />
           <span>{{ item.label }}</span>
           <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="`${activeTeaching.length} 份讲解正在生成`">{{ activeTeaching.length }}</span>
         </RouterLink>
@@ -215,9 +218,10 @@ onBeforeUnmount(() => {
         v-for="item in mobileNavigation"
         :key="item.name"
         :to="item.path"
-        class="min-h-11 rounded-lg px-1 py-2 text-center text-xs font-medium"
-        :class="route.name === item.name ? 'bg-ink text-canvas' : 'text-ink/55'"
+        class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-center text-[0.65rem] font-medium"
+        :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/55'"
       >
+        <TabletopGlyph :name="item.icon" :size="18" />
         <span>{{ item.label }}</span>
         <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-1 inline-grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] font-bold text-white" :aria-label="`${activeTeaching.length} 份讲解正在生成`">{{ activeTeaching.length }}</span>
       </RouterLink>

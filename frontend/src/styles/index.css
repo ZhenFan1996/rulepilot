@@ -64,6 +64,37 @@ button {
   font: inherit;
 }
 
+.shelf-cover {
+  position: relative;
+  overflow: hidden;
+  color: var(--shelf-ink);
+  background: var(--shelf-cover);
+}
+
+.shelf-cover::before,
+.shelf-cover::after {
+  position: absolute;
+  content: "";
+  border: 1px solid currentColor;
+  opacity: 0.22;
+}
+
+.shelf-cover::before {
+  width: 13rem;
+  height: 13rem;
+  right: -4rem;
+  bottom: -7rem;
+  border-radius: 50%;
+}
+
+.shelf-cover::after {
+  width: 8rem;
+  height: 8rem;
+  left: -2rem;
+  top: -4rem;
+  transform: rotate(28deg);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
