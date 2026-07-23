@@ -2,6 +2,7 @@ package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
+import com.rulepilot.document.application.PhotographedRulebookUploadService;
 import com.rulepilot.document.domain.DocumentSourceType;
 import java.io.IOException;
 import java.security.Principal;
@@ -28,10 +29,15 @@ import org.springframework.web.multipart.MultipartFile;
 public class UserRuleDocumentController {
 
     private final UploadRuleDocumentService documents;
+    private final PhotographedRulebookUploadService photographedDocuments;
     private final RuleDocumentRemovalService removals;
 
-    public UserRuleDocumentController(UploadRuleDocumentService documents, RuleDocumentRemovalService removals) {
+    public UserRuleDocumentController(
+            UploadRuleDocumentService documents,
+            PhotographedRulebookUploadService photographedDocuments,
+            RuleDocumentRemovalService removals) {
         this.documents = documents;
+        this.photographedDocuments = photographedDocuments;
         this.removals = removals;
     }
 
@@ -69,6 +75,30 @@ public class UserRuleDocumentController {
         }
     }
 
+    @PostMapping(path = "/photo-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    RuleDocumentController.UploadResponse uploadPhotographedRulebook(
+            @RequestParam(required = false) String title,
+            @RequestParam DocumentSourceType sourceType,
+            @RequestParam(required = false) String officialSourceUrl,
+            @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam("photos") List<MultipartFile> photos,
+            Principal principal) {
+        try {
+            var result = photographedDocuments.upload(
+                    null,
+                    title,
+                    sourceType,
+                    officialSourceUrl,
+                    officialCoverUrl,
+                    photoPages(photos),
+                    principal.getName());
+            return RuleDocumentController.UploadResponse.from(result);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("could not read photographed rulebook pages", exception);
+        }
+    }
+
     @PutMapping("/{documentId}/edition")
     RuleDocumentController.DocumentDetails assign(
             @PathVariable UUID documentId, @RequestBody AssignEditionRequest request, Principal principal) {
@@ -80,6 +110,27 @@ public class UserRuleDocumentController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     void delete(@PathVariable UUID documentId, Principal principal) {
         removals.removeOwned(documentId, principal.getName());
+    }
+
+    private List<PhotographedRulebookUploadService.PhotoPage> photoPages(List<MultipartFile> photos) throws IOException {
+        try {
+            return photos.stream().map(photo -> {
+                try {
+                    return new PhotographedRulebookUploadService.PhotoPage(
+                            photo.getOriginalFilename(), photo.getContentType(), photo.getBytes());
+                } catch (IOException exception) {
+                    throw new PhotographedPageReadException(exception);
+                }
+            }).toList();
+        } catch (PhotographedPageReadException exception) {
+            throw (IOException) exception.getCause();
+        }
+    }
+
+    private static final class PhotographedPageReadException extends RuntimeException {
+        private PhotographedPageReadException(IOException cause) {
+            super(cause);
+        }
     }
 
     record AssignEditionRequest(UUID editionId) {

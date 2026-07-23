@@ -35,6 +35,11 @@ interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
 }
+interface PhotographedPage {
+  id: string
+  file: File
+  previewUrl: string
+}
 
 class PreparationFailedError extends Error {}
 
@@ -46,6 +51,8 @@ const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const file = ref<File | null>(null)
+const photographedPages = ref<PhotographedPage[]>([])
+const preparingPhotos = ref(false)
 const title = ref('')
 const officialSourceUrl = ref('')
 const sourceType = ref('BASE_RULEBOOK')
@@ -67,12 +74,15 @@ const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
 let disposed = false
 let preparationClock: ReturnType<typeof setInterval> | null = null
+let photographedPageSequence = 0
 
 const editionOptions = computed(() => games.value.flatMap((entry) => entry.editions.map((edition) => ({
   id: edition.id,
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
-const canUpload = computed(() => Boolean(file.value && !uploading.value && !preparingVersionId.value))
+const canUpload = computed(() => Boolean(
+  (file.value || photographedPages.value.length) && !preparingPhotos.value && !uploading.value && !preparingVersionId.value,
+))
 const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
@@ -135,8 +145,101 @@ async function load() {
 
 function selectFile(event: Event) {
   file.value = (event.target as HTMLInputElement).files?.[0] ?? null
+  if (file.value) clearPhotographedPages()
   message.value = ''
   errorMessage.value = ''
+}
+
+async function addPhotographedPages(event: Event) {
+  const input = event.target as HTMLInputElement
+  const selected = [...(input.files ?? [])]
+  input.value = ''
+  if (!selected.length) return
+  if (photographedPages.value.length + selected.length > 40) {
+    errorMessage.value = t('documents.capture.tooMany')
+    return
+  }
+  preparingPhotos.value = true
+  message.value = ''
+  errorMessage.value = ''
+  try {
+    const prepared = [] as File[]
+    for (const photo of selected) prepared.push(await preparePhotographedPage(photo))
+    const totalBytes = photographedPages.value.reduce((total, page) => total + page.file.size, 0)
+      + prepared.reduce((total, page) => total + page.size, 0)
+    if (totalBytes > 48 * 1024 * 1024) throw new Error(t('documents.capture.tooLarge'))
+    file.value = null
+    photographedPages.value = [...photographedPages.value, ...prepared.map((photo) => ({
+      id: `photo-${Date.now()}-${photographedPageSequence++}`,
+      file: photo,
+      previewUrl: URL.createObjectURL(photo),
+    }))]
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('documents.capture.unsupported')
+  } finally {
+    preparingPhotos.value = false
+  }
+}
+
+async function preparePhotographedPage(photo: File): Promise<File> {
+  if (!photo.type.startsWith('image/') || typeof createImageBitmap !== 'function') {
+    throw new Error(t('documents.capture.unsupported'))
+  }
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(photo, { imageOrientation: 'from-image' })
+  } catch {
+    throw new Error(t('documents.capture.unsupported'))
+  }
+  try {
+    let maximumEdge = 3200
+    let quality = 0.9
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const scale = Math.min(1, maximumEdge / Math.max(bitmap.width, bitmap.height))
+      const width = Math.max(1, Math.round(bitmap.width * scale))
+      const height = Math.max(1, Math.round(bitmap.height * scale))
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error(t('documents.capture.unsupported'))
+      context.fillStyle = '#fff'
+      context.fillRect(0, 0, width, height)
+      context.drawImage(bitmap, 0, 0, width, height)
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+      if (blob && blob.size <= 8 * 1024 * 1024) {
+        const filename = photo.name.replace(/\.[^.]+$/, '') || 'rulebook-page'
+        return new File([blob], `${filename}.jpg`, { type: 'image/jpeg' })
+      }
+      maximumEdge = Math.round(maximumEdge * 0.85)
+      quality -= 0.08
+    }
+    throw new Error(t('documents.capture.tooLarge'))
+  } finally {
+    bitmap.close()
+  }
+}
+
+function removePhotographedPage(index: number) {
+  const page = photographedPages.value[index]
+  if (!page) return
+  URL.revokeObjectURL(page.previewUrl)
+  photographedPages.value = photographedPages.value.filter((_, currentIndex) => currentIndex !== index)
+}
+
+function movePhotographedPage(index: number, direction: -1 | 1) {
+  const destination = index + direction
+  if (destination < 0 || destination >= photographedPages.value.length) return
+  const pages = [...photographedPages.value]
+  const [page] = pages.splice(index, 1)
+  if (!page) return
+  pages.splice(destination, 0, page)
+  photographedPages.value = pages
+}
+
+function clearPhotographedPages() {
+  for (const page of photographedPages.value) URL.revokeObjectURL(page.previewUrl)
+  photographedPages.value = []
 }
 
 function titleFromFile(selected: File) {
@@ -412,21 +515,25 @@ async function recoverPendingHandoff() {
 }
 
 async function uploadRulebook() {
-  if (!file.value) return
+  if (!file.value && photographedPages.value.length === 0) return
   uploading.value = true
   message.value = t('documents.uploading')
   errorMessage.value = ''
   try {
     const selectedFile = file.value
+    const selectedPhotos = [...photographedPages.value]
     const csrf = await csrfToken()
     const form = new FormData()
-    form.append('title', title.value.trim() || titleFromFile(selectedFile))
+    if (title.value.trim()) form.append('title', title.value.trim())
+    else if (selectedFile) form.append('title', titleFromFile(selectedFile))
     form.append('sourceType', sourceType.value)
     if (officialSourceUrl.value.trim()) form.append('officialSourceUrl', officialSourceUrl.value.trim())
-    form.append('file', selectedFile)
-    const path = editionId.value
+    if (selectedFile) form.append('file', selectedFile)
+    else selectedPhotos.forEach((page) => form.append('photos', page.file))
+    const basePath = editionId.value
       ? `/api/v1/editions/${editionId.value}/documents`
       : '/api/v1/documents'
+    const path = selectedFile ? basePath : `${basePath}/photo-pages`
     const response = await checkedFetch(path, {
       method: 'POST', headers: { [csrf.headerName]: csrf.token }, body: form,
     })
@@ -435,6 +542,7 @@ async function uploadRulebook() {
     const pending = currentPreferences(result.version.id)
     if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
     file.value = null
+    clearPhotographedPages()
     title.value = ''
     officialSourceUrl.value = ''
     await loadDocuments()
@@ -487,6 +595,7 @@ onBeforeUnmount(() => {
   disposed = true
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = null
+  clearPhotographedPages()
   for (const versionId of new Set([...progressConnections.keys(), ...progressRetryTimers.keys()])) {
     closeProgressConnection(versionId)
   }
@@ -502,14 +611,53 @@ onBeforeUnmount(() => {
         <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">{{ t('documents.heading.description') }}</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
-          <label for="rulebook-file" class="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-ink/25 bg-canvas px-6 py-8 text-center hover:border-copper/60">
-            <span class="font-display text-xl font-semibold">{{ file?.name ?? t('documents.file.choose') }}</span>
-            <span class="mt-2 text-sm text-ink/45">{{ file ? t('documents.file.change') : t('documents.file.limit') }}</span>
-          </label>
+          <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
+          <div class="mt-3 grid gap-3 sm:grid-cols-3">
+            <label for="rulebook-file" class="group flex min-h-32 cursor-pointer flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition hover:border-copper/60 hover:bg-copper/5">
+              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
+              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
+              <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
+            </label>
+            <label for="rulebook-camera" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-[#fffaf2] p-4 transition hover:border-copper/60 hover:bg-[#fff4e4]">
+              <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
+              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
+              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
+            </label>
+            <label for="rulebook-gallery" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-[#f5f8f4] p-4 transition hover:border-indigo/50 hover:bg-[#edf4ec]">
+              <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
+              <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
+              <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>
+            </label>
+          </div>
           <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+          <input id="rulebook-camera" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
+          <input id="rulebook-gallery" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
+
+          <div v-if="photographedPages.length" class="mt-4 rounded-xl border border-ink/10 bg-canvas p-3 sm:p-4">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <p class="font-semibold">{{ t('documents.capture.photoCount', { count: photographedPages.length }) }}</p>
+              <p class="text-xs leading-5 text-ink/45">{{ t('documents.capture.photoHint') }}</p>
+            </div>
+            <ol class="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <li v-for="(page, index) in photographedPages" :key="page.id" class="overflow-hidden rounded-lg border border-ink/10 bg-paper">
+                <img :src="page.previewUrl" :alt="t('documents.capture.photoPage', { position: index + 1 })" class="aspect-[3/4] w-full object-cover">
+                <div class="flex items-center justify-between gap-1 px-2 py-2">
+                  <span class="text-xs font-semibold text-ink/60">{{ t('documents.capture.photoPage', { position: index + 1 }) }}</span>
+                  <span class="flex gap-1">
+                    <button type="button" :disabled="index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
+                    <button type="button" :disabled="index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
+                    <button type="button" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
+                  </span>
+                </div>
+              </li>
+            </ol>
+          </div>
+          <p v-else-if="file" class="mt-3 text-sm text-ink/45">{{ t('documents.file.change') }} · {{ t('documents.file.limit') }}</p>
+          <p v-if="preparingPhotos" class="mt-4 rounded-lg bg-copper/8 px-4 py-3 text-sm text-copper" role="status">{{ t('documents.capture.preparing') }}</p>
 
           <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
             <input v-model="title" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+            <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
           </label>
 
           <details class="mt-4 border-t border-ink/10 pt-4">

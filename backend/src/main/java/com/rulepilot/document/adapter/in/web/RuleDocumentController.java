@@ -2,6 +2,7 @@ package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.document.application.RuleDocumentRepository;
 import com.rulepilot.document.application.UploadRuleDocumentService;
+import com.rulepilot.document.application.PhotographedRulebookUploadService;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.RuleDocument;
@@ -28,9 +29,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class RuleDocumentController {
 
     private final UploadRuleDocumentService documents;
+    private final PhotographedRulebookUploadService photographedDocuments;
 
-    public RuleDocumentController(UploadRuleDocumentService documents) {
+    public RuleDocumentController(
+            UploadRuleDocumentService documents, PhotographedRulebookUploadService photographedDocuments) {
         this.documents = documents;
+        this.photographedDocuments = photographedDocuments;
     }
 
     @GetMapping
@@ -63,6 +67,52 @@ public class RuleDocumentController {
             return UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read uploaded file", exception);
+        }
+    }
+
+    @PostMapping(path = "/photo-pages", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    UploadResponse uploadPhotographedRulebook(
+            @PathVariable UUID editionId,
+            @RequestParam(required = false) String title,
+            @RequestParam DocumentSourceType sourceType,
+            @RequestParam(required = false) String officialSourceUrl,
+            @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam("photos") List<MultipartFile> photos,
+            Principal principal) {
+        try {
+            var result = photographedDocuments.upload(
+                    editionId,
+                    title,
+                    sourceType,
+                    officialSourceUrl,
+                    officialCoverUrl,
+                    photoPages(photos),
+                    principal.getName());
+            return UploadResponse.from(result);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("could not read photographed rulebook pages", exception);
+        }
+    }
+
+    private List<PhotographedRulebookUploadService.PhotoPage> photoPages(List<MultipartFile> photos) throws IOException {
+        try {
+            return photos.stream().map(photo -> {
+                try {
+                    return new PhotographedRulebookUploadService.PhotoPage(
+                            photo.getOriginalFilename(), photo.getContentType(), photo.getBytes());
+                } catch (IOException exception) {
+                    throw new PhotographedPageReadException(exception);
+                }
+            }).toList();
+        } catch (PhotographedPageReadException exception) {
+            throw (IOException) exception.getCause();
+        }
+    }
+
+    private static final class PhotographedPageReadException extends RuntimeException {
+        private PhotographedPageReadException(IOException cause) {
+            super(cause);
         }
     }
 

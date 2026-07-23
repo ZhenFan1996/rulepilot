@@ -100,7 +100,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await vi.runOnlyPendingTimersAsync()
   })
 
-  it('keeps the first upload step focused on a PDF and optional title', async () => {
+  it('offers a PDF alongside camera and photo-library rulebook intake', async () => {
     const fetchMock = mockApplicationFetch(() => 'READY')
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', FakeEventSource)
@@ -109,10 +109,17 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('上传规则书')
-    expect(wrapper.text()).toContain('只需选择 PDF')
+    expect(wrapper.text()).toContain('上传 PDF，或按页拍下规则书')
+    expect(wrapper.text()).toContain('已有 PDF')
+    expect(wrapper.text()).toContain('现在拍一页')
+    expect(wrapper.text()).toContain('添加已拍页面')
     expect(wrapper.text()).toContain('想自己起标题？')
     expect(wrapper.text()).toContain('可选：关联游戏、官方链接和讲解偏好')
     expect(wrapper.text()).not.toContain('让 RulePilot 自动创建')
+    expect(wrapper.find('#rulebook-file').attributes('accept')).toContain('application/pdf')
+    expect(wrapper.find('#rulebook-camera').attributes('capture')).toBe('environment')
+    expect(wrapper.find('#rulebook-camera').attributes('accept')).toBe('image/*')
+    expect(wrapper.find('#rulebook-gallery').attributes('multiple')).toBeDefined()
     wrapper.unmount()
   })
 })
