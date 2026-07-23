@@ -72,6 +72,22 @@ public class AssistantRunService implements AssistantRuns {
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public RunSnapshot advanceAfterWork(
+            UUID runId,
+            long expectedRevision,
+            AssistantRunState nextState,
+            String stepSummary) {
+        AssistantRun current = require(runId, expectedRevision);
+        if (current.mode() != AssistantRunMode.TEACHING) {
+            throw new IllegalArgumentException("post-work finalization is only available to teaching runs");
+        }
+        AssistantRun changed = current.advance(nextState, Instant.now(clock));
+        persist(current, changed, stepSummary);
+        return snapshot(changed);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public RunSnapshot fail(UUID runId, long expectedRevision, String errorCode, String stepSummary) {
         AssistantRun current = require(runId, expectedRevision);
         AssistantRun changed = current.fail(errorCode, Instant.now(clock));

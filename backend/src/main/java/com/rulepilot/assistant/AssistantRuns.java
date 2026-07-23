@@ -11,6 +11,14 @@ public interface AssistantRuns {
 
     RunSnapshot advance(UUID runId, long expectedRevision, AssistantRunState nextState, String stepSummary);
 
+    /**
+     * Records a state transition after all model and tool work for that transition has already settled.
+     *
+     * <p>This keeps a usable, persisted result readable when an optional final review used the last
+     * available execution budget. It does not authorize further agent work.
+     */
+    RunSnapshot advanceAfterWork(UUID runId, long expectedRevision, AssistantRunState nextState, String stepSummary);
+
     RunSnapshot fail(UUID runId, long expectedRevision, String errorCode, String stepSummary);
 
     void requestCancellation(UUID runId, String ownerUsername);

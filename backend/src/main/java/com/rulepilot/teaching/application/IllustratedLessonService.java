@@ -73,7 +73,7 @@ public class IllustratedLessonService {
             IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
             IllustratedLesson lesson = agent.createBase(
                     plan, run.id(), previousLesson, progressPublisher::publish);
-            run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
+            run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentExecutionStoppedException stopped) {
             failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
@@ -91,10 +91,10 @@ public class IllustratedLessonService {
         try {
             LessonStatus status = outcome.lessonStatus();
             if (status == LessonStatus.INCOMPLETE) {
-                run = advance(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Required lesson evidence is incomplete");
+                run = advanceAfterWork(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Required lesson evidence is incomplete");
             } else {
-                run = advance(run, AssistantRunState.LESSON_COMPOSITION, "Cited illustrated lesson is composed");
-                run = advance(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
+                run = advanceAfterWork(run, AssistantRunState.LESSON_COMPOSITION, "Cited illustrated lesson is composed");
+                run = advanceAfterWork(run, AssistantRunState.COMPLETED, "Illustrated lesson generation completed");
             }
         } catch (RuntimeException exception) {
             failRun(run, "TEACHING_COMPLETION_FAILED", "Persisted lesson could not be marked complete", exception);
@@ -126,6 +126,10 @@ public class IllustratedLessonService {
 
     private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
         return runs.advance(run.id(), run.revision(), state, summary);
+    }
+
+    private RunSnapshot advanceAfterWork(RunSnapshot run, AssistantRunState state, String summary) {
+        return runs.advanceAfterWork(run.id(), run.revision(), state, summary);
     }
 
     private TeachingPlan requireReadyPlan(UUID teachingPlanId, String ownerUsername) {

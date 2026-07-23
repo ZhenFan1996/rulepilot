@@ -1,8 +1,10 @@
 package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -69,6 +71,51 @@ class AssistantRunServiceTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30)),
                         org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2)));
+    }
+
+    @Test
+    void recordsFinalizationAfterModelWorkWithoutRecheckingTheExecutionBudget() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(60);
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.TEACHING, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.DOCUMENT_READINESS, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.LESSON_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(3))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(4));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+        when(repository.update(any(), any(), any())).thenReturn(true);
+
+        var verified = service.advanceAfterWork(
+                retrieving.id(), retrieving.revision(), AssistantRunState.VERIFYING_EVIDENCE,
+                "Lesson citations are scope checked");
+
+        assertThat(verified.state()).isEqualTo(AssistantRunState.VERIFYING_EVIDENCE);
+        verify(execution, never()).assertStepAllowed(any(), any(Long.class));
+    }
+
+    @Test
+    void doesNotOfferPostWorkFinalizationToQuestionRuns() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        Instant startedAt = Instant.now().minusSeconds(60);
+        AssistantRun retrieving = AssistantRun.start(
+                        AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", startedAt)
+                .advance(AssistantRunState.QUESTION_UNDERSTANDING, startedAt.plusSeconds(1))
+                .advance(AssistantRunState.RETRIEVAL_PLANNING, startedAt.plusSeconds(2))
+                .advance(AssistantRunState.RETRIEVING, startedAt.plusSeconds(3));
+        when(repository.find(retrieving.id())).thenReturn(java.util.Optional.of(retrieving));
+
+        assertThatThrownBy(() -> service.advanceAfterWork(
+                        retrieving.id(), retrieving.revision(), AssistantRunState.VERIFYING_EVIDENCE,
+                        "Answer source scope is policy checked"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("post-work finalization is only available to teaching runs");
+
+        verify(execution, never()).assertStepAllowed(any(), any(Long.class));
     }
 
     @Test
