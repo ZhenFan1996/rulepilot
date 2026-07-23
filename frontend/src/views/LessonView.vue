@@ -15,6 +15,13 @@ import {
   type StructuredRuleAnswer,
 } from '@/composables/useLessonAnswers'
 import { buildCardQuestion } from '@/lib/cardOcr'
+import {
+  useLessonSupportingContent,
+} from '@/composables/useLessonSupportingContent'
+import type {
+  LessonComprehensionReport,
+  SpeechCue,
+} from '@/composables/lessonSupportingContent'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import {
   finishSection,
@@ -91,110 +98,6 @@ interface LessonSection {
   }>
 }
 
-interface LessonQualityReport {
-  status: 'READY' | 'NEEDS_REVIEW' | 'BLOCKED'
-  score: number
-  checks: Array<{
-    type: string
-    status: 'PASS' | 'FAIL' | 'NOT_EVALUATED'
-    summary: string
-    detail: string
-  }>
-}
-
-interface LessonComprehensionReport {
-  lessonId: string
-  readyTaskCount: number
-  taskCount: number
-  canDoCount: number
-  needsHelpCount: number
-  readyVisualTaskCount: number
-  visualAidRatedCount: number
-  visualAidHelpfulCount: number
-  visualAidHelpfulPercent: number | null
-  visualAids: Array<{
-    key: string
-    label: string
-    chapterPosition: number
-    sourcePages: number[]
-    visualFocus: NonNullable<LessonSection['steps'][number]['visualFocus']>
-    result: 'NOT_RATED' | 'HELPFUL' | 'NOT_HELPFUL'
-  }>
-  tasks: Array<{
-    type: 'PREPARE_TABLE' | 'PLAY_A_ROUND' | 'FINISH_GAME' | 'SCORE_GAME' | 'VERIFY_VISUAL_AID' | 'IDENTIFY_COMPONENTS' | 'COMPLETE_VISUAL_SETUP'
-    label: string
-    prompt: string
-    readiness: 'READY' | 'MISSING_LESSON_CHECK' | 'MISSING_VISUAL_EVIDENCE'
-    result: 'NOT_TRIED' | 'CAN_DO' | 'NEEDS_HELP'
-    chapterPositions: number[]
-    sourcePages: number[]
-    visualFocus: LessonSection['steps'][number]['visualFocus']
-    visualAidResult: 'NOT_RATED' | 'HELPFUL' | 'NOT_HELPFUL'
-  }>
-}
-
-interface NarrationScript {
-  id: string
-  status: 'READY' | 'INCOMPLETE'
-  chapters: Array<{
-    position: number
-    type: string
-    title: string
-    supported: boolean
-    segments: Array<{ position: number; text: string; sourcePages: number[] }>
-  }>
-}
-
-interface NarrationPlayback {
-  script: NarrationScript
-  provider: string
-  durationMillis: number
-  cues: SpeechCue[]
-}
-
-interface SpeechCue {
-  chapterPosition: number
-  segmentPosition: number
-  startMillis: number
-  endMillis: number
-}
-
-interface ChapterVideo {
-  id: string
-  status: 'READY' | 'INCOMPLETE'
-  durationMillis: number
-  chapters: VideoChapter[]
-}
-
-interface MediaConsistencyReport {
-  status: 'CONSISTENT' | 'INCONSISTENT'
-  consistencyPercent: number
-  checks: Array<{
-    type: string
-    status: 'PASS' | 'FAIL'
-    summary: string
-    detail: string
-  }>
-}
-
-interface VideoChapter {
-  position: number
-  type: string
-  title: string
-  evidenceStatus: 'SUPPORTED' | 'INSUFFICIENT_EVIDENCE'
-  visualKind: 'REFERENCE_CARD' | 'TABLE_LAYOUT' | 'FLOW_DIAGRAM' | 'SCOREBOARD'
-  visualCaption: string
-  startMillis: number
-  endMillis: number
-  frames: Array<{
-    segmentPosition: number
-    startMillis: number
-    endMillis: number
-    subtitle: string
-    sourcePages: number[]
-  }>
-}
-
 type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
 
 const route = useRoute()
@@ -209,24 +112,9 @@ const sourceLesson = ref<IllustratedLesson | null>(null)
 const localizationStatus = ref<'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null>(null)
 const localizationPreparing = ref(false)
 let localizationRefreshTimer: ReturnType<typeof setTimeout> | undefined
-const quality = ref<LessonQualityReport | null>(null)
-const comprehension = ref<LessonComprehensionReport | null>(null)
-const comprehensionSaving = ref<string | null>(null)
-const comprehensionError = ref('')
-const narration = ref<NarrationScript | null>(null)
-const video = ref<ChapterVideo | null>(null)
-const mediaConsistency = ref<MediaConsistencyReport | null>(null)
-const mediaWarnings = ref<string[]>([])
-const audioAvailable = ref(false)
 const mediaMode = ref<MediaMode>('TEXT')
 const narrationPlayer = ref<HTMLAudioElement | null>(null)
-const narrationProvider = ref('')
-const narrationDurationMillis = ref(0)
-const narrationCues = ref<SpeechCue[]>([])
-const narrationMillis = ref(0)
-const narrationPlaying = ref(false)
 const narrationRate = ref(1)
-const narrationRestoreTarget = ref<number | null>(null)
 const progress = ref<LessonProgress>(initialLessonProgress())
 const ruling = ref<ConfirmedRuling | null>(null)
 const rulingSaving = ref(false)
@@ -251,6 +139,27 @@ let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let visualRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let lessonViewDisposed = false
 let latestLessonLoad = 0
+
+const {
+  quality,
+  comprehension,
+  comprehensionSaving,
+  comprehensionError,
+  narration,
+  video,
+  mediaConsistency,
+  mediaWarnings,
+  audioAvailable,
+  narrationProvider,
+  narrationDurationMillis,
+  narrationCues,
+  narrationMillis,
+  narrationPlaying,
+  narrationRestoreTarget,
+  addMediaWarning,
+  clearSupportingContent,
+  loadSupportingContent: loadSupportingContentForCurrentLesson,
+} = useLessonSupportingContent()
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -610,86 +519,13 @@ async function prepareEnglishGuide() {
   }
 }
 
-function addMediaWarning(message: string) {
-  if (!mediaWarnings.value.includes(message)) mediaWarnings.value.push(message)
-}
-
-function clearSupportingContent() {
-  quality.value = null
-  narration.value = null
-  video.value = null
-  mediaConsistency.value = null
-  comprehension.value = null
-  comprehensionError.value = ''
-  mediaWarnings.value = []
-  audioAvailable.value = false
-  narrationProvider.value = ''
-  narrationDurationMillis.value = 0
-  narrationCues.value = []
-  narrationMillis.value = 0
-  narrationPlaying.value = false
-  narrationRestoreTarget.value = null
-}
-
 async function loadSupportingContent(targetPlanId: string, request = latestLessonLoad) {
-  if (!isCurrentLessonLoad(request, targetPlanId)) return
-  clearSupportingContent()
-  const [qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse] = await Promise.all([
-    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/quality`),
-    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/comprehension`),
-    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/narration/playback`),
-    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/video`),
-    optionalFetch(`/api/v1/teaching-plans/${targetPlanId}/media-consistency`),
-  ])
-  if (!isCurrentLessonLoad(request, targetPlanId)) return
-  if ([qualityResponse, comprehensionResponse, narrationResponse, videoResponse, consistencyResponse]
-    .some((response) => response?.status === 401)) {
-    await router.push({ name: 'login' })
-    return
-  }
-  const [loadedQuality, loadedComprehension, loadedNarration, loadedVideo, loadedConsistency] = await Promise.all([
-    qualityResponse?.ok ? qualityResponse.json() as Promise<LessonQualityReport> : Promise.resolve(null),
-    comprehensionResponse?.ok ? comprehensionResponse.json() as Promise<LessonComprehensionReport> : Promise.resolve(null),
-    narrationResponse?.ok ? narrationResponse.json() as Promise<NarrationPlayback> : Promise.resolve(null),
-    videoResponse?.ok ? videoResponse.json() as Promise<ChapterVideo> : Promise.resolve(null),
-    consistencyResponse?.ok ? consistencyResponse.json() as Promise<MediaConsistencyReport> : Promise.resolve(null),
-  ])
-  if (!isCurrentLessonLoad(request, targetPlanId)) return
-  if (loadedQuality) {
-    quality.value = loadedQuality
-  } else {
-    addMediaWarning('讲解诊断暂不可用，不影响继续阅读。')
-  }
-  if (loadedComprehension) {
-    comprehension.value = loadedComprehension
-  } else {
-    comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
-  }
-  if (loadedNarration) {
-    const playback = loadedNarration
-    narration.value = playback.script
-    narrationProvider.value = playback.provider
-    narrationDurationMillis.value = playback.durationMillis
-    narrationCues.value = playback.cues
-    audioAvailable.value = true
-  } else {
-    addMediaWarning('语音暂不可用，已保留完整图文讲解。')
-  }
-  if (loadedVideo) {
-    video.value = loadedVideo
-  } else {
-    addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
-  }
-  mediaConsistency.value = loadedConsistency
-  const restoredNarration = Number(localStorage.getItem(narrationPositionKey()))
-  if (
-    Number.isFinite(restoredNarration) &&
-    restoredNarration >= 0 &&
-    restoredNarration < narrationDurationMillis.value
-  ) {
-    narrationRestoreTarget.value = restoredNarration
-    narrationMillis.value = restoredNarration
-  }
+  await loadSupportingContentForCurrentLesson({
+    planId: targetPlanId,
+    isCurrent: () => isCurrentLessonLoad(request, targetPlanId),
+    narrationPositionKey,
+    requestLogin: () => router.push({ name: 'login' }),
+  })
 }
 
 async function loadLesson() {
