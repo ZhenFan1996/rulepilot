@@ -5,7 +5,6 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
-import com.rulepilot.document.DocumentTeachingPreparation;
 import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
@@ -96,13 +95,13 @@ public class TeachingPlanService {
     private final DocumentProcessing documents;
     private final DocumentPageImages pageImages;
     private final DocumentVersionScopeLookup documentScopes;
-    private final DocumentTeachingPreparation documentPreparation;
     private final VisualRulebookPageCatalogModel visualCatalog;
     private final VisualRulebookPageFacts visualFacts;
     private final TeachingOutlineModel outlines;
     private final AuditedAgentInvocations invocations;
     private final TeachingPlanFactory plans;
     private final TeachingPlanRepository repository;
+    private final TeachingPlanPublication publication;
     private final Duration visualCatalogTimeout;
     private final int visualCoverageProbePages;
 
@@ -110,25 +109,25 @@ public class TeachingPlanService {
             DocumentProcessing documents,
             DocumentPageImages pageImages,
             DocumentVersionScopeLookup documentScopes,
-            DocumentTeachingPreparation documentPreparation,
             VisualRulebookPageCatalogModel visualCatalog,
             VisualRulebookPageFacts visualFacts,
             TeachingOutlineModel outlines,
             AuditedAgentInvocations invocations,
             TeachingPlanFactory plans,
             TeachingPlanRepository repository,
+            TeachingPlanPublication publication,
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
             @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages) {
         this.documents = documents;
         this.pageImages = pageImages;
         this.documentScopes = documentScopes;
-        this.documentPreparation = documentPreparation;
         this.visualCatalog = visualCatalog;
         this.visualFacts = visualFacts;
         this.outlines = outlines;
         this.invocations = invocations;
         this.plans = plans;
         this.repository = repository;
+        this.publication = publication;
         if (visualCatalogTimeout == null || visualCatalogTimeout.isZero() || visualCatalogTimeout.isNegative()) {
             throw new IllegalArgumentException("visual catalog timeout must be positive");
         }
@@ -140,13 +139,11 @@ public class TeachingPlanService {
         this.visualCoverageProbePages = visualCoverageProbePages;
     }
 
-    @Transactional
     public TeachingPlan create(
             UUID documentVersionId, int playerCount, int beginnerCount, int durationMinutes, String createdBy) {
         return create(documentVersionId, playerCount, beginnerCount, durationMinutes, createdBy, null);
     }
 
-    @Transactional
     public TeachingPlan create(
             UUID documentVersionId,
             int playerCount,
@@ -328,7 +325,6 @@ public class TeachingPlanService {
                 }
             }
         }
-        documentPreparation.prepare(documentVersionId, createdBy, outline.gameTitle());
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
                 documentVersionId,
@@ -337,13 +333,13 @@ public class TeachingPlanService {
                         .map(topic -> topic.key() + " visual=" + topic.visualEvidenceRecommended()
                                 + " tags=" + topic.coverageTags() + " queries=" + topic.retrievalQueries())
                         .toList());
-        return repository.save(plans.create(
+        return publication.publish(plans.create(
                 documentVersionId,
                 playerCount,
                 beginnerCount,
                 durationMinutes,
                 createdBy,
-                outline));
+                outline), outline.gameTitle());
     }
 
     /**
