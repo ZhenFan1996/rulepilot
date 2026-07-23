@@ -65,7 +65,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v32-chapter-scope-map";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v35-endgame-check-fidelity";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
@@ -122,6 +122,21 @@ public class GroundedTeachingAgent {
     private static final Pattern FINAL_CHECK_CLAIMS_ALL_IN_BAG = Pattern.compile(
             "(?i)(?:(?:所有|全部|all).{0,24}(?:标记|token).{0,24}(?:布袋|袋中|bag)|"
                     + "(?:布袋|袋中|bag).{0,24}(?:所有|全部|all).{0,24}(?:标记|token))");
+    private static final Pattern END_OF_ROUND_SOURCE = Pattern.compile(
+            "(?i)(?:\\bat\\s+the\\s+end\\s+of\\s+(?:a|the|this|that)\\s+round\\b|"
+                    + "\\b(?:when|after)\\s+(?:the|a|this|that)?\\s*round\\s+ends?\\b|"
+                    + "(?:本|该|一)?轮(?:结束|末)|回合结束)");
+    private static final Pattern IMMEDIATE_ENDING = Pattern.compile(
+            "(?i)(?:(?:游戏|game).{0,16}(?:立即|立刻|马上|即刻).{0,8}结束|"
+                    + "(?:立即|立刻|马上|即刻).{0,8}结束|"
+                    + "(?:ends?|ending).{0,16}\\bimmediately\\b|\\bimmediately\\b.{0,16}(?:ends?|ending))");
+    private static final Pattern ENDGAME_CHECK_SOURCE = Pattern.compile(
+            "(?i)(?:\\b(?:end game|game end)\\b.{0,120}\\b(?:if|when)\\b|"
+                    + "(?:游戏结束|结束检查).{0,120}(?:如果|当|若))");
+    private static final Pattern DEFERS_CLEANUP_ENDGAME_CHECK = Pattern.compile(
+            "(?i)(?:(?:清理|cleanup).{0,56}(?:不执行|不进行|不检查|does not check|do not check).{0,56}"
+                    + "(?:游戏结束|结束检查|end game|game end)|"
+                    + "(?:游戏结束|结束检查|end game|game end).{0,80}(?:最终计分阶段|final scoring phase))");
     private static final Pattern RETRIEVAL_QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
     private static final Set<String> ENGLISH_RETRIEVAL_FILLER = Set.of(
             "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
@@ -1687,6 +1702,17 @@ public class GroundedTeachingAgent {
         if (citationIds.contains(null) || !allowedEvidence.keySet().containsAll(citationIds)) {
             throw new IllegalArgumentException("teaching step cites evidence outside retrieval scope");
         }
+        List<RuleEvidence> citedEvidence = citationIds.stream().map(allowedEvidence::get).toList();
+        if (claimsImmediateEndingForEndOfRoundTrigger(draft.text(), citedEvidence)) {
+            throw new IllegalArgumentException(
+                    "When cited rules say an end condition occurs at the end of a round, do not rewrite it as an "
+                            + "immediate ending.");
+        }
+        if (defersCitedEndgameCheck(draft.text(), citedEvidence)) {
+            throw new IllegalArgumentException(
+                    "Do not move a cited end-game check to a separate final-scoring phase or say that "
+                            + "cleanup skips it.");
+        }
         List<Integer> pages = citationIds.stream()
                 .map(allowedEvidence::get)
                 .flatMapToInt(source -> IntStream.rangeClosed(source.pageFrom(), source.pageTo()))
@@ -1702,6 +1728,34 @@ public class GroundedTeachingAgent {
                 pages,
                 List.copyOf(citationIds),
                 validatedVisualFocus(draft));
+    }
+
+    /**
+     * A trigger at the end of a round is a timing rule, not an immediate interrupt.  This small
+     * deterministic guard catches a high-impact compression that an otherwise grounded prose
+     * draft can make. "End of round" is the useful player-facing timing, so it must not be
+     * restated as an immediate interrupt.
+     */
+    static boolean claimsImmediateEndingForEndOfRoundTrigger(String playerText, List<RuleEvidence> citedEvidence) {
+        if (playerText == null || citedEvidence == null || citedEvidence.isEmpty()) {
+            return false;
+        }
+        boolean citesEndOfRound = citedEvidence.stream()
+                .map(RuleEvidence::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(excerpt -> END_OF_ROUND_SOURCE.matcher(excerpt).find());
+        return citesEndOfRound && IMMEDIATE_ENDING.matcher(playerText).find();
+    }
+
+    static boolean defersCitedEndgameCheck(String playerText, List<RuleEvidence> citedEvidence) {
+        if (playerText == null || citedEvidence == null || citedEvidence.isEmpty()) {
+            return false;
+        }
+        return citedEvidence.stream()
+                        .map(RuleEvidence::excerpt)
+                        .filter(java.util.Objects::nonNull)
+                        .anyMatch(excerpt -> ENDGAME_CHECK_SOURCE.matcher(excerpt).find())
+                && DEFERS_CLEANUP_ENDGAME_CHECK.matcher(playerText).find();
     }
 
     private VisualFocus validatedVisualFocus(TeachingLessonModel.StepDraft draft) {
@@ -1850,6 +1904,8 @@ public class GroundedTeachingAgent {
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";
         if (message.contains("all tokens remain in the bag")) return "FINAL_SUPPLY_STATE_CONTRADICTION";
+        if (message.contains("end condition occurs at the end of a round")) return "END_OF_ROUND_TIMING_LOST";
+        if (message.contains("cited end-game check")) return "ENDGAME_CHECK_DEFERRED";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";
         if (message.contains("visual focus") || message.contains("focus region")) return "VISUAL_FOCUS_INVALID";
         if (message.contains("draft must contain")) return "STEP_COUNT_INVALID";

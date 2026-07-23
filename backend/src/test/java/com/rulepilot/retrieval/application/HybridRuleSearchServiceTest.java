@@ -38,6 +38,30 @@ class HybridRuleSearchServiceTest {
         });
     }
 
+    @Test
+    void preservesLexicalEvidenceDuringHighRecallRetrievalWhenVectorResultsCrowdItOut() {
+        UUID versionId = UUID.randomUUID();
+        List<RuleEvidenceHit> lexical = java.util.stream.IntStream.rangeClosed(1, 10)
+                .mapToObj(page -> hit(versionId, "ACTIONS", page))
+                .toList();
+        List<RuleEvidenceHit> vectorOnly = java.util.stream.IntStream.rangeClosed(11, 20)
+                .mapToObj(page -> hit(versionId, "ACTIONS", page))
+                .toList();
+        var service = new HybridRuleSearchService(
+                (version, query, limit) -> lexical,
+                (version, query, limit) -> vectorOnly,
+                (version, chunkIds) -> java.util.stream.Stream.concat(lexical.stream(), vectorOnly.stream())
+                        .filter(hit -> chunkIds.contains(hit.chunkId()))
+                        .map(hit -> complete(hit, "Complete evidence " + hit.pageFrom()))
+                        .toList());
+
+        var results = service.search(versionId, "ending scoring", new RetrievalOptions(20, Set.of(), null));
+
+        assertThat(results).extracting(result -> result.evidence().pageFrom())
+                .contains(1, 7, 10)
+                .hasSize(20);
+    }
+
     private RuleEvidenceHit complete(RuleEvidenceHit hit, String evidence) {
         return new RuleEvidenceHit(
                 hit.chunkId(), hit.documentVersionId(), hit.sectionType(), hit.heading(), evidence,

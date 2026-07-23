@@ -50,7 +50,7 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void putsBoundedModelProvidedQueriesFirstWithoutAddingSectionFilters() {
+    void usesCrossLanguageQueriesBeforeASingleSurfaceLanguageQuestion() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),
                 "万能牌能匹配行动花色吗？",
@@ -66,9 +66,33 @@ class AnswerRetrievalPlannerTest {
                 List.of("wild card matching action suit", "wild card matching action suit", "ignored"));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
-                .startsWith("wild card matching action suit", "ignored");
+                .startsWith("wild card matching action suit", "ignored", "万能牌能匹配行动花色吗？");
         assertThat(intents.getFirst().sectionTypes()).isEmpty();
         assertThat(intents.getFirst().currentSectionType()).isNull();
+    }
+
+    @Test
+    void preservesEveryDirectClauseOfACompoundQuestionBeforeSpendingRewriteBudget() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？",
+                "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？",
+                QuestionType.RULE_QUERY,
+                List.of("名声", "承诺货物", "平局"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(versionId, "游戏结束与最终计分", null, 4, Set.of()),
+                List.of("end game pledged cargo scoring tie breaker", "fame end gold tie"));
+
+        assertThat(intents.getFirst().query()).contains(
+                "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？", "end game end of round cleanup");
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .contains("有人到30名声后立刻结束吗", "承诺货物何时计分", "平局怎么处理")
+                .anyMatch(query -> query.contains("end game end of round cleanup") && query.contains("pledged cargo"));
     }
 
     @Test
@@ -129,10 +153,11 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
-        assertThat(intents).hasSize(3);
-        assertThat(intents.get(0).query()).isEqualTo("when does the game end");
-        assertThat(intents.get(1).query()).isEqualTo("how are ties resolved");
-        assertThat(intents.get(2).sectionTypes())
+        assertThat(intents).hasSize(4);
+        assertThat(intents.getFirst().query()).contains("end game end of round cleanup");
+        assertThat(intents.get(1).query()).isEqualTo("when does the game end");
+        assertThat(intents.get(2).query()).isEqualTo("how are ties resolved");
+        assertThat(intents.get(3).sectionTypes())
                 .contains("TIE_BREAKERS", "END_CONDITIONS", "SCORING");
     }
 

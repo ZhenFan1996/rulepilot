@@ -1162,7 +1162,7 @@ class StructuredRuleAnswerServiceTest {
 
             @Override
             public ModelDraft compose(ModelRequest request) {
-                assertThat(visualQueries).contains("主动玩家掷出骰子后", "其他被动玩家能领取自己的已部署奖励吗");
+                assertThat(visualQueries).contains("主动玩家掷出骰子后，其他被动玩家能领取自己的已部署奖励吗");
                 assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::pageFrom).contains(12, 7);
                 return new ModelDraft(
                         "被动玩家按同一骰子结果领取已部署奖励。",
@@ -2013,6 +2013,130 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(turnProcedure.chunkId());
         assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAnEndgameAnswerUntilItCitesTheDecisiveResolutionSequence() {
+        RuleEvidenceHit componentOnly = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "COMPONENTS", "Cargo", "Cargo cards are used by the Smugglers.", 3, 3, 0.9);
+        RuleEvidenceHit endgameProcedure = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ROUND_STRUCTURE",
+                "Clean Up",
+                "1. End EGavmen? If any player has at least 30\u00a0Fame, end the game. Smugglers score pledged Cargo, then the player with the most Fame wins. On a tie,\nthe tied player with the most gold wins.",
+                9,
+                9,
+                0.8);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "After End Rewards, the game ends.",
+                        "Cargo is scored later.",
+                        List.of(componentOnly.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                assertThat(feedback).anyMatch(item -> item.startsWith("ENDGAME_RESOLUTION_CITATION"));
+                revisions.incrementAndGet();
+                return new ModelDraft(
+                        "在轮末清理时检查30名声；触发后由走私者计分承诺货物，再比较名声与金币。",
+                        "清理的结束检查触发后，走私者先结算承诺货物；名声最高者获胜，平局时比较金币。",
+                        List.of(componentOnly.chunkId(), endgameProcedure.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(
+                        new HybridEvidenceHit(componentOnly, 0.04, 1, null, false),
+                        new HybridEvidenceHit(endgameProcedure, 0.03, 2, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "有人达到30名声后要立刻结束吗？承诺货物何时计分，平局如何处理？",
+                new QuestionContext(versionId, "END_CONDITIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(endgameProcedure.chunkId());
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void completesAnEndgameAnswerWithTheAdjacentResolutionSequence() {
+        RuleEvidenceHit roundEnd = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ROUND_STRUCTURE",
+                "Playing the Game",
+                "The game can end at the end of a round after scoring regions.",
+                8,
+                8,
+                0.8);
+        RuleEvidenceHit endgameProcedure = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ROUND_STRUCTURE",
+                "Ending the Round",
+                "1. End EGavmen? If any player has at least 30\u00a0Fame, end the game. "
+                        + "Smugglers score pledged Cargo, then the player with the most Fame wins. "
+                        + "On a tie,\nthe tied player with the most gold wins.",
+                9,
+                9,
+                0.8);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findAdjacent(
+                    UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
+                assertThat(anchorChunkIds).contains(roundEnd.chunkId());
+                assertThat(radius).isEqualTo(2);
+                return List.of(endgameProcedure);
+            }
+        };
+        List<RuleEvidenceHit> distractors = List.of(
+                new RuleEvidenceHit(UUID.randomUUID(), versionId, "COMPONENTS", "Cargo", "Cargo cards are secret.", 3, 3, 0.7),
+                new RuleEvidenceHit(UUID.randomUUID(), versionId, "SETUP", "Setup", "Put gold near the board.", 4, 4, 0.7),
+                new RuleEvidenceHit(UUID.randomUUID(), versionId, "ACTIONS", "Move", "Move one space.", 5, 5, 0.7),
+                new RuleEvidenceHit(UUID.randomUUID(), versionId, "SCORING", "Fame", "Fame is tracked on the board.", 6, 6, 0.7));
+        AtomicInteger retrievals = new AtomicInteger();
+        RuleAnswerModel model = request -> {
+            assertThat(request.evidence()).extracting(evidence -> evidence.chunkId())
+                    .contains(endgameProcedure.chunkId());
+            return new ModelDraft(
+                    "不是立刻结束；轮末区域计分后才检查30名声。",
+                    "触发后先计分承诺货物，再比较名声；平局比较金币。",
+                    List.of(endgameProcedure.chunkId()),
+                    List.of(),
+                    "HIGH");
+        };
+        var service = answerService(
+                (version, query, options) -> {
+                    int index = retrievals.getAndIncrement();
+                    RuleEvidenceHit source = index == 0
+                            ? roundEnd
+                            : distractors.get(Math.min(index - 1, distractors.size() - 1));
+                    return List.of(new HybridEvidenceHit(source, 0.04, 1, null, false));
+                },
+                VisualRulebookPageFactSearch.empty(),
+                lookup,
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "有人达到30名声后要立刻结束吗？承诺货物何时计分，平局如何处理？",
+                new QuestionContext(versionId, "END_CONDITIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(endgameProcedure.chunkId());
     }
 
     @Test

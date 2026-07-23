@@ -20,6 +20,8 @@ public class HybridRuleSearchService implements HybridRuleSearch {
     private static final int RRF_K = 60;
     private static final double CURRENT_SECTION_BOOST = 0.004;
     private static final int MAX_RESULTS = 20;
+    private static final int HIGH_RECALL_LIMIT = 12;
+    private static final int LEXICAL_EVIDENCE_RESERVE = 10;
     private final FullTextRuleSearch fullText;
     private final VectorRuleSearch vector;
     private final RuleEvidenceLookup evidenceLookup;
@@ -48,20 +50,32 @@ public class HybridRuleSearchService implements HybridRuleSearch {
                 .map(candidate -> candidate.result(options.currentSectionType()))
                 .sorted(java.util.Comparator.comparingDouble(HybridEvidenceHit::score).reversed()
                         .thenComparing(hit -> hit.evidence().chunkId()))
-                .limit(limit)
                 .toList();
         if (ranked.isEmpty()) {
             return List.of();
         }
+        Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
+        if (limit >= HIGH_RECALL_LIMIT) {
+            fullTextHits.stream()
+                    .filter(hit -> options.sectionTypes().isEmpty()
+                            || options.sectionTypes().contains(hit.sectionType().toUpperCase()))
+                    .limit(LEXICAL_EVIDENCE_RESERVE)
+                    .map(hit -> candidates.get(hit.chunkId()))
+                    .filter(java.util.Objects::nonNull)
+                    .map(candidate -> candidate.result(options.currentSectionType()))
+                    .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+        }
+        ranked.forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+        List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(limit).toList();
         Map<UUID, RuleEvidenceHit> completeEvidence = evidenceLookup
                 .findByChunkIds(
                         documentVersionId,
-                        ranked.stream()
+                        selectedEvidence.stream()
                                 .map(hit -> hit.evidence().chunkId())
                                 .collect(java.util.stream.Collectors.toUnmodifiableSet()))
                 .stream()
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(RuleEvidenceHit::chunkId, hit -> hit));
-        return ranked.stream()
+        return selectedEvidence.stream()
                 .map(hit -> new HybridEvidenceHit(
                         completeEvidence.getOrDefault(hit.evidence().chunkId(), hit.evidence()),
                         hit.score(),

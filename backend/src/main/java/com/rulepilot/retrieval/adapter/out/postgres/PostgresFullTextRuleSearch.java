@@ -14,6 +14,8 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository {
 
+    private static final int MAX_FALLBACK_TERMS = 24;
+
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -54,13 +56,13 @@ public class PostgresFullTextRuleSearch implements FullTextRuleSearchRepository 
         return rows.stream().map(this::toHit).toList();
     }
 
-    private String fallbackQuery(String query) {
+    static String fallbackQuery(String query) {
         List<String> terms = java.util.Arrays.stream(query.strip().split("\\s+"))
                 .map(term -> term.replaceAll("[^\\p{L}\\p{N}_-]", ""))
                 .filter(term -> term.length() > 2)
                 .map(term -> term.toLowerCase(Locale.ROOT))
                 .distinct()
-                .limit(8)
+                .limit(MAX_FALLBACK_TERMS)
                 .toList();
         return terms.size() < 2 ? query : String.join(" OR ", terms);
     }

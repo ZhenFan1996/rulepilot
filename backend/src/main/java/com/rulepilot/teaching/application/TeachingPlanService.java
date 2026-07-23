@@ -200,8 +200,18 @@ public class TeachingPlanService {
                         playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
             }
         }
+        var outlineBeforeCoverageRevision = outline;
         outline = refineSourcePageCoverage(outlineRequest, outline, pages, assistantRunId, documentPages, scope.documentTitle());
-        outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+        if (requiresChapterOwnershipRerun(outlineBeforeCoverageRevision, outline)) {
+            outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+        } else if (assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "skipRedundantTeachingOutlineOwnership",
+                    ActivityOutcome.SUCCEEDED,
+                    "Source-page coverage did not change chapter ownership; skipped a duplicate outline revision");
+        }
         try {
             if (visualOnly) validateVisualFastBaseline(outline);
             plans.validate(outline);
@@ -451,6 +461,15 @@ public class TeachingPlanService {
             }
         }
         return current;
+    }
+
+    static boolean requiresChapterOwnershipRerun(
+            TeachingOutlineModel.OutlineDraft outlineBeforeCoverageRevision,
+            TeachingOutlineModel.OutlineDraft outlineAfterCoverageRevision) {
+        if (outlineBeforeCoverageRevision == null || outlineAfterCoverageRevision == null) {
+            throw new IllegalArgumentException("outline revisions are required");
+        }
+        return !outlineBeforeCoverageRevision.equals(outlineAfterCoverageRevision);
     }
 
     @Transactional(readOnly = true)

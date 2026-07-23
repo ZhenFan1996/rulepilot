@@ -48,6 +48,44 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
+    void rejectsImmediateEndingWhenCitedRuleKeepsTheEndOfRoundBoundary() {
+        RuleEvidence endOfRound = new RuleEvidence(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "ENDING",
+                "End game",
+                "The game ends at the end of a round if any player has at least 30 Fame.",
+                2,
+                2);
+
+        assertThat(GroundedTeachingAgent.claimsImmediateEndingForEndOfRoundTrigger(
+                        "任意玩家达到30名声后，游戏立即结束。", List.of(endOfRound)))
+                .isTrue();
+        assertThat(GroundedTeachingAgent.claimsImmediateEndingForEndOfRoundTrigger(
+                        "任意玩家达到30名声后，在本轮结束时结算并结束游戏。", List.of(endOfRound)))
+                .isFalse();
+    }
+
+    @Test
+    void rejectsMovingACitedCleanupEndgameCheckToFinalScoring() {
+        RuleEvidence cleanup = new RuleEvidence(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                "CLEANUP",
+                "Cleanup",
+                "1. End Game? If any player has at least 30 Fame, end game. Smugglers score pledged Cargo.",
+                9,
+                9);
+
+        assertThat(GroundedTeachingAgent.defersCitedEndgameCheck(
+                        "清理步骤中不检查游戏结束，游戏结束发生在最终计分阶段。", List.of(cleanup)))
+                .isTrue();
+        assertThat(GroundedTeachingAgent.defersCitedEndgameCheck(
+                        "清理的第一步检查是否结束游戏。", List.of(cleanup)))
+                .isFalse();
+    }
+
+    @Test
     void publishesTextFirstBaseLessonBeforeRunningOneBoundedWholeLessonReview() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

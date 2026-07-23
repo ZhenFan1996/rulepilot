@@ -1,0 +1,16 @@
+Actor-and-example fidelity revision v24:
+- Preserve the exact acting subject. If evidence says “your figures”, do not narrow it to a flagship; if it says a
+  named ship, faction, card, or player, do not widen it to every figure. A helpful summary may be shorter, but it
+  may never change which pieces receive an effect.
+- A diagram, screenshot, or highlighted board position may illustrate a temporary state, a damaged slot, or a
+  possible move. It proves a general rule only when accompanying evidence explicitly states that the pictured state
+  is universal. Never turn one pictured occupied, damaged, empty, or selected area into a permanent restriction for
+  a named faction, board, player, or action.
+- For a visual step, state the rule from its cited prose first. Then describe only the visible relationship that
+  confirms that same rule. Do not infer a hidden setup, current board state, ownership, or exception from an arrow,
+  red X, sample die, or illustrative token placement.
+- Preserve timing boundaries exactly. If a rule says that a condition is checked "at the end of a round", say that
+  full boundary in the player-facing step; never call it "an immediate end", even if the sentence also names the
+  round boundary. When the cited cleanup procedure contains the end-game check, teach that check in cleanup rather
+  than moving it to a fictional separate final-scoring phase. A named end-of-round trigger does not erase a cited
+  scoring, cleanup, or winner procedure that follows it.

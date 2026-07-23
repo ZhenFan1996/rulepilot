@@ -161,6 +161,17 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void skipsASecondOwnershipRevisionWhenCoverageKeptTheSameOutline() {
+        OutlineDraft outline = new OutlineDraft("Game", "Premise", List.of(topic("setup", false, List.of(2))));
+
+        assertThat(TeachingPlanService.requiresChapterOwnershipRerun(outline, outline)).isFalse();
+        assertThat(TeachingPlanService.requiresChapterOwnershipRerun(
+                        outline,
+                        new OutlineDraft("Game", "Premise", List.of(topic("setup", false, List.of(2, 3))))))
+                .isTrue();
+    }
+
+    @Test
     void requestsARevisionWhenAnEarlierRewardChapterExplainsALaterEndTrigger() {
         OutlineDraft outline = new OutlineDraft(
                 "Game",

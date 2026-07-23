@@ -35,6 +35,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v21-complete-instructions-system.txt") Resource teachingCompleteInstructions,
             @Value("classpath:prompts/teaching-agent-v22-ordered-procedure-fidelity-system.txt") Resource teachingProcedureFidelity,
             @Value("classpath:prompts/teaching-agent-v23-chapter-scope-map-system.txt") Resource teachingChapterScope,
+            @Value("classpath:prompts/teaching-agent-v24-actor-and-example-fidelity-system.txt") Resource teachingActorAndExampleFidelity,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
@@ -49,6 +50,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v9-prohibition-fidelity-system.txt") Resource answerProhibitionFidelity,
             @Value("classpath:prompts/rule-answer-agent-v10-completeness-boundary-system.txt") Resource answerCompletenessBoundary,
             @Value("classpath:prompts/rule-answer-agent-v11-scope-discipline-system.txt") Resource answerScopeDiscipline,
+            @Value("classpath:prompts/rule-answer-agent-v12-direct-clause-citations-system.txt") Resource answerDirectClauseCitations,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -56,6 +58,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
             @Value("classpath:prompts/content-critic-v9-answer-scope-system.txt") Resource criticAnswerScope,
             @Value("classpath:prompts/content-critic-v10-lesson-structure-system.txt") Resource criticLessonStructure,
+            @Value("classpath:prompts/content-critic-v11-actor-and-example-fidelity-system.txt") Resource criticActorAndExampleFidelity,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
@@ -71,7 +74,8 @@ public class VersionedAgentPrompts {
                 teachingVisualOutput,
                 teachingCompleteInstructions,
                 teachingProcedureFidelity,
-                teachingChapterScope);
+                teachingChapterScope,
+                teachingActorAndExampleFidelity);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
                 teachingOutlineSystem,
@@ -87,11 +91,17 @@ public class VersionedAgentPrompts {
                 answerDirectRulings,
                 answerProhibitionFidelity,
                 answerCompletenessBoundary,
-                answerScopeDiscipline);
+                answerScopeDiscipline,
+                answerDirectClauseCitations);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = combined(criticSystem, criticFidelity, criticAnswerScope, criticLessonStructure);
+        this.criticSystem = combined(
+                criticSystem,
+                criticFidelity,
+                criticAnswerScope,
+                criticLessonStructure,
+                criticActorAndExampleFidelity);
         this.lessonStructureCriticSystem = read(criticLessonStructure);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);

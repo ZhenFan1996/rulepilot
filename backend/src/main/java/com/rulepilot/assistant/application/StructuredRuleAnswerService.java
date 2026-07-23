@@ -13,6 +13,7 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
@@ -43,6 +44,7 @@ import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import com.rulepilot.ruling.ConfirmedRulingLookup;
 import com.rulepilot.assistant.PlayerLocale;
 import io.micrometer.core.instrument.Counter;
@@ -73,7 +75,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v42-answer-scope-discipline";
+    private static final String ANSWER_POLICY_VERSION = "answer-v57-boundary-timed-endgame-evidence";
     private static final Pattern UNRESOLVED_VISUAL_SYMBOL = Pattern.compile(
             "(?iu)\\b(icon|symbol|pictograph)\\b|图标|符号|\\p{So}");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
@@ -159,6 +161,18 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
     private static final String END_TURN_PROCEDURE_INTENT_MARKER =
             "completed turn draw reveal resolve event alert card effect next player procedure";
+    private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
+            "(?isu)(?=.*(?:\\bend\\s+game\\b|\\bgame\\s+ends?\\b|游戏结束|"
+                    + "\\bat\\s+least[^\\p{L}\\p{N}]{0,8}\\d{1,3}[^\\p{L}\\p{N}]{0,8}fame\\b|"
+                    + "至少[^\\p{L}\\p{N}]{0,8}\\d{1,3}[^\\p{L}\\p{N}]{0,8}(?:名声|声望)))"
+                    + "(?=.*(?:\\bif\\b|\\bwhen\\b|若|如果|当))"
+                    + ".*(?:\\bfame\\b|名声|声望)");
+    private static final Pattern EVIDENCED_ENDGAME_CARGO = Pattern.compile(
+            "(?iu)(?:pledged\\s+cargo|cargo.{0,80}(?:score|scoring)|承诺.{0,24}货物|货物.{0,40}(?:计分|得分))");
+    private static final Pattern EVIDENCED_ENDGAME_TIE = Pattern.compile(
+            "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:gold|winner)|平局.{0,80}(?:金币|获胜)|同分.{0,80}(?:金币|获胜))");
+    private static final Pattern TITLE_CASED_ENGLISH_LABEL = Pattern.compile(
+            "\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,3}\\b");
     private static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
@@ -457,6 +471,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
         }
         draft = replaceMisdirectedReplenishmentDraft(modelRequest, draft);
+        draft = removePeripheralEndgameCitations(modelRequest, draft);
         List<String> playerFacingRepair = playerFacingRepairFeedback(modelRequest, draft);
         if (!playerFacingRepair.isEmpty()) {
             try {
@@ -514,8 +529,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "图标对应的规则资源无法从现有证据中可靠确定。");
             }
         }
+        draft = removePeripheralEndgameCitations(modelRequest, draft);
         if (requiresEndTurnProcedureCitation(modelRequest) && !citesEndTurnProcedure(modelRequest, draft)) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用回合结束处理的直接规则依据。");
+        }
+        if (requiresEndgameResolutionCitation(modelRequest) && !citesEndgameResolution(modelRequest, draft)) {
+            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用游戏结束结算的直接规则依据。");
         }
         draft = includeResolvedVisualReferenceCitations(modelRequest, draft);
         StructuredRuleAnswer answer;
@@ -685,6 +704,18 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     + "resolving, or executing the event/card effect. Setup instructions that only place that deck "
                     + "or card area are not sufficient evidence for the end-of-turn procedure.");
         }
+        if (requiresEndgameResolutionCitation(request) && !citesEndgameResolution(request, draft)) {
+            feedback.add("ENDGAME_RESOLUTION_CITATION: The question asks about an end trigger, end-of-round timing, "
+                    + "final scoring, winner, or tie. Cite the supplied excerpt that states the actual end-game "
+                    + "condition and resolution sequence. A component or inventory excerpt that merely names Cargo, "
+                    + "a marker, or a resource cannot support that timing, scoring, or tie ruling. Preserve the "
+                    + "printed order, including any numbered cleanup check, and do not invent a separate phase.");
+        }
+        if (containsUncitedEnglishTitleLabel(request, draft)) {
+            feedback.add("EXACT_PHASE_NAME: The draft uses an English multi-word phase label that does not appear in "
+                    + "its cited excerpts. Remove it rather than inventing a phase. If the source has a numbered "
+                    + "end-game check within cleanup, state that evidenced check and its order directly.");
+        }
         if (requiresVisualIdentityReconciliation(request, draft)) {
             feedback.add("VISUAL_IDENTITY: The draft relies on an unresolved icon, color, shape, emoji, or guessed "
                     + "resource name. Reconcile every supplied page before answering. Do not reject an entire visual "
@@ -765,8 +796,124 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 .anyMatch(this::hasEvidencedEndTurnProcedure);
     }
 
+    private boolean requiresEndgameResolutionCitation(ModelRequest request) {
+        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
+        boolean mentionsEndTrigger = containsAny(
+                question,
+                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+        boolean mentionsResolution = containsAny(
+                question,
+                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+        return mentionsEndTrigger && mentionsResolution
+                && request.evidence().stream().anyMatch(source -> hasRequiredEndgameResolution(request, source));
+    }
+
+    private boolean citesEndgameResolution(ModelRequest request, ModelDraft draft) {
+        Set<UUID> citations = Set.copyOf(draft.citationIds());
+        return request.evidence().stream()
+                .filter(source -> citations.contains(source.chunkId()))
+                .anyMatch(source -> hasRequiredEndgameResolution(request, source));
+    }
+
+    private ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
+        if (!isEndgameTimingAndTieSummary(request) || draft.citationIds().isEmpty()) return draft;
+        Set<UUID> cited = Set.copyOf(draft.citationIds());
+        List<UUID> decisive = request.evidence().stream()
+                .filter(source -> cited.contains(source.chunkId()))
+                .filter(source -> hasRequiredEndgameResolution(request, source))
+                .map(EvidenceInput::chunkId)
+                .distinct()
+                .toList();
+        if (decisive.isEmpty() || decisive.size() == draft.citationIds().size()) return draft;
+        return new ModelDraft(
+                draft.answerable(),
+                draft.insufficiencyReason(),
+                draft.shortVerdict(),
+                draft.explanation(),
+                decisive,
+                draft.exceptions(),
+                draft.confidence());
+    }
+
+    private boolean isEndgameTimingAndTieSummary(ModelRequest request) {
+        if (!requiresEndgameResolutionCitation(request)) return false;
+        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
+        boolean asksTiming = containsAny(question, "when", "immediately", "何时", "什么时候", "立刻", "立即");
+        boolean asksTie = containsAny(question, "tie", "tied", "平局", "同分");
+        return asksTiming && asksTie;
+    }
+
+    private boolean hasEvidencedEndgameResolution(EvidenceInput source) {
+        return source != null
+                && source.excerpt() != null
+                && !"COMPONENTS".equalsIgnoreCase(source.sectionType())
+                && EVIDENCED_ENDGAME_TRIGGER.matcher(source.excerpt()).find();
+    }
+
+    private boolean hasRequiredEndgameResolution(ModelRequest request, EvidenceInput source) {
+        if (!hasEvidencedEndgameResolution(source)) return false;
+        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
+        String excerpt = source.excerpt();
+        if (containsAny(question, "cargo", "货物") && !EVIDENCED_ENDGAME_CARGO.matcher(excerpt).find()) return false;
+        return !containsAny(question, "tie", "tied", "平局", "同分")
+                || EVIDENCED_ENDGAME_TIE.matcher(excerpt).find();
+    }
+
+    private boolean hasEvidencedEndgameResolution(HybridEvidenceHit hit) {
+        if (hit == null) return false;
+        return hasEvidencedEndgameResolution(new EvidenceInput(
+                hit.evidence().chunkId(),
+                hit.evidence().sectionType(),
+                hit.evidence().heading(),
+                hit.evidence().excerpt(),
+                hit.evidence().pageFrom(),
+                hit.evidence().pageTo()));
+    }
+
+    private int endgameResolutionDetailScore(HybridEvidenceHit hit) {
+        if (!hasEvidencedEndgameResolution(hit)) return 0;
+        String excerpt = hit.evidence().excerpt();
+        int score = 10;
+        if (EVIDENCED_ENDGAME_CARGO.matcher(excerpt).find()) score += 10;
+        if (EVIDENCED_ENDGAME_TIE.matcher(excerpt).find()) score += 10;
+        if (excerpt.toLowerCase(Locale.ROOT).contains("clean up") || excerpt.contains("清理")) score += 4;
+        String heading = hit.evidence().heading().toLowerCase(Locale.ROOT);
+        if (heading.contains("ending") || heading.contains("end game") || heading.contains("round")) score += 12;
+        return score;
+    }
+
+    private boolean containsUncitedEnglishTitleLabel(ModelRequest request, ModelDraft draft) {
+        String playerText = playerFacingText(draft);
+        if (playerText.isBlank()) return false;
+        Set<UUID> citations = Set.copyOf(draft.citationIds());
+        String citedText = request.evidence().stream()
+                .filter(source -> citations.contains(source.chunkId()))
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.joining("\n"))
+                .toLowerCase(Locale.ROOT);
+        var matcher = TITLE_CASED_ENGLISH_LABEL.matcher(playerText);
+        while (matcher.find()) {
+            if (!citedText.contains(matcher.group().toLowerCase(Locale.ROOT))) return true;
+        }
+        return false;
+    }
+
+    private static boolean containsAny(String value, String... values) {
+        for (String candidate : values) {
+            if (value.contains(candidate)) return true;
+        }
+        return false;
+    }
+
     private boolean isEndTurnProcedureIntent(String query) {
         return query != null && query.contains(END_TURN_PROCEDURE_INTENT_MARKER);
+    }
+
+    private boolean isEndgameResolutionIntent(String query) {
+        return query != null
+                && query.contains("end-game check")
+                && query.contains("pledged cargo");
     }
 
     private boolean hasEvidencedEndTurnProcedure(HybridEvidenceHit hit) {
@@ -1104,11 +1251,19 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         () -> retrieval.search(
                                 context.documentVersionId(),
                                 intent.query(),
-                                new RetrievalOptions(3, intent.sectionTypes(), intent.currentSectionType())),
+                                new RetrievalOptions(
+                                        isEndgameResolutionIntent(intent.query()) ? 20 : 3,
+                                        intent.sectionTypes(),
+                                        intent.currentSectionType())),
                         this::evidenceTokens);
                 boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
                 if (!retrieved.isEmpty() && !supplementaryIntent && isSuccessorTransitionIntent(intent.query())) {
                     retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
+                } else if (!retrieved.isEmpty() && !supplementaryIntent && isEndgameResolutionIntent(intent.query())) {
+                    HybridEvidenceHit directResolution = retrieved.stream()
+                            .max(Comparator.comparingInt(this::endgameResolutionDetailScore))
+                            .orElse(retrieved.getFirst());
+                    intentAnchors.putIfAbsent(directResolution.evidence().chunkId(), directResolution);
                 } else if (!retrieved.isEmpty() && !supplementaryIntent && isEndTurnProcedureIntent(intent.query())) {
                     HybridEvidenceHit directProcedure = retrieved.stream()
                             .filter(this::hasEvidencedEndTurnProcedure)
@@ -1142,7 +1297,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         matches -> matches.size() * 80);
                 visualMatches.forEach(match -> visualFactsByPage.merge(
                         match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
-                if (isDirectQuestionIntent(intent.query(), question.normalizedQuestion())) {
+                if (intent.directQuestion() || isDirectQuestionIntent(intent.query(), question.normalizedQuestion())) {
                     visualMatches.forEach(match -> directQuestionVisualFactPages.add(match.pageNumber()));
                 }
             } catch (AgentExecutionStoppedException stopped) {
@@ -1156,6 +1311,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             if (conflicting) {
                 break;
             }
+        }
+        if (!conflicting && isEndgameResolutionQuestion(question.normalizedQuestion())) {
+            enrichAdjacentEndgameEvidence(
+                    assistantRunId, context.documentVersionId(), evidenceById, intentAnchors);
         }
         if (!conflicting && requiresIconLegend(visualFactsByPage.values())) {
             List<PageFactMatch> legendMatches = invocations.invoke(
@@ -1209,7 +1368,141 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                             .thenComparing(hit -> hit.evidence().chunkId()))
                     .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
         }
-        return new RetrievalResult(selected.values().stream().limit(5).toList(), false);
+        List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(5).toList();
+        if (isEndgameResolutionQuestion(question.normalizedQuestion())) {
+            List<HybridEvidenceHit> decisiveEvidence = selectedEvidence.stream()
+                    .filter(this::hasEvidencedEndgameResolution)
+                    .sorted(Comparator.comparingInt(this::endgameResolutionDetailScore).reversed())
+                    .limit(1)
+                    .toList();
+            if (!decisiveEvidence.isEmpty()) {
+                UUID decisiveId = decisiveEvidence.getFirst().evidence().chunkId();
+                List<HybridEvidenceHit> timingEvidence = selectedEvidence.stream()
+                        .filter(this::hasEvidencedEndgameTiming)
+                        .filter(hit -> !decisiveId.equals(hit.evidence().chunkId()))
+                        .limit(1)
+                        .toList();
+                selectedEvidence = java.util.stream.Stream.concat(decisiveEvidence.stream(), timingEvidence.stream())
+                        .toList();
+            }
+            String pages = selectedEvidence.stream()
+                    .map(hit -> Integer.toString(hit.evidence().pageFrom()))
+                    .distinct()
+                    .collect(Collectors.joining(","));
+            String decisivePages = selectedEvidence.stream()
+                    .filter(this::hasEvidencedEndgameResolution)
+                    .map(hit -> Integer.toString(hit.evidence().pageFrom()))
+                    .distinct()
+                    .collect(Collectors.joining(","));
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "validateEndgameEvidenceScope",
+                    ActivityOutcome.SUCCEEDED,
+                    "Endgame evidence pages=" + pages + "; decisive pages=" + decisivePages);
+        }
+        return new RetrievalResult(selectedEvidence, false);
+    }
+
+    private void enrichAdjacentEndgameEvidence(
+            UUID assistantRunId,
+            UUID documentVersionId,
+            Map<UUID, HybridEvidenceHit> evidenceById,
+            Map<UUID, HybridEvidenceHit> intentAnchors) {
+        Set<UUID> proximityAnchors = evidenceById.values().stream()
+                .filter(this::hasEvidencedEndgameResolution)
+                .sorted(Comparator.comparingInt(this::endgameResolutionDetailScore).reversed())
+                .map(hit -> hit.evidence().chunkId())
+                .limit(1)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (proximityAnchors.isEmpty()) {
+            proximityAnchors = evidenceById.values().stream()
+                    .filter(this::isEndgameProximityAnchor)
+                    .map(hit -> hit.evidence().chunkId())
+                    .limit(2)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        }
+        if (proximityAnchors.isEmpty()) return;
+        Set<UUID> lookupAnchors = proximityAnchors;
+        try {
+            List<RuleEvidenceHit> adjacent = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    "readAdjacentEndgameEvidence",
+                    8,
+                    "Adjacent endgame rule evidence retrieved",
+                    () -> evidenceLookup.findAdjacent(documentVersionId, lookupAnchors, 2, Set.of()),
+                    result -> result.size() * 80);
+            for (RuleEvidenceHit source : adjacent) {
+                HybridEvidenceHit candidate = new HybridEvidenceHit(source, 0.0, 1, null, false);
+                HybridEvidenceHit existing = evidenceById.get(source.chunkId());
+                if (existing == null || candidate.score() > existing.score()) {
+                    evidenceById.put(source.chunkId(), candidate);
+                }
+            }
+            Optional<HybridEvidenceHit> decisive = evidenceById.values().stream()
+                    .filter(this::hasEvidencedEndgameResolution)
+                    .max(Comparator.comparingInt(this::endgameResolutionDetailScore));
+            if (decisive.isPresent()) {
+                Optional<HybridEvidenceHit> timing = evidenceById.values().stream()
+                        .filter(this::hasEvidencedEndgameTiming)
+                        .filter(hit -> hit.evidence().chunkId().equals(decisive.get().evidence().chunkId())
+                                || hit.evidence().pageFrom() == decisive.get().evidence().pageFrom())
+                        .filter(hit -> !hit.evidence().chunkId().equals(decisive.get().evidence().chunkId()))
+                        .findFirst();
+                prioritizeEndgameAnchors(intentAnchors, decisive.get(), timing.orElse(null));
+            }
+        } catch (RuntimeException lookupFailure) {
+            LOGGER.warn(
+                    "Adjacent endgame evidence lookup failed for document version {}: {}",
+                    documentVersionId,
+                    lookupFailure.getClass().getSimpleName());
+        }
+    }
+
+    private void prioritizeEndgameAnchors(
+            Map<UUID, HybridEvidenceHit> intentAnchors,
+            HybridEvidenceHit decisive,
+            HybridEvidenceHit timing) {
+        LinkedHashMap<UUID, HybridEvidenceHit> reordered = new LinkedHashMap<>();
+        reordered.put(decisive.evidence().chunkId(), decisive);
+        if (timing != null) reordered.put(timing.evidence().chunkId(), timing);
+        intentAnchors.forEach((chunkId, hit) -> reordered.putIfAbsent(chunkId, hit));
+        intentAnchors.clear();
+        intentAnchors.putAll(reordered);
+    }
+
+    private boolean isEndgameProximityAnchor(HybridEvidenceHit hit) {
+        if (hit == null) return false;
+        String text = (hit.evidence().heading() + "\n" + hit.evidence().excerpt()).toLowerCase(Locale.ROOT);
+        return text.contains("end of a round")
+                || text.contains("end of the round")
+                || text.contains("ending the round")
+                || text.contains("游戏结束")
+                || text.contains("轮末")
+                || text.contains("回合结束");
+    }
+
+    private boolean hasEvidencedEndgameTiming(HybridEvidenceHit hit) {
+        if (hit == null) return false;
+        String text = (hit.evidence().heading() + "\n" + hit.evidence().excerpt()).toLowerCase(Locale.ROOT);
+        return text.contains("when the round ends")
+                || text.contains("end of a round")
+                || text.contains("end of the round")
+                || text.contains("ending the round")
+                || text.contains("轮末")
+                || text.contains("回合结束");
+    }
+
+    private boolean isEndgameResolutionQuestion(String question) {
+        String normalized = question == null ? "" : question.toLowerCase(Locale.ROOT);
+        boolean mentionsEndTrigger = containsAny(
+                normalized,
+                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+        boolean mentionsResolution = containsAny(
+                normalized,
+                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+        return mentionsEndTrigger && mentionsResolution;
     }
 
     private String replenishmentRetrievalQuery(String question) {

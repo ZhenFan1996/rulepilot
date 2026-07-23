@@ -18,6 +18,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v21-complete-instructions-system.txt"),
                 resource("teaching-agent-v22-ordered-procedure-fidelity-system.txt"),
                 resource("teaching-agent-v23-chapter-scope-map-system.txt"),
+                resource("teaching-agent-v24-actor-and-example-fidelity-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
@@ -32,6 +33,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v9-prohibition-fidelity-system.txt"),
                 resource("rule-answer-agent-v10-completeness-boundary-system.txt"),
                 resource("rule-answer-agent-v11-scope-discipline-system.txt"),
+                resource("rule-answer-agent-v12-direct-clause-citations-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -39,6 +41,7 @@ class VersionedAgentPromptsTest {
                 resource("content-critic-v8-fidelity-system.txt"),
                 resource("content-critic-v9-answer-scope-system.txt"),
                 resource("content-critic-v10-lesson-structure-system.txt"),
+                resource("content-critic-v11-actor-and-example-fidelity-system.txt"),
                 resource("atomic-content-critic-v3-system.txt"),
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
@@ -88,6 +91,10 @@ class VersionedAgentPromptsTest {
                         "Ordered-procedure fidelity revision v22",
                         "must do B, then may do C or D",
                         "Chapter-scope-map revision v23",
+                        "Actor-and-example fidelity revision v24",
+                        "your figures",
+                        "Preserve timing boundaries exactly",
+                        "fictional separate final-scoring phase",
                         "Fully teach only the current section objective",
                         "camel-case property names",
                         "visualCaption",
@@ -167,6 +174,9 @@ class VersionedAgentPromptsTest {
                         "Evidence-completeness revision v10",
                         "Selected evidence is not a complete rulebook index",
                         "Scope-discipline revision v11",
+                        "Direct-clause citation revision v12",
+                        "translated or rewritten query must not displace",
+                        "enumerated cleanup check",
                         "loop-prevention rule",
                         "player's wording is not a component definition");
         assertThat(prompts.answerUser())
@@ -214,6 +224,10 @@ class VersionedAgentPromptsTest {
                         "ATOMIC_CONFIRMATION",
                         "faithful contextual translation",
                         "at most 160 characters");
+        assertThat(prompts.criticSystem()).contains(
+                "Actor-and-example fidelity revision v11",
+                "temporary illustration",
+                "merely related padding citations");
         assertThat(prompts.lessonStructureCriticSystem())
                 .contains("POST_PUBLICATION_STRUCTURE", "only CHAPTER_SCOPE_DUPLICATION");
         assertThat(prompts.atomicCriticSystem())

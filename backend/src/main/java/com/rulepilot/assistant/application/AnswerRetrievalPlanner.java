@@ -18,7 +18,7 @@ public final class AnswerRetrievalPlanner {
     private static final int MAX_SECTION_FILTERS = 4;
     private static final int MAX_INTENTS = 5;
     private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
-            java.util.regex.Pattern.compile("[?？!！;；,，]+");
+            java.util.regex.Pattern.compile("[?？!！;；]+");
     private static final Set<String> KNOWN_SECTIONS = Set.of(
             "OBJECTIVE",
             "COMPONENTS",
@@ -43,6 +43,10 @@ public final class AnswerRetrievalPlanner {
         }
         String currentSection = knownSection(context.currentLessonSection());
         List<RetrievalIntent> intents = new ArrayList<>();
+        String endgameResolutionQuery = endgameResolutionQuery(question.normalizedQuestion());
+        if (endgameResolutionQuery != null) {
+            intents.add(new RetrievalIntent(endgameResolutionQuery, Set.of(), null));
+        }
         String exhaustedSourceQuery = exhaustedSourceQuery(question.normalizedQuestion());
         if (exhaustedSourceQuery != null) {
             intents.add(new RetrievalIntent(exhaustedSourceQuery, Set.of(), null));
@@ -63,26 +67,22 @@ public final class AnswerRetrievalPlanner {
         if (deferredTurnQuery != null) {
             intents.add(new RetrievalIntent(deferredTurnQuery, Set.of(), null));
         }
-        if (rewrittenQueries != null) {
-            rewrittenQueries.stream()
-                    .map(AnswerRetrievalPlanner::bounded)
-                    .filter(query -> !query.isBlank())
-                    .distinct()
-                    .limit(2)
-                    .forEach(query -> intents.add(new RetrievalIntent(query, Set.of(), null)));
-        }
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
                 : Set.of();
-        int questionIntentBudget = Math.max(1, MAX_INTENTS - intents.size() - 1);
+        int availableBeforeSupplementary = Math.max(1, MAX_INTENTS - intents.size() - 1);
         if (parts.size() == 1) {
+            int rewriteBudget = Math.max(0, availableBeforeSupplementary - 1);
+            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget);
             intents.add(new RetrievalIntent(
-                    expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection));
+                    expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection, true));
         } else {
-            parts.stream().limit(questionIntentBudget).forEach(part -> intents.add(new RetrievalIntent(
-                    expandSearchTerms(part), learningScope, currentSection)));
+            parts.stream().limit(availableBeforeSupplementary).forEach(part -> intents.add(new RetrievalIntent(
+                    expandSearchTerms(part), learningScope, currentSection, true)));
+            int rewriteBudget = Math.max(0, MAX_INTENTS - intents.size() - 1);
+            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget);
         }
         intents.add(new RetrievalIntent(
                 supplementaryQuery(question, context),
@@ -108,6 +108,17 @@ public final class AnswerRetrievalPlanner {
         return parts.isEmpty() ? List.of(question) : parts;
     }
 
+    private static void addRewrittenQueries(
+            List<RetrievalIntent> intents, List<String> rewrittenQueries, int rewriteBudget) {
+        if (rewrittenQueries == null || rewriteBudget <= 0) return;
+        rewrittenQueries.stream()
+                .map(AnswerRetrievalPlanner::bounded)
+                .filter(query -> !query.isBlank())
+                .distinct()
+                .limit(rewriteBudget)
+                .forEach(query -> intents.add(new RetrievalIntent(query, Set.of(), null)));
+    }
+
     private static String expandSearchTerms(String questionPart) {
         return bounded(questionPart);
     }
@@ -119,6 +130,7 @@ public final class AnswerRetrievalPlanner {
             append(query, String.join(" ", question.terms()));
         }
         append(query, facets(question.type()));
+        append(query, endgameResolutionTerms(question.normalizedQuestion()));
         if (context.currentLessonSection() != null) {
             append(query, context.currentLessonSection().replace('_', ' '));
         }
@@ -152,6 +164,27 @@ public final class AnswerRetrievalPlanner {
         };
     }
 
+    private static String endgameResolutionTerms(String question) {
+        if (!isEndgameResolutionQuestion(question)) return null;
+        return "end game end of round cleanup end-game check fame scoring winner tie gold "
+                + "pledged cargo final resolution 游戏结束 轮末 清理 结束检查 名声 声望 计分 胜者 平局 金币";
+    }
+
+    private static String endgameResolutionQuery(String question) {
+        String terms = endgameResolutionTerms(question);
+        return terms == null ? null : bounded(question + " " + terms);
+    }
+
+    private static boolean isEndgameResolutionQuestion(String question) {
+        boolean mentionsEndTrigger = containsAny(
+                question,
+                "game end", "game ends", "end of round", "游戏结束", "轮末", "达到30", "30名声", "30声望", "30 fame");
+        boolean mentionsResolution = containsAny(
+                question,
+                "end", "score", "tie", "winner", "cargo", "结束", "计分", "平局", "获胜", "货物", "名声", "声望");
+        return mentionsEndTrigger && mentionsResolution;
+    }
+
     private static Set<String> inferredSections(UnderstoodQuestion question, String currentSection) {
         LinkedHashSet<String> sections = new LinkedHashSet<>();
         if (currentSection != null) {
@@ -164,8 +197,10 @@ public final class AnswerRetrievalPlanner {
             sections.add("END_CONDITIONS");
             sections.add("SCORING");
         }
-        addWhenContains(sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数");
-        addWhenContains(sections, text, "END_CONDITIONS", "game end", "ending", "结束条件", "游戏结束");
+        addWhenContains(
+                sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数", "名声", "声望");
+        addWhenContains(
+                sections, text, "END_CONDITIONS", "game end", "ending", "end of round", "结束条件", "游戏结束", "轮末", "结束");
         addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
         addWhenContains(sections, text, "PHASES", "phase", "trick", "阶段", "墩");
         addWhenContains(
@@ -339,7 +374,13 @@ public final class AnswerRetrievalPlanner {
                 : normalized.substring(0, MAX_QUERY_LENGTH).strip();
     }
 
-    public record RetrievalIntent(String query, Set<String> sectionTypes, String currentSectionType) {
+    public record RetrievalIntent(
+            String query, Set<String> sectionTypes, String currentSectionType, boolean directQuestion) {
+
+        public RetrievalIntent(String query, Set<String> sectionTypes, String currentSectionType) {
+            this(query, sectionTypes, currentSectionType, false);
+        }
+
         public RetrievalIntent {
             if (query == null || query.isBlank() || query.length() > MAX_QUERY_LENGTH
                     || sectionTypes == null || sectionTypes.size() > MAX_SECTION_FILTERS) {
