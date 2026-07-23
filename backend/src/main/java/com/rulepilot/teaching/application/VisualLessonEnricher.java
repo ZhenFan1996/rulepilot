@@ -18,6 +18,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -48,6 +51,7 @@ public class VisualLessonEnricher {
     private final VisualSectionPrioritizer prioritizer;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
+    private final int requestParallelism;
 
     @Autowired
     public VisualLessonEnricher(
@@ -58,7 +62,8 @@ public class VisualLessonEnricher {
             @Qualifier("boundedVisualRegionLocator") VisualRegionLocator locator,
             VisualSectionPrioritizer prioritizer,
             @Value("${rulepilot.visual.max-sections:12}") int maxSections,
-            @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection) {
+            @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection,
+            @Value("${rulepilot.visual.request-parallelism:1}") int requestParallelism) {
         this.understanding = understanding;
         this.pageImages = pageImages;
         this.visualPageFacts = visualPageFacts;
@@ -71,8 +76,12 @@ public class VisualLessonEnricher {
         if (maxVisualStepsPerSection < 1 || maxVisualStepsPerSection > 6) {
             throw new IllegalArgumentException("visual step limit must be between one and six");
         }
+        if (requestParallelism < 1 || requestParallelism > 3) {
+            throw new IllegalArgumentException("visual request parallelism must be between one and three");
+        }
         this.maxSections = maxSections;
         this.maxVisualStepsPerSection = maxVisualStepsPerSection;
+        this.requestParallelism = requestParallelism;
     }
 
     public VisualLessonEnricher(
@@ -80,7 +89,7 @@ public class VisualLessonEnricher {
             DocumentPageImages pageImages,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, VisualRulebookPageFacts.empty(), candidates, locator, new VisualSectionPrioritizer(), 12, 6);
+        this(understanding, pageImages, VisualRulebookPageFacts.empty(), candidates, locator, new VisualSectionPrioritizer(), 12, 6, 1);
     }
 
     VisualLessonEnricher(
@@ -89,7 +98,7 @@ public class VisualLessonEnricher {
             VisualRulebookPageFacts visualPageFacts,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator) {
-        this(understanding, pageImages, visualPageFacts, candidates, locator, new VisualSectionPrioritizer(), 12, 6);
+        this(understanding, pageImages, visualPageFacts, candidates, locator, new VisualSectionPrioritizer(), 12, 6, 1);
     }
 
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson) {
@@ -191,22 +200,57 @@ public class VisualLessonEnricher {
                 .filter(step -> step.kind() != TeachingMove.VISUAL || needsTighterReaderCrop(step.visualFocus()))
                 .count();
         int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
-        for (LessonStep step : visualTargets(section, limit)) {
-            VisualTarget target = new VisualTarget(section.position(), section.title(), step.position(), step.heading());
-            progress.targetStarted(target);
-            StepLocation location = locateForStep(
-                    understanding, documentVersionId, section, step, modelConfigurationOwner);
-            progress.targetFinished(target, location.region() == null
-                    ? location.rejection() == null ? Outcome.LOCATOR_RETURNED_NONE : location.rejection()
-                    : Outcome.ADDED);
-            if (location.region() != null) accepted.add(location.region());
-            else if (location.rejection() != null) rejected = location.rejection();
+        List<LessonStep> targets = visualTargets(section, limit);
+        if (targets.isEmpty()) return result(section, Outcome.NO_CITED_CANDIDATE);
+        try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
+            List<Future<StepLocation>> attempts = targets.stream()
+                    .map(step -> executor.submit(() -> locateWithProgress(
+                            understanding, documentVersionId, section, step, modelConfigurationOwner, progress)))
+                    .toList();
+            for (Future<StepLocation> attempt : attempts) {
+                StepLocation location = awaitLocation(attempt);
+                if (location.region() != null) accepted.add(location.region());
+                else if (location.rejection() != null) rejected = location.rejection();
+            }
         }
         if (accepted.isEmpty()) return result(section, rejected == null ? Outcome.LOCATOR_RETURNED_NONE : rejected);
         MergedVisualSection merged = mergeVisualIntoSupportedSteps(section, accepted);
         if (merged.addedCount() == 0) return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
         return new SectionResult(merged.section(), new SectionOutcome(
                 section.position(), Outcome.ADDED, addedSummary(section.position(), merged.addedCount())));
+    }
+
+    /**
+     * Independent steps can inspect different cited pages at the same time. The fixed-size executor is intentionally
+     * tiny and matches the provider-facing visual executor, so this shortens a player's wait without accumulating an
+     * unbounded paid-image queue or changing the exact-step validation contract.
+     */
+    private StepLocation locateWithProgress(
+            com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            LessonStep step,
+            String modelConfigurationOwner,
+            VisualProgressListener progress) {
+        VisualTarget target = new VisualTarget(section.position(), section.title(), step.position(), step.heading());
+        progress.targetStarted(target);
+        StepLocation location = locateForStep(understanding, documentVersionId, section, step, modelConfigurationOwner);
+        progress.targetFinished(target, location.region() == null
+                ? location.rejection() == null ? Outcome.LOCATOR_RETURNED_NONE : location.rejection()
+                : Outcome.ADDED);
+        return location;
+    }
+
+    private StepLocation awaitLocation(Future<StepLocation> attempt) {
+        try {
+            return attempt.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("visual lesson enrichment was interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw new IllegalStateException("visual lesson enrichment failed", failed.getCause());
+        }
     }
 
     /**

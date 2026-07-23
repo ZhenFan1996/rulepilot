@@ -13,6 +13,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class VisualLessonEnricherTest {
@@ -99,6 +102,54 @@ class VisualLessonEnricherTest {
                 });
 
         assertThat(events).containsExactly("started:开局设置:放置探测器", "finished:LOCATOR_RETURNED_NONE");
+    }
+
+    @Test
+    void starts_independent_visual_steps_together_with_a_small_bounded_parallelism() throws Exception {
+        UUID iconEvidence = UUID.randomUUID();
+        UUID stateEvidence = UUID.randomUUID();
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        VisualRegionLocator locator = request -> {
+            bothStarted.countDown();
+            try {
+                if (!release.await(1, TimeUnit.SECONDS)) return java.util.Optional.empty();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return java.util.Optional.empty();
+            }
+            var claim = request.claims().getFirst();
+            return java.util.Optional.of(new VisualRegionLocator.LocatedRegion(
+                    2,
+                    "行动标记",
+                    "圆形行动标记旁有指向轨道的箭头",
+                    120,
+                    claim.stepPosition() == 1 ? 220 : 420,
+                    180,
+                    120,
+                    List.of(claim.evidenceId()),
+                    List.of(claim.stepPosition())));
+        };
+        var enricher = new VisualLessonEnricher(
+                ignored -> understanding(),
+                (ignored, pages) -> List.of(new DocumentPageImages.PageImage(
+                        2, "image/png", new byte[] {1}, 1_000, 1_000)),
+                VisualRulebookPageFacts.empty(),
+                new VisualRegionCandidateSelector(),
+                locator,
+                new VisualSectionPrioritizer(),
+                12,
+                6,
+                2);
+        try (var caller = Executors.newSingleThreadExecutor()) {
+            var result = caller.submit(() -> enricher.enrich(UUID.randomUUID(), twoRuleLesson(iconEvidence, stateEvidence)));
+            assertThat(bothStarted.await(1, TimeUnit.SECONDS)).isTrue();
+            release.countDown();
+            assertThat(result.get(1, TimeUnit.SECONDS).sections().getFirst().steps())
+                    .allSatisfy(step -> assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL));
+        } finally {
+            release.countDown();
+        }
     }
 
     @Test

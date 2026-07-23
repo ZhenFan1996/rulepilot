@@ -27,14 +27,19 @@ class TeachingGenerationConfiguration {
     }
 
     /**
-     * Vision calls are deliberately isolated from base lesson generation. A provider that ignores interruption can
-     * occupy this one slot, but cannot starve publication work or accumulate a queue of costly image requests.
+     * Vision calls are deliberately isolated from base lesson generation. A tiny configurable concurrency lets a
+     * player receive independent icon/component crops sooner, while the zero-capacity queue still rejects excess work
+     * instead of accumulating costly provider calls.
      */
     @Bean(name = "visualLocationExecutor")
-    ThreadPoolTaskExecutor visualLocationExecutor() {
+    ThreadPoolTaskExecutor visualLocationExecutor(
+            @Value("${rulepilot.visual.request-parallelism:1}") int requestParallelism) {
+        if (requestParallelism < 1 || requestParallelism > 3) {
+            throw new IllegalArgumentException("visual request parallelism must be between one and three");
+        }
         var executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(1);
-        executor.setMaxPoolSize(1);
+        executor.setCorePoolSize(requestParallelism);
+        executor.setMaxPoolSize(requestParallelism);
         executor.setQueueCapacity(0);
         executor.setThreadNamePrefix("visual-location-");
         executor.setWaitForTasksToCompleteOnShutdown(false);
