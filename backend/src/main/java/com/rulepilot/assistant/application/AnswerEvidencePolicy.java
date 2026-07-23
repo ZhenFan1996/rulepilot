@@ -4,7 +4,11 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
@@ -23,6 +27,9 @@ final class AnswerEvidencePolicy {
     private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
             "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
                     + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
+    private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
+            "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
+                    + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
     private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
             "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
                     + "游戏结束|结束条件|终局))"
@@ -54,6 +61,19 @@ final class AnswerEvidencePolicy {
 
     static boolean hasEndTurnProcedure(String excerpt) {
         return excerpt != null && EVIDENCED_END_TURN_PROCEDURE.matcher(excerpt).find();
+    }
+
+    static boolean requiresEndTurnProcedureCitation(String question, Collection<EvidenceInput> evidence) {
+        return question != null
+                && END_TURN_PROCEDURE_QUESTION.matcher(question).matches()
+                && evidence.stream().anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
+    }
+
+    static boolean citesEndTurnProcedure(Collection<EvidenceInput> evidence, Collection<UUID> citationIds) {
+        Set<UUID> citations = Set.copyOf(citationIds);
+        return evidence.stream()
+                .filter(source -> citations.contains(source.chunkId()))
+                .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
     }
 
     static boolean hasEndgameResolution(EvidenceInput source) {
@@ -100,21 +120,52 @@ final class AnswerEvidencePolicy {
                 && containsAny(normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
     }
 
+    static boolean requiresEndgameResolutionCitation(String question, Collection<EvidenceInput> evidence) {
+        return isEndgameResolutionQuestion(question)
+                && evidence.stream().anyMatch(source -> hasRequiredEndgameResolution(question, List.of(source)));
+    }
+
+    static boolean citesEndgameResolution(
+            String question, Collection<EvidenceInput> evidence, Collection<UUID> citationIds) {
+        Set<UUID> citations = Set.copyOf(citationIds);
+        return hasRequiredEndgameResolution(
+                question,
+                evidence.stream().filter(source -> citations.contains(source.chunkId())).toList());
+    }
+
+    static boolean isEndgameTimingAndTieSummary(String question, Collection<EvidenceInput> evidence) {
+        return requiresEndgameResolutionCitation(question, evidence)
+                && asksEndgameTiming(question)
+                && asksTie(question);
+    }
+
+    static List<UUID> requiredEndgameCitationIds(
+            String question, Collection<EvidenceInput> evidence, Collection<UUID> citationIds) {
+        Set<UUID> citations = Set.copyOf(citationIds);
+        return requiredEndgameEvidence(
+                        question,
+                        evidence.stream().filter(source -> citations.contains(source.chunkId())).toList())
+                .stream()
+                .map(EvidenceInput::chunkId)
+                .distinct()
+                .toList();
+    }
+
     static boolean mentionsEndTrigger(String value) {
         return containsAny(
                 value, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
     }
 
     static boolean asksScoring(String value) {
-        return containsAny(value, "score", "scoring", "point", "计分", "得分", "分数");
+        return containsAny(normalize(value), "score", "scoring", "point", "计分", "得分", "分数");
     }
 
     static boolean asksTie(String value) {
-        return containsAny(value, "tie", "tied", "平局", "同分");
+        return containsAny(normalize(value), "tie", "tied", "平局", "同分");
     }
 
     static boolean asksEndgameTiming(String value) {
-        return containsAny(value, "when", "immediately", "何时", "什么时候", "立刻", "立即");
+        return containsAny(normalize(value), "when", "immediately", "何时", "什么时候", "立刻", "立即");
     }
 
     static boolean requiresIconLegend(Collection<PageFactMatch> facts) {
@@ -142,6 +193,45 @@ final class AnswerEvidencePolicy {
                 && left.excerpt().equals(right.excerpt())
                 && left.pageFrom() == right.pageFrom()
                 && left.pageTo() == right.pageTo();
+    }
+
+    private static boolean hasRequiredEndgameResolution(String question, Collection<EvidenceInput> sources) {
+        if (sources.stream().noneMatch(AnswerEvidencePolicy::hasEndgameResolution)) return false;
+        boolean asksScoring = asksScoring(question);
+        boolean asksTie = asksTie(question);
+        boolean citesScoring = sources.stream()
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(AnswerEvidencePolicy::hasEndgameScoring);
+        boolean citesTie = sources.stream()
+                .map(EvidenceInput::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(AnswerEvidencePolicy::hasEndgameTie);
+        return (!asksScoring || citesScoring) && (!asksTie || citesTie);
+    }
+
+    private static List<EvidenceInput> requiredEndgameEvidence(String question, Collection<EvidenceInput> sources) {
+        boolean asksScoring = asksScoring(question);
+        boolean asksTie = asksTie(question);
+        LinkedHashSet<EvidenceInput> required = new LinkedHashSet<>();
+        sources.stream().filter(AnswerEvidencePolicy::hasEndgameResolution).findFirst().ifPresent(required::add);
+        if (asksScoring) {
+            sources.stream()
+                    .filter(source -> hasEndgameScoring(source.excerpt()))
+                    .findFirst()
+                    .ifPresent(required::add);
+        }
+        if (asksTie) {
+            sources.stream()
+                    .filter(source -> hasEndgameTie(source.excerpt()))
+                    .findFirst()
+                    .ifPresent(required::add);
+        }
+        return List.copyOf(required);
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     private static boolean containsAny(String value, String... values) {

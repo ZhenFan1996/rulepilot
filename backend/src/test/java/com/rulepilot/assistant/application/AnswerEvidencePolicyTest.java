@@ -25,9 +25,54 @@ class AnswerEvidencePolicyTest {
 
     @Test
     void recognisesOnlyEvidenceThatActuallyDescribesEndOfTurnProcedure() {
+        EvidenceInput procedure = new EvidenceInput(
+                UUID.randomUUID(),
+                "TURN",
+                "End of turn",
+                "After your turn, reveal and resolve one event card.",
+                4,
+                4);
+
         assertThat(AnswerEvidencePolicy.hasEndTurnProcedure("After your turn, reveal and resolve one event card."))
                 .isTrue();
         assertThat(AnswerEvidencePolicy.hasEndTurnProcedure("Draw cards at the beginning of the round.")).isFalse();
+        assertThat(AnswerEvidencePolicy.requiresEndTurnProcedureCitation(
+                        "After I finish my turn, do I reveal an event card?", java.util.List.of(procedure)))
+                .isTrue();
+        assertThat(AnswerEvidencePolicy.citesEndTurnProcedure(java.util.List.of(procedure), java.util.List.of()))
+                .isFalse();
+        assertThat(AnswerEvidencePolicy.citesEndTurnProcedure(
+                        java.util.List.of(procedure), java.util.List.of(procedure.chunkId())))
+                .isTrue();
+    }
+
+    @Test
+    void requiresOneDirectEndgameSourceAndKeepsOnlyItsCitation() {
+        EvidenceInput resolution = new EvidenceInput(
+                UUID.randomUUID(),
+                "ENDGAME",
+                "Game end",
+                "When the final round ends, the game ends. Players score points for their completed rows. "
+                        + "On a tie, the player with more coins wins.",
+                8,
+                9);
+        EvidenceInput peripheral = new EvidenceInput(
+                UUID.randomUUID(), "SETUP", "Setup", "Place the round marker on the first space.", 2, 2);
+        var evidence = java.util.List.of(resolution, peripheral);
+        String question = "When does the game end, how do we score, and who wins a tie?";
+
+        assertThat(AnswerEvidencePolicy.requiresEndgameResolutionCitation(question, evidence)).isTrue();
+        assertThat(AnswerEvidencePolicy.citesEndgameResolution(
+                        question, evidence, java.util.List.of(peripheral.chunkId())))
+                .isFalse();
+        assertThat(AnswerEvidencePolicy.citesEndgameResolution(
+                        question, evidence, java.util.List.of(resolution.chunkId())))
+                .isTrue();
+        assertThat(AnswerEvidencePolicy.requiredEndgameCitationIds(
+                        question,
+                        evidence,
+                        java.util.List.of(resolution.chunkId(), peripheral.chunkId())))
+                .containsExactly(resolution.chunkId());
     }
 
     @Test

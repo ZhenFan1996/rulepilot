@@ -103,9 +103,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private static final Pattern EXHAUSTED_SOURCE_QUESTION = Pattern.compile(
             "(?isu)(?=.*(?:draw|take|refill|source\\s+area|supply|pool|deck|pile|抽|摸|取|补|拿|牌堆|供应|区域))"
                     + "(?=.*(?:not\\s+enough|insufficient|empty|runs\\s+out|不足|不够|用完|没有骰子)).*");
-    private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
-            "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
-                    + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
     private final QuestionUnderstanding understanding;
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
@@ -464,10 +461,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
         }
         draft = removePeripheralEndgameCitations(modelRequest, draft);
-        if (requiresEndTurnProcedureCitation(modelRequest) && !citesEndTurnProcedure(modelRequest, draft)) {
+        if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(modelRequest.question(), modelRequest.evidence())
+                && !AnswerEvidencePolicy.citesEndTurnProcedure(modelRequest.evidence(), draft.citationIds())) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用回合结束处理的直接规则依据。");
         }
-        if (requiresEndgameResolutionCitation(modelRequest) && !citesEndgameResolution(modelRequest, draft)) {
+        if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(modelRequest.question(), modelRequest.evidence())
+                && !AnswerEvidencePolicy.citesEndgameResolution(
+                        modelRequest.question(), modelRequest.evidence(), draft.citationIds())) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用游戏结束结算的直接规则依据。");
         }
         draft = includeResolvedVisualReferenceCitations(modelRequest, draft);
@@ -632,13 +632,15 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<String> playerFacingRepairFeedback(ModelRequest request, ModelDraft draft) {
         List<String> feedback = new ArrayList<>();
-        if (requiresEndTurnProcedureCitation(request) && !citesEndTurnProcedure(request, draft)) {
+        if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(request.question(), request.evidence())
+                && !AnswerEvidencePolicy.citesEndTurnProcedure(request.evidence(), draft.citationIds())) {
             feedback.add("END_TURN_PROCEDURE_CITATION: The question asks what happens after a player finishes a turn. "
                     + "Cite the supplied excerpt that explicitly connects turn end to drawing, revealing, reading, "
                     + "resolving, or executing the event/card effect. Setup instructions that only place that deck "
                     + "or card area are not sufficient evidence for the end-of-turn procedure.");
         }
-        if (requiresEndgameResolutionCitation(request) && !citesEndgameResolution(request, draft)) {
+        if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(request.question(), request.evidence())
+                && !AnswerEvidencePolicy.citesEndgameResolution(request.question(), request.evidence(), draft.citationIds())) {
             feedback.add("ENDGAME_RESOLUTION_CITATION: The question asks about an end trigger, end-of-round timing, "
                     + "final scoring, winner, or tie. Cite the supplied excerpt that states the actual end-game "
                     + "condition and resolution sequence. A component or inventory excerpt that merely names a "
@@ -704,43 +706,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return List.copyOf(feedback);
     }
 
-    private boolean requiresEndTurnProcedureCitation(ModelRequest request) {
-        return END_TURN_PROCEDURE_QUESTION.matcher(request.question()).matches()
-                && request.evidence().stream()
-                        .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
-    }
-
-    private boolean citesEndTurnProcedure(ModelRequest request, ModelDraft draft) {
-        Set<UUID> citations = Set.copyOf(draft.citationIds());
-        return request.evidence().stream()
-                .filter(source -> citations.contains(source.chunkId()))
-                .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
-    }
-
-    private boolean requiresEndgameResolutionCitation(ModelRequest request) {
-        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        return AnswerEvidencePolicy.isEndgameResolutionQuestion(question)
-                && request.evidence().stream().anyMatch(source -> hasRequiredEndgameResolution(request, source));
-    }
-
-    private boolean citesEndgameResolution(ModelRequest request, ModelDraft draft) {
-        Set<UUID> citations = Set.copyOf(draft.citationIds());
-        List<EvidenceInput> cited = request.evidence().stream()
-                .filter(source -> citations.contains(source.chunkId()))
-                .toList();
-        return hasRequiredEndgameResolution(request, cited);
-    }
-
     private ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
-        if (!isEndgameTimingAndTieSummary(request) || draft.citationIds().isEmpty()) return draft;
-        Set<UUID> cited = Set.copyOf(draft.citationIds());
-        List<EvidenceInput> citedEvidence = request.evidence().stream()
-                .filter(source -> cited.contains(source.chunkId()))
-                .toList();
-        List<UUID> decisive = requiredEndgameEvidence(request, citedEvidence).stream()
-                .map(EvidenceInput::chunkId)
-                .distinct()
-                .toList();
+        if (!AnswerEvidencePolicy.isEndgameTimingAndTieSummary(request.question(), request.evidence())
+                || draft.citationIds().isEmpty()) return draft;
+        List<UUID> decisive = AnswerEvidencePolicy.requiredEndgameCitationIds(
+                request.question(), request.evidence(), draft.citationIds());
         if (decisive.isEmpty() || decisive.size() == draft.citationIds().size()) return draft;
         return new ModelDraft(
                 draft.answerable(),
@@ -750,55 +720,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 decisive,
                 draft.exceptions(),
                 draft.confidence());
-    }
-
-    private boolean isEndgameTimingAndTieSummary(ModelRequest request) {
-        if (!requiresEndgameResolutionCitation(request)) return false;
-        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksTiming = AnswerEvidencePolicy.asksEndgameTiming(question);
-        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
-        return asksTiming && asksTie;
-    }
-
-    private boolean hasRequiredEndgameResolution(ModelRequest request, EvidenceInput source) {
-        return hasRequiredEndgameResolution(request, List.of(source));
-    }
-
-    private boolean hasRequiredEndgameResolution(ModelRequest request, List<EvidenceInput> sources) {
-        if (sources.stream().noneMatch(AnswerEvidencePolicy::hasEndgameResolution)) return false;
-        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksScoring = AnswerEvidencePolicy.asksScoring(question);
-        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
-        boolean citesScoring = sources.stream()
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .anyMatch(AnswerEvidencePolicy::hasEndgameScoring);
-        boolean citesTie = sources.stream()
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .anyMatch(AnswerEvidencePolicy::hasEndgameTie);
-        return (!asksScoring || citesScoring) && (!asksTie || citesTie);
-    }
-
-    private List<EvidenceInput> requiredEndgameEvidence(ModelRequest request, List<EvidenceInput> sources) {
-        String question = request.question() == null ? "" : request.question().toLowerCase(Locale.ROOT);
-        boolean asksScoring = AnswerEvidencePolicy.asksScoring(question);
-        boolean asksTie = AnswerEvidencePolicy.asksTie(question);
-        LinkedHashSet<EvidenceInput> required = new LinkedHashSet<>();
-        sources.stream().filter(AnswerEvidencePolicy::hasEndgameResolution).findFirst().ifPresent(required::add);
-        if (asksScoring) {
-            sources.stream()
-                    .filter(source -> AnswerEvidencePolicy.hasEndgameScoring(source.excerpt()))
-                    .findFirst()
-                    .ifPresent(required::add);
-        }
-        if (asksTie) {
-            sources.stream()
-                    .filter(source -> AnswerEvidencePolicy.hasEndgameTie(source.excerpt()))
-                    .findFirst()
-                    .ifPresent(required::add);
-        }
-        return List.copyOf(required);
     }
 
     private ModelDraft revisePlayerFacingDraft(
