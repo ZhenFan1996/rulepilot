@@ -1085,24 +1085,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private RunSnapshot finishRun(RunSnapshot run, StructuredRuleAnswer answer) {
-        run = advance(run, AssistantRunState.QUESTION_UNDERSTANDING, "Question context is normalized");
-        if (answer.status() == AnswerStatus.CLARIFICATION_REQUIRED) {
-            return advance(run, AssistantRunState.NEED_CLARIFICATION, "Question requires additional context");
+        for (AnswerRunProgressPolicy.ProgressUpdate update : AnswerRunProgressPolicy.updatesFor(answer)) {
+            run = advance(run, update.state(), update.summary());
         }
-        run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Answer evidence scope is planned");
-        run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed answer source lookup completed");
-        run = advance(run, AssistantRunState.VERIFYING_EVIDENCE, "Answer source scope is policy checked");
-        if (answer.status() == AnswerStatus.INSUFFICIENT_EVIDENCE || answer.status() == AnswerStatus.VERSION_CONFLICT) {
-            return advance(run, AssistantRunState.INSUFFICIENT_EVIDENCE, "Answer evidence is insufficient");
-        }
-        run = advance(run, AssistantRunState.ANSWER_COMPOSITION, "Structured cited answer is composed");
-        if (answer.status() != AnswerStatus.ANSWERED) {
-            return advance(run, AssistantRunState.DEGRADED, "Answer generation degraded safely");
-        }
-        if (answer.confidence() == AnswerConfidence.LOW) {
-            run = advance(run, AssistantRunState.CRITIQUING, "Low-confidence answer critique completed");
-        }
-        return advance(run, AssistantRunState.COMPLETED, "Question workflow completed");
+        return run;
     }
 
     private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
