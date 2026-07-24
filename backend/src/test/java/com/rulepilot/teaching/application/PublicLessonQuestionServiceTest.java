@@ -74,6 +74,77 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
+    void returnsAnExactSamePageVisualWhenAnswerEvidenceUsesAnotherChunkFromTheSameRule() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID lessonChunk = UUID.randomUUID();
+        UUID answerChunk = UUID.randomUUID();
+        IllustratedLesson.LessonStep matchingVisual = new IllustratedLesson.LessonStep(
+                1,
+                "骑士回合的两个阶段",
+                IllustratedLesson.TeachingMove.VISUAL,
+                "先拾取英雄方块，再移动并执行遭遇。",
+                List.of(6),
+                List.of(lessonChunk),
+                new IllustratedLesson.VisualFocus(6, "骑士回合阶段列表", 100, 100, 300, 300));
+        IllustratedLesson.LessonStep unrelatedVisual = new IllustratedLesson.LessonStep(
+                2,
+                "哥布林部落的人口",
+                IllustratedLesson.TeachingMove.VISUAL,
+                "填充哥布林部落。",
+                List.of(6),
+                List.of(lessonChunk),
+                new IllustratedLesson.VisualFocus(6, "哥布林人口", 500, 100, 300, 300));
+        IllustratedLesson illustrated = new IllustratedLesson(
+                UUID.randomUUID(),
+                planId,
+                IllustratedLesson.LessonStatus.COMPLETE,
+                List.of(new IllustratedLesson.LessonSection(
+                        1,
+                        "knight-turn",
+                        List.of("骑士", "回合"),
+                        "骑士回合",
+                        true,
+                        IllustratedLesson.EvidenceStatus.SUPPORTED,
+                        IllustratedLesson.VisualKind.FLOW_DIAGRAM,
+                        "骑士回合阶段",
+                        List.of(6),
+                        List.of(lessonChunk),
+                        List.of(matchingVisual, unrelatedVisual))),
+                "test",
+                Instant.now());
+        when(lessons.find(planId)).thenReturn(Optional.of(new PublicLessonReader.PublicLesson(
+                planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, illustrated)));
+        RuleAnswering.Answer answer = new RuleAnswering.Answer(
+                "ANSWERED",
+                "骑士回合分为两个阶段。",
+                "先拾取方块，再移动与遭遇。",
+                List.of(new RuleAnswering.Citation("The Knight", 6, 6)),
+                List.of(),
+                "HIGH",
+                null);
+        when(answers.answerForPublicReader(
+                        eq(versionId),
+                        eq("骑士的一个回合分成哪两个阶段？"),
+                        org.mockito.ArgumentMatchers.contains("骑士"),
+                        eq(null),
+                        eq(PlayerLocale.ZH_CN)))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
+
+        var result = service.answer(
+                planId,
+                new PublicLessonQuestionService.QuestionRequest("骑士的一个回合分成哪两个阶段？", 1, null));
+
+        assertThat(result).hasValueSatisfying(value -> {
+            assertThat(value.visualAids()).singleElement().satisfies(aid -> {
+                assertThat(aid.relatedStep()).isEqualTo("骑士回合的两个阶段");
+                assertThat(aid.visualFocus().label()).isEqualTo("骑士回合阶段列表");
+            });
+            assertThat(value.examples()).isEmpty();
+        });
+    }
+
+    @Test
     void requestsAnEnglishAnswerFromFreshRulebookEvidence() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();

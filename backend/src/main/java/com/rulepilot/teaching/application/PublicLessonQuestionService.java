@@ -30,6 +30,7 @@ public class PublicLessonQuestionService {
             "那么", "因此", "这里", "那里", "does", "what", "when", "where", "with", "then", "from", "this",
             "that", "your", "you", "the", "and", "for", "are", "can", "after", "before", "into", "about",
             "rule", "rules", "rulebook", "player", "players", "game", "step", "steps");
+    private static final int MIN_DIRECT_PAGE_TOPIC_OVERLAP = 2;
 
     private final PublicLessonReader lessons;
     private final RuleAnswering answers;
@@ -83,7 +84,14 @@ public class PublicLessonQuestionService {
             String question,
             RuleAnswering.Answer answer,
             PlayerLocale language) {
-        return relevantSteps(lesson, citedPages, citedEvidenceIds, question, answer, step -> step.visualFocus() != null)
+        return relevantSteps(
+                        lesson,
+                        citedPages,
+                        citedEvidenceIds,
+                        question,
+                        answer,
+                        step -> step.visualFocus() != null,
+                        true)
                 .stream()
                 .map(step -> new VisualAid(visibleFocus(step.visualFocus(), language), visibleStepLabel(step, language)))
                 .toList();
@@ -96,7 +104,14 @@ public class PublicLessonQuestionService {
             String question,
             RuleAnswering.Answer answer,
             PlayerLocale language) {
-        return relevantSteps(lesson, citedPages, citedEvidenceIds, question, answer, step -> step.kind() == TeachingMove.EXAMPLE)
+        return relevantSteps(
+                        lesson,
+                        citedPages,
+                        citedEvidenceIds,
+                        question,
+                        answer,
+                        step -> step.kind() == TeachingMove.EXAMPLE,
+                        false)
                 .stream()
                 .map(step -> language == PlayerLocale.EN
                         ? new Example(
@@ -113,15 +128,18 @@ public class PublicLessonQuestionService {
             Set<UUID> citedEvidenceIds,
             String question,
             RuleAnswering.Answer answer,
-            Predicate<LessonStep> kind) {
+            Predicate<LessonStep> kind,
+            boolean permitsDirectPageTopicFallback) {
         Set<String> answerTerms = relevanceTerms(questionAndAnswerText(question, answer));
         List<RankedStep> candidates = lesson.lesson().sections().stream()
                 .flatMap(section -> section.steps().stream())
                 .filter(kind)
                 .filter(step -> step.sourcePages().stream().anyMatch(citedPages::contains))
                 .filter(step -> step.visualFocus() == null || citedPages.contains(step.visualFocus().pageNumber()))
-                .filter(step -> sharesCitedEvidence(step, citedEvidenceIds))
                 .map(step -> new RankedStep(step, relevanceScore(step, answerTerms)))
+                .filter(candidate -> sharesCitedEvidence(candidate.step(), citedEvidenceIds)
+                        || (permitsDirectPageTopicFallback
+                                && candidate.relevance() >= MIN_DIRECT_PAGE_TOPIC_OVERLAP))
                 .sorted((left, right) -> {
                     int score = Integer.compare(right.relevance(), left.relevance());
                     return score != 0 ? score : Integer.compare(left.step().position(), right.step().position());
