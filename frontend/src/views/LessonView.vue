@@ -28,6 +28,7 @@ import {
   type MediaWarningCode,
 } from '@/composables/useLessonSupportingContent'
 import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/useLessonNarrationPlayback'
+import { useLessonLocalization } from '@/composables/useLessonLocalization'
 import type {
   LessonComprehensionReport,
 } from '@/composables/lessonSupportingContent'
@@ -117,9 +118,6 @@ const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const sourceLesson = ref<IllustratedLesson | null>(null)
-const localizationStatus = ref<'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null>(null)
-const localizationPreparing = ref(false)
-let localizationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 const mediaMode = ref<MediaMode>('TEXT')
 const progress = ref<LessonProgress>(initialLessonProgress())
 const ruling = ref<ConfirmedRuling | null>(null)
@@ -443,13 +441,30 @@ function isCurrentLessonLoad(request: number, targetPlanId: string) {
   return !lessonViewDisposed && request === latestLessonLoad && targetPlanId === planId.value
 }
 
+const {
+  status: localizationStatus,
+  preparing: localizationPreparing,
+  applySelectedLocale,
+  prepareEnglishGuide,
+  reset: resetLessonLocalization,
+  dispose: disposeLessonLocalization,
+} = useLessonLocalization({
+  locale,
+  planId,
+  sourceLesson,
+  displayedLesson: lesson,
+  currentRequest: () => latestLessonLoad,
+  isCurrent: (request, targetPlanId) => isCurrentLessonLoad(request, targetPlanId),
+  requestLogin: () => router.push({ name: 'login' }),
+  csrfToken,
+})
+
 function resetLessonReader() {
   narrationPlayer.value?.pause()
   plan.value = null
   lesson.value = null
   sourceLesson.value = null
-  localizationStatus.value = null
-  localizationPreparing.value = false
+  resetLessonLocalization()
   progress.value = initialLessonProgress()
   resetConversation(true)
   ruling.value = null
@@ -475,86 +490,6 @@ async function optionalFetch(url: string) {
   }
 }
 
-interface LocalizationView {
-  language: 'ZH_CN' | 'EN'
-  status: 'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null
-  lesson: IllustratedLesson | null
-  failureCode: string | null
-}
-
-function clearLocalizationRefresh() {
-  if (localizationRefreshTimer) clearTimeout(localizationRefreshTimer)
-  localizationRefreshTimer = undefined
-}
-
-function scheduleLocalizationRefresh() {
-  clearLocalizationRefresh()
-  if (lessonViewDisposed || locale.value !== 'en' || !sourceLesson.value || !['PENDING', 'RUNNING'].includes(localizationStatus.value ?? '')) return
-  localizationRefreshTimer = setTimeout(() => {
-    localizationRefreshTimer = undefined
-    void applySelectedLocale()
-  }, 3000)
-}
-
-async function applySelectedLocale(targetPlanId = planId.value, request = latestLessonLoad) {
-  if (!isCurrentLessonLoad(request, targetPlanId)) return
-  clearLocalizationRefresh()
-  const source = sourceLesson.value
-  if (!source) return
-  if (locale.value !== 'en') {
-    localizationStatus.value = 'READY'
-    lesson.value = source
-    return
-  }
-  try {
-    const response = await fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/localizations/en`, { credentials: 'include' })
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (response.status === 401) {
-      await router.push({ name: 'login' })
-      return
-    }
-    if (!response.ok) throw new Error('English guide is unavailable.')
-    const localized = await response.json() as LocalizationView
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    localizationStatus.value = localized.status
-    lesson.value = localized.status === 'READY' && localized.lesson ? localized.lesson : source
-  } catch {
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    localizationStatus.value = 'FAILED'
-    lesson.value = source
-  } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) scheduleLocalizationRefresh()
-  }
-}
-
-async function prepareEnglishGuide() {
-  if (!sourceLesson.value || localizationPreparing.value) return
-  const targetPlanId = planId.value
-  const request = latestLessonLoad
-  localizationPreparing.value = true
-  try {
-    const csrf = await csrfToken()
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    const response = await fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest/localizations/en`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { [csrf.headerName]: csrf.token },
-    })
-    if (!response.ok) throw new Error('English guide could not be queued.')
-    const localized = await response.json() as LocalizationView
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    localizationStatus.value = localized.status
-  } catch {
-    if (!isCurrentLessonLoad(request, targetPlanId)) return
-    localizationStatus.value = 'FAILED'
-  } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) {
-      localizationPreparing.value = false
-      scheduleLocalizationRefresh()
-    }
-  }
-}
-
 async function loadSupportingContent(targetPlanId: string, request = latestLessonLoad) {
   await loadSupportingContentForCurrentLesson({
     planId: targetPlanId,
@@ -569,7 +504,6 @@ async function loadLesson() {
   const request = ++latestLessonLoad
   clearGenerationRefresh()
   clearVisualRefresh()
-  clearLocalizationRefresh()
   loading.value = true
   errorMessage.value = ''
   resetLessonReader()
@@ -1082,7 +1016,7 @@ onUnmounted(() => {
   lessonViewDisposed = true
   clearGenerationRefresh()
   clearVisualRefresh()
-  clearLocalizationRefresh()
+  disposeLessonLocalization()
   if (generationClockTimer) clearInterval(generationClockTimer)
   generationClockTimer = undefined
   window.removeEventListener('online', updateOnlineStatus)
