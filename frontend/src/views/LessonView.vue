@@ -368,12 +368,13 @@ const teachingMoveMeta = {
 } as const
 
 const chapterPathTitle = computed(() => {
-  if (chapterPathSteps.value.some((step) => ['DO', 'FLOW'].includes(step.kind))) return '上桌时按这个顺序'
-  return '再抓住这几个判断'
+  if (chapterPathSteps.value.some((step) => ['DO', 'FLOW'].includes(step.kind))) return t('lesson.chapter.path.action')
+  return t('lesson.chapter.path.keyPoints')
 })
 
 function stepSourceLabel(step: LessonSection['steps'][number]) {
-  return step.sourcePages.length ? `原文 ${step.sourcePages.join('、')} 页` : ''
+  if (!step.sourcePages.length) return ''
+  return t('lesson.chapter.source', { pages: step.sourcePages.join(locale.value === 'en' ? ', ' : '、') })
 }
 
 function lessonOutcome(section: LessonSection) {
@@ -1109,10 +1110,10 @@ function formatDuration(millis: number) {
 
 function visualKindLabel(kind: LessonSection['visualKind']) {
   return {
-    REFERENCE_CARD: '规则要点',
-    TABLE_LAYOUT: '摆放示意',
-    FLOW_DIAGRAM: '流程示意',
-    SCOREBOARD: '计分示意',
+    REFERENCE_CARD: t('lesson.chapter.visualKind.reference'),
+    TABLE_LAYOUT: t('lesson.chapter.visualKind.layout'),
+    FLOW_DIAGRAM: t('lesson.chapter.visualKind.flow'),
+    SCOREBOARD: t('lesson.chapter.visualKind.scoreboard'),
   }[kind]
 }
 

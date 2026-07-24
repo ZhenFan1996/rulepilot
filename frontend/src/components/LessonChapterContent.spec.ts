@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import LessonChapterContent from './LessonChapterContent.vue'
+import { setLocale } from '@/lib/locale'
 
 const visualFocus = { pageNumber: 6, label: '行动网格', x: 100, y: 100, width: 500, height: 300 }
 const visualStep = { position: 2, heading: '从网格中取牌', kind: 'VISUAL' as const, text: '选择一行或一列。', sourcePages: [6], visualFocus }
@@ -26,6 +27,8 @@ function mountContent(overrides: Record<string, unknown> = {}) {
 }
 
 describe('LessonChapterContent', () => {
+  afterEach(() => setLocale('zh-CN'))
+
   it('renders cited visual evidence and forwards only image-feedback intent', async () => {
     const wrapper = mountContent()
 
@@ -41,5 +44,21 @@ describe('LessonChapterContent', () => {
   it('keeps visual feedback disabled while it is being saved or offline', () => {
     const wrapper = mountContent({ visualFeedbackSaving: 'visual-s2-v2', online: false })
     expect(wrapper.findAll('button').filter((button) => ['有帮助', '没帮上忙'].includes(button.text())).every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+  })
+
+  it('localizes reader chrome around cited source content without changing feedback actions', () => {
+    setLocale('en')
+    const wrapper = mountContent()
+
+    expect(wrapper.text()).toContain('The one rule to remember')
+    expect(wrapper.text()).toContain('From reading to playing')
+    expect(wrapper.text()).toContain('1 step')
+    expect(wrapper.text()).toContain('Look at the table')
+    expect(wrapper.text()).toContain('View page 6 in context')
+    expect(wrapper.text()).toContain('Did this visual help?')
+    expect(wrapper.text()).toContain('It helped')
+    expect(wrapper.text()).toContain('Not yet')
+    expect(wrapper.get('aside[aria-label]').attributes('aria-label')).toBe('Rulebook pages and table visuals')
+    expect(wrapper.get('img[alt*="from rulebook page 6"]').attributes('alt')).toContain('from rulebook page 6')
   })
 })
