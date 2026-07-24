@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import LessonView from './LessonView.vue'
+import { setLocale } from '@/lib/locale'
 
 describe('LessonView progressive reading', () => {
   beforeEach(() => {
@@ -14,6 +15,7 @@ describe('LessonView progressive reading', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
     vi.useRealTimers()
+    setLocale('zh-CN')
   })
 
   it('keeps the reader in place, opens the next published chapter, and unlocks final actions at terminal state', async () => {
@@ -459,6 +461,52 @@ describe('LessonView progressive reading', () => {
 
     expect(wrapper.text()).toContain('第二节')
     expect(wrapper.text()).not.toContain('陈旧章节答案')
+    wrapper.unmount()
+  })
+
+  it('sends an English grounded example request from an English reader', async () => {
+    setLocale('en')
+    let answerRequest: Record<string, unknown> | null = null
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json({
+          ...planFixture('plan-1', 'First game'),
+          sections: [{ position: 1, title: 'First round', visualEvidenceRecommended: false }],
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, 'First round')] })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequest = JSON.parse(String(init.body)) as Record<string, unknown>
+        return new Response(null, { status: 503 })
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: { AppShell: { template: '<div><slot /></div>' }, CardOcrCapture: true, VoiceQuestionCapture: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === 'Walk through an example')!.trigger('click')
+    await flushPromises()
+
+    expect(answerRequest).toMatchObject({
+      question: 'Using the rules for “First round”, walk through one concrete, legal table example.',
+      currentLessonSection: 'topic-1 First round setup',
+      learningIntent: 'EXAMPLE',
+      language: 'en',
+    })
     wrapper.unmount()
   })
 })

@@ -799,13 +799,17 @@ function recordChapterVisualAid(
 }
 
 function learningPrompt(intent: LearningIntent) {
-  const title = currentSection.value?.title ?? '这一节'
-  return {
-    SIMPLIFY: `请用更简单的话重新讲解“${title}”，告诉我现在最需要记住什么。`,
-    EXAMPLE: `请根据“${title}”的规则，走一个具体、合法的桌面例子。`,
-    WHY: `请说明“${title}”里的步骤前后怎么衔接：哪一步完成后必须做什么，只讲规则明确写出的关系。`,
-    EXCEPTIONS: `请整理“${title}”中规则明确写出的时机、限制、禁止和例外。`,
-  }[intent]
+  const title = currentSection.value?.title ?? t('lesson.answer.sectionFallback')
+  switch (intent) {
+    case 'SIMPLIFY':
+      return t('lesson.answer.prompt.simplify', { title })
+    case 'EXAMPLE':
+      return t('lesson.answer.prompt.example', { title })
+    case 'WHY':
+      return t('lesson.answer.prompt.why', { title })
+    case 'EXCEPTIONS':
+      return t('lesson.answer.prompt.exceptions', { title })
+  }
 }
 
 function focusQuestionPanel() {
