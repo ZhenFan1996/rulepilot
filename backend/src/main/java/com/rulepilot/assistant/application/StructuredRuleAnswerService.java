@@ -2,8 +2,6 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
-import com.rulepilot.assistant.GeneratedContentCritic.Review;
-import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AssistantRunMode;
@@ -58,7 +56,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final ConfirmedRulingLookup confirmedRulings;
     private final AnswerPublicationValidator publicationValidator;
     private final AnswerEvidenceAdmissionGate evidenceAdmissionGate;
-    private final GeneratedContentCritic critic;
+    private final AnswerPostPublicationReviewer postPublicationReviewer;
     private final AnswerRunLifecycle runLifecycle;
     private final AuditedAgentInvocations invocations;
     private final ObservationRegistry observations;
@@ -96,7 +94,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.confirmedRulings = confirmedRulings;
         this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
         this.evidenceAdmissionGate = new AnswerEvidenceAdmissionGate(publicationValidator);
-        this.critic = critic;
+        this.postPublicationReviewer = new AnswerPostPublicationReviewer(critic, modelGateway, publicationValidator);
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
         this.observations = observations;
@@ -352,72 +350,31 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
+        AnswerPostPublicationReviewer.Result reviewResult;
         try {
-            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(context, gameSessionId, answer);
-            Review review = critic.review(
-                    AnswerCritiquePolicy.request(assistantRunId, understood, context, answer, evidence), risk);
-            if (!review.accepted()) {
-                if (!AnswerCritiquePolicy.allowsBoundedCorrection(context, gameSessionId)) {
-                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
-                }
-                answer = reviseLearningResponse(
-                        assistantRunId,
-                        context.documentVersionId(),
-                        username,
-                        gameSessionId,
-                        modelRequest,
-                        draft,
-                        review,
-                        evidence);
-                Review revisionReview = critic.review(
-                        AnswerCritiquePolicy.request(assistantRunId, understood, context, answer, evidence),
-                        ReviewRisk.HIGH_IMPACT);
-                if (!revisionReview.accepted()) {
-                    return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "局部重讲仍未通过事实一致性审查。");
-                }
-            }
+            reviewResult = postPublicationReviewer.review(
+                    assistantRunId,
+                    understood,
+                    context,
+                    username,
+                    gameSessionId,
+                    modelRequest,
+                    draft,
+                    answer,
+                    evidence);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "局部重讲超时，可以稍后重试或直接查看规则引用。");
         } catch (AgentExecutionStoppedException exception) {
             throw exception;
-        } catch (RuntimeException exception) {
-            LOGGER.warn(
-                    "Adaptive answer validation failed for run {}: {} ({})",
-                    assistantRunId,
-                    exception.getMessage(),
-                    exception.getClass().getSimpleName());
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
         }
+        if (!reviewResult.accepted()) {
+            return safe(context.documentVersionId(), reviewResult.failureStatus(), reviewResult.failureMessage());
+        }
+        answer = reviewResult.answer();
         if (cacheKey.isPresent()) {
             saveCached(cacheKey.get(), answer);
         }
         return answer;
-    }
-
-    private StructuredRuleAnswer reviseLearningResponse(
-            UUID assistantRunId,
-            UUID documentVersionId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft,
-            Review review,
-            List<HybridEvidenceHit> evidence) {
-        List<String> feedback = AnswerCritiquePolicy.revisionFeedback(review);
-        ModelDraft revised = modelGateway.revise(
-                assistantRunId,
-                username,
-                gameSessionId,
-                modelRequest,
-                previousDraft,
-                feedback,
-                "reviseLearningResponse",
-                "Learning response revised from bounded critic feedback");
-        if (revised == null || !revised.answerable()) {
-            throw new IllegalArgumentException("revised learning response is not answerable");
-        }
-        return publicationValidator.publish(
-                documentVersionId, AnswerBasisPolicy.classify(modelRequest, revised), evidence);
     }
 
     private ModelDraft reviseEvidenceBackedAbstention(
