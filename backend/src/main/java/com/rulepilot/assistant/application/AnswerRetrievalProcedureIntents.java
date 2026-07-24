@@ -34,6 +34,10 @@ final class AnswerRetrievalProcedureIntents {
         if (stateTransitionQuery != null) {
             intents.add(intent(stateTransitionQuery, RetrievalPurpose.STATE_TRANSITION));
         }
+        String matchingValueResolutionQuery = matchingValueResolutionQuery(question);
+        if (matchingValueResolutionQuery != null) {
+            intents.add(intent(matchingValueResolutionQuery, RetrievalPurpose.MATCHING_VALUE_RESOLUTION));
+        }
         String roundResetQuery = roundResetQuery(question);
         if (roundResetQuery != null) {
             intents.add(intent(roundResetQuery, RetrievalPurpose.ROUND_RESET));
@@ -79,6 +83,23 @@ final class AnswerRetrievalProcedureIntents {
         if (!actorExits || !asksNextActor) return null;
         return AnswerRetrievalPlanner.bounded(question + " state transition successor actor replacement active player skipped turn order "
                 + "状态变化 后继行动者 替代玩家 跳过 行动顺序 例外");
+    }
+
+    /**
+     * Players usually describe this situation as "the same number" rather than using a rulebook's local term
+     * such as collision, bump, or priority. Preserve their wording, then add only cross-game procedural synonyms
+     * so retrieval can find the named resolution without guessing a game-specific outcome.
+     */
+    private static String matchingValueResolutionQuery(String question) {
+        boolean mentionsMatchingValue = AnswerRetrievalPlanner.containsAny(
+                question,
+                "same number", "same value", "same card", "matching number", "equal number", "equal value",
+                "相同数字", "同样数字", "数字相同", "相同数值", "相同点数", "相同牌", "同号", "撞号", "碰撞");
+        if (!mentionsMatchingValue) return null;
+        return AnswerRetrievalPlanner.bounded(question
+                + " shared value equal numbered cards matching number tie collision bump priority resolution order "
+                + "players resolve same number same value matching card equal number "
+                + "同数值 同号 碰撞 优先顺序 处理");
     }
 
     private static String exhaustedSourceQuery(String question) {

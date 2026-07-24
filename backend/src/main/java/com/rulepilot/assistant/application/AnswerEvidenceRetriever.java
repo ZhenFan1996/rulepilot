@@ -27,6 +27,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,6 +36,10 @@ import org.slf4j.LoggerFactory;
 final class AnswerEvidenceRetriever {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceRetriever.class);
+    private static final Pattern INTENT_TERM = Pattern.compile("[\\p{L}\\p{N}]{3,}");
+    private static final Set<String> INTENT_STOP_TERMS = Set.of(
+            "about", "after", "before", "does", "from", "have", "happen", "happens", "into", "other",
+            "players", "play", "rule", "rules", "that", "the", "then", "this", "what", "when", "with");
 
     private final HybridRuleSearch retrieval;
     private final VisualRulebookPageFactSearch visualFacts;
@@ -121,7 +127,12 @@ final class AnswerEvidenceRetriever {
                         retrievalFailure.getClass().getSimpleName());
                 continue;
             }
-            boolean supplementaryIntent = intents.size() > 2 && intentIndex == intents.size() - 1;
+            // The last intent is deliberately broad recall support. It may fill a genuine retrieval gap, but it
+            // must never become the answer's primary anchor merely because it happens to rank a generic paragraph.
+            boolean supplementaryIntent = intentIndex == intents.size() - 1;
+            if (supplementaryIntent && !intentAnchors.isEmpty()) {
+                continue;
+            }
             selectIntentAnchor(intent, retrieved, supplementaryIntent, intentAnchors);
             for (HybridEvidenceHit hit : retrieved) {
                 HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
@@ -227,7 +238,9 @@ final class AnswerEvidenceRetriever {
             Map<UUID, HybridEvidenceHit> intentAnchors) {
         if (retrieved.isEmpty() || supplementaryIntent) return;
         if (intent.purpose() == RetrievalPurpose.STATE_TRANSITION) {
-            retrieved.stream().limit(2).forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
+            rankedForIntent(intent.query(), retrieved).stream()
+                    .limit(2)
+                    .forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
             return;
         }
         HybridEvidenceHit anchor;
@@ -238,12 +251,44 @@ final class AnswerEvidenceRetriever {
         } else if (intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
             anchor = retrieved.stream().filter(AnswerEvidencePolicy::hasEndTurnProcedure).findFirst().orElse(retrieved.getFirst());
         } else {
-            anchor = retrieved.stream()
+            anchor = rankedForIntent(intent.query(), retrieved).stream()
                     .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))
                     .findFirst()
-                    .orElse(retrieved.getFirst());
+                    .orElse(rankedForIntent(intent.query(), retrieved).getFirst());
         }
         intentAnchors.putIfAbsent(anchor.evidence().chunkId(), anchor);
+    }
+
+    /**
+     * The hybrid score can place a broad setup paragraph above a rule that repeats the player's exact condition.
+     * Preserve the hybrid score as a tie-breaker, but anchor an answer intent on the candidate that carries more
+     * distinctive terms from that intent.
+     */
+    private List<HybridEvidenceHit> rankedForIntent(String query, List<HybridEvidenceHit> retrieved) {
+        Set<String> terms = intentTerms(query);
+        return retrieved.stream()
+                .sorted(Comparator.comparingInt((HybridEvidenceHit hit) -> intentCoverage(hit, terms))
+                        .reversed()
+                        .thenComparing(Comparator.comparingDouble(HybridEvidenceHit::score).reversed())
+                        .thenComparing(hit -> hit.evidence().chunkId()))
+                .toList();
+    }
+
+    private Set<String> intentTerms(String query) {
+        if (query == null || query.isBlank()) return Set.of();
+        Set<String> terms = new LinkedHashSet<>();
+        Matcher matcher = INTENT_TERM.matcher(query.toLowerCase(Locale.ROOT));
+        while (matcher.find()) {
+            String term = matcher.group();
+            if (!INTENT_STOP_TERMS.contains(term)) terms.add(term);
+        }
+        return Set.copyOf(terms);
+    }
+
+    private int intentCoverage(HybridEvidenceHit hit, Set<String> terms) {
+        if (terms.isEmpty()) return 0;
+        String candidate = (hit.evidence().heading() + " " + hit.evidence().excerpt()).toLowerCase(Locale.ROOT);
+        return (int) terms.stream().filter(candidate::contains).count();
     }
 
     private void enrichAdjacentEndgameEvidence(

@@ -26,4 +26,15 @@ class AnswerRetrievalProcedureIntentsTest {
     void doesNotTreatAnOrdinaryCardQuestionAsAProcedureRecoveryCase() {
         assertThat(AnswerRetrievalProcedureIntents.plan("Can I score this card now?")).isEmpty();
     }
+
+    @Test
+    void expandsAPlayersPlainLanguageSameNumberQuestionIntoAResolutionLookup() {
+        var intents = AnswerRetrievalProcedureIntents.plan(
+                "What happens when two players play the same number?");
+
+        assertThat(intents).singleElement().satisfies(intent -> {
+            assertThat(intent.purpose()).isEqualTo(RetrievalPurpose.MATCHING_VALUE_RESOLUTION);
+            assertThat(intent.query()).contains("same number", "collision", "bump", "priority", "resolution");
+        });
+    }
 }

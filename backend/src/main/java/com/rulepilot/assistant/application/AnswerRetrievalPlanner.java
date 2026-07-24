@@ -238,7 +238,8 @@ public final class AnswerRetrievalPlanner {
         END_TURN_PROCEDURE,
         STATE_TRANSITION,
         ROUND_RESET,
-        DEFERRED_TURN
+        DEFERRED_TURN,
+        MATCHING_VALUE_RESOLUTION
     }
 
     public record RetrievalIntent(

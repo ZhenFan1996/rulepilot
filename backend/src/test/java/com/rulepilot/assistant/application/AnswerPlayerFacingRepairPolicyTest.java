@@ -59,6 +59,28 @@ class AnswerPlayerFacingRepairPolicyTest {
         assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft)).isEmpty();
     }
 
+    @Test
+    void asksForTheDirectCollisionRuleWhenTheDraftCitesOnlySetupEvidence() {
+        UUID setup = UUID.randomUUID();
+        UUID collision = UUID.randomUUID();
+        ModelRequest request = request(
+                "两位玩家出了相同数字时，该怎么处理？",
+                List.of(
+                        new EvidenceInput(setup, "SETUP", "Setup", "Each player receives numbered cards.", 4, 4),
+                        new EvidenceInput(
+                                collision,
+                                "ROUND_STRUCTURE",
+                                "Resolving a bump",
+                                "Players who played the same number resolve the bump in priority order.",
+                                10,
+                                10)));
+        ModelDraft draft = new ModelDraft(
+                "无法确定。", "组件说明没有给出同数字的处理。", List.of(setup), List.of(), "LOW");
+
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
+                .anyMatch(item -> item.startsWith("MATCHING_VALUE_RESOLUTION_CITATION:"));
+    }
+
     private ModelRequest request(String question, List<EvidenceInput> evidence) {
         return new ModelRequest(
                 question,

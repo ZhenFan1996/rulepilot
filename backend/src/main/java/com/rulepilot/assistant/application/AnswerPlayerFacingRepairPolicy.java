@@ -27,6 +27,13 @@ final class AnswerPlayerFacingRepairPolicy {
                     + "marker, card, or resource cannot support that timing, scoring, or tie ruling. Preserve the "
                     + "printed order, including any numbered cleanup check, and do not invent a separate phase.");
         }
+        if (AnswerEvidencePolicy.requiresMatchingValueResolutionCitation(request.question(), request.evidence())
+                && !AnswerEvidencePolicy.citesMatchingValueResolution(request.evidence(), draft.citationIds())) {
+            feedback.add("MATCHING_VALUE_RESOLUTION_CITATION: The player's ordinary-language question states that "
+                    + "players used the same number, value, or card. A supplied excerpt directly names that matching "
+                    + "condition and gives its bump, collision, priority, placement, or resolution procedure. Cite that "
+                    + "procedure and answer it; setup or component evidence cannot replace the direct resolution rule.");
+        }
         if (AnswerDraftSafetyPolicy.containsUncitedEnglishTitleLabel(request, draft)) {
             feedback.add("EXACT_PHASE_NAME: The draft uses an English multi-word phase label that does not appear in "
                     + "its cited excerpts. Remove it rather than inventing a phase. If the source has a numbered "

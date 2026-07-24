@@ -21,13 +21,21 @@ final class AnswerEvidenceReconsiderationPolicy {
             + "continuing when the named draw or supply area becomes empty. Apply that stated sequence to "
             + "a question about reaching the required draw amount, and cite its source. Do not abstain merely "
             + "because the player did not state how many items were present before that area became empty.";
+    private static final String DIRECT_MATCHING_VALUE_FEEDBACK = " DIRECT_MATCHING_VALUE_RESOLUTION: A supplied excerpt explicitly gives "
+            + "the consequence or resolution when players use the same number, value, or card. Apply that named "
+            + "condition directly and cite the procedure; do not treat the absence of the rulebook's local label as "
+            + "missing context.";
 
     private AnswerEvidenceReconsiderationPolicy() {}
 
     static List<String> feedbackFor(ModelRequest request) {
-        String feedback = AnswerReplenishmentPolicy.hasEvidencedProcedure(request)
-                ? BASE_FEEDBACK + DIRECT_REPLENISHMENT_FEEDBACK
-                : BASE_FEEDBACK;
+        String feedback = BASE_FEEDBACK;
+        if (AnswerReplenishmentPolicy.hasEvidencedProcedure(request)) {
+            feedback += DIRECT_REPLENISHMENT_FEEDBACK;
+        }
+        if (AnswerEvidencePolicy.requiresMatchingValueResolutionCitation(request.question(), request.evidence())) {
+            feedback += DIRECT_MATCHING_VALUE_FEEDBACK;
+        }
         return List.of(feedback);
     }
 }

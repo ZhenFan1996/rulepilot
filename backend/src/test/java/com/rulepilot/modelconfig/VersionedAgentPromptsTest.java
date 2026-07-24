@@ -35,6 +35,8 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v11-scope-discipline-system.txt"),
                 resource("rule-answer-agent-v12-direct-clause-citations-system.txt"),
                 resource("rule-answer-agent-v13-grounded-application-system.txt"),
+                resource("rule-answer-agent-v14-natural-language-condition-system.txt"),
+                resource("rule-answer-agent-v15-matching-value-resolution-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -182,7 +184,11 @@ class VersionedAgentPromptsTest {
                         "player's wording is not a component definition",
                         "Grounded-application revision v13",
                         "GROUNDED_APPLICATION",
-                        "not private reasoning");
+                        "not private reasoning",
+                        "Natural-language condition revision v14",
+                        "not required to use the rulebook's label",
+                        "Matching-value resolution revision v15",
+                        "same number");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}", "{outputLanguage}");
         assertThat(prompts.lessonLocalizationSystem())

@@ -17,7 +17,6 @@ import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class AnswerEvidenceRetrieverTest {
@@ -71,11 +70,10 @@ class AnswerEvidenceRetrieverTest {
 
     @Test
     void rejectsConflictingSnapshotsForTheSameEvidenceIdentity() {
-        AtomicInteger calls = new AtomicInteger();
         AnswerEvidenceRetriever retriever = retriever(
-                (documentVersionId, query, options) -> List.of(evidence(
-                        calls.getAndIncrement() == 0 ? "执行该行动后获得一分。" : "执行该行动后失去一分。",
-                        0.7)),
+                (documentVersionId, query, options) -> List.of(
+                        evidence("执行该行动后获得一分。", 0.7),
+                        evidence("执行该行动后失去一分。", 0.7)),
                 VisualRulebookPageFactSearch.empty(),
                 (documentVersionId, chunkIds) -> List.of());
 
@@ -84,6 +82,60 @@ class AnswerEvidenceRetrieverTest {
 
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.CONFLICTING);
         assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
+    void anchorsAnOrdinaryQuestionOnTheCandidateThatContainsItsDistinctiveCondition() {
+        HybridEvidenceHit setup = hit(
+                "SETUP",
+                "Player setup",
+                "Each player receives a hand of numbered cards before the game starts.",
+                4,
+                0.9);
+        HybridEvidenceHit collision = hit(
+                "ROUND_STRUCTURE",
+                "Resolving a bump",
+                "Players who played the same number resolve the bump in the printed order.",
+                10,
+                0.8);
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(setup, collision),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of());
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question("What happens when two players play the same number?"), context(), "alice");
+
+        assertThat(result.evidence()).first().satisfies(hit ->
+                assertThat(hit.evidence().heading()).isEqualTo("Resolving a bump"));
+    }
+
+    @Test
+    void keepsBroadSupplementaryRecallOutOfTheAnswerContextWhenAPrimaryAnchorExists() {
+        HybridEvidenceHit direct = hit(
+                "ROUND_STRUCTURE",
+                "Collision",
+                "When players choose the same number, resolve the collision in the printed order.",
+                10,
+                0.6);
+        HybridEvidenceHit broadSupplement = hit(
+                "ROUND_STRUCTURE",
+                "Round cleanup",
+                "After the round, every player retrieves their numbered card and draws a replacement.",
+                11,
+                0.9);
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> query.contains("rule definition")
+                        ? List.of(broadSupplement)
+                        : List.of(direct),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of());
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question("What happens when players choose the same number?"), context(), "alice");
+
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                .containsExactly(direct.evidence().chunkId());
     }
 
     private AnswerEvidenceRetriever retriever(
@@ -124,6 +176,15 @@ class AnswerEvidenceRetrieverTest {
     private HybridEvidenceHit evidence(String excerpt, double score) {
         return new HybridEvidenceHit(
                 new RuleEvidenceHit(chunkId, versionId, "ACTIONS", "Scoring", excerpt, 4, 4, score),
+                score,
+                1,
+                null,
+                false);
+    }
+
+    private HybridEvidenceHit hit(String sectionType, String heading, String excerpt, int page, double score) {
+        return new HybridEvidenceHit(
+                new RuleEvidenceHit(UUID.randomUUID(), versionId, sectionType, heading, excerpt, page, page, score),
                 score,
                 1,
                 null,

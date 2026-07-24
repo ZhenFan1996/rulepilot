@@ -21,6 +21,9 @@ final class AnswerVisualEvidencePolicy {
                     + "|(?:哪个|哪种|哪一种|什么|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)"
                     + "|(?:图标|符号).{0,36}(?:表示|代表|对应|是什么|含义)"
                     + "|(?:支付|花费|消耗|获得).{0,18}(?:什么|哪种|哪一种|何种).{0,18}(?:资源|令牌|标记|图标|符号|胜利点)");
+    private static final Pattern VISUAL_IDENTITY_ASSERTION = Pattern.compile(
+            "(?iu)(?:\\b(?:icon|symbol|pictograph)\\b.{0,36}\\b(?:means|represents|corresponds|refers)\\b"
+                    + "|(?:图标|符号).{0,36}(?:表示|代表|对应|含义|是))");
     private static final Pattern EVIDENCED_CROSS_PAGE_ICON_MAPPING = Pattern.compile(
             "(?iu)(?:visually identical|same icon|exact visual match|视觉完全相同|同一图标)"
                     + ".{0,240}(?:labeled|component name|标为|标签|组件名)");
@@ -34,14 +37,17 @@ final class AnswerVisualEvidencePolicy {
     private AnswerVisualEvidencePolicy() {}
 
     static boolean requiresIdentityReconciliation(ModelRequest request, ModelDraft draft) {
-        if (!VISUAL_IDENTITY_QUESTION.matcher(request.question()).find()
-                && !AnswerDraftSafetyPolicy.containsUnresolvedVisualSymbol(draft)) {
+        boolean identityQuestion = VISUAL_IDENTITY_QUESTION.matcher(request.question()).find();
+        boolean identityAssertion = VISUAL_IDENTITY_ASSERTION.matcher(playerFacingText(draft)).find();
+        if (!identityQuestion && !identityAssertion) {
             return false;
         }
         if (hasEvidencedCrossPageIconMapping(request)) {
             return false;
         }
+        Set<UUID> cited = Set.copyOf(draft.citationIds());
         return request.evidence().stream()
+                .filter(source -> identityQuestion || cited.contains(source.chunkId()))
                 .map(EvidenceInput::excerpt)
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(excerpt -> excerpt.contains("Visual page facts")
@@ -117,5 +123,13 @@ final class AnswerVisualEvidencePolicy {
         Set<UUID> cited = Set.copyOf(draft.citationIds());
         return request.evidence().stream()
                 .filter(source -> visualIdentityQuestion || cited.contains(source.chunkId()));
+    }
+
+    private static String playerFacingText(ModelDraft draft) {
+        return Stream.concat(
+                        Stream.of(draft.shortVerdict(), draft.explanation()),
+                        draft.exceptions().stream())
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.joining("\n"));
     }
 }

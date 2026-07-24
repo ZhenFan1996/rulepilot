@@ -80,6 +80,28 @@ class AnswerDraftPublicationPolicyTest {
     }
 
     @Test
+    void rejectsASameNumberAnswerThatOmitsTheDirectCollisionProcedure() {
+        UUID collisionId = UUID.randomUUID();
+        UUID setupId = UUID.randomUUID();
+        var request = request(
+                "What happens when two players play the same number?",
+                new RuleAnswerModel.EvidenceInput(
+                        collisionId,
+                        "ROUND_STRUCTURE",
+                        "Resolving a bump",
+                        "Players who played the same number resolve the bump in priority order.",
+                        10,
+                        10),
+                new RuleAnswerModel.EvidenceInput(
+                        setupId, "SETUP", "Setup", "Each player receives numbered cards.", 4, 4));
+
+        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(setupId)));
+
+        assertThat(prepared.ready()).isFalse();
+        assertThat(prepared.failureMessage()).isEqualTo("回答没有引用相同数值条件的直接处理规则。");
+    }
+
+    @Test
     void addsTheReferencedLegendPageForAnAlreadyValidatedVisualMapping() {
         UUID operationalId = UUID.randomUUID();
         UUID legendId = UUID.randomUUID();

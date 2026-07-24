@@ -11,6 +11,7 @@ final class AnswerDraftPublicationPolicy {
 
     private static final String MISSING_END_TURN_PROCEDURE = "回答没有引用回合结束处理的直接规则依据。";
     private static final String MISSING_ENDGAME_RESOLUTION = "回答没有引用游戏结束结算的直接规则依据。";
+    private static final String MISSING_MATCHING_VALUE_RESOLUTION = "回答没有引用相同数值条件的直接处理规则。";
 
     private AnswerDraftPublicationPolicy() {}
 
@@ -43,6 +44,10 @@ final class AnswerDraftPublicationPolicy {
                 && !AnswerEvidencePolicy.citesEndgameResolution(
                         request.question(), request.evidence(), prepared.citationIds())) {
             return Preparation.rejected(MISSING_ENDGAME_RESOLUTION);
+        }
+        if (AnswerEvidencePolicy.requiresMatchingValueResolutionCitation(request.question(), request.evidence())
+                && !AnswerEvidencePolicy.citesMatchingValueResolution(request.evidence(), prepared.citationIds())) {
+            return Preparation.rejected(MISSING_MATCHING_VALUE_RESOLUTION);
         }
         return Preparation.ready(AnswerVisualEvidencePolicy.includeReferenceCitations(request, prepared));
     }

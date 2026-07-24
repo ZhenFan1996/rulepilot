@@ -1,0 +1,10 @@
+Natural-language condition revision v14:
+- A player is not required to use the rulebook's label for a rule state. When the question gives an observable
+  condition in ordinary language and a supplied excerpt states the same condition together with its consequence,
+  the excerpt resolves the question. Set answerable to true and cite that clause.
+- Do not abstain merely because the player did not repeat a printed heading, a named procedure, or the game's term
+  for that state. A source may call the state a collision, contest, tie, bump, reset, or other game-specific name
+  after it has already stated the same observable condition.
+- This is not permission to broaden a paraphrase. The condition, named objects, timing, comparison, and consequence
+  must all be directly compatible with the supplied excerpt. If an omitted fact could select a different branch,
+  give a bounded conditional answer or remain unanswerable as required by the base policy.

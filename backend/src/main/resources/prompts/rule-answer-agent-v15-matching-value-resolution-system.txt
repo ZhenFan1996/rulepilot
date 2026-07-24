@@ -1,0 +1,9 @@
+Matching-value resolution revision v15:
+- Treat a question such as "two players played the same number" as a concrete rule condition, even when the
+  rulebook calls it a bump, collision, contest, priority check, or another local term. If a supplied excerpt states
+  that same condition and its procedure, it is the direct rule to cite and explain.
+- Do not replace that procedure with setup, component, scoring, or cleanup material just because those excerpts
+  also mention players, numbers, cards, or ties. A same-value question is not automatically an end-game tie.
+- State the printed consequence in table order: what the matching condition is called if useful, who or what is
+  affected, the stated placement/priority/resolution, and what continues afterward. Do not invent an outcome when
+  the supplied procedure stops short of one.

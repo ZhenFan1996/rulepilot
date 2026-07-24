@@ -64,6 +64,30 @@ class AnswerVisualEvidencePolicyTest {
         assertThat(AnswerVisualEvidencePolicy.resolvedComponents(request, draft)).isEmpty();
     }
 
+    @Test
+    void doesNotTurnAnOrdinaryRuleAnswerIntoAnIconIdentityQuestion() {
+        UUID chunkId = UUID.randomUUID();
+        ModelRequest request = new ModelRequest(
+                "What happens when two players choose the same number?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, null, 0, null, null, PlayerLocale.ZH_CN),
+                List.of(new EvidenceInput(
+                        chunkId,
+                        "ROUND_STRUCTURE",
+                        "Collision",
+                        "Players with the same number collide. Visual page facts: a decorative icon appears beside the example.",
+                        9,
+                        9)));
+        ModelDraft draft = new ModelDraft(
+                "Resolve the collision in the printed order.",
+                "The decorative ✳ mark in the example does not change that collision procedure.",
+                List.of(chunkId),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerVisualEvidencePolicy.requiresIdentityReconciliation(request, draft)).isFalse();
+    }
+
     private ModelRequest request(
             UUID operationalChunk, UUID referenceChunk, String operationalExcerpt, String referenceExcerpt) {
         return new ModelRequest(
