@@ -4,6 +4,7 @@ import {
   parseArguments,
   needsBggCatalog,
   shouldImportBggCatalog,
+  requestedCoverSource,
   selectEntry,
   selectReusableDocument,
   slugify,
@@ -35,6 +36,11 @@ test('continues with a rulebook-front cover when optional BGG metadata is unavai
   assert.equal(shouldImportBggCatalog(entry, { configured: true }), true)
   assert.equal(shouldImportBggCatalog(entry, { configured: false }), false)
   assert.equal(shouldImportBggCatalog({ publisherCover: 'https://publisher.example/cover.png', bggId: 123 }, { configured: true }), false)
+})
+
+test('records the fallback cover path honestly before optional BGG metadata is resolved', () => {
+  assert.equal(requestedCoverSource({ publisherCover: 'https://publisher.example/cover.png' }), 'PUBLISHER')
+  assert.equal(requestedCoverSource({ publisherCover: null, bggId: 123 }), 'BGG_OR_RULEBOOK_FRONT')
 })
 
 test('parses bounded local-run options and creates stable report slugs', () => {

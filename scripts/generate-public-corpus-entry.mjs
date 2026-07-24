@@ -66,6 +66,10 @@ export function shouldImportBggCatalog(entry, bggStatus) {
   return needsBggCatalog(entry) && bggStatus?.configured === true
 }
 
+export function requestedCoverSource(entry) {
+  return entry?.publisherCover ? 'PUBLISHER' : 'BGG_OR_RULEBOOK_FRONT'
+}
+
 export function slugify(value) {
   const slug = value.normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
   return slug || 'rulebook'
@@ -352,7 +356,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
       file: entry.file,
       sha256: checksum,
       officialSourceUrl: entry.source,
-      coverSource: entry.publisherCover ? 'PUBLISHER' : 'BGG',
+      coverSource: requestedCoverSource(entry),
       bggId: entry.bggId ?? null,
     },
   }
