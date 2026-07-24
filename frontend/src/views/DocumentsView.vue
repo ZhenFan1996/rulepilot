@@ -105,6 +105,7 @@ function progressMessage(snapshot: ProcessingSnapshot) {
       total: snapshot.totalPages,
     })
   }
+  if (snapshot.stage === 'STRUCTURING') return t('documents.progress.structuring')
   return t('documents.progress.reading', { percentage: snapshot.percentage })
 }
 

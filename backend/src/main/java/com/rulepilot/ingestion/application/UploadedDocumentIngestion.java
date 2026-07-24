@@ -92,22 +92,17 @@ public class UploadedDocumentIngestion {
         if (renderedPageCountResult != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
+        // Keep the positioned extraction that just produced the durable page text. Re-opening the same PDF in the
+        // next queue stage adds substantial work on a small worker and can only reproduce these same source blocks.
+        documents.markStructuring(documentVersionId);
+        progress.update(documentVersionId, "STRUCTURING", 75, totalPages, totalPages, false);
+        structures.organize(documentVersionId, pages);
     }
 
     private void chunk(UUID documentVersionId) {
         int storedPageCount = documents.pages(documentVersionId).size();
-        documents.markStructuring(documentVersionId);
-        progress.update(documentVersionId, "STRUCTURING", 75, storedPageCount, false);
-        // Page text is persisted for reading, but position data is deliberately kept transient.
-        // Re-extract from the immutable source so semantic crops retain the original PDF layout
-        // and a retried CHUNK stage remains self-contained after a worker restart.
-        var pages = extractor.extract(documents.open(documentVersionId));
-        if (pages.size() != storedPageCount) {
-            throw new IllegalStateException("re-extracted page count does not match stored page count");
-        }
-        structures.organize(documentVersionId, pages);
         documents.markChunking(documentVersionId);
-        progress.update(documentVersionId, "CHUNKING", 85, pages.size(), false);
+        progress.update(documentVersionId, "CHUNKING", 85, storedPageCount, false);
     }
 
     private void embed(UUID documentVersionId) {

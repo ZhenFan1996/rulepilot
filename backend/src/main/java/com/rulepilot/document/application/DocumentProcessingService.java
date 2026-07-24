@@ -94,7 +94,7 @@ class DocumentProcessingService implements DocumentProcessing, DocumentPageImage
     public void prepareRetry(UUID documentVersionId, com.rulepilot.document.DocumentProcessingStage stage) {
         ProcessingStatus resumeFrom = switch (stage) {
             case PARSE -> ProcessingStatus.UPLOADED;
-            case CHUNK -> ProcessingStatus.EXTRACTING;
+            case CHUNK -> ProcessingStatus.STRUCTURING;
             case EMBED -> ProcessingStatus.CHUNKING;
         };
         repository.update(requireVersion(documentVersionId).retryFromFailure(resumeFrom));

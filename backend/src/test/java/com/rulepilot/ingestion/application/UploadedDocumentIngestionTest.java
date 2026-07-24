@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.DocumentPageImageStore;
@@ -56,6 +57,9 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "RENDERING", 48, 1, 3, false);
         verify(progress).update(versionId, "RENDERING", 57, 2, 3, false);
         verify(progress).update(versionId, "RENDERING", 65, 3, 3, false);
+        verify(progress).update(versionId, "STRUCTURING", 75, 3, 3, false);
+        verify(documents).markStructuring(versionId);
+        verify(structures).organize(versionId, pages);
     }
 
     @Test
@@ -67,7 +71,7 @@ class UploadedDocumentIngestionTest {
     }
 
     @Test
-    void rebuildsStructureFromSourcePagesSoLayoutBlocksSurviveTheChunkStage() {
+    void completesChunkingWithoutReopeningTheAlreadyStructuredPdf() {
         DocumentProcessing documents = Mockito.mock(DocumentProcessing.class);
         PdfPageExtractor extractor = Mockito.mock(PdfPageExtractor.class);
         PdfPageImageRenderer renderer = Mockito.mock(PdfPageImageRenderer.class);
@@ -78,19 +82,12 @@ class UploadedDocumentIngestionTest {
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
                 documents, extractor, renderer, pageImages, progress, structures, embeddings);
         UUID versionId = UUID.randomUUID();
-        List<ExtractedPage> sourcePages = List.of(new ExtractedPage(1, "Setup", List.of(
-                new ExtractedTextBlock(0, "Setup", 100, 120, 240, 40))));
-
         when(documents.pages(versionId)).thenReturn(List.of(new DocumentProcessing.PageView(1, "Setup", 5)));
-        when(documents.open(versionId)).thenReturn(new ByteArrayInputStream(new byte[0]));
-        when(extractor.extract(any())).thenReturn(sourcePages);
 
         ingestion.process(versionId, DocumentProcessingStage.CHUNK);
 
-        verify(documents).markStructuring(versionId);
-        verify(extractor).extract(any());
-        verify(structures).organize(versionId, sourcePages);
         verify(documents).markChunking(versionId);
+        verifyNoInteractions(extractor, renderer, pageImages, structures, embeddings);
     }
 
     private ExtractedPage page(int pageNumber, String text) {

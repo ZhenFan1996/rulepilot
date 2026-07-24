@@ -78,6 +78,25 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('names the structural pass that follows visual page rendering', async () => {
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+    })
+    vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    FakeEventSource.instances[0]!.emitProgress({
+      stage: 'STRUCTURING', percentage: 75, processedPages: 28, totalPages: 28, complete: false,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在整理章节、规则和图例索引…')
+    wrapper.unmount()
+  })
+
   it('shows an honest resumable stage while visual pages are being organized', async () => {
     vi.useFakeTimers()
     rememberPendingRulebookLesson(localStorage, 'player', {
