@@ -8,7 +8,6 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AssistantRunMode;
-import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import com.rulepilot.assistant.AuditedAgentInvocations;
@@ -60,7 +59,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final ConfirmedRulingLookup confirmedRulings;
     private final AnswerPublicationValidator publicationValidator;
     private final GeneratedContentCritic critic;
-    private final AssistantRuns runs;
+    private final AnswerRunLifecycle runLifecycle;
     private final AuditedAgentInvocations invocations;
     private final ObservationRegistry observations;
     private final Counter cacheHits;
@@ -97,7 +96,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.confirmedRulings = confirmedRulings;
         this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
         this.critic = critic;
-        this.runs = runs;
+        this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
         this.observations = observations;
         this.cacheHits = metrics.counter("rulepilot.answer.cache.requests", "result", "hit");
@@ -189,20 +188,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private AnswerCreation answerEvaluationObserved(
             String question, QuestionContext context, String username, UUID evaluationSessionId) {
-        RunSnapshot run = runs.start(
+        RunSnapshot run = runLifecycle.start(
                 AssistantRunMode.QUESTION_ANSWER, context.documentVersionId(), username);
         try {
             StructuredRuleAnswer answer = answerInternal(
                     question, context, username, evaluationSessionId, run.id(), false);
-            finishRun(run, answer);
+            runLifecycle.finish(run, answer);
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
-            failRun(run, "AGENT_" + stopped.reason().name(), "Evaluation stopped by execution budget", stopped);
+            runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Evaluation stopped by execution budget", stopped);
             return new AnswerCreation(
                     run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
                             "评测执行受到预算限制，未产生可验证答案。"));
         } catch (RuntimeException exception) {
-            failRun(run, "ANSWER_EVALUATION_FAILED", "Answer evaluation failed safely", exception);
+            runLifecycle.fail(run, "ANSWER_EVALUATION_FAILED", "Answer evaluation failed safely", exception);
             return new AnswerCreation(
                     run.id(), safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT,
                             "评测执行失败，未产生可验证答案。"));
@@ -211,20 +210,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private AnswerCreation answerWithRunObserved(
             String question, QuestionContext context, String username, UUID gameSessionId, boolean useCache) {
-        RunSnapshot run = runs.start(
+        RunSnapshot run = runLifecycle.start(
                 AssistantRunMode.QUESTION_ANSWER,
                 gameSessionId == null ? context.documentVersionId() : gameSessionId,
                 username);
         try {
             StructuredRuleAnswer answer = answerInternal(
                     question, context, username, gameSessionId, run.id(), useCache);
-            run = finishRun(run, answer);
+            run = runLifecycle.finish(run, answer);
             return new AnswerCreation(run.id(), answer);
         } catch (AgentExecutionStoppedException stopped) {
-            failRun(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
+            runLifecycle.fail(run, "AGENT_" + stopped.reason().name(), "Question workflow stopped by execution budget", stopped);
             throw stopped;
         } catch (RuntimeException exception) {
-            failRun(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
+            runLifecycle.fail(run, "QUESTION_WORKFLOW_FAILED", "Question workflow failed safely", exception);
             throw exception;
         }
     }
@@ -525,27 +524,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static RuleEvidenceLookup emptyEvidenceLookup() {
         return (documentVersionId, chunkIds) -> List.of();
-    }
-
-    private RunSnapshot finishRun(RunSnapshot run, StructuredRuleAnswer answer) {
-        for (AnswerRunProgressPolicy.ProgressUpdate update : AnswerRunProgressPolicy.updatesFor(answer)) {
-            run = advance(run, update.state(), update.summary());
-        }
-        return run;
-    }
-
-    private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
-        return runs.advance(run.id(), run.revision(), state, summary);
-    }
-
-    private void failRun(RunSnapshot run, String errorCode, String summary, RuntimeException exception) {
-        if (!run.state().terminal()) {
-            try {
-                runs.fail(run.id(), run.revision(), errorCode, summary);
-            } catch (RuntimeException trackingFailure) {
-                exception.addSuppressed(trackingFailure);
-            }
-        }
     }
 
     private int estimateTokens(String value) {
