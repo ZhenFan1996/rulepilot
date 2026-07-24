@@ -8,7 +8,7 @@ import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonChapterContent from '@/components/LessonChapterContent.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
-import LessonGenerationStatus, { type LessonGenerationActivity } from '@/components/LessonGenerationStatus.vue'
+import LessonGenerationStatus from '@/components/LessonGenerationStatus.vue'
 import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
 import LessonReaderChapterHeader from '@/components/LessonReaderChapterHeader.vue'
 import LessonReaderControls from '@/components/LessonReaderControls.vue'
@@ -29,10 +29,11 @@ import {
 import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/useLessonNarrationPlayback'
 import { useLessonLocalization } from '@/composables/useLessonLocalization'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
+import { useLessonGenerationPresentation } from '@/composables/useLessonGenerationPresentation'
 import type {
   LessonComprehensionReport,
 } from '@/composables/lessonSupportingContent'
-import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
+import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import {
   finishSection,
   initialLessonProgress,
@@ -47,12 +48,7 @@ import {
 } from '@/lib/offlineKnowledge'
 import {
   mergeTeachingRunProgress,
-  processedTeachingChapterCount,
-  supportedTeachingChapterCount,
   teachingActivityCursor,
-  teachingActivityText,
-  teachingElapsedLabel,
-  teachingRemainingTimeText,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
@@ -270,52 +266,29 @@ const chapterVisualFocus = computed(() =>
 const currentVisualPageNumber = computed(() =>
   chapterVisualFocus.value?.pageNumber ?? currentSection.value?.visualSourcePages[0],
 )
-const generationActive = computed(
-  () => generationStatusUnknown.value || teachingRunIsActive(teachingRun.value?.run.state),
-)
-const visualEnrichmentActive = computed(() => teachingRunIsActive(visualEnrichmentRun.value?.run.state))
-const visualEnrichmentActivities = computed(() => (visualEnrichmentRun.value?.activities ?? [])
-  .filter((activity) => activity.operation.startsWith('visualStep|') || activity.operation.startsWith('visualSection|')))
-const visualEnrichmentSectionResults = computed(() => visualEnrichmentActivities.value
-  .filter((activity) => activity.operation.startsWith('visualSection|')))
-const visualEnrichmentSummary = computed(() => {
-  const latest = visualEnrichmentActivities.value.at(-1)
-  if (visualEnrichmentActive.value) return latest?.summary ?? '正在从规则书中挑选能帮助上桌的局部图示。'
-  if (!visualEnrichmentRun.value || visualEnrichmentSectionResults.value.length === 0) return ''
-  const added = visualEnrichmentSectionResults.value.filter((activity) => activity.outcome === 'SUCCEEDED').length
-  return added > 0
-    ? `已为 ${added} 节补入可核对的局部截图；其余章节只保留有可靠依据的配图。`
-    : '这次没有找到可靠的局部图示，因此没有用整页规则书充数。'
+const {
+  generationActive,
+  visualEnrichmentActive,
+  visualEnrichmentSummary,
+  draftReady,
+  lessonStillGrowing,
+  readingCurrentLastChapter,
+  currentGenerationText,
+  generationElapsed,
+  processedGenerationChapters,
+  supportedGenerationChapters,
+  generationProgressWidth,
+  generationRemainingTime,
+  recentGenerationActivities,
+} = useLessonGenerationPresentation({
+  plan,
+  lesson,
+  currentSectionIndex: computed(() => progress.value.currentIndex),
+  generationRun: teachingRun,
+  visualEnrichmentRun,
+  generationStatusUnknown,
+  now: generationNow,
 })
-const draftReady = computed(() => lesson.value?.status === 'DRAFT_READY')
-const lessonStillGrowing = computed(() => generationActive.value && !draftReady.value)
-const readingCurrentLastChapter = computed(
-  () => Boolean(lesson.value?.sections.length) && progress.value.currentIndex === lesson.value!.sections.length - 1,
-)
-const generationActivities = computed(() => teachingRun.value?.activities ?? [])
-const currentGenerationActivity = computed(() => generationActivities.value.at(-1))
-const currentGenerationText = computed(() => plan.value
-  ? teachingActivityText(plan.value, generationActivities.value, currentGenerationActivity.value, locale.value)
-  : t('lesson.generation.preparing'))
-const generationElapsed = computed(() => teachingElapsedLabel(teachingRun.value, generationNow.value))
-const processedGenerationChapters = computed(() => processedTeachingChapterCount(teachingRun.value))
-const supportedGenerationChapters = computed(() => supportedTeachingChapterCount(teachingRun.value))
-const generationProgressWidth = computed(() => `${Math.round(
-  processedGenerationChapters.value / Math.max(1, plan.value?.sections.length ?? 1) * 100,
-)}%`)
-const generationRemainingTime = computed(() => plan.value
-  ? teachingRemainingTimeText(plan.value, teachingRun.value, generationNow.value, locale.value)
-  : '')
-const recentGenerationActivities = computed<LessonGenerationActivity[]>(() => generationActivities.value
-  .slice(-3)
-  .reverse()
-  .map((activity) => ({
-    sequence: activity.sequence,
-    outcome: activity.outcome,
-    text: plan.value
-      ? teachingActivityText(plan.value, generationActivities.value, activity, locale.value)
-      : t('lesson.generation.preparing'),
-  })))
 
 function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
