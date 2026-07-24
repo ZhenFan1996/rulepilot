@@ -79,7 +79,7 @@ onMounted(() => { void load() })
       <div v-else-if="visibleLessons.length" class="mt-8 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
         <RouterLink v-for="(entry, index) in visibleLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group min-w-0">
           <div class="relative aspect-[3/4] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition duration-200 group-hover:-translate-y-1 group-hover:shadow-lg">
-            <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId, entry.lesson.gameCover?.imageUrl)" :alt="t('library.cover', { title: entry.title })" :index="index" />
+            <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId)" :alt="t('library.cover', { title: entry.title })" :index="index" />
           </div>
           <h2 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h2>
           <p class="mt-1 text-xs text-ink/45">{{ t('library.size', { sections: entry.lesson.sectionCount, steps: entry.lesson.stepCount }) }}</p>

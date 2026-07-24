@@ -1,4 +1,4 @@
-package com.rulepilot.teaching.adapter.out.cover;
+package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -9,7 +9,7 @@ import java.io.ByteArrayOutputStream;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
-class PublicCoverThumbnailerTest {
+class CoverThumbnailerTest {
 
     @Test
     void downscales_a_large_origin_image_to_card_bounds_and_encodes_jpeg() throws Exception {
@@ -21,7 +21,7 @@ class PublicCoverThumbnailerTest {
         var source = new ByteArrayOutputStream();
         ImageIO.write(original, "png", source);
 
-        var thumbnail = new PublicCoverThumbnailer().create(source.toByteArray());
+        var thumbnail = new CoverThumbnailer().create(source.toByteArray());
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(thumbnail.content()));
 
         assertThat(decoded.getWidth()).isEqualTo(480);

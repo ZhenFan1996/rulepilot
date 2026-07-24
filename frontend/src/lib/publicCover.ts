@@ -1,4 +1,4 @@
-export function publicCoverUrl(planId: string, sourceImageUrl?: string | null): string | undefined {
-  if (!planId || !sourceImageUrl) return undefined
+export function publicCoverUrl(planId: string): string | undefined {
+  if (!planId) return undefined
   return `/api/public/lessons/${encodeURIComponent(planId)}/cover`
 }

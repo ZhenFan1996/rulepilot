@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.teaching.PublicCoverImageFetcher;
 import com.rulepilot.teaching.PublicCoverThumbnailCache;
 import com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail;
+import com.rulepilot.document.DocumentPageImages.PageImage;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -12,6 +13,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -31,6 +34,7 @@ public class PublicCoverThumbnailService {
 
     private final PublicCoverThumbnailCache cache;
     private final PublicCoverImageFetcher fetcher;
+    private final CoverThumbnailer thumbnailer = new CoverThumbnailer();
     private final ConcurrentHashMap<String, CompletableFuture<Thumbnail>> inFlight = new ConcurrentHashMap<>();
 
     public PublicCoverThumbnailService(PublicCoverThumbnailCache cache, PublicCoverImageFetcher fetcher) {
@@ -41,6 +45,22 @@ public class PublicCoverThumbnailService {
     public Thumbnail thumbnailFor(String sourceUrl) {
         URI source = trustedSource(sourceUrl);
         String cacheKey = digest(source);
+        return createOrRetrieve(cacheKey, () -> fetcher.fetch(source));
+    }
+
+    /**
+     * Uses the first page already rendered from an official rulebook when no publisher or BGG cover is available.
+     * It never exposes the original full-size page and its content-addressed cache key changes with the source page.
+     */
+    public Thumbnail thumbnailForRulebookCover(UUID documentVersionId, PageImage page) {
+        if (documentVersionId == null || page == null || page.pageNumber() != 1) {
+            throw new IllegalArgumentException("rulebook cover must be its first rendered page");
+        }
+        String cacheKey = digest("rulebook-cover:" + documentVersionId + ":" + digest(page.content()));
+        return createOrRetrieve(cacheKey, () -> thumbnailer.create(page.content()));
+    }
+
+    private Thumbnail createOrRetrieve(String cacheKey, Supplier<Thumbnail> creator) {
         Optional<Thumbnail> cached = cached(cacheKey);
         if (cached.isPresent()) return cached.get();
 
@@ -49,7 +69,7 @@ public class PublicCoverThumbnailService {
         if (existing != null) return await(existing);
 
         try {
-            Thumbnail thumbnail = cached(cacheKey).orElseGet(() -> fetcher.fetch(source));
+            Thumbnail thumbnail = cached(cacheKey).orElseGet(creator);
             retain(cacheKey, thumbnail);
             created.complete(thumbnail);
             return thumbnail;
@@ -109,9 +129,21 @@ public class PublicCoverThumbnailService {
     }
 
     private String digest(URI source) {
+        return digest(source.toASCIIString());
+    }
+
+    private String digest(String source) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(source.toASCIIString().getBytes(StandardCharsets.UTF_8)));
+                    .digest(source.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 is unavailable", unavailable);
+        }
+    }
+
+    private String digest(byte[] source) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source));
         } catch (NoSuchAlgorithmException unavailable) {
             throw new IllegalStateException("SHA-256 is unavailable", unavailable);
         }

@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-/** Anonymous lesson reader that exposes only lesson-cited page imagery and official publisher links. */
+/** Anonymous reader for public lessons, cited pages, official source links, and bounded cover thumbnails. */
 @RestController
 @RequestMapping("/api/public/lessons")
 @Profile("!test")
@@ -85,15 +85,26 @@ public class PublicLessonController {
 
     @GetMapping("/{planId}/cover")
     ResponseEntity<byte[]> cover(@PathVariable UUID planId) {
-        var cover = require(planId).gameCover();
-        if (cover == null) throw notFound();
+        var lesson = require(planId);
         try {
-            var thumbnail = coverThumbnails.thumbnailFor(cover.imageUrl());
+            var thumbnail = lesson.gameCover() == null
+                    ? rulebookCover(lesson)
+                    : coverThumbnails.thumbnailFor(lesson.gameCover().imageUrl());
             return ResponseEntity.ok()
                     .contentType(MediaType.IMAGE_JPEG)
                     .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
                     .body(thumbnail.content());
         } catch (RuntimeException unavailable) {
+            if (lesson.gameCover() != null) {
+                try {
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.IMAGE_JPEG)
+                            .cacheControl(CacheControl.maxAge(Duration.ofDays(30)).cachePublic())
+                            .body(rulebookCover(lesson).content());
+                } catch (RuntimeException fallbackUnavailable) {
+                    // Continue with the same client-facing availability response below.
+                }
+            }
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "public cover is temporarily unavailable");
         }
     }
@@ -127,6 +138,15 @@ public class PublicLessonController {
         return pageImages.read(lesson.documentVersionId(), Set.of(pageNumber)).stream()
                 .findFirst()
                 .orElseThrow(this::notFound);
+    }
+
+    private com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail rulebookCover(
+            PublicLessonReader.PublicLesson lesson) {
+        var firstPage = pageImages.read(lesson.documentVersionId(), Set.of(1)).stream()
+                .filter(image -> image.pageNumber() == 1)
+                .findFirst()
+                .orElseThrow(this::notFound);
+        return coverThumbnails.thumbnailForRulebookCover(lesson.documentVersionId(), firstPage);
     }
 
     private PublicLessonReader.PublicLesson require(UUID planId) {

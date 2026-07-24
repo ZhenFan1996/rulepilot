@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.out.cover;
 
 import com.rulepilot.teaching.PublicCoverImageFetcher;
 import com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail;
+import com.rulepilot.teaching.application.CoverThumbnailer;
 import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.Inet6Address;
@@ -40,7 +41,7 @@ public class HttpPublicCoverImageFetcher implements PublicCoverImageFetcher {
             .dns(PUBLIC_DNS)
             .followRedirects(false)
             .build();
-    private final PublicCoverThumbnailer thumbnailer = new PublicCoverThumbnailer();
+    private final CoverThumbnailer thumbnailer = new CoverThumbnailer();
 
     @Override
     public Thumbnail fetch(URI source) {

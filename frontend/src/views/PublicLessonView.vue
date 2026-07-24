@@ -77,6 +77,7 @@ const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
 const readerScope = ref<string | null>(null)
 const readerScopeReady = ref(false)
+const coverUnavailable = ref(false)
 let latestLoadRequest = 0
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
@@ -240,6 +241,7 @@ async function load() {
     const received = await response.json() as PublicLessonResponse
     if (request !== latestLoadRequest) return
     publicLesson.value = received
+    coverUnavailable.value = false
   } catch (error) {
     if (request !== latestLoadRequest) return
     errorMessage.value = error instanceof Error ? error.message : t('public.error.open')
@@ -350,9 +352,12 @@ watch([locale, planId], () => {
         <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo hover:text-indigo/75">← {{ t('nav.library') }}</RouterLink>
         <div class="border-b border-ink/10 pb-8">
           <div class="flex items-start gap-5 sm:gap-7">
-            <a v-if="publicLesson.gameCover" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="t('public.cover.open', { title: displayTitle, source: publicLesson.gameCover.attributionLabel })">
-              <img :src="publicCoverUrl(planId, publicLesson.gameCover.imageUrl)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async">
+            <a v-if="publicLesson.gameCover && !coverUnavailable" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="t('public.cover.open', { title: displayTitle, source: publicLesson.gameCover.attributionLabel })">
+              <img :src="publicCoverUrl(planId)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async" @error="coverUnavailable = true">
             </a>
+            <div v-else-if="!coverUnavailable" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32">
+              <img :src="publicCoverUrl(planId)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async" @error="coverUnavailable = true">
+            </div>
             <div>
               <p class="text-sm font-semibold text-copper">{{ t('public.hero.eyebrow') }}</p>
               <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ displayTitle }}</h1>

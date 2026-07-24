@@ -1,4 +1,4 @@
-package com.rulepilot.teaching.adapter.out.cover;
+package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.PublicCoverThumbnailCache.Thumbnail;
 import java.awt.Color;
@@ -18,15 +18,15 @@ import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
 
-/** Bounds untrusted remote artwork before it reaches object storage or a reader's browser. */
-final class PublicCoverThumbnailer {
+/** Converts a bounded source image into the small JPEG used by public cover cards. */
+public final class CoverThumbnailer {
 
     static final int MAX_WIDTH = 480;
     static final int MAX_HEIGHT = 640;
     private static final int MAX_SOURCE_EDGE = 6_000;
     private static final long MAX_SOURCE_PIXELS = 18_000_000L;
 
-    Thumbnail create(byte[] sourceContent) {
+    public Thumbnail create(byte[] sourceContent) {
         BufferedImage source = read(sourceContent);
         int[] dimensions = dimensions(source.getWidth(), source.getHeight());
         BufferedImage resized = new BufferedImage(dimensions[0], dimensions[1], BufferedImage.TYPE_INT_RGB);

@@ -163,7 +163,7 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
         <div class="-mx-5 mt-6 flex gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0">
           <RouterLink v-for="(entry, index) in featuredPublicLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group w-52 shrink-0 sm:w-auto">
             <div class="relative aspect-[16/10] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
-              <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId, entry.lesson.gameCover?.imageUrl)" :alt="t('home.cover', { title: entry.title })" :index="index" />
+              <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId)" :alt="t('home.cover', { title: entry.title })" :index="index" />
             </div>
             <h3 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h3>
             <p class="mt-1 text-xs text-ink/45">{{ t('home.guideSize', { sections: entry.lesson.sectionCount, steps: entry.lesson.stepCount }) }}</p>
