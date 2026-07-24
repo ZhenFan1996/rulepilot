@@ -120,8 +120,10 @@ public class JpaDocumentProcessingQueue
                             started_at = excluded.started_at,
                             completed_at = null,
                             updated_at = excluded.updated_at
-                        where processing_stage_execution.status = 'FAILED'
-                          and (:attempt > 1 or processing_stage_execution.first_event_id = :eventId)
+                        where (processing_stage_execution.status = 'FAILED'
+                               and (:attempt > 1 or processing_stage_execution.first_event_id = :eventId))
+                           or (processing_stage_execution.status = 'RUNNING'
+                               and processing_stage_execution.first_event_id = :eventId)
                         """)
                 .setParameter("id", UUID.randomUUID())
                 .setParameter("documentVersionId", command.documentVersionId())
