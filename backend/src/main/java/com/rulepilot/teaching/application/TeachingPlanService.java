@@ -150,7 +150,7 @@ public class TeachingPlanService {
             List<PageFact> coverageFacts = inspectUnownedSparseVisualPages(
                     documentVersionId, outline, documentPages, scope.documentTitle(), createdBy, assistantRunId);
             if (!coverageFacts.isEmpty()) {
-                pages = mergeVisualFactsIntoPageInputs(pages, coverageFacts);
+                pages = VisualRulebookCatalogPolicy.appendFactsToPageInputs(pages, coverageFacts);
                 outlineRequest = new OutlineRequest(
                         playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
             }
@@ -342,7 +342,7 @@ public class TeachingPlanService {
                     documentVersionId,
                     fresh.stream().map(PageFact::pageNumber).toList());
         }
-        return mergeVisualPageFacts(cached, fresh);
+        return VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh);
     }
 
     private TeachingOutlineModel.OutlineDraft refineChapterOwnership(
@@ -459,8 +459,8 @@ public class TeachingPlanService {
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
-        Set<Integer> missingPages = missingVisualCatalogPages(requestedPages, cached);
-        Set<Integer> anchorlessPages = anchorlessVisualCatalogPages(cached);
+        Set<Integer> missingPages = VisualRulebookCatalogPolicy.missingPages(requestedPages, cached);
+        Set<Integer> anchorlessPages = VisualRulebookCatalogPolicy.anchorlessPages(cached);
         if (!cached.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -496,8 +496,8 @@ public class TeachingPlanService {
                             + " uncataloged page(s) to focused visual retrieval; cached page facts can start the lesson");
         }
         List<PageFact> facts = cached.isEmpty()
-                ? mergeVisualPageFacts(cached, fresh)
-                : mergeVisualPageAnchorBackfill(cached, fresh);
+                ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
+                : VisualRulebookCatalogPolicy.backfillAnchors(cached, fresh);
         if (facts.isEmpty()) {
             throw new IllegalArgumentException("visual rulebook catalog did not produce any reliable page facts");
         }
@@ -516,106 +516,7 @@ public class TeachingPlanService {
                         "Visual catalog was incomplete; completed facts are used and remaining source pages stay in the outline");
             }
         }
-        return visualPageInputs(documentPages, facts);
-    }
-
-    static Set<Integer> missingVisualCatalogPages(Set<Integer> requestedPages, List<PageFact> cached) {
-        LinkedHashSet<Integer> missing = new LinkedHashSet<>(requestedPages);
-        cached.stream().map(PageFact::pageNumber).forEach(missing::remove);
-        return java.util.Collections.unmodifiableSet(missing);
-    }
-
-    static Set<Integer> anchorlessVisualCatalogPages(List<PageFact> cached) {
-        return cached.stream()
-                .filter(fact -> fact.visualAnchors().isEmpty())
-                .map(PageFact::pageNumber)
-                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    static List<PageFact> mergeVisualPageFacts(List<PageFact> cached, List<PageFact> fresh) {
-        return java.util.stream.Stream.concat(cached.stream(), fresh.stream())
-                .collect(java.util.stream.Collectors.toMap(
-                        PageFact::pageNumber,
-                        java.util.function.Function.identity(),
-                        (existing, ignored) -> existing,
-                        java.util.LinkedHashMap::new))
-                .values().stream()
-                .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
-                .toList();
-    }
-
-    static List<PageFact> mergeVisualPageAnchorBackfill(List<PageFact> cached, List<PageFact> fresh) {
-        Map<Integer, PageFact> freshByPage = fresh.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
-        List<PageFact> retained = cached.stream()
-                .map(existing -> {
-                    PageFact refreshed = freshByPage.remove(existing.pageNumber());
-                    if (refreshed == null || refreshed.visualAnchors().isEmpty()) return existing;
-                    return new PageFact(
-                            existing.pageNumber(),
-                            existing.printedTerms(),
-                            existing.factualSummary(),
-                            existing.keywords(),
-                            refreshed.visualAnchors());
-                })
-                .toList();
-        return java.util.stream.Stream.concat(retained.stream(), freshByPage.values().stream())
-                .sorted(java.util.Comparator.comparingInt(PageFact::pageNumber))
-                .toList();
-    }
-
-    static List<PageInput> visualPageInputs(
-            List<DocumentProcessing.PageView> documentPages, List<PageFact> facts) {
-        Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, java.util.function.Function.identity(), (first, duplicate) -> first));
-        return documentPages.stream()
-                .map(page -> visualPageInput(page.pageNumber(), factsByPage.get(page.pageNumber())))
-                .toList();
-    }
-
-    /**
-     * Preserves the extracted text used by ordinary outline planning while appending a verified page-local visual
-     * ledger for an otherwise sparse source page. The catalog is deliberately marked as navigation data: a later
-     * teaching step still has to retrieve and cite immutable source evidence from that exact page.
-    */
-    static List<PageInput> mergeVisualFactsIntoPageInputs(List<PageInput> pages, List<PageFact> facts) {
-        if (pages == null || pages.isEmpty() || facts == null || facts.isEmpty()) {
-            return pages == null ? List.of() : List.copyOf(pages);
-        }
-        Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
-                PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
-        return pages.stream()
-                .map(page -> {
-                    PageFact fact = factsByPage.get(page.pageNumber());
-                    if (fact == null) return page;
-                    return new PageInput(
-                            page.pageNumber(),
-                            page.text() + "\n\n" + visualPageInput(page.pageNumber(), fact).text());
-                })
-                .toList();
-    }
-
-    private static PageInput visualPageInput(int pageNumber, PageFact fact) {
-        if (fact == null) {
-            return new PageInput(
-                    pageNumber,
-                    TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
-                            + "\nPrinted terms: unavailable because visual interpretation did not finish."
-                            + "\nVisible facts: No factual visual claim is available for this page. Keep its source binding"
-                            + " and verify the original page image before teaching any detail."
-                            + "\nKeywords: visual source page "
-                            + pageNumber
-                            + ", incomplete visual catalog");
-        }
-        return new PageInput(
-                pageNumber,
-                TeachingOutlineRevisionPolicy.VISUAL_CATALOG_PREFIX
-                        + "\nPrinted terms: "
-                        + fact.printedTerms()
-                        + "\nVisible facts: "
-                        + fact.factualSummary()
-                        + "\nKeywords: "
-                        + String.join(", ", fact.keywords()));
+        return VisualRulebookCatalogPolicy.pageInputs(documentPages, facts);
     }
 
     private List<PageFact> catalogPageFacts(
@@ -627,7 +528,7 @@ public class TeachingPlanService {
             UUID assistantRunId) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         List<List<Integer>> batches = iconLegendPage != null && pageNumbers.contains(iconLegendPage)
-                ? crossPageIconBatches(orderedPages, iconLegendPage)
+                ? VisualRulebookCatalogPolicy.crossPageIconBatches(orderedPages, iconLegendPage)
                 : java.util.stream.IntStream.range(0, orderedPages.size())
                         .boxed()
                         .collect(java.util.stream.Collectors.groupingBy(
@@ -697,15 +598,6 @@ public class TeachingPlanService {
                         summary.keywords(),
                         summary.visualAnchors()))
                 .toList();
-    }
-
-    private List<List<Integer>> crossPageIconBatches(List<Integer> pages, int legendPage) {
-        List<Integer> targets = pages.stream().filter(page -> page != legendPage).toList();
-        if (targets.isEmpty()) return List.of(List.of(legendPage));
-        java.util.ArrayList<List<Integer>> batches = new java.util.ArrayList<>();
-        batches.add(List.of(legendPage));
-        targets.forEach(page -> batches.add(List.of(legendPage, page)));
-        return List.copyOf(batches);
     }
 
     static TeachingOutlineModel.OutlineDraft preferDocumentTitle(

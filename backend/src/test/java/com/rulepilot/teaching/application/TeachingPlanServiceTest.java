@@ -289,7 +289,7 @@ class TeachingPlanServiceTest {
     void letsAConcreteVisualLedgerRequestCoverageWithoutDiscardingTheExtractedText() {
         OutlineDraft outline = new OutlineDraft(
                 "Game", "Premise", List.of(topic("setup", false, List.of(2))));
-        List<PageInput> merged = TeachingPlanService.mergeVisualFactsIntoPageInputs(
+        List<PageInput> merged = VisualRulebookCatalogPolicy.appendFactsToPageInputs(
                 List.of(
                         new PageInput(2, "SETUP Give each player a board."),
                         new PageInput(3, "◆ ◆")),
@@ -310,7 +310,7 @@ class TeachingPlanServiceTest {
     void doesNotCreateCoverageWorkFromAnUncatalogedSparseVisualPage() {
         OutlineDraft outline = new OutlineDraft(
                 "Game", "Premise", List.of(topic("setup", false, List.of(2))));
-        List<PageInput> pages = TeachingPlanService.visualPageInputs(
+        List<PageInput> pages = VisualRulebookCatalogPolicy.pageInputs(
                 List.of(page(2, "SETUP Give each player a board."), page(3, "")),
                 List.of());
 
@@ -319,7 +319,7 @@ class TeachingPlanServiceTest {
 
     @Test
     void retainsEveryVisualOnlySourcePageWhenOneVisualCatalogBatchTimesOut() {
-        List<PageInput> inputs = TeachingPlanService.visualPageInputs(
+        List<PageInput> inputs = VisualRulebookCatalogPolicy.pageInputs(
                 List.of(page(1, ""), page(2, ""), page(3, "")),
                 List.of(
                         new PageFact(1, "WAR CHEST", "盒面显示两方军队。", List.of("WAR CHEST")),
@@ -340,9 +340,9 @@ class TeachingPlanServiceTest {
                 new PageFact(3, "END", "完整终局规则。", List.of("END")));
         List<PageFact> fresh = List.of(new PageFact(2, "SET UP", "设置规则。", List.of("SET UP")));
 
-        assertThat(TeachingPlanService.missingVisualCatalogPages(java.util.Set.of(1, 2, 3), cached))
+        assertThat(VisualRulebookCatalogPolicy.missingPages(java.util.Set.of(1, 2, 3), cached))
                 .containsExactly(2);
-        assertThat(TeachingPlanService.mergeVisualPageFacts(cached, fresh))
+        assertThat(VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
     }
@@ -357,9 +357,9 @@ class TeachingPlanServiceTest {
                 List.of("changed"),
                 List.of(new VisualAnchor("score group", "Final scoring", "终局计分卡牌组。", 120, 420, 300, 180)));
 
-        var merged = TeachingPlanService.mergeVisualPageAnchorBackfill(List.of(cached), List.of(refreshed));
+        var merged = VisualRulebookCatalogPolicy.backfillAnchors(List.of(cached), List.of(refreshed));
 
-        assertThat(TeachingPlanService.anchorlessVisualCatalogPages(List.of(cached))).containsExactly(3);
+        assertThat(VisualRulebookCatalogPolicy.anchorlessPages(List.of(cached))).containsExactly(3);
         assertThat(merged).singleElement().satisfies(fact -> {
             assertThat(fact.factualSummary()).isEqualTo("原有的终局事实。");
             assertThat(fact.keywords()).containsExactly("END");
