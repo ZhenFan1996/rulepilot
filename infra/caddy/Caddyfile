@@ -1,0 +1,4 @@
+rulepilot.cn {
+    encode zstd gzip
+    reverse_proxy frontend:80
+}
