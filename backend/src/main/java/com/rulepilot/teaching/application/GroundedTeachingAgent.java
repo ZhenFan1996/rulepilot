@@ -8,14 +8,11 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
-import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
-import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson;
-import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -31,7 +28,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.UUID;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -47,19 +43,13 @@ public class GroundedTeachingAgent {
     static final String GENERATOR_VERSION = "adaptive-teaching-v35-endgame-check-fidelity";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
-    /*
-     * The cited base lesson is published section by section.  Whole-lesson review improves it,
-     * but must not turn a usable first read into an unbounded rewrite job.
-     */
-    private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
-    private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionEvidenceRetriever evidenceRetriever;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
-    private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy = new TeachingReviewCorrectionPolicy();
+    private final TeachingPublishedLessonReviewer publishedLessonReviewer;
     private final int maxToolCalls;
     private final int baseSectionParallelism;
 
@@ -76,7 +66,6 @@ public class GroundedTeachingAgent {
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
         this.tools = tools;
         this.model = model;
-        this.critic = critic;
         this.invocations = invocations;
         TeachingVisualEvidenceResolver visualEvidenceResolver = new TeachingVisualEvidenceResolver(
                 tools, invocations, visualFacts, visualCatalog);
@@ -84,6 +73,12 @@ public class GroundedTeachingAgent {
                 tools, evidenceVerifier, invocations, visualEvidenceResolver);
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
+        this.publishedLessonReviewer = new TeachingPublishedLessonReviewer(
+                model,
+                critic,
+                invocations,
+                sectionDraftComposer,
+                new TeachingReviewCorrectionPolicy());
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
     }
@@ -232,7 +227,7 @@ public class GroundedTeachingAgent {
         }
         IllustratedLesson readableDraft = lesson(lessonId, plan, sections, createdAt);
         if (readableDraft.status() == LessonStatus.DRAFT_READY && !reviewCandidates.isEmpty()) {
-            reviewPublishedLesson(
+            publishedLessonReviewer.review(
                     plan,
                     reviewCandidates,
                     sections,
@@ -363,7 +358,7 @@ public class GroundedTeachingAgent {
 
         IllustratedLesson draftReady = lesson(lessonId, plan, sections, createdAt);
         if (draftReady.status() == LessonStatus.DRAFT_READY) {
-            reviewPublishedLesson(
+            publishedLessonReviewer.review(
                     plan, reviewCandidates, sections, assistantRunId,
                     () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
         }
@@ -395,211 +390,6 @@ public class GroundedTeachingAgent {
                 previousLesson,
                 REUSABLE_GENERATOR_VERSIONS,
                 model.supportsVisualEvidence(plan.createdBy()));
-    }
-
-    private void reviewPublishedLesson(
-            TeachingPlan plan,
-            List<TeachingSectionDraftCandidate> candidates,
-            List<LessonSection> sections,
-            UUID assistantRunId,
-            Runnable progressPublisher) {
-        reviewPublishedBatch(
-                plan,
-                candidates,
-                sections,
-                assistantRunId,
-                progressPublisher,
-                MAX_POST_PUBLICATION_REVIEW_PASSES);
-    }
-
-    private boolean reviewPublishedBatch(
-            TeachingPlan plan,
-            List<TeachingSectionDraftCandidate> candidates,
-            List<LessonSection> sections,
-            UUID assistantRunId,
-            Runnable progressPublisher,
-            int remainingPasses) {
-        LessonReviewPlanner.LessonReviewBatch batch = LessonReviewPlanner.plan(candidates, assistantRunId);
-        GeneratedContentCritic.Review review;
-        try {
-            review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT);
-        } catch (AgentExecutionStoppedException stopped) {
-            candidates.forEach(candidate -> recordPublication(
-                    assistantRunId,
-                    candidate.planned(),
-                    ActivityOutcome.SUCCEEDED,
-                    "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT"));
-            return true;
-        } catch (RuntimeException reviewFailure) {
-            log.warn("Whole-lesson factual review retained cited draft: {}", reviewFailure.getMessage());
-            candidates.forEach(candidate -> recordPublication(
-                    assistantRunId,
-                    candidate.planned(),
-                    ActivityOutcome.SUCCEEDED,
-                    "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT"));
-            return true;
-        }
-
-        Map<Integer, List<GeneratedContentCritic.Issue>> issuesBySection = review.issues().stream()
-                .collect(Collectors.groupingBy(issue -> batch.claimOwners()
-                        .get(issue.claimPosition()).sectionIndex()));
-        List<TeachingSectionDraftCandidate> correctedCandidates = new ArrayList<>();
-        int factualCorrectionsStarted = 0;
-        int scopeCorrectionsStarted = 0;
-        for (TeachingSectionDraftCandidate candidate : candidates) {
-            List<GeneratedContentCritic.Issue> issues = issuesBySection.getOrDefault(
-                    candidate.sectionIndex(), List.of());
-            sectionDraftComposer.recordValidation(
-                    assistantRunId,
-                    candidate.planned(),
-                    0,
-                    issues.isEmpty() ? ActivityOutcome.SUCCEEDED : ActivityOutcome.REJECTED,
-                    issues.isEmpty() ? "POST_PUBLICATION_REVIEW_ACCEPTED" : reviewCorrectionPolicy.criticDiagnostic(issues));
-            TeachingReviewCorrectionPolicy.CorrectionKind correctionKind = reviewCorrectionPolicy.correctionKind(issues);
-            boolean correctionBudgetExhausted = reviewCorrectionPolicy.correctionBudgetExhausted(
-                    correctionKind, factualCorrectionsStarted, scopeCorrectionsStarted);
-            if (!issues.isEmpty() && correctionBudgetExhausted) {
-                log.info(
-                        "Whole-lesson review defers {} correction for topic {} after its immediate budget",
-                        correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE
-                                ? "chapter-scope"
-                                : "factual",
-                        candidate.planned().topicKey());
-                recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_DEFERRED_FOR_INCREMENTAL_REVIEW");
-                continue;
-            }
-            try {
-                TeachingSectionDraftCandidate reviewed = issues.isEmpty()
-                        ? new TeachingSectionDraftCandidate(
-                                candidate.sectionIndex(),
-                                candidate.planned(),
-                                candidate.evidence(),
-                                candidate.modelRequest(),
-                                candidate.draft(),
-                                sectionDraftComposer.validatedSection(
-                                plan,
-                                candidate.planned(),
-                                candidate.evidence(),
-                                candidate.modelRequest(),
-                                candidate.draft(),
-                                EvidenceStatus.SUPPORTED))
-                        : correctedPublishedDraft(plan, candidate, issues, assistantRunId);
-                if (!issues.isEmpty()) {
-                    if (correctionKind == TeachingReviewCorrectionPolicy.CorrectionKind.CHAPTER_SCOPE) {
-                        scopeCorrectionsStarted++;
-                    } else {
-                        factualCorrectionsStarted++;
-                    }
-                }
-                sections.set(candidate.sectionIndex(), reviewed.section());
-                if (!issues.isEmpty()) correctedCandidates.add(reviewed);
-                recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        reviewed.section().evidenceStatus() == EvidenceStatus.SUPPORTED
-                                ? "POST_PUBLICATION_REVIEW_ACCEPTED"
-                                : "POST_PUBLICATION_REVIEW_PENDING");
-                progressPublisher.run();
-            } catch (AgentExecutionStoppedException stopped) {
-                recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_DEFERRED_RETAINING_CITED_DRAFT");
-                return true;
-            } catch (RuntimeException correctionFailure) {
-                log.warn(
-                        "Whole-lesson review retained cited draft for topic {}: {}",
-                        candidate.planned().topicKey(),
-                        correctionFailure.getMessage());
-                recordPublication(
-                        assistantRunId,
-                        candidate.planned(),
-                        ActivityOutcome.SUCCEEDED,
-                        "POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT");
-            }
-        }
-        if (!correctedCandidates.isEmpty() && remainingPasses > 1) {
-            return reviewPublishedBatch(
-                    plan,
-                    correctedCandidates,
-                    sections,
-                    assistantRunId,
-                    progressPublisher,
-                    remainingPasses - 1);
-        }
-        return true;
-    }
-
-    private TeachingSectionDraftCandidate correctedPublishedDraft(
-            TeachingPlan plan,
-            TeachingSectionDraftCandidate candidate,
-            List<GeneratedContentCritic.Issue> issues,
-            UUID assistantRunId) {
-        List<String> feedback = reviewCorrectionPolicy.correctionFeedback(issues);
-        SectionDraft corrected = invocations.invoke(
-                assistantRunId,
-                ActivityType.MODEL,
-                operationName("correctTeachingSection", candidate.planned().position()),
-                estimateTokens(candidate.modelRequest().toString()) + estimateTokens(candidate.draft().toString())
-                        + estimateTokens(feedback.toString()),
-                "Published teaching section corrected from whole-lesson review",
-                () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
-                result -> estimateTokens(result.toString()));
-        corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
-        EvidenceStatus correctionStatus = corrected.equals(candidate.draft())
-                ? EvidenceStatus.CITED_DRAFT
-                : EvidenceStatus.SUPPORTED;
-        LessonSection correctedSection;
-        try {
-            correctedSection = sectionDraftComposer.validatedSection(
-                    plan,
-                    candidate.planned(),
-                    candidate.evidence(),
-                    candidate.modelRequest(),
-                    corrected,
-                    correctionStatus);
-        } catch (IllegalArgumentException invalidCorrection) {
-            SectionDraft invalidDraft = corrected;
-            List<String> structuralRepair = reviewCorrectionPolicy.structuralRepairFeedback(
-                    feedback, TeachingDraftRejectionCategory.from(invalidCorrection));
-            corrected = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.MODEL,
-                    operationName("repairCorrectedTeachingSection", candidate.planned().position()),
-                    estimateTokens(candidate.modelRequest().toString()) + estimateTokens(invalidDraft.toString())
-                            + estimateTokens(structuralRepair.toString()),
-                    "Published teaching correction repaired to the section contract",
-                    () -> model.revise(candidate.modelRequest(), invalidDraft, structuralRepair),
-                    result -> estimateTokens(result.toString()));
-            corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
-            correctionStatus = corrected.equals(candidate.draft()) ? EvidenceStatus.CITED_DRAFT : EvidenceStatus.SUPPORTED;
-            correctedSection = sectionDraftComposer.validatedSection(
-                    plan,
-                    candidate.planned(),
-                    candidate.evidence(),
-                    candidate.modelRequest(),
-                    corrected,
-                    correctionStatus);
-        }
-        sectionDraftComposer.recordValidation(
-                assistantRunId,
-                candidate.planned(),
-                1,
-                ActivityOutcome.SUCCEEDED,
-                "POST_PUBLICATION_CORRECTION_APPLIED");
-        return new TeachingSectionDraftCandidate(
-                candidate.sectionIndex(),
-                candidate.planned(),
-                candidate.evidence(),
-                candidate.modelRequest(),
-                corrected,
-                correctedSection);
     }
 
     static boolean claimsImmediateEndingForEndOfRoundTrigger(String playerText, List<RuleEvidence> citedEvidence) {
