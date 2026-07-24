@@ -12,6 +12,7 @@ import LessonGenerationStatus, { type LessonGenerationActivity } from '@/compone
 import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
 import LessonReaderChapterHeader from '@/components/LessonReaderChapterHeader.vue'
 import LessonReaderControls from '@/components/LessonReaderControls.vue'
+import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
 import LessonReaderSidebar from '@/components/LessonReaderSidebar.vue'
 import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
@@ -20,7 +21,6 @@ import {
   type ConfirmedRuling,
   type CsrfResponse,
   type LearningIntent,
-  type RuleCitation,
 } from '@/composables/useLessonAnswers'
 import { buildCardQuestion } from '@/lib/cardOcr'
 import {
@@ -966,21 +966,6 @@ async function reloadRuling() {
   }
 }
 
-function citationPages(citation: RuleCitation) {
-  return citation.pageFrom === citation.pageTo
-    ? `第 ${citation.pageFrom} 页`
-    : `第 ${citation.pageFrom}–${citation.pageTo} 页`
-}
-
-function cachedAtLabel(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
 function previousSection() {
   if (progress.value.currentIndex === 0) return
   selectSection(progress.value.currentIndex - 1)
@@ -1208,7 +1193,7 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">当前离线；只能查看本地讲解进度、最近答案和已确认裁定，生成式答疑已停用。</p>
+      <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">{{ t('lesson.reader.offline.banner') }}</p>
       <div v-if="mediaWarnings.length" class="bg-amber-50 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">
         <p v-for="warning in mediaWarnings" :key="warning">{{ warning }}</p>
       </div>
@@ -1230,39 +1215,7 @@ onUnmounted(() => {
         :finished-message="generationFinishedMessage"
       />
 
-      <section v-if="!online && offlineKnowledge.length" class="mx-auto max-w-4xl px-5 pt-7 sm:px-8" aria-labelledby="offline-knowledge-title">
-        <div class="rounded-3xl border border-amber-300 bg-amber-50 p-5 sm:p-6">
-          <p class="text-xs font-semibold text-copper">离线可用</p>
-          <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 id="offline-knowledge-title" class="font-display text-2xl font-semibold">本局已缓存规则结论</h2>
-              <p class="mt-2 text-sm leading-6 text-amber-950/70">这里保留了此前确认过的回答。联网后才能继续提问。</p>
-            </div>
-            <span class="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white">{{ offlineKnowledge.length }} 条</span>
-          </div>
-          <div class="mt-5 space-y-3">
-            <details v-for="entry in offlineKnowledge" :key="`${entry.question}-${entry.cachedAt}`" class="rounded-2xl border border-amber-200 bg-paper p-4">
-              <summary class="cursor-pointer list-none">
-                <span class="flex flex-wrap items-start justify-between gap-3">
-                  <span>
-                    <span class="block text-xs font-semibold text-copper">{{ entry.sectionTitle }}</span>
-                    <span class="mt-1 block font-semibold leading-6">{{ entry.question }}</span>
-                  </span>
-                  <span class="text-xs font-semibold text-ink/45">{{ entry.ruling ? '已确认裁定' : '最近答案' }} · {{ cachedAtLabel(entry.cachedAt) }}</span>
-                </span>
-              </summary>
-              <p class="mt-4 border-t border-ink/10 pt-4 font-display text-lg font-semibold leading-7">{{ entry.ruling?.shortVerdict ?? entry.answer.shortVerdict }}</p>
-              <p class="mt-3 text-sm leading-7 text-ink/70">{{ entry.ruling?.explanation ?? entry.answer.explanation }}</p>
-              <ol class="mt-4 space-y-2">
-                <li v-for="citation in (entry.ruling?.citations ?? entry.answer.citations)" :key="citation.chunkId" class="rounded-xl bg-indigo/5 p-3 text-sm">
-                  <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
-                  <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
-                </li>
-              </ol>
-            </details>
-          </div>
-        </div>
-      </section>
+      <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />
 
       <div v-if="loading" class="mx-auto max-w-7xl px-5 py-16 sm:px-8" aria-live="polite">
         <div class="h-7 w-44 animate-pulse rounded bg-ink/10" />
