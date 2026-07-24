@@ -31,6 +31,7 @@ import { useLessonGenerationPresentation } from '@/composables/useLessonGenerati
 import { useConditionalPolling } from '@/composables/useConditionalPolling'
 import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehensionFeedback'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
+import { useLessonResume } from '@/composables/useLessonResume'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import {
   finishSection,
@@ -115,7 +116,6 @@ const mediaMode = ref<MediaMode>('TEXT')
 const progress = ref<LessonProgress>(initialLessonProgress())
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
-const resumingLesson = ref(false)
 const teachingRun = ref<TeachingRunProgress | null>(null)
 const visualEnrichmentRun = ref<TeachingRunProgress | null>(null)
 const generationStatusUnknown = ref(false)
@@ -483,6 +483,24 @@ const {
   csrfToken,
 })
 
+const {
+  resuming: resumingLesson,
+  errorMessage: resumeError,
+  reset: resetLessonResume,
+  resume: resumeLesson,
+} = useLessonResume({
+  planId,
+  online,
+  currentRequest: () => latestLessonLoad,
+  isCurrent: isCurrentLessonLoad,
+  csrfToken,
+  onStarted: (startedPlanId) => router.push({ name: 'lessons', query: { started: startedPlanId } }),
+  messages: {
+    requestFailed: () => t('lesson.sidebar.resumeError'),
+    requestError: () => t('lesson.sidebar.resumeError'),
+  },
+})
+
 function resetLessonReader() {
   narrationPlayer.value?.pause()
   plan.value = null
@@ -494,7 +512,7 @@ function resetLessonReader() {
   resetRuling()
   offlineKnowledge.value = []
   cardOcrOpen.value = false
-  resumingLesson.value = false
+  resetLessonResume()
   mediaMode.value = 'TEXT'
   narrationPlaying.value = false
   narrationRestoreTarget.value = null
@@ -715,26 +733,6 @@ async function csrfToken() {
   return (await response.json()) as CsrfResponse
 }
 
-async function resumeLesson() {
-  if (!planId.value || resumingLesson.value || !online.value) return
-  resumingLesson.value = true
-  errorMessage.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/illustrated-lessons`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { [csrf.headerName]: csrf.token },
-    })
-    if (!response.ok) throw new Error('暂时无法继续补全讲解，请稍后重试。')
-    await router.push({ name: 'lessons', query: { started: planId.value } })
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '暂时无法继续补全讲解。'
-  } finally {
-    resumingLesson.value = false
-  }
-}
-
 function previousSection() {
   if (progress.value.currentIndex === 0) return
   selectSection(progress.value.currentIndex - 1)
@@ -909,6 +907,7 @@ onUnmounted(() => {
           :media-mode="mediaMode"
           :online="online"
           :resuming="resumingLesson"
+          :resume-error="resumeError"
           :media-mode-available="mediaModeAvailable"
           @select-section="selectSection"
           @select-media-mode="selectMediaMode"

@@ -36,6 +36,7 @@ function mountSidebar(overrides = {}) {
       mediaMode: 'TEXT',
       online: true,
       resuming: false,
+      resumeError: '',
       mediaModeAvailable,
       ...overrides,
     },
@@ -62,6 +63,14 @@ describe('LessonReaderSidebar', () => {
 
     expect(wrapper.get('button[aria-pressed="false"][disabled]').text()).toBe('语音')
     expect(wrapper.get('button.bg-indigo').attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps a resume failure beside the recovery action', () => {
+    const wrapper = mountSidebar({ resumeError: 'Could not continue this guide.' })
+
+    expect(wrapper.text()).toContain('Could not continue this guide.')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.get('button.bg-indigo').text()).toContain('继续核对细节')
   })
 
   it('localizes reader controls and status chrome without changing emitted intents', () => {

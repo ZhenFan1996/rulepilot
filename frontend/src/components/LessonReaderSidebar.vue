@@ -36,6 +36,7 @@ defineProps<{
   mediaMode: MediaMode
   online: boolean
   resuming: boolean
+  resumeError: string
   mediaModeAvailable: (mode: MediaMode) => boolean
 }>()
 
@@ -101,6 +102,8 @@ const { t } = useLocale()
         {{ resuming ? t('lesson.sidebar.resuming') : t('lesson.sidebar.resumeGuide') }}
       </button>
     </div>
+
+    <p v-if="resumeError" class="mt-3 hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-700 lg:block" role="alert">{{ resumeError }}</p>
 
     <details v-if="mediaConsistency && !generationActive" class="mt-3 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
       <summary class="cursor-pointer list-none text-sm font-semibold">
