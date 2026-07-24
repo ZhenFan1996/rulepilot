@@ -53,7 +53,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v58-document-scoped-resolution-evidence";
+    private static final String ANSWER_POLICY_VERSION = "answer-v59-direct-tie-break-evidence";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;

@@ -157,6 +157,7 @@ class AnswerRetrievalPlannerTest {
 
         assertThat(intents).hasSize(4);
         assertThat(intents.getFirst().query()).contains("end condition", "final scoring", "tie");
+        assertThat(intents.getFirst().query()).contains("tie breaker", "most gold", "金币");
         assertThat(intents.getFirst().purpose())
                 .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.ENDGAME_RESOLUTION);
         assertThat(intents.get(1).query()).isEqualTo("when does the game end");

@@ -166,8 +166,11 @@ public final class AnswerRetrievalPlanner {
 
     private static String endgameResolutionTerms(String question) {
         if (!isEndgameResolutionQuestion(question)) return null;
-        return "end game end condition end of round final scoring winner tie resolution "
+        String terms = "end game end condition end of round final scoring winner tie resolution "
                 + "游戏结束 结束条件 轮末 最终计分 胜者 平局 结算";
+        return containsAny(question, "tie", "tied", "平局", "同分")
+                ? terms + " tiebreak tie breaker most gold coins 平局 同分 决胜 金币"
+                : terms;
     }
 
     private static String endgameResolutionQuery(String question) {
