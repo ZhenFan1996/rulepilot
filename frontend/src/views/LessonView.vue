@@ -31,9 +31,7 @@ import { useLessonLocalization } from '@/composables/useLessonLocalization'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonGenerationPresentation } from '@/composables/useLessonGenerationPresentation'
 import { useConditionalPolling } from '@/composables/useConditionalPolling'
-import type {
-  LessonComprehensionReport,
-} from '@/composables/lessonSupportingContent'
+import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehensionFeedback'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import {
   finishSection,
@@ -300,6 +298,29 @@ const visualPolling = useConditionalPolling({
   defaultDelay: 2_500,
 })
 
+const {
+  visualAidResult,
+  hasVisualAid,
+  recordComprehension,
+  recordVisualAid,
+  recordChapterVisualAid,
+} = useLessonComprehensionFeedback({
+  planId,
+  online,
+  currentRequest: () => latestLessonLoad,
+  isCurrent: isCurrentLessonLoad,
+  comprehension,
+  saving: comprehensionSaving,
+  errorMessage: comprehensionError,
+  csrfToken,
+  messages: {
+    saveTaskRetry: () => t('lesson.comprehension.error.saveTaskRetry'),
+    saveTask: () => t('lesson.comprehension.error.saveTask'),
+    saveVisualRetry: () => t('lesson.comprehension.error.saveVisualRetry'),
+    saveVisual: () => t('lesson.comprehension.error.saveVisual'),
+  },
+})
+
 function pageImageUrl(page: number | undefined) {
   if (!plan.value || !page) return ''
   return `/api/v1/document-versions/${plan.value.documentVersionId}/pages/${page}/image`
@@ -323,22 +344,6 @@ function visualFocusStyle(focus: NonNullable<LessonSection['steps'][number]['vis
     width: `${focus.width / 10}%`,
     height: `${focus.height / 10}%`,
   }
-}
-
-function visualAidFor(sectionPosition: number, stepPosition: number) {
-  return comprehension.value?.visualAids.find((aid) => aid.key === visualAidKey(sectionPosition, stepPosition)) ?? null
-}
-
-function visualAidKey(sectionPosition: number, stepPosition: number) {
-  return `s${sectionPosition}-v${stepPosition}`
-}
-
-function visualAidResult(sectionPosition: number, stepPosition: number) {
-  return visualAidFor(sectionPosition, stepPosition)?.result ?? 'NOT_RATED'
-}
-
-function hasVisualAid(sectionPosition: number, stepPosition: number) {
-  return visualAidFor(sectionPosition, stepPosition) !== null
 }
 
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
@@ -680,62 +685,6 @@ function selectSection(index: number) {
   resetRuling()
   saveProgress()
   seekToChapter(index)
-}
-
-async function recordComprehension(
-  taskType: LessonComprehensionReport['tasks'][number]['type'],
-  result: 'CAN_DO' | 'NEEDS_HELP',
-) {
-  if (comprehensionSaving.value || !online.value) return
-  comprehensionSaving.value = taskType
-  comprehensionError.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/${taskType}`, {
-      method: 'PUT',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({ result }),
-    })
-    if (!response.ok) throw new Error(t('lesson.comprehension.error.saveTaskRetry'))
-    comprehension.value = (await response.json()) as LessonComprehensionReport
-  } catch (error) {
-    comprehensionError.value = error instanceof Error ? error.message : t('lesson.comprehension.error.saveTask')
-  } finally {
-    comprehensionSaving.value = null
-  }
-}
-
-async function recordVisualAid(
-  visualAidKey: string,
-  result: 'HELPFUL' | 'NOT_HELPFUL',
-) {
-  if (comprehensionSaving.value || !online.value) return
-  comprehensionSaving.value = `visual-${visualAidKey}`
-  comprehensionError.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/teaching-plans/${planId.value}/comprehension/visual-aids/${visualAidKey}`, {
-      method: 'PUT',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({ result }),
-    })
-    if (!response.ok) throw new Error(t('lesson.comprehension.error.saveVisualRetry'))
-    comprehension.value = (await response.json()) as LessonComprehensionReport
-  } catch (error) {
-    comprehensionError.value = error instanceof Error ? error.message : t('lesson.comprehension.error.saveVisual')
-  } finally {
-    comprehensionSaving.value = null
-  }
-}
-
-function recordChapterVisualAid(
-  sectionPosition: number,
-  stepPosition: number,
-  result: 'HELPFUL' | 'NOT_HELPFUL',
-) {
-  void recordVisualAid(visualAidKey(sectionPosition, stepPosition), result)
 }
 
 function learningPrompt(intent: LearningIntent) {
