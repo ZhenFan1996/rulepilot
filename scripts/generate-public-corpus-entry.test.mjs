@@ -98,6 +98,7 @@ test('keeps the reusable source checkpoint while refreshing the generated lesson
     preparation: { runId: 'prepare-old', state: 'COMPLETED' },
     plan: { id: 'plan-old' },
     teaching: { runId: 'teach-old', state: 'COMPLETED' },
+    visual: { runId: 'visual-old', state: 'COMPLETED' },
     result: { lessonId: 'lesson-old', status: 'DRAFT_READY' },
   })
 

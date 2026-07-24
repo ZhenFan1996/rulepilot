@@ -92,7 +92,7 @@ export function summarizeRunProgress(details) {
 }
 
 export function resetGeneratedLessonStateForPlanRefresh(state) {
-  const { preparation, plan, teaching, result, ...reusableState } = state
+  const { preparation, plan, teaching, visual, result, ...reusableState } = state
   return reusableState
 }
 
@@ -280,9 +280,9 @@ async function runDetails(client, runId) {
   return client.request(`/api/v1/assistant-runs/${runId}`)
 }
 
-async function latestTeachingRun(client, planId) {
+async function latestRun(client, planId, mode) {
   try {
-    return await client.request(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${planId}`)
+    return await client.request(`/api/v1/assistant-runs/latest?mode=${mode}&subjectId=${planId}`)
   } catch (error) {
     if (error.status === 404) return null
     throw error
@@ -465,7 +465,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     const details = await poll(
       '等待讲解任务启动',
       state,
-      () => latestTeachingRun(client, state.plan.id),
+      () => latestRun(client, state.plan.id, 'TEACHING'),
       (value) => value !== null,
       deadline,
     )
@@ -487,6 +487,36 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     if (FAILED_RUN_STATES.has(details.run.state)) throw new Error(`Teaching generation ended as ${details.run.state}`)
   }
 
+  if (!state.visual) {
+    const details = await poll(
+      '等待局部图示任务启动',
+      state,
+      () => latestRun(client, state.plan.id, 'VISUAL_ENRICHMENT'),
+      (value) => value !== null,
+      deadline,
+    )
+    state.visual = {
+      runId: details.run.id,
+      state: details.run.state,
+      lastErrorCode: details.run.lastErrorCode,
+      activityCount: details.activities?.length ?? 0,
+    }
+    await checkpoint(outputPath, state)
+  }
+  if (!TERMINAL_RUN_STATES.has(state.visual.state)) {
+    const details = await poll(
+      '定位并核对局部图示',
+      state,
+      () => runDetails(client, state.visual.runId),
+      (value) => TERMINAL_RUN_STATES.has(value.run.state),
+      deadline,
+    )
+    state.visual.state = details.run.state
+    state.visual.lastErrorCode = details.run.lastErrorCode
+    state.visual.activityCount = details.activities?.length ?? 0
+    await checkpoint(outputPath, state)
+  }
+
   const lesson = await client.request(`/api/v1/teaching-plans/${state.plan.id}/illustrated-lessons/latest`)
   const publicLesson = await client.request(`/api/public/lessons/${state.plan.id}`)
   const result = {
@@ -494,6 +524,8 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     publicTitle: publicLesson.rulebookTitle,
     hasCover: Boolean(publicLesson.gameCover?.imageUrl),
     hasOfficialRulebook: Boolean(publicLesson.officialSourceUrl),
+    visualEnrichmentState: state.visual.state,
+    visualActivityCount: state.visual.activityCount ?? null,
     completedAt: new Date().toISOString(),
     elapsedSeconds: Math.round((Date.now() - new Date(state.startedAt).getTime()) / 1000),
     attemptElapsedSeconds: Math.round((Date.now() - new Date(state.attemptStartedAt).getTime()) / 1000),
@@ -501,7 +533,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   if (result.status === 'INCOMPLETE') throw new Error('Generated lesson is incomplete and cannot enter the public corpus')
   if (!result.hasCover || !result.hasOfficialRulebook) throw new Error('Public lesson is missing its cover or official rulebook link')
   await checkpoint(outputPath, state, { result })
-  progress(state, `公开讲解可读：${result.sectionCount} 章、${result.stepCount} 步、${result.visualStepCount} 个局部图示`)
+  progress(state, `公开讲解可读：${result.sectionCount} 章、${result.stepCount} 步、${result.visualStepCount} 个局部图示（视觉任务 ${result.visualEnrichmentState}）`)
   return state
 }
 
