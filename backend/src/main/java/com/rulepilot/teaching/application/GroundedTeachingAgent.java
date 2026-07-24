@@ -21,9 +21,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
-import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
-import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -37,7 +34,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.UUID;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +63,7 @@ public class GroundedTeachingAgent {
     private final AuditedAgentInvocations invocations;
     private final TeachingVisualEvidenceResolver visualEvidenceResolver;
     private final TeachingSectionDraftComposer sectionDraftComposer;
+    private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
     private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy = new TeachingReviewCorrectionPolicy();
     private final int maxToolCalls;
     private final int baseSectionParallelism;
@@ -210,7 +207,7 @@ public class GroundedTeachingAgent {
 
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
         if (!remaining.isEmpty()) {
-            List<PriorSectionContext> sharedContext = continuityContext(sections);
+            List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
             try (var executor = Executors.newFixedThreadPool(Math.min(baseSectionParallelism, remaining.size()))) {
                 List<Future<SectionOutcome>> futures = remaining.stream()
@@ -294,7 +291,7 @@ public class GroundedTeachingAgent {
                     resolution.state() == EvidenceState.EMPTY
                             ? mode.noEvidenceCategory()
                             : mode.invalidEvidenceCategory());
-            return new SectionOutcome(planned.position(), insufficient(planned), null, resolution.toolCalls());
+            return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
         }
         try {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
@@ -313,7 +310,7 @@ public class GroundedTeachingAgent {
         } catch (RuntimeException invalidDraft) {
             log.warn("Teaching section {} was withheld: {}", planned.topicKey(), invalidDraft.getMessage());
             recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, mode.withheldCategory());
-            return new SectionOutcome(planned.position(), insufficient(planned), null, resolution.toolCalls());
+            return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
         }
     }
 
@@ -401,7 +398,7 @@ public class GroundedTeachingAgent {
             if (!reusable && toolCalls >= maxToolCalls) {
                 log.warn("Teaching Agent tool budget exhausted before topic {}", planned.topicKey());
                 recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, "TOOL_BUDGET_EXHAUSTED");
-                sections.add(insufficient(planned));
+                sections.add(lessonAssembly.insufficient(planned));
                 publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
                 continue;
             }
@@ -409,7 +406,7 @@ public class GroundedTeachingAgent {
                     plan,
                     planned,
                     pacing.get(planned.position()),
-                    continuityContext(sections),
+                    lessonAssembly.continuityContext(sections),
                     reusableSections,
                     assistantRunId,
                     Math.min(queriesPerTopic, maxToolCalls - toolCalls),
@@ -436,25 +433,7 @@ public class GroundedTeachingAgent {
             TeachingPlan plan,
             List<LessonSection> sections,
             Instant createdAt) {
-        IllustratedLesson lesson = new IllustratedLesson(
-                lessonId,
-                plan.id(),
-                lessonStatus(plan, sections),
-                sections,
-                GENERATOR_VERSION,
-                createdAt);
-        return lesson;
-    }
-
-    private LessonStatus lessonStatus(TeachingPlan plan, List<LessonSection> sections) {
-        if (sections.size() < plan.sections().size()) return LessonStatus.INCOMPLETE;
-        List<LessonSection> required = sections.stream().filter(LessonSection::required).toList();
-        if (required.stream().anyMatch(section -> section.evidenceStatus() == EvidenceStatus.INSUFFICIENT_EVIDENCE)) {
-            return LessonStatus.INCOMPLETE;
-        }
-        return required.stream().allMatch(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
-                ? LessonStatus.COMPLETE
-                : LessonStatus.DRAFT_READY;
+        return lessonAssembly.snapshot(lessonId, plan, sections, GENERATOR_VERSION, createdAt);
     }
 
     private void publishProgress(
@@ -463,37 +442,16 @@ public class GroundedTeachingAgent {
             TeachingPlan plan,
             List<LessonSection> sections,
             Instant createdAt) {
-        progressPublisher.accept(new IllustratedLesson(
-                lessonId,
-                plan.id(),
-                lessonStatus(plan, sections),
-                sections,
-                GENERATOR_VERSION,
-                createdAt));
+        progressPublisher.accept(lessonAssembly.snapshot(lessonId, plan, sections, GENERATOR_VERSION, createdAt));
     }
 
     private Map<String, LessonSection> reusableSections(
             TeachingPlan plan, IllustratedLesson previousLesson) {
-        if (previousLesson == null
-                || !plan.id().equals(previousLesson.teachingPlanId())
-                || !REUSABLE_GENERATOR_VERSIONS.contains(previousLesson.generatorVersion())) {
-            return Map.of();
-        }
-        Set<String> currentTopics = plan.sections().stream()
-                .map(TeachingPlan.PlannedSection::topicKey)
-                .collect(Collectors.toUnmodifiableSet());
-        Map<String, Boolean> visualRequirements = plan.sections().stream()
-                .collect(Collectors.toUnmodifiableMap(
-                        TeachingPlan.PlannedSection::topicKey,
-                        TeachingPlan.PlannedSection::visualEvidenceRecommended));
-        return previousLesson.sections().stream()
-                .filter(section -> section.evidenceStatus() == EvidenceStatus.SUPPORTED)
-                .filter(section -> currentTopics.contains(section.topicKey()))
-                .filter(section -> !model.supportsVisualEvidence(plan.createdBy())
-                        || !visualRequirements.getOrDefault(section.topicKey(), false)
-                        || section.steps().stream().anyMatch(step ->
-                                step.kind() == TeachingMove.VISUAL && step.visualFocus() != null))
-                .collect(Collectors.toUnmodifiableMap(LessonSection::topicKey, Function.identity()));
+        return lessonAssembly.reusableSections(
+                plan,
+                previousLesson,
+                REUSABLE_GENERATOR_VERSIONS,
+                model.supportsVisualEvidence(plan.createdBy()));
     }
 
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {
@@ -779,40 +737,10 @@ public class GroundedTeachingAgent {
                 && first.pageTo() == second.pageTo();
     }
 
-    private List<PriorSectionContext> continuityContext(List<LessonSection> sections) {
-        List<LessonSection> supported = sections.stream()
-                .filter(section -> section.evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE)
-                .toList();
-        int fromIndex = Math.max(0, supported.size() - 2);
-        return supported.subList(fromIndex, supported.size()).stream()
-                .map(section -> new PriorSectionContext(
-                        section.topicKey(), section.title(), section.steps().getLast().text()))
-                .toList();
-    }
-
     private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {
         return new EvidenceSource(
                 evidence.chunkId(), evidence.documentVersionId(), evidence.sectionType(), evidence.excerpt(),
                 evidence.pageFrom(), evidence.pageTo());
-    }
-
-    private LessonSection insufficient(TeachingPlan.PlannedSection planned) {
-        return new LessonSection(
-                planned.position(),
-                planned.topicKey(),
-                planned.coverageTags(),
-                planned.title(),
-                planned.required(),
-                EvidenceStatus.INSUFFICIENT_EVIDENCE,
-                VisualKind.REFERENCE_CARD,
-                "本节等待可验证的规则证据",
-                List.of(new LessonStep(
-                        1,
-                        "暂时跳过",
-                        TeachingMove.WATCH,
-                        "规则资料中尚未找到这一节所需的可靠证据。",
-                        List.of(),
-                        List.of())));
     }
 
     private int evidenceTokens(List<RuleEvidence> evidence) {
