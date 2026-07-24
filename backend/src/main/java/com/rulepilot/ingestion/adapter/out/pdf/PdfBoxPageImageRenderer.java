@@ -51,7 +51,7 @@ public class PdfBoxPageImageRenderer implements PdfPageImageRenderer {
                 if (document.getNumberOfPages() > maxPages) {
                     throw new PdfExtractionException("PDF exceeds the configured page limit");
                 }
-                PDFRenderer renderer = new PDFRenderer(document);
+                PDFRenderer renderer = configuredRenderer(document);
                 for (int index = 0; index < document.getNumberOfPages(); index++) {
                     BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
                     try {
@@ -81,6 +81,14 @@ public class PdfBoxPageImageRenderer implements PdfPageImageRenderer {
         } catch (IOException exception) {
             temporaryPdf.toFile().deleteOnExit();
         }
+    }
+
+    static PDFRenderer configuredRenderer(PDDocument document) {
+        PDFRenderer renderer = new PDFRenderer(document);
+        // Rulebooks commonly embed print-resolution artwork. PDFBox can decode only the pixels needed for the
+        // requested 200 DPI output, preserving crop dimensions while avoiding needless memory and CPU work.
+        renderer.setSubsamplingAllowed(true);
+        return renderer;
     }
 
     private byte[] encodeJpeg(BufferedImage image) throws IOException {

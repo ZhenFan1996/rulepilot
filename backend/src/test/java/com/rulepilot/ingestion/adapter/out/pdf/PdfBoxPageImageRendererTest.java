@@ -19,6 +19,14 @@ import org.junit.jupiter.api.Test;
 class PdfBoxPageImageRendererTest {
 
     @Test
+    void subsamplesEmbeddedArtworkWithoutChangingRequestedOutputResolution() throws IOException {
+        try (PDDocument document = new PDDocument()) {
+            assertThat(PdfBoxPageImageRenderer.configuredRenderer(document).isSubsamplingAllowed())
+                    .isTrue();
+        }
+    }
+
+    @Test
     void rendersEachPdfPageAsAReadableBoundedJpeg() throws IOException {
         byte[] pdf;
         try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
