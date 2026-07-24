@@ -23,10 +23,14 @@ final class AnswerCritiquePolicy {
     private AnswerCritiquePolicy() {}
 
     static ReviewRisk reviewRisk(QuestionContext context, UUID gameSessionId, StructuredRuleAnswer answer) {
-        if (gameSessionId != null || context.previousQuestion() != null || context.learningIntent() != null) {
+        if (allowsBoundedCorrection(context, gameSessionId)) {
             return ReviewRisk.HIGH_IMPACT;
         }
         return answer.confidence() == AnswerConfidence.LOW ? ReviewRisk.LOW_CONFIDENCE : ReviewRisk.STANDARD;
+    }
+
+    static boolean allowsBoundedCorrection(QuestionContext context, UUID gameSessionId) {
+        return gameSessionId != null || context.previousQuestion() != null || context.learningIntent() != null;
     }
 
     static ReviewRequest request(

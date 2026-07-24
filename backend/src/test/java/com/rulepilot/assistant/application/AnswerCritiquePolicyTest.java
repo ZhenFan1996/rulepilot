@@ -42,6 +42,18 @@ class AnswerCritiquePolicyTest {
     }
 
     @Test
+    void allows_one_bounded_correction_for_each_high_impact_answer_context() {
+        QuestionContext ordinary = context(null, null);
+
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinary, null)).isFalse();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(context("上一问", null), null)).isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(
+                        context(null, LearningIntent.SIMPLIFY), null))
+                .isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinary, UUID.randomUUID())).isTrue();
+    }
+
+    @Test
     void builds_a_cited_critique_request_with_answer_and_exception_claims() {
         HybridEvidenceHit evidence = evidence("规则段落", "在主要行动后可以执行自由行动。", 8);
         RuleCitation citation = citation(evidence);

@@ -1653,6 +1653,61 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void repairsARejectedContextResolvedFollowUpWithBoundedCriticFeedback() {
+        RuleEvidenceHit source = evidence("ACTIONS");
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "可以不限次数执行。", "主要行动后可以任意次执行自由行动。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).containsExactly(
+                        "OVERREACH: Evidence establishes timing but not unlimited frequency.");
+                return new ModelDraft(
+                        "自由行动可以在主要行动后执行。",
+                        "规则只说明时机；现有证据没有说明可以重复多少次。",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+        };
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            assertThat(risk).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
+            return criticCalls.getAndIncrement() == 0
+                    ? new GeneratedContentCritic.Review(true, List.of(new Issue(
+                            IssueType.OVERREACH,
+                            1,
+                            List.of(source.chunkId()),
+                            "Evidence establishes timing but not unlimited frequency.")))
+                    : new GeneratedContentCritic.Review(true, List.of());
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, true)),
+                model,
+                critic);
+
+        var answer = service.answer(
+                "那还能再做一次吗？",
+                new QuestionContext(
+                        versionId,
+                        "ACTIONS",
+                        null,
+                        4,
+                        Set.of(),
+                        "执行一次主要行动后还能执行自由行动吗？"));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.explanation()).contains("没有说明可以重复多少次");
+        assertThat(revisions).hasValue(1);
+        assertThat(criticCalls).hasValue(2);
+    }
+
+    @Test
     void passesThePlayerLearningIntentToCompositionAndCritique() {
         RuleEvidenceHit source = evidence("ACTIONS");
         AtomicReference<RuleAnswerModel.ModelRequest> modelRequest = new AtomicReference<>();

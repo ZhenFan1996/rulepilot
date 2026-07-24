@@ -47,7 +47,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v62-grounded-application-spatial-scope";
+    private static final String ANSWER_POLICY_VERSION = "answer-v63-follow-up-critic-recovery";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
@@ -357,7 +357,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             Review review = critic.review(
                     AnswerCritiquePolicy.request(assistantRunId, understood, context, answer, evidence), risk);
             if (!review.accepted()) {
-                if (context.learningIntent() == null && gameSessionId == null) {
+                if (!AnswerCritiquePolicy.allowsBoundedCorrection(context, gameSessionId)) {
                     return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
                 }
                 answer = reviseLearningResponse(
