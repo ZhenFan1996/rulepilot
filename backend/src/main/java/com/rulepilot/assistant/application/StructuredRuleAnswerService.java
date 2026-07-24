@@ -316,7 +316,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
         }
         draft = AnswerReplenishmentPolicy.replaceMisdirectedDraft(modelRequest, draft);
-        draft = removePeripheralEndgameCitations(modelRequest, draft);
+        draft = AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(modelRequest, draft);
         List<String> playerFacingRepair = AnswerPlayerFacingRepairPolicy.feedbackFor(modelRequest, draft);
         if (!playerFacingRepair.isEmpty()) {
             try {
@@ -353,19 +353,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 return safe(context.documentVersionId(), failure.get().status(), failure.get().message());
             }
         }
-        draft = removePeripheralEndgameCitations(modelRequest, draft);
-        draft = AnswerSpatialScopePolicy.boundRepeatedInference(modelRequest, draft);
-        draft = AnswerBasisPolicy.classify(modelRequest, draft);
-        if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(modelRequest.question(), modelRequest.evidence())
-                && !AnswerEvidencePolicy.citesEndTurnProcedure(modelRequest.evidence(), draft.citationIds())) {
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用回合结束处理的直接规则依据。");
+        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, draft);
+        if (!preparation.ready()) {
+            return safe(context.documentVersionId(), preparation.failureStatus(), preparation.failureMessage());
         }
-        if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(modelRequest.question(), modelRequest.evidence())
-                && !AnswerEvidencePolicy.citesEndgameResolution(
-                        modelRequest.question(), modelRequest.evidence(), draft.citationIds())) {
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用游戏结束结算的直接规则依据。");
-        }
-        draft = AnswerVisualEvidencePolicy.includeReferenceCitations(modelRequest, draft);
+        draft = preparation.draft();
         StructuredRuleAnswer answer;
         try {
             answer = publicationValidator.publish(context.documentVersionId(), draft, evidence);
@@ -472,23 +464,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 List.of(feedback),
                 "reconsiderEvidenceBackedAbstention",
                 "Evidence-backed table abstention reconsidered");
-    }
-
-    private ModelDraft removePeripheralEndgameCitations(ModelRequest request, ModelDraft draft) {
-        if (!AnswerEvidencePolicy.isEndgameTimingAndTieSummary(request.question(), request.evidence())
-                || draft.citationIds().isEmpty()) return draft;
-        List<UUID> decisive = AnswerEvidencePolicy.requiredEndgameCitationIds(
-                request.question(), request.evidence(), draft.citationIds());
-        if (decisive.isEmpty() || decisive.size() == draft.citationIds().size()) return draft;
-        return new ModelDraft(
-                draft.answerable(),
-                draft.insufficiencyReason(),
-                draft.shortVerdict(),
-                draft.explanation(),
-                decisive,
-                draft.exceptions(),
-                draft.confidence(),
-                draft.answerBasis());
     }
 
     private ModelDraft revisePlayerFacingDraft(
