@@ -234,7 +234,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     private LocateGuideResult confirmedExactStepCrops(
             VisualLocationRequest request, List<LocatedRegion> regions, String owner) {
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))
-                && !qwenNeedsExactCropReview(
+                && !VisualExactCropReviewPolicy.qwenNeedsExactCropReview(
                         VisualCropAcceptancePolicy.claimsForExactCrop(request, regions.getFirst()))) {
             // The first pass already tied this routine recognition aid to its exact page, evidence, and step. Qwen's
             // second visual pass is deliberately reserved for rules where a neighbouring card, faction, score, or
@@ -262,45 +262,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         // that removes it. This keeps the text-first speed boundary while preserving useful visual coverage.
         log.info("Exact-step crop verification was unavailable for section {}; retaining the first grounded crop", request.sectionTitle());
         return LocateGuideResult.found(regions);
-    }
-
-    static boolean qwenNeedsExactCropReview(List<VisualRegionLocator.Claim> claims) {
-        String text = claims.stream()
-                .map(VisualRegionLocator.Claim::text)
-                .map(SpringAiVisualRegionLocator::exactStepHeading)
-                .collect(java.util.stream.Collectors.joining(" "))
-                .toLowerCase(java.util.Locale.ROOT);
-        return text.contains("卡牌")
-                || text.contains("统治卡")
-                || text.contains("打出")
-                || text.contains("激活")
-                || text.contains("使用")
-                || text.contains("阵营")
-                || text.contains("计分")
-                || text.contains("分数")
-                || text.contains("胜利")
-                || text.contains("结束")
-                || text.contains("平局")
-                || text.contains("card")
-                || text.contains("play")
-                || text.contains("activate")
-                || text.contains("faction")
-                || text.contains("score")
-                || text.contains("win")
-                || text.contains("end")
-                || text.contains("tie");
-    }
-
-    private static String exactStepHeading(String claim) {
-        if (claim == null || claim.isBlank()) return "high-risk-unreadable-heading";
-        int opening = claim.indexOf('（');
-        int closing = claim.indexOf('）', opening + 1);
-        if (opening >= 0 && closing > opening + 1) return claim.substring(opening + 1, closing);
-        opening = claim.indexOf('(');
-        closing = claim.indexOf(')', opening + 1);
-        return opening >= 0 && closing > opening + 1
-                ? claim.substring(opening + 1, closing)
-                : "high-risk-unreadable-heading";
     }
 
     /** One crop and one exact claim per call prevents a vision model from confusing R references across images. */

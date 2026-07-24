@@ -355,9 +355,9 @@ class SpringAiVisualRegionLocatorTest {
         Claim dominance = new Claim(UUID.randomUUID(), "步骤 1（打出统治卡）：打出统治卡。", List.of(21), 1);
         Claim scoring = new Claim(UUID.randomUUID(), "步骤 2（计分）：比较分数。", List.of(11), 2);
 
-        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(supply))).isFalse();
-        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(dominance))).isTrue();
-        assertThat(SpringAiVisualRegionLocator.qwenNeedsExactCropReview(List.of(scoring))).isTrue();
+        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(supply))).isFalse();
+        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(dominance))).isTrue();
+        assertThat(VisualExactCropReviewPolicy.qwenNeedsExactCropReview(List.of(scoring))).isTrue();
     }
 
     @Test
