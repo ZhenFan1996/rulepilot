@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class PdfBoxPageExtractorTest {
 
     @Test
-    void rejectsDocumentsOverThePageLimit() throws IOException {
+    void keepsTheTextOnlyRebuildPathWithinTheSameSafetyLimits() throws IOException {
         byte[] pdf = pdfWithPages(2);
 
         assertThatThrownBy(() -> new PdfBoxPageExtractor(1, 10_000).extract(new ByteArrayInputStream(pdf)))
@@ -66,7 +66,8 @@ class PdfBoxPageExtractorTest {
             document.addPage(page);
             try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
                 stream.beginText();
-                stream.setFont(new PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA_BOLD), 14);
+                stream.setFont(
+                        new PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA_BOLD), 14);
                 stream.newLineAtOffset(72, 720);
                 stream.showText("SETUP");
                 stream.endText();

@@ -25,15 +25,14 @@ class UploadedDocumentIngestionTest {
     @Test
     void reportsBoundedPageRenderingProgressAfterTextExtraction() {
         DocumentProcessing documents = Mockito.mock(DocumentProcessing.class);
-        PdfPageExtractor extractor = Mockito.mock(PdfPageExtractor.class);
-        PdfPageImageRenderer renderer = Mockito.mock(PdfPageImageRenderer.class);
+        PdfRulebookPreparation pdfPreparation = Mockito.mock(PdfRulebookPreparation.class);
         DocumentPageImageStore pageImages = Mockito.mock(DocumentPageImageStore.class);
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
-                documents, extractor, renderer, pageImages, progress, structures, embeddings, metrics);
+                documents, pdfPreparation, pageImages, progress, structures, embeddings, metrics);
         UUID versionId = UUID.randomUUID();
         List<ExtractedPage> pages = List.of(
                 page(1, "Setup"),
@@ -41,17 +40,18 @@ class UploadedDocumentIngestionTest {
                 page(3, "Scoring"));
 
         when(documents.open(versionId)).thenAnswer(ignored -> new ByteArrayInputStream(new byte[] {1}));
-        when(extractor.extract(any())).thenReturn(pages);
         doAnswer(invocation -> {
-                    Consumer<DocumentPageImageStore.RenderedPageImage> consumer = invocation.getArgument(1);
+                    Consumer<List<ExtractedPage>> extractedPagesConsumer = invocation.getArgument(1);
+                    Consumer<DocumentPageImageStore.RenderedPageImage> pageImageConsumer = invocation.getArgument(2);
+                    extractedPagesConsumer.accept(pages);
                     for (int pageNumber = 1; pageNumber <= 3; pageNumber++) {
-                        consumer.accept(new DocumentPageImageStore.RenderedPageImage(
+                        pageImageConsumer.accept(new DocumentPageImageStore.RenderedPageImage(
                                 pageNumber, new byte[] {1}, 100, 100));
                     }
-                    return 3;
+                    return null;
                 })
-                .when(renderer)
-                .render(any(), any());
+                .when(pdfPreparation)
+                .prepare(any(), any(), any());
 
         ingestion.process(versionId, DocumentProcessingStage.PARSE);
 
@@ -61,6 +61,7 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "RENDERING", 65, 3, 3, false);
         verify(progress).update(versionId, "STRUCTURING", 75, 3, 3, false);
         verify(documents).markStructuring(versionId);
+        verify(documents).open(versionId);
         verify(structures).organize(versionId, pages);
         assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
                         .tag("phase", "extraction").timer().count())
@@ -87,22 +88,21 @@ class UploadedDocumentIngestionTest {
     @Test
     void completesChunkingWithoutReopeningTheAlreadyStructuredPdf() {
         DocumentProcessing documents = Mockito.mock(DocumentProcessing.class);
-        PdfPageExtractor extractor = Mockito.mock(PdfPageExtractor.class);
-        PdfPageImageRenderer renderer = Mockito.mock(PdfPageImageRenderer.class);
+        PdfRulebookPreparation pdfPreparation = Mockito.mock(PdfRulebookPreparation.class);
         DocumentPageImageStore pageImages = Mockito.mock(DocumentPageImageStore.class);
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
-                documents, extractor, renderer, pageImages, progress, structures, embeddings, metrics);
+                documents, pdfPreparation, pageImages, progress, structures, embeddings, metrics);
         UUID versionId = UUID.randomUUID();
         when(documents.pages(versionId)).thenReturn(List.of(new DocumentProcessing.PageView(1, "Setup", 5)));
 
         ingestion.process(versionId, DocumentProcessingStage.CHUNK);
 
         verify(documents).markChunking(versionId);
-        verifyNoInteractions(extractor, renderer, pageImages, structures, embeddings);
+        verifyNoInteractions(pdfPreparation, pageImages, structures, embeddings);
     }
 
     private ExtractedPage page(int pageNumber, String text) {

@@ -5,9 +5,11 @@ import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentPageImageStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,8 +27,7 @@ public class UploadedDocumentIngestion {
     static final String PARSE_PHASE_DURATION_METRIC = "rulepilot.document.processing.parse.phase.duration";
 
     private final DocumentProcessing documents;
-    private final PdfPageExtractor extractor;
-    private final PdfPageImageRenderer pageImageRenderer;
+    private final PdfRulebookPreparation pdfPreparation;
     private final DocumentPageImageStore pageImages;
     private final ProcessingProgressTracker progress;
     private final RuleStructureService structures;
@@ -35,16 +36,14 @@ public class UploadedDocumentIngestion {
 
     public UploadedDocumentIngestion(
             DocumentProcessing documents,
-            PdfPageExtractor extractor,
-            PdfPageImageRenderer pageImageRenderer,
+            PdfRulebookPreparation pdfPreparation,
             DocumentPageImageStore pageImages,
             ProcessingProgressTracker progress,
             RuleStructureService structures,
             RuleChunkEmbeddingService embeddings,
             MeterRegistry metrics) {
         this.documents = documents;
-        this.extractor = extractor;
-        this.pageImageRenderer = pageImageRenderer;
+        this.pdfPreparation = pdfPreparation;
         this.pageImages = pageImages;
         this.progress = progress;
         this.structures = structures;
@@ -78,22 +77,33 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "EXTRACTING", 30, 0, false);
         documents.markExtracting(documentVersionId);
         long extractionStartedAt = System.nanoTime();
-        var pages = extractor.extract(documents.open(documentVersionId));
-        long extractionNanos = recordParsePhase("extraction", extractionStartedAt);
-        documents.replacePages(documentVersionId, pages);
-        int totalPages = pages.size();
-        progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
+        AtomicReference<List<DocumentProcessing.ExtractedPage>> extractedPages = new AtomicReference<>();
+        AtomicLong extractionNanos = new AtomicLong();
+        AtomicInteger totalPageCount = new AtomicInteger();
+        AtomicLong renderingStartedAt = new AtomicLong();
         AtomicInteger renderedPageCount = new AtomicInteger();
         AtomicLong pageStorageNanos = new AtomicLong();
-        int updateInterval = renderingUpdateInterval(totalPages);
-        long renderingStartedAt = System.nanoTime();
-        int renderedPageCountResult = pageImageRenderer.render(
-                documents.open(documentVersionId), image -> {
+        pdfPreparation.prepare(
+                documents.open(documentVersionId),
+                pages -> {
+                    extractedPages.set(pages);
+                    extractionNanos.set(recordParsePhase("extraction", extractionStartedAt));
+                    documents.replacePages(documentVersionId, pages);
+                    int totalPages = pages.size();
+                    totalPageCount.set(totalPages);
+                    progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
+                    renderingStartedAt.set(System.nanoTime());
+                },
+                image -> {
+                    int totalPages = totalPageCount.get();
+                    if (totalPages < 1) {
+                        throw new IllegalStateException("PDF images must follow extracted pages");
+                    }
                     long pageStorageStartedAt = System.nanoTime();
                     pageImages.store(documentVersionId, image);
                     pageStorageNanos.addAndGet(recordParsePhase("page-storage", pageStorageStartedAt));
                     int completedPages = renderedPageCount.incrementAndGet();
-                    if (completedPages % updateInterval == 0 || completedPages == totalPages) {
+                    if (completedPages % renderingUpdateInterval(totalPages) == 0 || completedPages == totalPages) {
                         progress.update(
                                 documentVersionId,
                                 "RENDERING",
@@ -103,8 +113,13 @@ public class UploadedDocumentIngestion {
                                 false);
                     }
                 });
-        long renderingAndStoreNanos = recordParsePhase("render-and-store", renderingStartedAt);
-        if (renderedPageCountResult != totalPages) {
+        List<DocumentProcessing.ExtractedPage> pages = extractedPages.get();
+        int totalPages = totalPageCount.get();
+        if (pages == null || totalPages < 1) {
+            throw new IllegalStateException("PDF preparation completed without extracted pages");
+        }
+        long renderingAndStoreNanos = recordParsePhase("render-and-store", renderingStartedAt.get());
+        if (renderedPageCount.get() != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
         // Keep the positioned extraction that just produced the durable page text. Re-opening the same PDF in the
@@ -117,7 +132,7 @@ public class UploadedDocumentIngestion {
         LOGGER.info(
                 "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageMs={}, structuringMs={}",
                 totalPages,
-                milliseconds(extractionNanos),
+                milliseconds(extractionNanos.get()),
                 milliseconds(renderingAndStoreNanos),
                 milliseconds(pageStorageNanos.get()),
                 milliseconds(structuringNanos));
