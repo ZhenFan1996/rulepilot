@@ -3,8 +3,15 @@ import type {
   LessonQualityReport,
   MediaConsistencyReport,
 } from '@/composables/lessonSupportingContent'
+import { useLocale } from '@/lib/locale'
 
 type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
+
+const mediaModes = [
+  ['TEXT', 'lesson.sidebar.media.text'],
+  ['AUDIO', 'lesson.sidebar.media.audio'],
+  ['VIDEO', 'lesson.sidebar.media.video'],
+] as const
 
 interface LessonDirectorySection {
   position: number
@@ -37,14 +44,16 @@ const emit = defineEmits<{
   selectMediaMode: [mode: MediaMode]
   resume: []
 }>()
+
+const { t } = useLocale()
 </script>
 
 <template>
-  <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" aria-label="讲解章节">
+  <aside class="min-w-0 max-w-full overflow-hidden lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)] lg:overflow-auto" :aria-label="t('lesson.sidebar.aria')">
     <div class="hidden items-end justify-between lg:flex">
       <div>
-        <p class="text-xs font-medium text-copper">讲解目录</p>
-        <h1 class="mt-2 font-display text-2xl font-semibold">{{ lessonStillGrowing ? '已完成章节' : lessonStatus === 'DRAFT_READY' ? '完整基础讲解' : '完整规则讲解' }}</h1>
+        <p class="text-xs font-medium text-copper">{{ t('lesson.sidebar.directory') }}</p>
+        <h1 class="mt-2 font-display text-2xl font-semibold">{{ lessonStillGrowing ? t('lesson.sidebar.completedChapters') : lessonStatus === 'DRAFT_READY' ? t('lesson.sidebar.baseGuide') : t('lesson.sidebar.completeGuide') }}</h1>
       </div>
       <span class="text-sm font-semibold text-copper">{{ progressPercent }}%</span>
     </div>
@@ -52,8 +61,8 @@ const emit = defineEmits<{
     <details v-if="quality && !generationActive" class="mt-4 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
       <summary class="cursor-pointer list-none text-sm font-semibold">
         <span class="flex items-center justify-between gap-3">
-          <span>讲解有问题？查看诊断</span>
-          <span :class="quality.status === 'READY' ? 'text-emerald-700' : quality.status === 'BLOCKED' ? 'text-red-700' : 'text-amber-700'">{{ quality.status === 'READY' ? '可交付' : quality.status === 'BLOCKED' ? '有阻塞项' : '需要复核' }}</span>
+          <span>{{ t('lesson.sidebar.quality.title') }}</span>
+          <span :class="quality.status === 'READY' ? 'text-emerald-700' : quality.status === 'BLOCKED' ? 'text-red-700' : 'text-amber-700'">{{ quality.status === 'READY' ? t('lesson.sidebar.quality.ready') : quality.status === 'BLOCKED' ? t('lesson.sidebar.quality.blocked') : t('lesson.sidebar.quality.review') }}</span>
         </span>
       </summary>
       <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
@@ -65,39 +74,39 @@ const emit = defineEmits<{
     </details>
 
     <div v-if="lessonStatus === 'DRAFT_READY' && !generationActive" class="mt-3 hidden rounded-2xl border border-indigo/20 bg-indigo/5 p-3 text-sm text-indigo lg:block">
-      <p class="font-semibold">完整基础讲解可以使用</p>
-      <p class="mt-1 text-xs leading-5 text-ink/60">全部章节已有原文引用，{{ supportedSectionCount }} / {{ sections.length }} 节完成细节核对。你可以先开桌，也可以继续后台核对。</p>
+      <p class="font-semibold">{{ t('lesson.sidebar.draft.title') }}</p>
+      <p class="mt-1 text-xs leading-5 text-ink/60">{{ t('lesson.sidebar.draft.detail', { supported: supportedSectionCount, total: sections.length }) }}</p>
       <button
         class="mt-3 min-h-10 rounded-xl bg-indigo px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
         :disabled="resuming || !online"
         @click="emit('resume')"
       >
-        {{ resuming ? '正在继续…' : '继续核对细节' }}
+        {{ resuming ? t('lesson.sidebar.resuming') : t('lesson.sidebar.reviewDetails') }}
       </button>
     </div>
 
     <div v-if="visualEnrichmentSummary" class="mt-3 block rounded-2xl border border-indigo/15 bg-paper/70 p-3 text-sm" :class="visualEnrichmentActive ? 'text-indigo' : 'text-ink/65'">
-      <p class="font-semibold">{{ visualEnrichmentActive ? '正在补入局部图示' : '局部图示处理完成' }}</p>
+      <p class="font-semibold">{{ visualEnrichmentActive ? t('lesson.sidebar.visual.enriching') : t('lesson.sidebar.visual.completed') }}</p>
       <p class="mt-1 text-xs leading-5 text-ink/60">{{ visualEnrichmentSummary }}</p>
     </div>
 
     <div v-if="lessonStatus === 'INCOMPLETE' && !generationActive" class="mt-3 hidden rounded-2xl border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-950 lg:block">
-      <p class="font-semibold">已验证 {{ supportedSectionCount }} / {{ sections.length }} 节</p>
-      <p class="mt-1 text-xs leading-5 text-amber-900/75">继续时会保留已经通过引用与事实检查的章节，只补尚未通过的部分。</p>
+      <p class="font-semibold">{{ t('lesson.sidebar.incomplete.progress', { supported: supportedSectionCount, total: sections.length }) }}</p>
+      <p class="mt-1 text-xs leading-5 text-amber-900/75">{{ t('lesson.sidebar.incomplete.detail') }}</p>
       <button
         class="mt-3 min-h-10 rounded-xl bg-amber-900 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
         :disabled="resuming || !online"
         @click="emit('resume')"
       >
-        {{ resuming ? '正在补全…' : '继续补全讲解' }}
+        {{ resuming ? t('lesson.sidebar.resuming') : t('lesson.sidebar.resumeGuide') }}
       </button>
     </div>
 
     <details v-if="mediaConsistency && !generationActive" class="mt-3 hidden rounded-2xl border border-ink/10 bg-paper/70 p-3 lg:block">
       <summary class="cursor-pointer list-none text-sm font-semibold">
         <span class="flex items-center justify-between gap-3">
-          <span>图文与音视频状态</span>
-          <span :class="mediaConsistency.status === 'CONSISTENT' ? 'text-emerald-700' : 'text-red-700'">{{ mediaConsistency.status === 'CONSISTENT' ? '一致' : '需检查' }}</span>
+          <span>{{ t('lesson.sidebar.media.status') }}</span>
+          <span :class="mediaConsistency.status === 'CONSISTENT' ? 'text-emerald-700' : 'text-red-700'">{{ mediaConsistency.status === 'CONSISTENT' ? t('lesson.sidebar.media.consistent') : t('lesson.sidebar.media.check') }}</span>
         </span>
       </summary>
       <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
@@ -108,9 +117,9 @@ const emit = defineEmits<{
       </ul>
     </details>
 
-    <div v-if="!generationActive" class="grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1 lg:mt-4" aria-label="讲解形式">
+    <div v-if="!generationActive" class="grid grid-cols-3 rounded-2xl border border-ink/10 bg-paper/70 p-1 lg:mt-4" :aria-label="t('lesson.sidebar.media.formats')">
       <button
-        v-for="mode in ([['TEXT', '图文'], ['AUDIO', '语音'], ['VIDEO', '视频']] as const)"
+        v-for="mode in mediaModes"
         :key="mode[0]"
         class="min-h-10 rounded-xl px-2 text-xs font-semibold transition"
         :disabled="!mediaModeAvailable(mode[0])"
@@ -118,7 +127,7 @@ const emit = defineEmits<{
         :aria-pressed="mediaMode === mode[0]"
         @click="emit('selectMediaMode', mode[0])"
       >
-        {{ mode[1] }}
+        {{ t(mode[1]) }}
       </button>
     </div>
 

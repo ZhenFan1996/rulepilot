@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import LessonReaderSidebar from './LessonReaderSidebar.vue'
+import { setLocale } from '@/lib/locale'
 
 const mediaModeAvailable = vi.fn((mode: 'TEXT' | 'AUDIO' | 'VIDEO') => mode !== 'AUDIO')
 
@@ -42,6 +43,8 @@ function mountSidebar(overrides = {}) {
 }
 
 describe('LessonReaderSidebar', () => {
+  afterEach(() => setLocale('zh-CN'))
+
   it('forwards chapter, media, and resume intents without owning reader state', async () => {
     const wrapper = mountSidebar()
 
@@ -59,5 +62,20 @@ describe('LessonReaderSidebar', () => {
 
     expect(wrapper.get('button[aria-pressed="false"][disabled]').text()).toBe('语音')
     expect(wrapper.get('button.bg-indigo').attributes('disabled')).toBeDefined()
+  })
+
+  it('localizes reader controls and status chrome without changing emitted intents', () => {
+    setLocale('en')
+    const wrapper = mountSidebar()
+
+    expect(wrapper.attributes('aria-label')).toBe('Guide chapters')
+    expect(wrapper.text()).toContain('Guide contents')
+    expect(wrapper.text()).toContain('Starter guide ready')
+    expect(wrapper.text()).toContain('Guide check')
+    expect(wrapper.text()).toContain('Focused visuals are ready')
+    expect(wrapper.text()).toContain('Reading, audio, and video')
+    expect(wrapper.text()).toContain('Reading')
+    expect(wrapper.text()).toContain('Audio')
+    expect(wrapper.text()).toContain('Video')
   })
 })
