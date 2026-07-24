@@ -3,6 +3,10 @@ spring:
     name: rulepilot-worker
   main:
     web-application-type: none
+    # The dedicated worker only needs its document-consumer dependency graph at boot.
+    # Deferring API, reader, and lesson-delivery beans keeps a small host's memory available
+    # for PDFBox page rendering rather than holding an idle copy of the web application.
+    lazy-initialization: true
   ai:
     mcp:
       server:
