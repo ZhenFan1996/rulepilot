@@ -26,7 +26,7 @@ class TeachingPlanServiceTest {
         worker.start();
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
-                        () -> TeachingPlanService.awaitCatalog(slowCatalog, Duration.ofMillis(20)))
+                        () -> VisualRulebookCataloger.awaitCatalog(slowCatalog, Duration.ofMillis(20)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("timed out");
         worker.join(250);
