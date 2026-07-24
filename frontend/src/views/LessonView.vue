@@ -10,6 +10,8 @@ import LessonChapterContent from '@/components/LessonChapterContent.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus, { type LessonGenerationActivity } from '@/components/LessonGenerationStatus.vue'
 import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
+import LessonReaderChapterHeader from '@/components/LessonReaderChapterHeader.vue'
+import LessonReaderControls from '@/components/LessonReaderControls.vue'
 import LessonReaderSidebar from '@/components/LessonReaderSidebar.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
@@ -380,12 +382,12 @@ function stepSourceLabel(step: LessonSection['steps'][number]) {
 function lessonOutcome(section: LessonSection) {
   const tags = new Set(section.coverageTags)
   const key = section.topicKey.toLowerCase()
-  if (tags.has('setup') || key.includes('setup')) return '把组件摆到正确位置，并能一眼确认开局已经准备好。'
-  if (tags.has('scoring') || key.includes('scor')) return '按正确顺序算完分，知道每一项从哪里来。'
-  if (tags.has('end') || key.includes('end')) return '认出游戏何时结束，以及结束后马上做什么。'
-  if (tags.has('action') || key.includes('action') || key.includes('turn')) return '轮到你时知道有哪些选择，并能完整走完一次行动。'
-  if (key.includes('objective') || key.includes('goal')) return '用一句话讲清你在争取什么，以及最后如何判断胜负。'
-  return `用自己的话讲清“${section.title}”，并知道它在桌上什么时候会用到。`
+  if (tags.has('setup') || key.includes('setup')) return t('lesson.reader.outcome.setup')
+  if (tags.has('scoring') || key.includes('scor')) return t('lesson.reader.outcome.scoring')
+  if (tags.has('end') || key.includes('end')) return t('lesson.reader.outcome.end')
+  if (tags.has('action') || key.includes('action') || key.includes('turn')) return t('lesson.reader.outcome.action')
+  if (key.includes('objective') || key.includes('goal')) return t('lesson.reader.outcome.objective')
+  return t('lesson.reader.outcome.generic', { section: section.title })
 }
 
 function moveMeta(kind: LessonSection['steps'][number]['kind'] | undefined) {
@@ -1312,32 +1314,14 @@ onUnmounted(() => {
 
         <section v-if="currentSection" class="min-w-0" aria-live="polite">
           <div class="rounded-[2rem] border border-ink/10 bg-paper p-5 shadow-sm sm:p-8">
-            <div class="flex flex-wrap items-start justify-between gap-4 border-b border-ink/8 pb-5">
-              <div class="max-w-3xl">
-                <p class="text-xs font-semibold text-copper">第 {{ currentSection.position }} / {{ lesson.sections.length }} 节</p>
-                <h2 class="mt-2 font-display text-3xl font-semibold leading-tight sm:text-4xl">{{ currentSection.title }}</h2>
-                <p class="mt-3 hidden max-w-2xl text-sm leading-6 text-ink/55 sm:block">学完这一节，你应该能：{{ lessonOutcome(currentSection) }}</p>
-                <button
-                  type="button"
-                  class="mt-4 inline-flex min-h-11 items-center rounded-xl bg-indigo px-4 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-indigo/90"
-                  @click="focusQuestionPanel"
-                >
-                  问这一节的规则
-                </button>
-              </div>
-              <details class="relative hidden text-xs sm:block">
-                <summary class="cursor-pointer list-none rounded-full border border-ink/10 px-3 py-2 font-semibold text-ink/55">
-                  {{ currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE' ? '原文不足' : currentSection.evidenceStatus === 'CITED_DRAFT' ? '有原文引用 · 细节核对中' : '引用已核对' }}
-                </summary>
-                <div class="absolute right-0 z-10 mt-2 w-56 rounded-xl border border-ink/10 bg-paper p-3 leading-5 text-ink/60 shadow-lg">
-                  {{ currentSection.evidenceStatus === 'INSUFFICIENT_EVIDENCE' ? '这一节缺少足够原文，请把内容当作待补部分。' : currentSection.evidenceStatus === 'CITED_DRAFT' ? '每一步都可以回到对应原文，后台仍在核对细节。' : '本节引用与规则事实已经通过核对。' }}
-                </div>
-              </details>
-            </div>
-            <div v-if="lessonStillGrowing && readingCurrentLastChapter" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-indigo" role="status">
-              <p class="font-semibold">这是当前最后一节，后续章节仍在生成。</p>
-              <p class="mt-1 text-ink/55">你可以先读完并标记本节；下一节完成后，页面会自动继续。</p>
-            </div>
+            <LessonReaderChapterHeader
+              :section="currentSection"
+              :section-count="lesson.sections.length"
+              :outcome="lessonOutcome(currentSection)"
+              :lesson-still-growing="lessonStillGrowing"
+              :reading-current-last-chapter="readingCurrentLastChapter"
+              @ask-question="focusQuestionPanel"
+            />
 
             <audio
               v-if="narration"
@@ -1352,7 +1336,7 @@ onUnmounted(() => {
               @pause="onNarrationPaused"
               @ended="narrationPlaying = false"
               @error="onNarrationError"
-            >浏览器不支持音频播放。</audio>
+            >{{ t('lesson.reader.audio.unsupported') }}</audio>
 
             <LessonVideoPanel
               v-if="mediaMode === 'VIDEO'"
@@ -1459,13 +1443,17 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <nav v-if="lesson" class="fixed inset-x-0 bottom-0 z-30 border-t border-ink/10 bg-canvas/95 p-3 backdrop-blur lg:sticky lg:mx-auto lg:max-w-4xl lg:rounded-2xl lg:border" aria-label="讲解控制">
-        <div class="mx-auto grid max-w-3xl grid-cols-[0.8fr_1fr_1.5fr] gap-2">
-          <button :disabled="progress.currentIndex === 0" class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold disabled:opacity-35" @click="previousSection">上一节</button>
-          <button class="min-h-12 rounded-xl border border-ink/15 px-3 text-sm font-semibold" @click="finish('skipped')">稍后再看</button>
-          <button :disabled="waitingForNextChapter" class="min-h-12 rounded-xl bg-copper px-3 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60" @click="finish('completed')">{{ lessonStillGrowing && readingCurrentLastChapter ? (waitingForNextChapter ? '等待下一节…' : '这节看懂了，等待下一节') : progress.currentIndex === lesson.sections.length - 1 ? '我学完了' : '看懂了，下一节' }}</button>
-        </div>
-      </nav>
+      <LessonReaderControls
+        v-if="lesson"
+        :current-index="progress.currentIndex"
+        :section-count="lesson.sections.length"
+        :lesson-still-growing="lessonStillGrowing"
+        :reading-current-last-chapter="readingCurrentLastChapter"
+        :waiting-for-next-chapter="waitingForNextChapter"
+        @previous="previousSection"
+        @skip="finish('skipped')"
+        @complete="finish('completed')"
+      />
 
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
     </div>
