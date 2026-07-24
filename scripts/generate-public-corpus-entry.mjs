@@ -62,6 +62,10 @@ export function needsBggCatalog(entry) {
   return !entry?.publisherCover && Number.isInteger(entry?.bggId) && entry.bggId > 0
 }
 
+export function shouldImportBggCatalog(entry, bggStatus) {
+  return needsBggCatalog(entry) && bggStatus?.configured === true
+}
+
 export function slugify(value) {
   const slug = value.normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
   return slug || 'rulebook'
@@ -381,14 +385,15 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
 
   if (!state.catalog && needsBggCatalog(entry)) {
     const status = await client.request('/api/v1/bgg/status')
-    if (!status.configured) {
-      throw new Error(`${entry.title} requires BGG cover metadata, but the local BGG token is not configured`)
+    if (shouldImportBggCatalog(entry, status)) {
+      const imported = await client.request(`/api/v1/bgg/games/${entry.bggId}/import`, { method: 'POST' })
+      await checkpoint(outputPath, state, {
+        catalog: { gameId: imported.game.id, editionId: imported.edition.id, bggId: imported.bggId },
+      })
+      progress(state, `已关联 BGG 封面与游戏版本：${imported.game.name}`)
+    } else {
+      progress(state, '未配置 BGG，规则书将独立生成公开讲解并使用规则书首页封面')
     }
-    const imported = await client.request(`/api/v1/bgg/games/${entry.bggId}/import`, { method: 'POST' })
-    await checkpoint(outputPath, state, {
-      catalog: { gameId: imported.game.id, editionId: imported.edition.id, bggId: imported.bggId },
-    })
-    progress(state, `已关联 BGG 封面与游戏版本：${imported.game.name}`)
   }
 
   if (!state.document) {

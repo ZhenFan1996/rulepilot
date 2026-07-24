@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   parseArguments,
   needsBggCatalog,
+  shouldImportBggCatalog,
   selectEntry,
   selectReusableDocument,
   slugify,
@@ -27,6 +28,13 @@ test('uses BGG catalog metadata only when an official publisher cover is unavail
   assert.equal(needsBggCatalog({ publisherCover: 'https://publisher.example/cover.png', bggId: 123 }), false)
   assert.equal(needsBggCatalog({ publisherCover: null, bggId: 123 }), true)
   assert.equal(needsBggCatalog({ publisherCover: null, bggId: null }), false)
+})
+
+test('continues with a rulebook-front cover when optional BGG metadata is unavailable', () => {
+  const entry = { publisherCover: null, bggId: 123 }
+  assert.equal(shouldImportBggCatalog(entry, { configured: true }), true)
+  assert.equal(shouldImportBggCatalog(entry, { configured: false }), false)
+  assert.equal(shouldImportBggCatalog({ publisherCover: 'https://publisher.example/cover.png', bggId: 123 }, { configured: true }), false)
 })
 
 test('parses bounded local-run options and creates stable report slugs', () => {
