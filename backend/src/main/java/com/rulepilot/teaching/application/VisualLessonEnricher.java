@@ -3,8 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.ingestion.RulebookUnderstandingCatalog;
 import com.rulepilot.teaching.VisualRegionLocator;
-import com.rulepilot.teaching.VisualRegionLocator.Claim;
-import com.rulepilot.teaching.VisualRegionLocator.PageImage;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
@@ -14,7 +12,6 @@ import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -34,14 +31,10 @@ import org.springframework.stereotype.Service;
 public class VisualLessonEnricher {
 
     private final RulebookUnderstandingCatalog understanding;
-    private final DocumentPageImages pageImages;
-    private final VisualRulebookPageFacts visualPageFacts;
-    private final VisualRegionCandidateSelector candidates;
-    private final VisualRegionLocator locator;
     private final VisualSectionPrioritizer prioritizer;
     private final VisualReaderCropPolicy cropPolicy;
     private final VisualLessonMergePolicy mergePolicy;
-    private final VisualStepRelevancePolicy stepRelevancePolicy;
+    private final VisualLessonStepLocator stepLocator;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
     private final int requestParallelism;
@@ -58,14 +51,16 @@ public class VisualLessonEnricher {
             @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection,
             @Value("${rulepilot.visual.request-parallelism:1}") int requestParallelism) {
         this.understanding = understanding;
-        this.pageImages = pageImages;
-        this.visualPageFacts = visualPageFacts;
-        this.candidates = candidates;
-        this.locator = locator;
         this.prioritizer = prioritizer;
         this.cropPolicy = new VisualReaderCropPolicy();
         this.mergePolicy = new VisualLessonMergePolicy(cropPolicy);
-        this.stepRelevancePolicy = new VisualStepRelevancePolicy();
+        this.stepLocator = new VisualLessonStepLocator(
+                pageImages,
+                visualPageFacts,
+                candidates,
+                locator,
+                cropPolicy,
+                new VisualStepRelevancePolicy());
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
         }
@@ -199,12 +194,12 @@ public class VisualLessonEnricher {
         List<LessonStep> targets = visualTargets(section, limit);
         if (targets.isEmpty()) return result(section, Outcome.NO_CITED_CANDIDATE);
         try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
-            List<Future<StepLocation>> attempts = targets.stream()
+            List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
                     .map(step -> executor.submit(() -> locateWithProgress(
                             understanding, documentVersionId, section, step, modelConfigurationOwner, progress)))
                     .toList();
-            for (Future<StepLocation> attempt : attempts) {
-                StepLocation location = awaitLocation(attempt);
+            for (Future<VisualLessonStepLocator.Result> attempt : attempts) {
+                VisualLessonStepLocator.Result location = awaitLocation(attempt);
                 if (location.region() != null) accepted.add(location.region());
                 else if (location.rejection() != null) rejected = location.rejection();
             }
@@ -221,7 +216,7 @@ public class VisualLessonEnricher {
      * tiny and matches the provider-facing visual executor, so this shortens a player's wait without accumulating an
      * unbounded paid-image queue or changing the exact-step validation contract.
      */
-    private StepLocation locateWithProgress(
+    private VisualLessonStepLocator.Result locateWithProgress(
             com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
             UUID documentVersionId,
             LessonSection section,
@@ -230,14 +225,15 @@ public class VisualLessonEnricher {
             VisualProgressListener progress) {
         VisualTarget target = new VisualTarget(section.position(), section.title(), step.position(), step.heading());
         progress.targetStarted(target);
-        StepLocation location = locateForStep(understanding, documentVersionId, section, step, modelConfigurationOwner);
+        VisualLessonStepLocator.Result location = stepLocator.locate(
+                understanding, documentVersionId, section, step, modelConfigurationOwner);
         progress.targetFinished(target, location.region() == null
                 ? location.rejection() == null ? Outcome.LOCATOR_RETURNED_NONE : location.rejection()
                 : Outcome.ADDED);
         return location;
     }
 
-    private StepLocation awaitLocation(Future<StepLocation> attempt) {
+    private VisualLessonStepLocator.Result awaitLocation(Future<VisualLessonStepLocator.Result> attempt) {
         try {
             return attempt.get();
         } catch (InterruptedException interrupted) {
@@ -276,80 +272,6 @@ public class VisualLessonEnricher {
         return score;
     }
 
-    private StepLocation locateForStep(
-            com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
-            UUID documentVersionId,
-            LessonSection section,
-            LessonStep step,
-            String modelConfigurationOwner) {
-        Set<Integer> citedPages = new LinkedHashSet<>(step.sourcePages());
-        List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
-                understanding, citedPages, terms(section, step), visualPageFacts.find(documentVersionId, citedPages));
-        if (selected.isEmpty()) return StepLocation.rejected(Outcome.NO_CITED_CANDIDATE);
-        List<Integer> candidatePageOrder = selected.stream().map(VisualRegionCandidateSelector.Candidate::pageNumber)
-                .distinct()
-                .toList();
-        Map<Integer, DocumentPageImages.PageImage> availablePages = pageImages.read(
-                        documentVersionId, new LinkedHashSet<>(candidatePageOrder))
-                .stream()
-                .collect(Collectors.toMap(
-                        DocumentPageImages.PageImage::pageNumber, image -> image, (first, ignored) -> first));
-        List<PageImage> pages = candidatePageOrder.stream()
-                .map(availablePages::get)
-                .filter(java.util.Objects::nonNull)
-                .limit(2)
-                .map(image -> new PageImage(image.pageNumber(), image.mediaType(), image.content()))
-                .toList();
-        if (pages.isEmpty()) return StepLocation.rejected(Outcome.NO_PAGE_IMAGE);
-        Set<Integer> attachedPages = pages.stream().map(PageImage::pageNumber).collect(Collectors.toUnmodifiableSet());
-        List<VisualRegionCandidateSelector.Candidate> attachedCandidates = selected.stream()
-                .filter(candidate -> attachedPages.contains(candidate.pageNumber()))
-                .toList();
-        List<Claim> claims = claims(step);
-        var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
-                section.title() + " · " + step.heading(), claims, attachedCandidates, pages, modelConfigurationOwner));
-        if (guide.regions().isEmpty()) return StepLocation.rejected(outcomeFor(guide.diagnostic()));
-        Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
-        Outcome rejected = null;
-        for (VisualRegionLocator.LocatedRegion candidate : guide.regions()) {
-            VisualRegionLocator.LocatedRegion region = candidate;
-            if (cropPolicy.needsReaderViewport(region)) {
-                if (!cropPolicy.canExpandIntoReaderViewport(region)) {
-                    rejected = Outcome.REJECTED_TOO_SMALL;
-                    continue;
-                }
-                region = cropPolicy.expandIntoReaderViewport(region);
-            }
-            Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
-            if (rejection == null && !supportsExactStep(region, step)) {
-                rejection = Outcome.REJECTED_STEP_MISMATCH;
-            }
-            if (rejection == null && !stepRelevancePolicy.directlyIllustrates(step, region)) {
-                rejection = Outcome.REJECTED_STEP_MISMATCH;
-            }
-            if (rejection == null) return StepLocation.accepted(region);
-            rejected = rejection;
-        }
-        return StepLocation.rejected(rejected == null ? Outcome.REJECTED_UNKNOWN_EVIDENCE : rejected);
-    }
-
-    private boolean supportsExactStep(VisualRegionLocator.LocatedRegion region, LessonStep step) {
-        return region.supportedStepPositions().isEmpty() || region.supportedStepPositions().contains(step.position());
-    }
-
-    private Outcome rejectionFor(
-            VisualRegionLocator.LocatedRegion region,
-            List<VisualRegionCandidateSelector.Candidate> attachedCandidates,
-            Set<UUID> evidenceIds) {
-        if (!cropPolicy.isCompactReaderCrop(region)) return Outcome.REJECTED_WHOLE_PAGE;
-        if (!cropPolicy.isReadableForPlayer(region)) return Outcome.REJECTED_TOO_SMALL;
-        if (region.visibleDescription().isBlank()) return Outcome.REJECTED_MISSING_OBSERVATION;
-        if (!cropPolicy.isUsefulPlayerVisual(region)) return Outcome.REJECTED_NON_VISUAL;
-        if (!cropPolicy.intersectsCandidate(region, attachedCandidates)) return Outcome.REJECTED_OUTSIDE_CANDIDATE;
-        if (!evidenceIds.containsAll(region.supportedEvidenceIds())) return Outcome.REJECTED_UNKNOWN_EVIDENCE;
-        return null;
-    }
-
     private SectionResult result(LessonSection section, Outcome outcome) {
         return new SectionResult(section, new SectionOutcome(section.position(), outcome, outcomeSummary(section.position(), outcome)));
     }
@@ -358,25 +280,6 @@ public class VisualLessonEnricher {
         return count == 1
                 ? outcomeSummary(sectionPosition, Outcome.ADDED)
                 : "第 " + sectionPosition + " 节已加入 " + count + " 处可核对的局部规则书截图";
-    }
-
-    private Outcome outcomeFor(VisualRegionLocator.Diagnostic diagnostic) {
-        return switch (diagnostic) {
-            case NO_REGION -> Outcome.LOCATOR_RETURNED_NONE;
-            case OVERSIZED_REGION -> Outcome.MODEL_OVERSIZED_REGION;
-            case SEMANTIC_REJECTED -> Outcome.MODEL_SEMANTIC_REJECTED;
-            case MODEL_UNAVAILABLE -> Outcome.MODEL_UNAVAILABLE;
-            case EXPLICIT_NO_REGION -> Outcome.MODEL_EXPLICIT_NO_REGION;
-            case MALFORMED_RESPONSE -> Outcome.MODEL_MALFORMED_RESPONSE;
-            case UNSUPPORTED_SCOPE -> Outcome.MODEL_UNSUPPORTED_SCOPE;
-            case INVALID_GEOMETRY -> Outcome.MODEL_INVALID_GEOMETRY;
-            case NON_CHINESE_OBSERVATION -> Outcome.MODEL_NON_CHINESE_OBSERVATION;
-            case TIMEOUT -> Outcome.MODEL_TIMEOUT;
-            case INTERRUPTED -> Outcome.MODEL_INTERRUPTED;
-            case EXECUTOR_BUSY -> Outcome.MODEL_BUSY;
-            case PROVIDER_FAILURE -> Outcome.MODEL_PROVIDER_FAILURE;
-            case FOUND -> throw new IllegalArgumentException("found visual location cannot be rejected");
-        };
     }
 
     private String outcomeSummary(int sectionPosition, Outcome outcome) {
@@ -486,30 +389,6 @@ public class VisualLessonEnricher {
 
     private record SectionResult(LessonSection section, SectionOutcome outcome) {}
 
-    private List<String> terms(LessonSection section, LessonStep step) {
-        List<String> result = new ArrayList<>();
-        result.add(section.title());
-        result.addAll(section.coverageTags());
-        result.add(step.heading());
-        result.add(step.text());
-        return List.copyOf(result);
-    }
-
-    private List<Claim> claims(LessonStep step) {
-        return new LinkedHashSet<>(step.sourceChunkIds()).stream()
-                .map(id -> new Claim(id, claimText(step), step.sourcePages(), step.position()))
-                .toList();
-    }
-
-    /** The heading gives vision an unambiguous target when adjacent steps cite the same prose chunk. */
-    private String claimText(LessonStep step) {
-        String prefix = "步骤 " + step.position() + "（" + step.heading() + "）：";
-        int remaining = 600 - prefix.length();
-        if (remaining <= 0) return prefix.substring(0, 600);
-        String body = step.text();
-        return body.length() <= remaining ? prefix + body : prefix + body.substring(0, remaining);
-    }
-
     /**
      * A crop is a reading aid, not decorative repetition. Keep the first grounded use of a substantially identical
      * viewport and leave later steps as their original rule prose so a player does not see the same diagram twice.
@@ -527,13 +406,4 @@ public class VisualLessonEnricher {
                 original.position(), Outcome.ADDED, addedSummary(original.position(), distinct.addedCount())));
     }
 
-    private record StepLocation(VisualRegionLocator.LocatedRegion region, Outcome rejection) {
-        static StepLocation accepted(VisualRegionLocator.LocatedRegion region) {
-            return new StepLocation(region, null);
-        }
-
-        static StepLocation rejected(Outcome rejection) {
-            return new StepLocation(null, rejection);
-        }
-    }
 }
