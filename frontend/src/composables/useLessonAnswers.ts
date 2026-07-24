@@ -18,6 +18,7 @@ export interface StructuredRuleAnswer {
   citations: RuleCitation[]
   exceptions: string[]
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
   official: boolean
   confirmedRulingId: string | null
   confirmedRulingVersion: number | null

@@ -40,10 +40,22 @@ public interface RuleAnswering {
             List<Citation> citations,
             List<String> exceptions,
             String confidence,
+            String answerBasis,
             String clarification) {
         public Answer {
             citations = List.copyOf(citations);
             exceptions = List.copyOf(exceptions);
+        }
+
+        public Answer(
+                String status,
+                String shortVerdict,
+                String explanation,
+                List<Citation> citations,
+                List<String> exceptions,
+                String confidence,
+                String clarification) {
+            this(status, shortVerdict, explanation, citations, exceptions, confidence, null, clarification);
         }
     }
 

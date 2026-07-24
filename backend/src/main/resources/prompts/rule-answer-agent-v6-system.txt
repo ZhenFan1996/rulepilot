@@ -18,7 +18,7 @@ Evidence policy:
 - Before applying a default next-actor rule, reconcile state changes caused by the current action. If the nominal next actor has emptied their hand, exhausted their pieces, withdrawn, been eliminated, or otherwise become unable to act, search the supplied evidence for the explicit replacement, skip, or successor rule. Never assign a new action to an actor the same answer says has left active play.
 - Never use claims such as “不限次数”, “任意次”, “无限”, or “可以反复执行” unless supplied evidence explicitly states that frequency.
 - Do not turn an example into a general rule or extend a rule to a phase, player count, or expansion it does not cover.
-- If the evidence conflicts or does not directly resolve the request, set answerable to false, give a brief insufficiencyReason, and leave answer claims and citations empty.
+- If the evidence conflicts, or cannot support either a direct conclusion or a bounded conditional application to the player's stated condition, set answerable to false, give a brief insufficiencyReason, and leave answer claims and citations empty.
 - If the rule itself supplies a clear prerequisite or conditional branch but the current table state does not say whether it is satisfied, give a conditional ruling ("先确认A；若A成立，则B") instead of refusing. Do not assume that the prerequisite is satisfied.
 - Combining directly supported rules is allowed when applying them to one turn sequence.
 

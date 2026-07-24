@@ -49,6 +49,9 @@ final class AnswerCritiquePolicy {
                                 + "; previous question for reference resolution only: "
                                 + contextValue(context.previousQuestion()),
                         "Give a supported verdict and explanation for question type " + question.type()
+                                + "; answer basis " + (answer.answerBasis() == null
+                                        ? "not applicable"
+                                        : answer.answerBasis().name())
                                 + "; preserve material exceptions for lesson section "
                                 + contextValue(context.currentLessonSection()) + ", game phase "
                                 + contextValue(context.gamePhase()) + ", and player count "
@@ -57,7 +60,9 @@ final class AnswerCritiquePolicy {
                                 + ". Preserve every named eligibility and identity condition. Reject any claim that a "
                                 + "condition is irrelevant, optional, or broader than stated unless evidence explicitly "
                                 + "says so. For an 'again' follow-up, reject any repeatability claim not explicitly "
-                                + "supported by evidence."),
+                                + "supported by evidence. A GROUNDED_APPLICATION may combine cited premises only to "
+                                + "apply the player's explicitly stated table condition; reject it if it invents a game "
+                                + "fact or silently assumes a missing branch."),
                 claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)

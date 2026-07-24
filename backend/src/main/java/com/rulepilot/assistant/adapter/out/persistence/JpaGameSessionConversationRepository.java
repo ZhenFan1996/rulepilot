@@ -2,6 +2,7 @@ package com.rulepilot.assistant.adapter.out.persistence;
 
 import com.rulepilot.assistant.application.GameSessionConversationRepository;
 import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.RuleCitation;
@@ -111,6 +112,9 @@ class GameSessionConversationTurnEntity {
     @Column(nullable = false)
     String confidence;
 
+    @Column(name = "answer_basis", length = 40)
+    String answerBasis;
+
     @Column(nullable = false)
     boolean official;
 
@@ -145,6 +149,7 @@ class GameSessionConversationTurnEntity {
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         exceptions = new ArrayList<>(answer.exceptions());
         confidence = answer.confidence().name();
+        answerBasis = answer.answerBasis() == null ? null : answer.answerBasis().name();
         official = answer.official();
         confirmedRulingId = answer.confirmedRulingId();
         confirmedRulingVersion = answer.confirmedRulingVersion();
@@ -162,6 +167,7 @@ class GameSessionConversationTurnEntity {
                 citations.stream().map(PersistedRuleCitation::toDomain).toList(),
                 exceptions,
                 AnswerConfidence.valueOf(confidence),
+                answerBasis == null ? null : AnswerBasis.valueOf(answerBasis),
                 official,
                 confirmedRulingId,
                 confirmedRulingVersion,

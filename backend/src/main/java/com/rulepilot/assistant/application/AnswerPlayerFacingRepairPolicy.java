@@ -86,6 +86,13 @@ final class AnswerPlayerFacingRepairPolicy {
                     + "repeatability boundary only when the question asks about it or cite the exact evidence that "
                     + "governs the same action.");
         }
+        if (AnswerSpatialScopePolicy.needsRepair(request, draft)) {
+            feedback.add("SPATIAL_SCOPE: The player gave one board position, but the draft adds a different row, "
+                    + "column, or geometric restriction not stated in that question. Do not infer that a marker "
+                    + "beside one row or column blocks neighbouring rows or columns. Keep only the exact printed "
+                    + "restriction. If the answer depends on a physical placement the supplied evidence does not "
+                    + "specify, say what the player must confirm instead of naming extra coordinates.");
+        }
         return List.copyOf(feedback);
     }
 }

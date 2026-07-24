@@ -88,7 +88,7 @@ describe('PublicLessonView', () => {
         return Response.json({
           answer: {
             status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步。',
-            citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', clarification: null,
+            citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', answerBasis: 'GROUNDED_APPLICATION', clarification: null,
           },
           visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
           examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
@@ -117,6 +117,8 @@ describe('PublicLessonView', () => {
 
     expect(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')).toBeTruthy()
     expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
+    expect(wrapper.text()).toContain('按规则套用到你的局面')
+    expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
     expect(wrapper.get('a[aria-label="打开来源：设置，第 2 页"]').attributes('href'))

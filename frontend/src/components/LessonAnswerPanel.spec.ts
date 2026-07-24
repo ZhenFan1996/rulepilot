@@ -10,6 +10,7 @@ const answered = {
   citations: [{ chunkId: 'chunk-1', sectionType: 'RULE', heading: '回合结束', excerpt: '结算本轮。', pageFrom: 4, pageTo: 4 }],
   exceptions: ['除非效果明确打断结算。'],
   confidence: 'HIGH' as const,
+  answerBasis: 'GROUNDED_APPLICATION' as const,
   official: false,
   confirmedRulingId: null,
   confirmedRulingVersion: null,
@@ -78,6 +79,9 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('先完成结算，再记录本轮结果。')
     expect(wrapper.text()).toContain('回合结束')
     expect(wrapper.text()).toContain('第 4 页')
+    expect(wrapper.text()).toContain('规则套用')
+    expect(wrapper.text()).toContain('这条答案如何得出')
+    expect(wrapper.text()).toContain('这不是额外规则')
 
     await wrapper.findAll('button').find((button) => button.text() === '编辑裁定')!.trigger('click')
     expect(wrapper.emitted('update:editing-ruling')).toEqual([[true]])

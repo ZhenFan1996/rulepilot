@@ -24,18 +24,23 @@ class AnswerVisualEvidencePolicyTest {
                 "The operational icon is visually identical to the same icon labeled 'Energy token' on page 5.",
                 "Energy token is listed in the components legend.");
         ModelDraft unnamed = new ModelDraft(
+                true,
+                null,
                 "Pay the required resource.",
                 "Use the icon shown by the rule.",
                 List.of(operationalChunk),
                 List.of(),
-                "HIGH");
+                "HIGH",
+                "GROUNDED_APPLICATION");
 
         assertThat(AnswerVisualEvidencePolicy.hasEvidencedCrossPageIconMapping(request)).isTrue();
         assertThat(AnswerVisualEvidencePolicy.requiresIdentityReconciliation(request, unnamed)).isFalse();
         assertThat(AnswerVisualEvidencePolicy.resolvedComponents(request, unnamed)).containsExactly("Energy token");
         assertThat(AnswerVisualEvidencePolicy.namesEveryResolvedComponent(request, unnamed)).isFalse();
-        assertThat(AnswerVisualEvidencePolicy.includeReferenceCitations(request, unnamed).citationIds())
+        ModelDraft withReference = AnswerVisualEvidencePolicy.includeReferenceCitations(request, unnamed);
+        assertThat(withReference.citationIds())
                 .containsExactly(operationalChunk, referenceChunk);
+        assertThat(withReference.answerBasis()).isEqualTo("GROUNDED_APPLICATION");
     }
 
     @Test

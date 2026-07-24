@@ -18,11 +18,14 @@ class AnswerDraftSafetyPolicyTest {
     void removesInternalReferencesAndReplacesOneResolvedGlyph() {
         UUID chunkId = UUID.randomUUID();
         ModelDraft draft = new ModelDraft(
+                true,
+                null,
                 "支付 🟢 [E1]",
                 "参见 chunk 48a31827-0ebf-42f2-8b9f-8a33c842e15e（，）后执行。",
                 List.of(chunkId),
                 List.of(),
-                "HIGH");
+                "HIGH",
+                "GROUNDED_APPLICATION");
 
         ModelDraft normalized = AnswerDraftSafetyPolicy.normalizeSingleMappedVisualGlyph(draft, List.of("Energy token"));
         normalized = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(normalized);
@@ -32,6 +35,7 @@ class AnswerDraftSafetyPolicyTest {
         assertThat(normalized.explanation()).doesNotContain("chunk", "48a31827", "E1", "（，）");
         assertThat(AnswerDraftSafetyPolicy.containsInternalEvidenceReference(normalized)).isFalse();
         assertThat(AnswerDraftSafetyPolicy.containsVisualGlyph(normalized)).isFalse();
+        assertThat(normalized.answerBasis()).isEqualTo("GROUNDED_APPLICATION");
     }
 
     @Test

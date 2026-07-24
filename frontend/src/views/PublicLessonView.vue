@@ -52,6 +52,7 @@ interface PublicAnswer {
     citations: RuleCitation[]
     exceptions: string[]
     confidence: 'LOW' | 'MEDIUM' | 'HIGH'
+    answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
     clarification: string | null
   }
   visualAids: Array<{ visualFocus: VisualFocus; relatedStep: string }>
@@ -172,6 +173,8 @@ function isPublicAnswer(value: unknown): value is PublicAnswer {
     && Array.isArray(answer.citations) && answer.citations.every(isCitation)
     && Array.isArray(answer.exceptions) && answer.exceptions.every((exception) => typeof exception === 'string')
     && isConfidence(answer.confidence)
+    && (answer.answerBasis === undefined || answer.answerBasis === null
+      || answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
     && (typeof answer.clarification === 'string' || answer.clarification === null)
     && Array.isArray(value.visualAids) && value.visualAids.every(isVisualAid)
     && Array.isArray(value.examples) && value.examples.every(isExample)
@@ -247,6 +250,18 @@ async function load() {
 
 function confidenceLabel(confidence: PublicAnswer['answer']['confidence']) {
   return { LOW: t('public.answer.low'), MEDIUM: t('public.answer.medium'), HIGH: t('public.answer.high') }[confidence]
+}
+
+function answerBasisLabel(answerBasis: PublicAnswer['answer']['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION'
+    ? t('public.answer.groundedBasis')
+    : t('public.answer.directBasis')
+}
+
+function answerBasisDescription(answerBasis: PublicAnswer['answer']['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION'
+    ? t('public.answer.groundedDescription')
+    : t('public.answer.directDescription')
 }
 
 function citationPageLabel(citation: RuleCitation) {
@@ -384,9 +399,9 @@ watch([locale, planId], () => {
               <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
               <article :id="`public-answer-${index}`" tabindex="-1" class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm outline-none focus:ring-4 focus:ring-indigo/15 sm:max-w-[88%]">
                 <div class="p-5 sm:p-6">
-                  <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
+                  <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="turn.answer.answer.status === 'ANSWERED'" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
                   <p class="mt-4 font-display text-xl font-semibold leading-8">{{ turn.answer.answer.shortVerdict }}</p>
-                  <p v-if="turn.answer.answer.status === 'ANSWERED' && turn.answer.answer.explanation" class="mt-3 leading-7 text-ink/75">{{ turn.answer.answer.explanation }}</p>
+                  <div v-if="turn.answer.answer.status === 'ANSWERED' && turn.answer.answer.explanation" class="mt-4 rounded-2xl bg-canvas p-4 text-sm leading-6 text-ink/70"><p class="font-semibold text-indigo">{{ t('public.answer.trace') }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(turn.answer.answer.answerBasis) }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ turn.answer.answer.explanation }}</p></div>
                   <p v-else class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ answerFailureMessage(turn.answer.answer) }}</p>
                   <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
 

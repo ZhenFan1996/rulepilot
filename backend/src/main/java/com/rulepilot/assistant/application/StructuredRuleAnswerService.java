@@ -53,7 +53,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v59-direct-tie-break-evidence";
+    private static final String ANSWER_POLICY_VERSION = "answer-v62-grounded-application-spatial-scope";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
@@ -197,6 +197,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                 .toList(),
                         answer.exceptions(),
                         answer.confidence().name(),
+                        answer.answerBasis() == null ? null : answer.answerBasis().name(),
                         answer.clarification()),
                 answer.citations().stream()
                         .map(RuleCitation::chunkId)
@@ -377,6 +378,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
         }
         draft = removePeripheralEndgameCitations(modelRequest, draft);
+        draft = AnswerSpatialScopePolicy.boundRepeatedInference(modelRequest, draft);
+        draft = AnswerBasisPolicy.classify(modelRequest, draft);
         if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(modelRequest.question(), modelRequest.evidence())
                 && !AnswerEvidencePolicy.citesEndTurnProcedure(modelRequest.evidence(), draft.citationIds())) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答没有引用回合结束处理的直接规则依据。");
@@ -457,7 +460,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         if (revised == null || !revised.answerable()) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
-        return publicationValidator.publish(documentVersionId, revised, evidence);
+        return publicationValidator.publish(
+                documentVersionId, AnswerBasisPolicy.classify(modelRequest, revised), evidence);
     }
 
     private ModelDraft reviseEvidenceBackedAbstention(
@@ -473,7 +477,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 + "and an explicitly described tie state. If the evidence gives a prerequisite or conditional branch "
                 + "but the current table state is otherwise unknown, answer conditionally instead of assuming the "
                 + "condition or refusing. Preserve relative rules, scope, timing, negation, and exceptions exactly. "
-                + "Remain unanswerable when the excerpts still do not directly resolve the question.";
+                + "When two or more cited premises jointly determine the result for the exact table condition the player "
+                + "stated, provide a bounded grounded application: identify the condition, apply only those premises, "
+                + "and label any still-unknown branch instead of refusing. Remain unanswerable only when the excerpts "
+                + "cannot support either a direct conclusion or a bounded conditional application.";
         String feedback = AnswerReplenishmentPolicy.hasEvidencedProcedure(modelRequest)
                 ? baseFeedback + " DIRECT_REPLENISHMENT_PROCEDURE: A supplied excerpt explicitly gives the sequence for "
                         + "continuing when the named draw or supply area becomes empty. Apply that stated sequence to "
@@ -504,7 +511,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 draft.explanation(),
                 decisive,
                 draft.exceptions(),
-                draft.confidence());
+                draft.confidence(),
+                draft.answerBasis());
     }
 
     private ModelDraft revisePlayerFacingDraft(

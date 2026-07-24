@@ -36,6 +36,7 @@ interface RuleAnswer {
   citations: Citation[]
   exceptions: string[]
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
+  answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
   clarification: string | null
 }
 
@@ -230,6 +231,16 @@ function pages(citation: Citation) {
   return citation.pageFrom === citation.pageTo ? `第 ${citation.pageFrom} 页` : `第 ${citation.pageFrom}–${citation.pageTo} 页`
 }
 
+function answerBasisLabel(answerBasis: RuleAnswer['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION' ? '按规则套用当前局面' : '规则原文直接裁定'
+}
+
+function answerBasisDescription(answerBasis: RuleAnswer['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION'
+    ? '这条结论把已引用规则用于你刚才描述的局面；没有把未说明的桌面状态当作事实。'
+    : '这条结论可由下方引用的规则原文直接核对。'
+}
+
 onMounted(() => void loadTable())
 onUnmounted(() => {
   if (elapsedTimer !== undefined) window.clearInterval(elapsedTimer)
@@ -282,8 +293,10 @@ onUnmounted(() => {
               <h1 class="mt-2 font-display text-2xl font-semibold leading-9">{{ latestTurn.answer.shortVerdict }}</h1>
               <p v-if="latestTurn.answer.status !== 'ANSWERED'" class="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{{ latestTurn.answer.clarification ?? '当前证据还不足以给出可靠裁定。' }}</p>
               <details v-else class="mt-5 border-t border-ink/10 pt-4">
-                <summary class="cursor-pointer font-semibold text-indigo">为什么？有没有例外？</summary>
-                <p class="mt-3 leading-7 text-ink/70">{{ latestTurn.answer.explanation }}</p>
+                <summary class="cursor-pointer font-semibold text-indigo">这条裁定如何得出？</summary>
+                <p class="mt-3 text-sm font-semibold text-copper">{{ answerBasisLabel(latestTurn.answer.answerBasis) }}</p>
+                <p class="mt-2 text-sm leading-6 text-ink/60">{{ answerBasisDescription(latestTurn.answer.answerBasis) }}</p>
+                <p class="mt-3 leading-7 text-ink/70"><span class="font-semibold text-ink">套用到当前问题：</span>{{ latestTurn.answer.explanation }}</p>
                 <ul v-if="latestTurn.answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
                   <li v-for="item in latestTurn.answer.exceptions" :key="item">{{ item }}</li>
                 </ul>

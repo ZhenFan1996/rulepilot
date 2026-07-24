@@ -108,7 +108,8 @@ final class AnswerVisualEvidencePolicy {
                 draft.explanation(),
                 List.copyOf(citations),
                 draft.exceptions(),
-                draft.confidence());
+                draft.confidence(),
+                draft.answerBasis());
     }
 
     private static Stream<EvidenceInput> applicableMappingEvidence(ModelRequest request, ModelDraft draft) {

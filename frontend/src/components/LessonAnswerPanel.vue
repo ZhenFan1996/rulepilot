@@ -76,6 +76,16 @@ function confidenceLabel(confidence: StructuredRuleAnswer['confidence']) {
   return { HIGH: '高置信度', MEDIUM: '中等置信度', LOW: '低置信度' }[confidence]
 }
 
+function answerBasisLabel(answerBasis: StructuredRuleAnswer['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION' ? '规则套用' : '原文可直接裁定'
+}
+
+function answerBasisDescription(answerBasis: StructuredRuleAnswer['answerBasis']) {
+  return answerBasis === 'GROUNDED_APPLICATION'
+    ? '这不是额外规则：回答把下方引用的规则，用在你描述的局面上。'
+    : '下方引用的规则原文已经直接说明了这个结论。'
+}
+
 function citationPages(citation: StructuredRuleAnswer['citations'][number]) {
   return citation.pageFrom === citation.pageTo
     ? `第 ${citation.pageFrom} 页`
@@ -180,6 +190,7 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
           <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : '你问' }}：{{ answeredQuestion }}</p>
           <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
             <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
+            <span v-if="answer.status === 'ANSWERED'" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
             <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? '已确认裁定' : answer.official ? '官方来源' : '上传规则资料' }}</span>
           </div>
           <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
@@ -188,11 +199,12 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
           <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
 
           <div v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
-            <p class="text-sm font-semibold text-indigo">详细解释</p>
-            <p class="mt-3 leading-7 text-ink/70">{{ answer.explanation }}</p>
-            <ul v-if="answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
-              <li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li>
-            </ul>
+            <p class="text-sm font-semibold text-indigo">这条答案如何得出</p>
+            <ol class="mt-3 space-y-3 text-sm leading-6 text-ink/70">
+              <li class="rounded-2xl bg-indigo/[0.045] p-3"><span class="font-semibold text-ink">规则依据：</span>{{ answerBasisDescription(answer.answerBasis) }}</li>
+              <li class="rounded-2xl bg-paper p-3"><span class="font-semibold text-ink">套用到你的问题：</span>{{ answer.explanation }}</li>
+              <li v-if="answer.exceptions.length" class="rounded-2xl bg-copper/[0.07] p-3"><span class="font-semibold text-ink">还要留意：</span><ul class="mt-1 list-disc space-y-1 pl-5"><li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li></ul></li>
+            </ol>
           </div>
 
           <div v-if="answer.status === 'ANSWERED'" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" aria-label="继续追问">

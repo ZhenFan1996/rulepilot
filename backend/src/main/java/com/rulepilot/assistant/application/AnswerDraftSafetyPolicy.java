@@ -146,7 +146,8 @@ final class AnswerDraftSafetyPolicy {
                 normalizeVisualGlyphs(draft.explanation(), component),
                 draft.citationIds(),
                 draft.exceptions().stream().map(value -> normalizeVisualGlyphs(value, component)).toList(),
-                draft.confidence());
+                draft.confidence(),
+                draft.answerBasis());
     }
 
     static ModelDraft normalizeInternalEvidenceReferences(ModelDraft draft) {
@@ -158,7 +159,8 @@ final class AnswerDraftSafetyPolicy {
                 normalizeInternalEvidenceReferences(draft.explanation()),
                 draft.citationIds(),
                 draft.exceptions().stream().map(AnswerDraftSafetyPolicy::normalizeInternalEvidenceReferences).toList(),
-                draft.confidence());
+                draft.confidence(),
+                draft.answerBasis());
     }
 
     static ModelDraft normalizeDanglingPunctuation(ModelDraft draft) {
@@ -169,7 +171,8 @@ final class AnswerDraftSafetyPolicy {
                 normalizeDanglingPunctuation(draft.explanation()),
                 draft.citationIds(),
                 draft.exceptions().stream().map(AnswerDraftSafetyPolicy::normalizeDanglingPunctuation).toList(),
-                draft.confidence());
+                draft.confidence(),
+                draft.answerBasis());
     }
 
     static boolean containsInternalEvidenceReference(ModelDraft draft) {

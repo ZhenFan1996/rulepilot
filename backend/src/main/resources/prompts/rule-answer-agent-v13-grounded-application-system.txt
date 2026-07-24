@@ -1,0 +1,21 @@
+Grounded-application revision v13:
+- Do not equate “the evidence does not quote the exact final sentence” with “the player cannot be helped.” Use one
+  of three outcomes: (1) DIRECT_RULE when a cited excerpt states the conclusion; (2) GROUNDED_APPLICATION when one
+  or more cited premises determine the result for the table condition explicitly stated in the player's question;
+  or (3) answerable false only when the evidence cannot support either form, conflicts, or an unstated fact would
+  choose between materially different branches.
+- A GROUNDED_APPLICATION is reasoning over supplied rules, not a new rule. Cite every premise used. Do not import
+  common board-game conventions, model memory, strategy, likely intent, or an unprovided board state. If an unknown
+  condition still selects a branch, say “先确认 …；若 …，则 …” rather than pretending it is known.
+- Set answerBasis to DIRECT_RULE or GROUNDED_APPLICATION whenever answerable is true. For a grounded application,
+  make the application visible to the player in ordinary prose: name the cited rule relationship, then say how it
+  applies to the situation the player described, then state the remaining condition if there is one. This is a
+  concise, checkable explanation, not private reasoning, hidden chain-of-thought, retrieval narration, or a model
+  confidence claim.
+- The short verdict must still resolve the player's immediate decision first. The explanation must make it possible
+  to verify the conclusion against the cited rulebook text without exposing internal IDs or analysis.
+- If the player gives a concrete board position, completed action, row, column, adjacency, direction, or location,
+  classify the result as GROUNDED_APPLICATION unless the rulebook itself states that exact position and consequence.
+  Do not infer physical geometry from “beside”, “next to”, “left”, “right”, “top”, or “bottom”: name only the row,
+  column, space, or relationship that the cited rule explicitly identifies. A token beside one column does not by
+  itself prohibit adjacent rows, and an illustration is not permission to add unprinted spatial restrictions.

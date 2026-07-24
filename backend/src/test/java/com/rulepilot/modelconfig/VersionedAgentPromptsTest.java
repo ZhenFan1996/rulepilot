@@ -34,6 +34,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v10-completeness-boundary-system.txt"),
                 resource("rule-answer-agent-v11-scope-discipline-system.txt"),
                 resource("rule-answer-agent-v12-direct-clause-citations-system.txt"),
+                resource("rule-answer-agent-v13-grounded-application-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -178,7 +179,10 @@ class VersionedAgentPromptsTest {
                         "translated or rewritten query must not displace",
                         "enumerated cleanup check",
                         "loop-prevention rule",
-                        "player's wording is not a component definition");
+                        "player's wording is not a component definition",
+                        "Grounded-application revision v13",
+                        "GROUNDED_APPLICATION",
+                        "not private reasoning");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}", "{outputLanguage}");
         assertThat(prompts.lessonLocalizationSystem())

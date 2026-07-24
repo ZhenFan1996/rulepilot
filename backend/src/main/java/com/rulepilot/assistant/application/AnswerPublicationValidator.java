@@ -4,6 +4,7 @@ import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceClaim;
 import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.RuleCitation;
@@ -64,9 +65,10 @@ final class AnswerPublicationValidator {
                     source.excerpt(), source.pageFrom(), source.pageTo());
         }).toList();
         AnswerConfidence confidence = AnswerConfidence.valueOf(draft.confidence().toUpperCase(Locale.ROOT));
+        AnswerBasis answerBasis = AnswerBasis.fromModelValue(draft.answerBasis());
         return new StructuredRuleAnswer(
                 versionId, AnswerStatus.ANSWERED, draft.shortVerdict(), draft.explanation(), citations,
-                draft.exceptions(), confidence, false, null, null, null);
+                draft.exceptions(), confidence, answerBasis, false, null, null, null);
     }
 
     private static EvidenceSource toVerifierEvidence(HybridEvidenceHit hit) {

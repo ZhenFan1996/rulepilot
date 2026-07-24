@@ -122,11 +122,26 @@ public interface RuleAnswerModel {
             String explanation,
             List<UUID> citationIds,
             List<String> exceptions,
-            String confidence) {
+            String confidence,
+            String answerBasis) {
 
         public ModelDraft {
             citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
             exceptions = exceptions == null ? List.of() : List.copyOf(exceptions);
+            answerBasis = answerable && (answerBasis == null || answerBasis.isBlank())
+                    ? "DIRECT_RULE"
+                    : answerBasis;
+        }
+
+        public ModelDraft(
+                boolean answerable,
+                String insufficiencyReason,
+                String shortVerdict,
+                String explanation,
+                List<UUID> citationIds,
+                List<String> exceptions,
+                String confidence) {
+            this(answerable, insufficiencyReason, shortVerdict, explanation, citationIds, exceptions, confidence, null);
         }
 
         public ModelDraft(
@@ -135,7 +150,7 @@ public interface RuleAnswerModel {
                 List<UUID> citationIds,
                 List<String> exceptions,
                 String confidence) {
-            this(true, null, shortVerdict, explanation, citationIds, exceptions, confidence);
+            this(true, null, shortVerdict, explanation, citationIds, exceptions, confidence, null);
         }
     }
 }

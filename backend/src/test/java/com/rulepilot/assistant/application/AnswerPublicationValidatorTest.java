@@ -7,6 +7,7 @@ import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.EvidenceVerifier.Verification;
 import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
@@ -31,6 +32,41 @@ class AnswerPublicationValidatorTest {
             assertThat(citation.documentVersionId()).isEqualTo(versionId);
             assertThat(citation.pageFrom()).isEqualTo(4);
         });
+    }
+
+    @Test
+    void keepsTheExplicitGroundedApplicationBasisWithTheValidatedAnswer() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        ModelDraft grounded = new ModelDraft(
+                true,
+                null,
+                "若你描述的条件成立，则按该规则执行。",
+                "规则先要求满足列出的条件；你已说明条件成立，因此套用该结果。",
+                List.of(chunkId),
+                List.of(),
+                "MEDIUM",
+                "GROUNDED_APPLICATION");
+
+        var answer = validator.publish(versionId, grounded, List.of(evidence(versionId)));
+
+        assertThat(answer.answerBasis()).isEqualTo(AnswerBasis.GROUNDED_APPLICATION);
+    }
+
+    @Test
+    void rejectsAnUnknownModelAnswerBasisRatherThanPublishingIt() {
+        AnswerPublicationValidator validator = new AnswerPublicationValidator(verified());
+        ModelDraft unknownBasis = new ModelDraft(
+                true,
+                null,
+                "可以执行这个行动。",
+                "规则满足列出的条件后允许执行该行动。",
+                List.of(chunkId),
+                List.of(),
+                "MEDIUM",
+                "MODEL_MEMORY");
+
+        assertThatThrownBy(() -> validator.publish(versionId, unknownBasis, List.of(evidence(versionId))))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

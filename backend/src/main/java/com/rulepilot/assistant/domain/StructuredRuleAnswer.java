@@ -11,6 +11,7 @@ public record StructuredRuleAnswer(
         List<RuleCitation> citations,
         List<String> exceptions,
         AnswerConfidence confidence,
+        AnswerBasis answerBasis,
         boolean official,
         UUID confirmedRulingId,
         Long confirmedRulingVersion,
@@ -26,6 +27,9 @@ public record StructuredRuleAnswer(
         if (status == AnswerStatus.ANSWERED && citations.isEmpty()) {
             throw new IllegalArgumentException("answered rule response requires citations");
         }
+        answerBasis = status == AnswerStatus.ANSWERED
+                ? answerBasis == null ? AnswerBasis.DIRECT_RULE : answerBasis
+                : null;
         if (status != AnswerStatus.ANSWERED && !citations.isEmpty()) {
             throw new IllegalArgumentException("non-answered rule response cannot contain citations");
         }
@@ -34,5 +38,32 @@ public record StructuredRuleAnswer(
                 || status != AnswerStatus.ANSWERED && confirmedRulingId != null) {
             throw new IllegalArgumentException("confirmed ruling answer identity is invalid");
         }
+    }
+
+    public StructuredRuleAnswer(
+            UUID documentVersionId,
+            AnswerStatus status,
+            String shortVerdict,
+            String explanation,
+            List<RuleCitation> citations,
+            List<String> exceptions,
+            AnswerConfidence confidence,
+            boolean official,
+            UUID confirmedRulingId,
+            Long confirmedRulingVersion,
+            String clarification) {
+        this(
+                documentVersionId,
+                status,
+                shortVerdict,
+                explanation,
+                citations,
+                exceptions,
+                confidence,
+                null,
+                official,
+                confirmedRulingId,
+                confirmedRulingVersion,
+                clarification);
     }
 }

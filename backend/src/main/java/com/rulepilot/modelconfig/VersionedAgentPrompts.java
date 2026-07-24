@@ -51,6 +51,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v10-completeness-boundary-system.txt") Resource answerCompletenessBoundary,
             @Value("classpath:prompts/rule-answer-agent-v11-scope-discipline-system.txt") Resource answerScopeDiscipline,
             @Value("classpath:prompts/rule-answer-agent-v12-direct-clause-citations-system.txt") Resource answerDirectClauseCitations,
+            @Value("classpath:prompts/rule-answer-agent-v13-grounded-application-system.txt") Resource answerGroundedApplication,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -92,7 +93,8 @@ public class VersionedAgentPrompts {
                 answerProhibitionFidelity,
                 answerCompletenessBoundary,
                 answerScopeDiscipline,
-                answerDirectClauseCitations);
+                answerDirectClauseCitations,
+                answerGroundedApplication);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);

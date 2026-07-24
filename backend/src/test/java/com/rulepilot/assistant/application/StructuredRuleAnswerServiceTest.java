@@ -65,6 +65,46 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void publishesAConditionalApplicationAfterTheModelReconsidersRelevantRulePremises() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Action timing",
+                "After completing the listed prerequisite, the player may resolve the action.", 6, 6, 0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(false, "The result is not copied verbatim", null, null, List.of(), List.of(), "LOW");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("jointly determine the result"));
+                return new ModelDraft(
+                        true,
+                        null,
+                        "若你已完成该前置条件，就可以结算这个行动。",
+                        "规则要求先完成前置条件；按你描述的情况该条件已经满足，因此可以结算行动。",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "MEDIUM",
+                        "GROUNDED_APPLICATION");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                model);
+
+        var answer = service.answer(
+                "我已经完成前置条件，现在可以结算这个行动吗？",
+                new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.answerBasis().name()).isEqualTo("GROUNDED_APPLICATION");
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
     void preservesInternalCitationIdentityForAVisualAidWithoutExposingItInTheReadableCitation() {
         UUID chunkId = UUID.randomUUID();
         StructuredRuleAnswer answer = new StructuredRuleAnswer(
