@@ -16,8 +16,6 @@ import com.rulepilot.assistant.QuestionUnderstanding;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
-import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
@@ -59,6 +57,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
+    private final AnswerModelRequestFactory modelRequestFactory;
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
     private final RuleDataVersion ruleDataVersion;
@@ -95,6 +94,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
         this.evidenceRetriever = new AnswerEvidenceRetriever(
                 retrieval, visualFacts, evidenceLookup, invocations, modelGateway);
+        this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
         this.rateLimiter = rateLimiter;
         this.ruleDataVersion = ruleDataVersion;
@@ -318,7 +318,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         ModelDraft draft;
         ModelRequest modelRequest;
         try {
-            modelRequest = toRequest(understood, context, evidence);
+            modelRequest = modelRequestFactory.create(understood, context, evidence);
             draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
@@ -575,26 +575,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static RuleEvidenceLookup emptyEvidenceLookup() {
         return (documentVersionId, chunkIds) -> List.of();
-    }
-
-    private ModelRequest toRequest(
-            UnderstoodQuestion question, QuestionContext context, List<HybridEvidenceHit> evidence) {
-        return new ModelRequest(
-                question.normalizedQuestion(),
-                question.type(),
-                new AnswerContext(
-                        context.currentLessonSection(),
-                        context.gamePhase(),
-                        context.playerCount(),
-                        context.activeExpansions().size(),
-                        context.previousQuestion(),
-                        context.learningIntent(),
-                        context.outputLanguage()),
-                evidence.stream()
-                        .map(HybridEvidenceHit::evidence)
-                        .map(hit -> new EvidenceInput(
-                                hit.chunkId(), hit.sectionType(), hit.heading(), hit.excerpt(), hit.pageFrom(), hit.pageTo()))
-                        .toList());
     }
 
     private RunSnapshot finishRun(RunSnapshot run, StructuredRuleAnswer answer) {
