@@ -30,6 +30,7 @@ import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/
 import { useLessonLocalization } from '@/composables/useLessonLocalization'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonGenerationPresentation } from '@/composables/useLessonGenerationPresentation'
+import { useConditionalPolling } from '@/composables/useConditionalPolling'
 import type {
   LessonComprehensionReport,
 } from '@/composables/lessonSupportingContent'
@@ -126,9 +127,7 @@ const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
 const waitingForNextChapter = ref(false)
 const generationNow = ref(Date.now())
-let generationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
-let visualRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let lessonViewDisposed = false
 let latestLessonLoad = 0
 
@@ -288,6 +287,17 @@ const {
   visualEnrichmentRun,
   generationStatusUnknown,
   now: generationNow,
+})
+
+const generationPolling = useConditionalPolling({
+  enabled: () => !lessonViewDisposed && online.value && generationActive.value,
+  refresh: refreshGeneration,
+  defaultDelay: 1_500,
+})
+const visualPolling = useConditionalPolling({
+  enabled: () => !lessonViewDisposed && online.value && visualEnrichmentActive.value,
+  refresh: refreshVisualEnrichment,
+  defaultDelay: 2_500,
 })
 
 function pageImageUrl(page: number | undefined) {
@@ -494,8 +504,8 @@ async function loadSupportingContent(targetPlanId: string, request = latestLesso
 async function loadLesson() {
   const targetPlanId = planId.value
   const request = ++latestLessonLoad
-  clearGenerationRefresh()
-  clearVisualRefresh()
+  generationPolling.clear()
+  visualPolling.clear()
   loading.value = true
   errorMessage.value = ''
   resetLessonReader()
@@ -551,35 +561,16 @@ async function loadLesson() {
       ),
       paused: false,
     }
-    if (generationActive.value) scheduleGenerationRefresh()
+    if (generationActive.value) generationPolling.schedule()
     else await loadSupportingContent(targetPlanId, request)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (visualEnrichmentActive.value) scheduleVisualRefresh()
+    if (visualEnrichmentActive.value) visualPolling.schedule()
   } catch {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     errorMessage.value = t('lesson.reader.error.load')
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
   }
-}
-
-function clearGenerationRefresh() {
-  if (generationRefreshTimer) clearTimeout(generationRefreshTimer)
-  generationRefreshTimer = undefined
-}
-
-function clearVisualRefresh() {
-  if (visualRefreshTimer) clearTimeout(visualRefreshTimer)
-  visualRefreshTimer = undefined
-}
-
-function scheduleVisualRefresh(delay = 2500) {
-  clearVisualRefresh()
-  if (lessonViewDisposed || !online.value || !visualEnrichmentActive.value) return
-  visualRefreshTimer = setTimeout(() => {
-    visualRefreshTimer = undefined
-    void refreshVisualEnrichment()
-  }, delay)
 }
 
 async function refreshVisualEnrichment() {
@@ -602,17 +593,8 @@ async function refreshVisualEnrichment() {
   } catch {
     retryDelay = 5000
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) scheduleVisualRefresh(retryDelay)
+    if (isCurrentLessonLoad(request, targetPlanId)) visualPolling.schedule(retryDelay)
   }
-}
-
-function scheduleGenerationRefresh(delay = 1500) {
-  clearGenerationRefresh()
-  if (lessonViewDisposed || !online.value || !generationActive.value) return
-  generationRefreshTimer = setTimeout(() => {
-    generationRefreshTimer = undefined
-    void refreshGeneration()
-  }, delay)
 }
 
 function terminalGenerationMessage(state: string) {
@@ -687,7 +669,7 @@ async function refreshGeneration() {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     generationRefreshError.value = t('lesson.generation.refreshFailed')
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) scheduleGenerationRefresh()
+    if (isCurrentLessonLoad(request, targetPlanId)) generationPolling.schedule()
   }
 }
 
@@ -881,10 +863,10 @@ function handleKeydown(event: KeyboardEvent) {
 function updateOnlineStatus() {
   online.value = navigator.onLine
   if (!online.value) refreshOfflineKnowledge()
-  if (online.value && generationActive.value) scheduleGenerationRefresh(0)
-  else if (!online.value) clearGenerationRefresh()
-  if (online.value && visualEnrichmentActive.value) scheduleVisualRefresh(0)
-  else if (!online.value) clearVisualRefresh()
+  if (online.value && generationActive.value) generationPolling.schedule(0)
+  else if (!online.value) generationPolling.clear()
+  if (online.value && visualEnrichmentActive.value) visualPolling.schedule(0)
+  else if (!online.value) visualPolling.clear()
 }
 
 onMounted(() => {
@@ -911,8 +893,8 @@ watch(planId, () => {
 
 onUnmounted(() => {
   lessonViewDisposed = true
-  clearGenerationRefresh()
-  clearVisualRefresh()
+  generationPolling.dispose()
+  visualPolling.dispose()
   disposeLessonLocalization()
   if (generationClockTimer) clearInterval(generationClockTimer)
   generationClockTimer = undefined
