@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import LessonGenerationStatus from './LessonGenerationStatus.vue'
+import { setLocale } from '@/lib/locale'
 
 function mountStatus(overrides: Record<string, unknown> = {}) {
   return mount(LessonGenerationStatus, {
@@ -30,6 +31,8 @@ function mountStatus(overrides: Record<string, unknown> = {}) {
 }
 
 describe('LessonGenerationStatus', () => {
+  afterEach(() => setLocale('zh-CN'))
+
   it('renders player-safe live progress without exposing raw activity details', () => {
     const wrapper = mountStatus()
 
@@ -51,5 +54,16 @@ describe('LessonGenerationStatus', () => {
     await wrapper.setProps({ active: false, finishedMessage: '讲解已经生成完成，全部章节都已载入。' })
     expect(wrapper.text()).toContain('讲解已经生成完成')
     expect(wrapper.find('[role="progressbar"]').exists()).toBe(false)
+  })
+
+  it('localizes all deterministic progress chrome while retaining the supplied activity text', () => {
+    setLocale('en')
+    const wrapper = mountStatus({ statusText: 'Writing “开始对局” from the rulebook', remainingTime: 'About 2 minutes remaining.' })
+
+    expect(wrapper.text()).toContain('Writing “开始对局” from the rulebook')
+    expect(wrapper.text()).toContain('The complete guide is still being built')
+    expect(wrapper.text()).toContain('2/5 chapters processed; 1 passed review')
+    expect(wrapper.text()).toContain('3 model calls')
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-label')).toBe('2 of 5 chapters processed')
   })
 })

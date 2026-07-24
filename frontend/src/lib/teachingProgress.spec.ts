@@ -45,6 +45,10 @@ describe('teaching progress', () => {
     expect(supportedTeachingChapterCount(snapshot)).toBe(1)
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z')))
       .toContain('第一节完成后')
+    expect(teachingActivityText(plan, activities, activities[0], 'en'))
+      .toBe('Writing “完成开局设置” from the rulebook')
+    expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z'), 'en'))
+      .toContain('After the first chapter is ready')
   })
 })
 

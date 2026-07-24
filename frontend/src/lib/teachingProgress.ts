@@ -55,10 +55,29 @@ export function teachingActivityText(
   plan: TeachingProgressPlan,
   activities: TeachingActivity[],
   activity: TeachingActivity | undefined,
+  locale: AppLocale = 'zh-CN',
 ) {
-  if (!activity) return '正在准备规则依据和章节顺序'
+  if (!activity) return locale === 'en' ? 'Preparing rulebook support and chapter order' : '正在准备规则依据和章节顺序'
   const chapter = chapterForActivity(plan, activities, activity)
-  const target = chapter ? `“${chapter.title}”` : '当前内容'
+  const target = chapter ? `“${chapter.title}”` : locale === 'en' ? 'this part of the guide' : '当前内容'
+  if (locale === 'en') {
+    if (activity.operation.startsWith('searchRuleEvidence')) return `Finding rulebook support for ${target}`
+    if (activity.operation.startsWith('composeTeachingSection')) return `Writing ${target} from the rulebook`
+    if (activity.operation.startsWith('correctTeachingSection')) return `Correcting ${target} from the review notes`
+    if (activity.operation.startsWith('reviseTeachingSection')) return `Revising ${target} after review`
+    if (activity.operation.startsWith('confirmGeneratedClaims')) return `Checking each rule claim in ${target}`
+    if (activity.operation.startsWith('reviewGeneratedContent')) return `Reviewing rules and sources for ${target}`
+    if (activity.operation.startsWith('reviewPublishedTeachingSection')) return `Starter guide ready; reviewing details for ${target}`
+    if (activity.operation.startsWith('reviewObjectiveCoverage')) return `Checking ${target} for missing key steps`
+    if (activity.operation.startsWith('validateTeachingSection')) {
+      return activity.outcome === 'SUCCEEDED' ? `${target} passed its structure check` : `${target} needs another revision`
+    }
+    if (activity.operation.startsWith('publishTeachingSection')) {
+      if (activity.summary.includes('CITED_DRAFT_PUBLISHED')) return `A readable starter guide for ${target} is ready`
+      return activity.outcome === 'SUCCEEDED' ? `${target} passed review` : `${target} keeps its starter guide while review continues`
+    }
+    return 'Organising and reviewing the guide'
+  }
   if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
   if (activity.operation.startsWith('composeTeachingSection')) {
     return `正在依据规则书编写${target}`
@@ -103,18 +122,27 @@ export function teachingRemainingTimeText(
   plan: TeachingProgressPlan,
   run: TeachingRunProgress | null,
   now: number,
+  locale: AppLocale = 'zh-CN',
 ) {
   const completed = processedTeachingChapterCount(run)
   const total = plan.sections.length
-  if (completed === 0) return '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
-  if (completed >= total) return '完整基础讲解已经可读，后台正在核对细节。'
+  if (completed === 0) return locale === 'en'
+    ? 'After the first chapter is ready, we will estimate the remaining time from this rulebook’s actual pace.'
+    : '第一节完成后，会按这本规则书的真实速度估算剩余时间。'
+  if (completed >= total) return locale === 'en'
+    ? 'The complete starter guide is readable; background detail review is still running.'
+    : '完整基础讲解已经可读，后台正在核对细节。'
   const startedAt = run?.run.createdAt
-  if (!startedAt) return '已有章节完成，正在继续处理后续内容。'
+  if (!startedAt) return locale === 'en'
+    ? 'Some chapters are ready; the remaining content is still being processed.'
+    : '已有章节完成，正在继续处理后续内容。'
   const elapsedMinutes = Math.max(0.1, (now - new Date(startedAt).getTime()) / 60_000)
   const estimatedMinutes = elapsedMinutes / completed * (total - completed)
   const low = Math.max(1, Math.floor(estimatedMinutes * 0.7))
   const high = Math.max(low + 1, Math.ceil(estimatedMinutes * 1.5))
-  return `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；基础讲解会优先发布，配图与细节核对随后补充。`
+  return locale === 'en'
+    ? `At the current pace, the remaining chapters may take about ${low}–${high} minutes. The starter guide publishes first; visuals and detail review follow.`
+    : `按目前速度，剩余章节大约还需 ${low}–${high} 分钟；基础讲解会优先发布，配图与细节核对随后补充。`
 }
 
 function operationPosition(operation: string) {
@@ -148,3 +176,4 @@ function publishedPositions(activities: TeachingActivity[]) {
     .map((activity) => operationPosition(activity.operation))
     .filter((position): position is number => position !== null))
 }
+import type { AppLocale } from './locale'

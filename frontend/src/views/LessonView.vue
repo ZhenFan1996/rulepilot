@@ -13,6 +13,7 @@ import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
 import LessonReaderChapterHeader from '@/components/LessonReaderChapterHeader.vue'
 import LessonReaderControls from '@/components/LessonReaderControls.vue'
 import LessonReaderSidebar from '@/components/LessonReaderSidebar.vue'
+import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
@@ -270,8 +271,8 @@ const readingCurrentLastChapter = computed(
 const generationActivities = computed(() => teachingRun.value?.activities ?? [])
 const currentGenerationActivity = computed(() => generationActivities.value.at(-1))
 const currentGenerationText = computed(() => plan.value
-  ? teachingActivityText(plan.value, generationActivities.value, currentGenerationActivity.value)
-  : '正在准备规则依据和章节顺序')
+  ? teachingActivityText(plan.value, generationActivities.value, currentGenerationActivity.value, locale.value)
+  : t('lesson.generation.preparing'))
 const generationElapsed = computed(() => teachingElapsedLabel(teachingRun.value, generationNow.value))
 const processedGenerationChapters = computed(() => processedTeachingChapterCount(teachingRun.value))
 const supportedGenerationChapters = computed(() => supportedTeachingChapterCount(teachingRun.value))
@@ -279,7 +280,7 @@ const generationProgressWidth = computed(() => `${Math.round(
   processedGenerationChapters.value / Math.max(1, plan.value?.sections.length ?? 1) * 100,
 )}%`)
 const generationRemainingTime = computed(() => plan.value
-  ? teachingRemainingTimeText(plan.value, teachingRun.value, generationNow.value)
+  ? teachingRemainingTimeText(plan.value, teachingRun.value, generationNow.value, locale.value)
   : '')
 const recentGenerationActivities = computed<LessonGenerationActivity[]>(() => generationActivities.value
   .slice(-3)
@@ -288,8 +289,8 @@ const recentGenerationActivities = computed<LessonGenerationActivity[]>(() => ge
     sequence: activity.sequence,
     outcome: activity.outcome,
     text: plan.value
-      ? teachingActivityText(plan.value, generationActivities.value, activity)
-      : '正在整理并核对讲解',
+      ? teachingActivityText(plan.value, generationActivities.value, activity, locale.value)
+      : t('lesson.generation.preparing'),
   })))
 
 function pageImageUrl(page: number | undefined) {
@@ -567,7 +568,7 @@ async function loadLesson() {
       return
     }
     if (!planResponse.ok || !lessonResponse.ok) {
-      throw new Error('无法读取这份讲解，请重新生成。')
+      throw new Error(t('lesson.reader.error.load'))
     }
     const [loadedPlan, loadedLesson, loadedRun, loadedVisualRun] = await Promise.all([
       planResponse.json() as Promise<TeachingPlan>,
@@ -584,7 +585,7 @@ async function loadLesson() {
     teachingRun.value = loadedRun
     visualEnrichmentRun.value = loadedVisualRun
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
-    if (generationStatusUnknown.value) generationRefreshError.value = '暂时无法确认后台生成状态。'
+    if (generationStatusUnknown.value) generationRefreshError.value = t('lesson.generation.refreshFailed')
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
     progress.value = {
       ...restoreLessonProgress(
@@ -597,9 +598,9 @@ async function loadLesson() {
     else await loadSupportingContent(targetPlanId, request)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (visualEnrichmentActive.value) scheduleVisualRefresh()
-  } catch (error) {
+  } catch {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    errorMessage.value = error instanceof Error ? error.message : '讲解加载失败。'
+    errorMessage.value = t('lesson.reader.error.load')
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
   }
@@ -658,11 +659,11 @@ function scheduleGenerationRefresh(delay = 1500) {
 }
 
 function terminalGenerationMessage(state: string) {
-  if (state === 'COMPLETED') return '讲解已经生成完成，全部章节都已载入。'
+  if (state === 'COMPLETED') return t('lesson.generation.finished.complete')
   if (state === 'INSUFFICIENT_EVIDENCE' || state === 'DEGRADED') {
-    return '本轮生成已经结束；已通过核对的章节仍可阅读，缺少依据的部分可以继续补全。'
+    return t('lesson.generation.finished.incomplete')
   }
-  if (state === 'FAILED') return '后台生成已经停止，已完成章节仍然保留，可以稍后重新补全。'
+  if (state === 'FAILED') return t('lesson.generation.finished.failed')
   return ''
 }
 
@@ -683,7 +684,7 @@ async function refreshGeneration() {
       return
     }
     if ((!runResponse.ok && runResponse.status !== 404) || !lessonResponse.ok) {
-      throw new Error('暂时没有取得最新章节。')
+      throw new Error(t('lesson.generation.refreshFailed'))
     }
 
     const [incomingRun, incomingLesson] = await Promise.all([
@@ -725,9 +726,9 @@ async function refreshGeneration() {
       if (!isCurrentLessonLoad(request, targetPlanId)) return
       await refreshVisualEnrichment()
     }
-  } catch (error) {
+  } catch {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    generationRefreshError.value = error instanceof Error ? error.message : '暂时没有取得最新章节。'
+    generationRefreshError.value = t('lesson.generation.refreshFailed')
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) scheduleGenerationRefresh()
   }
@@ -1268,25 +1269,12 @@ onUnmounted(() => {
         <div class="mt-6 h-80 animate-pulse rounded-3xl bg-paper" />
       </div>
 
-      <section v-else-if="errorMessage" class="mx-auto max-w-xl px-5 py-20 text-center">
-        <p class="font-display text-2xl font-semibold">讲解暂时无法打开</p>
-        <p class="mt-3 text-ink/60" role="alert">
-          {{ online ? errorMessage : '离线时无法加载尚未缓存的讲解，联网后可继续学习。' }}
-        </p>
-        <button
-          v-if="online"
-          class="mt-6 rounded-xl bg-copper px-5 py-3 font-semibold text-white"
-          @click="loadLesson"
-        >
-          重新加载
-        </button>
-      </section>
-
-      <section v-else-if="!lesson" class="mx-auto max-w-xl px-5 py-20 text-center">
-        <h1 class="font-display text-4xl font-semibold">还没有可以继续的讲解</h1>
-        <p class="mt-4 leading-7 text-ink/60">先导入规则书，创建教学计划并生成图文讲解。</p>
-        <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-xl bg-copper px-5 py-3 font-semibold text-white">开始导入</RouterLink>
-      </section>
+      <LessonReaderStateSurface
+        v-else-if="errorMessage || !lesson"
+        :error-message="errorMessage"
+        :online="online"
+        @retry="loadLesson"
+      />
 
       <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
         <LessonReaderSidebar
