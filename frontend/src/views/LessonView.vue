@@ -18,7 +18,6 @@ import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
-  type ConfirmedRuling,
   type CsrfResponse,
   type LearningIntent,
 } from '@/composables/useLessonAnswers'
@@ -29,6 +28,7 @@ import {
 } from '@/composables/useLessonSupportingContent'
 import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/useLessonNarrationPlayback'
 import { useLessonLocalization } from '@/composables/useLessonLocalization'
+import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import type {
   LessonComprehensionReport,
 } from '@/composables/lessonSupportingContent'
@@ -120,13 +120,6 @@ const lesson = ref<IllustratedLesson | null>(null)
 const sourceLesson = ref<IllustratedLesson | null>(null)
 const mediaMode = ref<MediaMode>('TEXT')
 const progress = ref<LessonProgress>(initialLessonProgress())
-const ruling = ref<ConfirmedRuling | null>(null)
-const rulingSaving = ref(false)
-const rulingError = ref('')
-const rulingConflict = ref(false)
-const editingRuling = ref(false)
-const editedVerdict = ref('')
-const editedExplanation = ref('')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
 const resumingLesson = ref(false)
@@ -211,9 +204,41 @@ const {
         version: received.confirmedRulingVersion,
       })
     } else {
-      ruling.value = null
+      resetRuling()
     }
-    rulingConflict.value = false
+  },
+})
+
+const {
+  ruling,
+  saving: rulingSaving,
+  error: rulingError,
+  conflict: rulingConflict,
+  editing: editingRuling,
+  editedVerdict,
+  editedExplanation,
+  applyRuling,
+  confirmAnswer,
+  saveRulingRevision,
+  reloadRuling,
+  reset: resetRuling,
+} = useConfirmedRuling({
+  documentVersionId: computed(() => plan.value?.documentVersionId ?? null),
+  answer,
+  answeredQuestion,
+  currentSectionTitle: () => currentSection.value?.title ?? t('lesson.answer.sectionFallback'),
+  csrfToken,
+  onApplied: (value, answered, sectionTitle) => {
+    cacheOfflineRuling(planId.value, answered, sectionTitle, value)
+    refreshOfflineKnowledge()
+  },
+  messages: {
+    createFailed: () => t('lesson.answer.ruling.createFailed'),
+    createRequestFailed: () => t('lesson.answer.ruling.createRequestFailed'),
+    updateFailed: () => t('lesson.answer.ruling.updateFailed'),
+    updateRequestFailed: () => t('lesson.answer.ruling.updateRequestFailed'),
+    reloadFailed: () => t('lesson.answer.ruling.reloadFailed'),
+    reloadRequestFailed: () => t('lesson.answer.ruling.reloadRequestFailed'),
   },
 })
 const chapterLeadStep = computed(() => {
@@ -467,13 +492,7 @@ function resetLessonReader() {
   resetLessonLocalization()
   progress.value = initialLessonProgress()
   resetConversation(true)
-  ruling.value = null
-  rulingSaving.value = false
-  rulingError.value = ''
-  rulingConflict.value = false
-  editingRuling.value = false
-  editedVerdict.value = ''
-  editedExplanation.value = ''
+  resetRuling()
   offlineKnowledge.value = []
   cardOcrOpen.value = false
   resumingLesson.value = false
@@ -703,10 +722,7 @@ function selectSection(index: number) {
   waitingForNextChapter.value = false
   progress.value = { ...progress.value, currentIndex: index }
   resetConversation(true)
-  ruling.value = null
-  rulingError.value = ''
-  rulingConflict.value = false
-  editingRuling.value = false
+  resetRuling()
   saveProgress()
   seekToChapter(index)
 }
@@ -813,9 +829,9 @@ async function csrfToken() {
   const response = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (response.status === 401) {
     await router.push({ name: 'login' })
-    throw new Error('请先登录。')
+    throw new Error(t('lesson.reader.error.loginRequired'))
   }
-  if (!response.ok) throw new Error('无法建立安全会话，请稍后重试。')
+  if (!response.ok) throw new Error(t('lesson.reader.error.secureSession'))
   return (await response.json()) as CsrfResponse
 }
 
@@ -836,98 +852,6 @@ async function resumeLesson() {
     errorMessage.value = error instanceof Error ? error.message : '暂时无法继续补全讲解。'
   } finally {
     resumingLesson.value = false
-  }
-}
-
-function applyRuling(value: ConfirmedRuling) {
-  ruling.value = value
-  editedVerdict.value = value.shortVerdict
-  editedExplanation.value = value.explanation
-  rulingConflict.value = false
-  editingRuling.value = false
-  cacheOfflineRuling(
-    planId.value,
-    answeredQuestion.value,
-    currentSection.value?.title ?? '规则答疑',
-    value,
-  )
-  refreshOfflineKnowledge()
-}
-
-async function confirmAnswer() {
-  if (!answer.value || answer.value.status !== 'ANSWERED' || !plan.value || rulingSaving.value) return
-  rulingSaving.value = true
-  rulingError.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch('/api/v1/confirmed-rulings', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({
-        documentVersionId: plan.value.documentVersionId,
-        expansionIds: [],
-        question: answeredQuestion.value,
-        shortVerdict: answer.value.shortVerdict,
-        explanation: answer.value.explanation,
-        citationChunkIds: answer.value.citations.map((citation) => citation.chunkId),
-        exceptions: answer.value.exceptions,
-        confidence: answer.value.confidence,
-      }),
-    })
-    if (!response.ok) throw new Error('无法保存这条裁定，可能已存在相同问题的确认版本。')
-    applyRuling((await response.json()) as ConfirmedRuling)
-  } catch (error) {
-    rulingError.value = error instanceof Error ? error.message : '保存裁定失败。'
-  } finally {
-    rulingSaving.value = false
-  }
-}
-
-async function saveRulingRevision() {
-  if (!ruling.value || rulingSaving.value) return
-  rulingSaving.value = true
-  rulingError.value = ''
-  rulingConflict.value = false
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/confirmed-rulings/${ruling.value.id}`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({
-        expectedVersion: ruling.value.version,
-        shortVerdict: editedVerdict.value,
-        explanation: editedExplanation.value,
-        citationChunkIds: ruling.value.citations.map((citation) => citation.chunkId),
-        exceptions: ruling.value.exceptions,
-        confidence: ruling.value.confidence,
-      }),
-    })
-    if (response.status === 409) {
-      rulingConflict.value = true
-      return
-    }
-    if (!response.ok) throw new Error('无法更新这条裁定。')
-    applyRuling((await response.json()) as ConfirmedRuling)
-  } catch (error) {
-    rulingError.value = error instanceof Error ? error.message : '更新裁定失败。'
-  } finally {
-    rulingSaving.value = false
-  }
-}
-
-async function reloadRuling() {
-  if (!ruling.value) return
-  rulingSaving.value = true
-  try {
-    const response = await fetch(`/api/v1/confirmed-rulings/${ruling.value.id}`, { credentials: 'include' })
-    if (!response.ok) throw new Error('无法加载服务器上的最新裁定。')
-    applyRuling((await response.json()) as ConfirmedRuling)
-  } catch (error) {
-    rulingError.value = error instanceof Error ? error.message : '加载最新裁定失败。'
-  } finally {
-    rulingSaving.value = false
   }
 }
 
