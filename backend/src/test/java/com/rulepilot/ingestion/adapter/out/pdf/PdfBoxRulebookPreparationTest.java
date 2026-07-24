@@ -127,6 +127,24 @@ class PdfBoxRulebookPreparationTest {
     }
 
     @Test
+    void keepsTextAndPositionedBlocksBoundToTheirOriginalPagesInOnePreparation() throws IOException {
+        byte[] pdf;
+        try (PDDocument document = new PDDocument(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            addTextPage(document, "SETUP");
+            addTextPage(document, "SCORING");
+            document.save(output);
+            pdf = output.toByteArray();
+        }
+        List<ExtractedPage> pages = new ArrayList<>();
+
+        new PdfBoxRulebookPreparation(10, 10_000).prepare(chunked(pdf), pages::addAll, ignored -> {});
+
+        assertThat(pages).extracting(ExtractedPage::text).containsExactly("SETUP", "SCORING");
+        assertThat(pages.getFirst().textBlocks()).extracting(block -> block.text()).containsExactly("SETUP");
+        assertThat(pages.get(1).textBlocks()).extracting(block -> block.text()).containsExactly("SCORING");
+    }
+
+    @Test
     void keepsSubsamplingEnabledAtTheEvidenceResolution() throws IOException {
         try (PDDocument document = new PDDocument()) {
             assertThat(PdfBoxRulebookPreparation.configuredRenderer(document).isSubsamplingAllowed())
@@ -141,6 +159,18 @@ class PdfBoxRulebookPreparationTest {
             }
             document.save(output);
             return output.toByteArray();
+        }
+    }
+
+    private void addTextPage(PDDocument document, String text) throws IOException {
+        PDPage page = new PDPage();
+        document.addPage(page);
+        try (PDPageContentStream stream = new PDPageContentStream(document, page)) {
+            stream.beginText();
+            stream.setFont(new PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA_BOLD), 14);
+            stream.newLineAtOffset(72, 720);
+            stream.showText(text);
+            stream.endText();
         }
     }
 

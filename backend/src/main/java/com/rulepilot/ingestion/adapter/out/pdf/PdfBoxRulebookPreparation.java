@@ -110,18 +110,18 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             throws IOException {
         LayoutTextStripper stripper = new LayoutTextStripper();
         stripper.setSortByPosition(true);
+        // PDFTextStripper initializes document and writer state through getText. LayoutTextStripper captures each
+        // page's writer output itself, so this traverses the PDF page tree once instead of once per page.
+        stripper.getText(document);
         List<DocumentProcessing.ExtractedPage> pages = new ArrayList<>(document.getNumberOfPages());
         int extractedCharacters = 0;
         for (int pageNumber = 1; pageNumber <= document.getNumberOfPages(); pageNumber++) {
-            stripper.setStartPage(pageNumber);
-            stripper.setEndPage(pageNumber);
-            stripper.preparePage(document.getPage(pageNumber - 1));
-            String text = stripper.getText(document).replace("\r\n", "\n").strip();
+            String text = stripper.capturedText(pageNumber).replace("\r\n", "\n").strip();
             extractedCharacters = Math.addExact(extractedCharacters, text.length());
             if (extractedCharacters > maxExtractedCharacters) {
                 throw new PdfExtractionException("PDF exceeds the configured extracted-text limit");
             }
-            pages.add(new DocumentProcessing.ExtractedPage(pageNumber, text, stripper.capturedBlocks()));
+            pages.add(new DocumentProcessing.ExtractedPage(pageNumber, text, stripper.capturedBlocks(pageNumber)));
         }
         return List.copyOf(pages);
     }
@@ -213,19 +213,46 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     private static final class LayoutTextStripper extends PDFTextStripper {
 
         private final List<DocumentProcessing.ExtractedTextBlock> blocks = new ArrayList<>();
+        private final List<List<DocumentProcessing.ExtractedTextBlock>> blocksByPage = new ArrayList<>();
+        private final List<String> textByPage = new ArrayList<>();
         private float pageWidth;
         private float pageHeight;
 
         private LayoutTextStripper() throws IOException {}
 
-        void preparePage(PDPage page) {
+        @Override
+        protected void startPage(PDPage page) throws IOException {
+            super.startPage(page);
             pageWidth = page.getMediaBox().getWidth();
             pageHeight = page.getMediaBox().getHeight();
             blocks.clear();
         }
 
-        List<DocumentProcessing.ExtractedTextBlock> capturedBlocks() {
-            return List.copyOf(blocks);
+        @Override
+        protected void writePage() throws IOException {
+            var originalOutput = output;
+            var pageOutput = new java.io.StringWriter();
+            output = pageOutput;
+            try {
+                super.writePage();
+                textByPage.add(pageOutput.toString());
+            } finally {
+                output = originalOutput;
+            }
+        }
+
+        @Override
+        protected void endPage(PDPage page) throws IOException {
+            blocksByPage.add(List.copyOf(blocks));
+            super.endPage(page);
+        }
+
+        String capturedText(int pageNumber) {
+            return textByPage.get(pageNumber - 1);
+        }
+
+        List<DocumentProcessing.ExtractedTextBlock> capturedBlocks(int pageNumber) {
+            return blocksByPage.get(pageNumber - 1);
         }
 
         @Override
