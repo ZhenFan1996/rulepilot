@@ -758,10 +758,10 @@ async function recordComprehension(
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({ result }),
     })
-    if (!response.ok) throw new Error('这次学习检查没有保存，请重试。')
+    if (!response.ok) throw new Error(t('lesson.comprehension.error.saveTaskRetry'))
     comprehension.value = (await response.json()) as LessonComprehensionReport
   } catch (error) {
-    comprehensionError.value = error instanceof Error ? error.message : '这次学习检查没有保存。'
+    comprehensionError.value = error instanceof Error ? error.message : t('lesson.comprehension.error.saveTask')
   } finally {
     comprehensionSaving.value = null
   }
@@ -782,10 +782,10 @@ async function recordVisualAid(
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({ result }),
     })
-    if (!response.ok) throw new Error('图片帮助反馈没有保存，请重试。')
+    if (!response.ok) throw new Error(t('lesson.comprehension.error.saveVisualRetry'))
     comprehension.value = (await response.json()) as LessonComprehensionReport
   } catch (error) {
-    comprehensionError.value = error instanceof Error ? error.message : '图片帮助反馈没有保存。'
+    comprehensionError.value = error instanceof Error ? error.message : t('lesson.comprehension.error.saveVisual')
   } finally {
     comprehensionSaving.value = null
   }
