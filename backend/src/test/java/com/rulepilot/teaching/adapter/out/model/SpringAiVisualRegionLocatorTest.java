@@ -25,7 +25,7 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void accepts_json_wrapped_in_a_model_code_fence() {
-        var parsed = SpringAiVisualRegionLocator.parseModelRegion("""
+        var parsed = VisualLocatorResponsePolicy.parseModelRegion("""
                 ```json
                 {"pageNumber":1,"label":"QR code","x":780,"y":472,"width":126,"height":89,"supportedClaimRefs":["C1"]}
                 ```
@@ -34,29 +34,29 @@ class SpringAiVisualRegionLocatorTest {
         assertThat(parsed).isPresent();
         assertThat(parsed.orElseThrow())
                 .extracting(
-                        SpringAiVisualRegionLocator.ModelRegion::pageNumber,
-                        SpringAiVisualRegionLocator.ModelRegion::label,
-                        SpringAiVisualRegionLocator.ModelRegion::x,
-                        SpringAiVisualRegionLocator.ModelRegion::y)
+                        VisualLocatorResponsePolicy.ModelRegion::pageNumber,
+                        VisualLocatorResponsePolicy.ModelRegion::label,
+                        VisualLocatorResponsePolicy.ModelRegion::x,
+                        VisualLocatorResponsePolicy.ModelRegion::y)
                 .containsExactly(1, "QR code", 780, 472);
     }
 
     @Test
     void rejects_prose_or_a_null_response() {
-        assertThat(SpringAiVisualRegionLocator.parseModelRegion("I cannot find a useful image.")).isEmpty();
-        assertThat(SpringAiVisualRegionLocator.parseModelRegion("null")).isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelRegion("I cannot find a useful image.")).isEmpty();
+        assertThat(VisualLocatorResponsePolicy.parseModelRegion("null")).isEmpty();
     }
 
     @Test
     void accepts_plain_json_without_a_code_fence() {
-        assertThat(SpringAiVisualRegionLocator.parseModelRegion(
+        assertThat(VisualLocatorResponsePolicy.parseModelRegion(
                         "{\"pageNumber\":1,\"label\":\"board\",\"visibleDescription\":\"中央有一块地图和相邻的标记区。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}"))
                 .isPresent();
     }
 
     @Test
     void retains_a_literal_visual_observation_with_the_crop() {
-        var parsed = SpringAiVisualRegionLocator.parseModelRegion(
+        var parsed = VisualLocatorResponsePolicy.parseModelRegion(
                 "{\"pageNumber\":2,\"label\":\"matching icons\",\"visibleDescription\":\"两张卡牌之间以箭头连接，花色图标相同。\",\"x\":100,\"y\":100,\"width\":200,\"height\":200,\"supportedClaimRefs\":[\"C1\"]}");
 
         assertThat(parsed).isPresent();
@@ -65,7 +65,7 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void parses_two_distinct_visual_walkthrough_anchors_from_one_model_response() {
-        var guide = SpringAiVisualRegionLocator.parseModelGuide("""
+        var guide = VisualLocatorResponsePolicy.parseModelGuide("""
                 {"regions":[
                   {"pageNumber":2,"label":"行动图标","visibleDescription":"骰子图标旁有向右箭头","x":100,"y":100,"width":60,"height":60,"supportedClaimRefs":["C1"]},
                   {"pageNumber":2,"label":"示例状态","visibleDescription":"棋子位于行动轨道的第三格","x":300,"y":500,"width":240,"height":160,"supportedClaimRefs":["C2"]}
@@ -73,13 +73,13 @@ class SpringAiVisualRegionLocatorTest {
                 """);
 
         assertThat(guide).isPresent();
-        assertThat(guide.orElseThrow().regions()).extracting(SpringAiVisualRegionLocator.ModelRegion::label)
+        assertThat(guide.orElseThrow().regions()).extracting(VisualLocatorResponsePolicy.ModelRegion::label)
                 .containsExactly("行动图标", "示例状态");
     }
 
     @Test
     void accepts_a_single_json_object_after_brief_model_prose() {
-        assertThat(SpringAiVisualRegionLocator.parseModelRegion("""
+        assertThat(VisualLocatorResponsePolicy.parseModelRegion("""
                 I found a matching rule reference.
                 {"pageNumber":1,"label":"board","x":100,"y":100,"width":200,"height":200,"supportedClaimRefs":["C1"]}
                 """))
@@ -97,7 +97,7 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void gives_qwen_a_compact_exact_step_contract_and_strips_extracted_prose_from_candidates() {
-        var candidates = SpringAiVisualRegionLocator.candidatePromptPayload(
+        var candidates = VisualLocatorResponsePolicy.candidatePromptPayload(
                 List.of(new Candidate(
                         4,
                         new Rectangle(600, 500, 300, 200),
@@ -115,55 +115,55 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void treats_an_explicit_null_as_a_terminal_no_region_response() {
-        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" null ")).isTrue();
-        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion(" {} ")).isTrue();
-        assertThat(SpringAiVisualRegionLocator.isExplicitNoRegion("not valid JSON")).isFalse();
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" null ")).isTrue();
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion(" {} ")).isTrue();
+        assertThat(VisualLocatorResponsePolicy.isExplicitNoRegion("not valid JSON")).isFalse();
     }
 
     @Test
     void exposes_the_reason_when_a_visual_response_is_not_parseable() {
-        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
-                        SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
+        assertThat(VisualLocatorResponsePolicy.diagnosticFor(
+                        VisualLocatorResponsePolicy.Rejection.MALFORMED_JSON))
                 .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.MALFORMED_RESPONSE);
-        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
-                        SpringAiVisualRegionLocator.Rejection.EXPLICIT_NO_REGION))
+        assertThat(VisualLocatorResponsePolicy.diagnosticFor(
+                        VisualLocatorResponsePolicy.Rejection.EXPLICIT_NO_REGION))
                 .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.EXPLICIT_NO_REGION);
-        assertThat(SpringAiVisualRegionLocator.diagnosticFor(
-                        SpringAiVisualRegionLocator.Rejection.NON_CHINESE_OBSERVATION))
+        assertThat(VisualLocatorResponsePolicy.diagnosticFor(
+                        VisualLocatorResponsePolicy.Rejection.NON_CHINESE_OBSERVATION))
                 .isEqualTo(com.rulepilot.teaching.VisualRegionLocator.Diagnostic.NON_CHINESE_OBSERVATION);
     }
 
     @Test
     void gives_the_single_retry_a_correction_that_matches_the_rejected_contract() {
-        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.UNSUPPORTED_SCOPE))
+        assertThat(VisualLocatorResponsePolicy.retryInstruction(VisualLocatorResponsePolicy.Rejection.UNSUPPORTED_SCOPE))
                 .contains("page", "claim");
-        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.INVALID_GEOMETRY))
+        assertThat(VisualLocatorResponsePolicy.retryInstruction(VisualLocatorResponsePolicy.Rejection.INVALID_GEOMETRY))
                 .contains("x + width", "y + height");
-        assertThat(SpringAiVisualRegionLocator.retryInstruction(SpringAiVisualRegionLocator.Rejection.MALFORMED_JSON))
+        assertThat(VisualLocatorResponsePolicy.retryInstruction(VisualLocatorResponsePolicy.Rejection.MALFORMED_JSON))
                 .contains("JSON");
-        assertThat(SpringAiVisualRegionLocator.retryInstruction(
-                        SpringAiVisualRegionLocator.Rejection.NON_CHINESE_OBSERVATION))
+        assertThat(VisualLocatorResponsePolicy.retryInstruction(
+                        VisualLocatorResponsePolicy.Rejection.NON_CHINESE_OBSERVATION))
                 .contains("Simplified Chinese", "crop itself visibly contains");
     }
 
     @Test
     void recognizesWhetherAVisionObservationUsesChinese() {
-        assertThat(SpringAiVisualRegionLocator.containsChinese("骰子行动区")).isTrue();
-        assertThat(SpringAiVisualRegionLocator.containsChinese("Dice Actions")).isFalse();
+        assertThat(VisualLocatorResponsePolicy.containsChinese("骰子行动区")).isTrue();
+        assertThat(VisualLocatorResponsePolicy.containsChinese("Dice Actions")).isFalse();
     }
 
     @Test
     void clampsARegionThatSlightlyOverrunsTheModelsNormalizedPageBoundary() {
         var normalized = VisualCropAcceptancePolicy.normalizedGeometry(
-                new SpringAiVisualRegionLocator.ModelRegion(
+                new VisualLocatorResponsePolicy.ModelRegion(
                         1, "card detail", "可见卡牌图标", 960, 970, 100, 100, java.util.List.of("C1")));
 
         assertThat(normalized)
                 .extracting(
-                        SpringAiVisualRegionLocator.ModelRegion::x,
-                        SpringAiVisualRegionLocator.ModelRegion::y,
-                        SpringAiVisualRegionLocator.ModelRegion::width,
-                        SpringAiVisualRegionLocator.ModelRegion::height)
+                        VisualLocatorResponsePolicy.ModelRegion::x,
+                        VisualLocatorResponsePolicy.ModelRegion::y,
+                        VisualLocatorResponsePolicy.ModelRegion::width,
+                        VisualLocatorResponsePolicy.ModelRegion::height)
                 .containsExactly(960, 970, 40, 30);
     }
 
@@ -321,10 +321,10 @@ class SpringAiVisualRegionLocatorTest {
 
     @Test
     void parses_only_offered_exact_crop_references_from_the_second_visual_check() {
-        assertThat(SpringAiVisualRegionLocator.acceptedCropReferences(
+        assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
                         "{\"acceptedCropRefs\":[\"R1\"]}", Set.of("R1", "R2")))
                 .contains(Set.of("R1"));
-        assertThat(SpringAiVisualRegionLocator.acceptedCropReferences(
+        assertThat(VisualLocatorResponsePolicy.acceptedCropReferences(
                         "{\"acceptedCropRefs\":[\"R3\"]}", Set.of("R1", "R2")))
                 .isEmpty();
     }

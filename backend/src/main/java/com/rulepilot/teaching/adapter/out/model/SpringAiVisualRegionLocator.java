@@ -1,8 +1,5 @@
 package com.rulepilot.teaching.adapter.out.model;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator;
@@ -11,9 +8,11 @@ import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.LocateGuideResult;
 import com.rulepilot.teaching.VisualRegionLocator.LocateResult;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
+import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelGuide;
+import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.ModelRegion;
+import com.rulepilot.teaching.adapter.out.model.VisualLocatorResponsePolicy.Rejection;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +32,6 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
@@ -186,7 +184,8 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         }
         if (!first.retryable()) return withCatalogedAnchorFallback(request, owner, first.guide());
         log.info("Retrying visual locator after a rejected response for section {}", request.sectionTitle());
-        GuideAttempt retried = locateGuideOnce(request, owner, retryInstruction(first.rejection()));
+        GuideAttempt retried = locateGuideOnce(
+                request, owner, VisualLocatorResponsePolicy.retryInstruction(first.rejection()));
         if (retried.guide().regions().isEmpty()) return withCatalogedAnchorFallback(request, owner, retried.guide());
         return withCatalogedAnchorFallback(
                 request, owner, confirmedExactStepCrops(request, retried.guide().regions(), owner));
@@ -334,7 +333,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     })
                     .call()
                     .content();
-            Optional<Boolean> verified = acceptedCropReferences(content, Set.of(reference))
+            Optional<Boolean> verified = VisualLocatorResponsePolicy.acceptedCropReferences(content, Set.of(reference))
                     .map(accepted -> accepted.contains(reference));
             if (qwen) {
                 log.info(
@@ -367,28 +366,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             crops.put("R" + (index + 1), new CropImage(region.pageNumber(), region.label(), content));
         }
         return Map.copyOf(crops);
-    }
-
-    static Optional<Set<String>> acceptedCropReferences(String content, Set<String> offeredReferences) {
-        if (content == null || content.isBlank() || offeredReferences == null || offeredReferences.isEmpty()) {
-            return Optional.empty();
-        }
-        String json = content.strip();
-        int objectStart = json.indexOf('{');
-        int objectEnd = json.lastIndexOf('}');
-        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
-        try {
-            JsonNode accepted = JSON.readTree(json.substring(objectStart, objectEnd + 1)).path("acceptedCropRefs");
-            if (!accepted.isArray()) return Optional.empty();
-            Set<String> references = new LinkedHashSet<>();
-            for (JsonNode reference : accepted) {
-                if (!reference.isTextual() || !offeredReferences.contains(reference.asText())) return Optional.empty();
-                references.add(reference.asText());
-            }
-            return Optional.of(Set.copyOf(references));
-        } catch (JsonProcessingException invalidJson) {
-            return Optional.empty();
-        }
     }
 
     private record CropImage(int pageNumber, String label, byte[] content) {
@@ -431,17 +408,17 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                             .param("candidateLabel", qwen
                                     ? "Candidate pages (visual hints only; choose your own compact crop bounds)"
                                     : "Candidate rectangles")
-                            .param("candidates", candidatePromptPayload(request.candidates(), qwen))
+                            .param("candidates", VisualLocatorResponsePolicy.candidatePromptPayload(request.candidates(), qwen))
                             .param("correction", correction);
                     request.pages().forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
                 .call()
                 .content();
-        if (isExplicitNoRegion(content)) {
+        if (VisualLocatorResponsePolicy.isExplicitNoRegion(content)) {
             return unavailableGuide(Rejection.EXPLICIT_NO_REGION, false);
         }
-        Optional<ModelGuide> parsed = parseModelGuide(content);
+        Optional<ModelGuide> parsed = VisualLocatorResponsePolicy.parseModelGuide(content);
         if (parsed.isEmpty()) {
             log.info("Visual locator returned no usable JSON for section {}", request.sectionTitle());
             return unavailableGuide(Rejection.MALFORMED_JSON, true);
@@ -501,28 +478,9 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         return unavailableGuide(rejected == Rejection.NONE ? Rejection.UNSUPPORTED_SCOPE : rejected, true);
     }
 
-    /** Avoid feeding Qwen extracted prose or a full-page rectangle it may mechanically repeat as its crop. */
-    static List<Map<String, Object>> candidatePromptPayload(List<Candidate> candidates, boolean compactForQwen) {
-        if (!compactForQwen) {
-            return candidates.stream().map(candidate -> Map.<String, Object>of(
-                            "pageNumber", candidate.pageNumber(),
-                            "rectangle", candidate.rectangle(),
-                            "sourceText", candidate.sourceText()))
-                    .toList();
-        }
-        return candidates.stream().map(candidate -> Map.<String, Object>of(
-                        "pageNumber", candidate.pageNumber(),
-                        "hint", visualHint(candidate.sourceText())))
-                .toList();
-    }
-
-    private static String visualHint(String sourceText) {
-        String normalized = sourceText == null ? "" : sourceText.strip();
-        return normalized.startsWith("Cataloged visual anchor") ? "cataloged visual anchor" : "page visual context";
-    }
-
     private GuideAttempt unavailableGuide(Rejection rejection, boolean retryable) {
-        return new GuideAttempt(LocateGuideResult.unavailable(diagnosticFor(rejection)), retryable, rejection);
+        return new GuideAttempt(
+                LocateGuideResult.unavailable(VisualLocatorResponsePolicy.diagnosticFor(rejection)), retryable, rejection);
     }
 
     private boolean sameRegion(LocatedRegion first, LocatedRegion second) {
@@ -544,106 +502,6 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                 .model(modelName)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-    }
-
-    static boolean isExplicitNoRegion(String content) {
-        return content != null && (content.strip().equals("null") || content.strip().equals("{}"));
-    }
-
-    static String retryInstruction(Rejection rejection) {
-        return switch (rejection) {
-            case EXPLICIT_NO_REGION -> "";
-            case MALFORMED_JSON -> "The previous response was not a readable JSON object. Return one JSON object only, or an empty JSON object when no crop is useful.";
-            case UNSUPPORTED_SCOPE -> "The previous response used an unavailable page or claim reference. Use only the supplied page numbers and C1, C2, etc. claim references; the crop page must be a sourcePage for the cited claim.";
-            case INVALID_GEOMETRY -> "The previous rectangle was outside the page. Return a new JSON candidate only after verifying x + width <= 1000 and y + height <= 1000.";
-            case NON_CHINESE_OBSERVATION -> "The previous label or visibleDescription was not natural Simplified Chinese. Reinspect the page and return Chinese names for literal visible objects only. Verify that the crop itself visibly contains the object or relationship needed for the claim; otherwise return an empty JSON object.";
-            case NONE -> "";
-        };
-    }
-
-    static boolean containsChinese(String value) {
-        return value != null && value.codePoints().anyMatch(codePoint ->
-                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
-    }
-
-    static Optional<ModelRegion> parseModelRegion(String content) {
-        return parseModelGuide(content).flatMap(guide -> guide.regions().stream().findFirst());
-    }
-
-    static Optional<ModelGuide> parseModelGuide(String content) {
-        if (content == null || content.isBlank()) return Optional.empty();
-        String json = content.strip();
-        if (json.startsWith("```")) {
-            int firstLineEnd = json.indexOf('\n');
-            int closingFence = json.lastIndexOf("```");
-            if (firstLineEnd < 0 || closingFence <= firstLineEnd) return Optional.empty();
-            json = json.substring(firstLineEnd + 1, closingFence).strip();
-        }
-        if (json.equals("null")) return Optional.empty();
-        int objectStart = json.indexOf('{');
-        int objectEnd = json.lastIndexOf('}');
-        if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
-        json = json.substring(objectStart, objectEnd + 1);
-        try {
-            JsonNode root = JSON.readTree(json);
-            if (!root.isObject()) return Optional.empty();
-            JsonNode regions = root.get("regions");
-            if (regions == null) {
-                return Optional.ofNullable(JSON.treeToValue(root, ModelRegion.class))
-                        .map(region -> new ModelGuide(List.of(region)));
-            }
-            if (!regions.isArray()) return Optional.empty();
-            List<ModelRegion> parsed = new java.util.ArrayList<>();
-            for (JsonNode region : regions) {
-                ModelRegion parsedRegion = JSON.treeToValue(region, ModelRegion.class);
-                if (parsedRegion != null) parsed.add(parsedRegion);
-            }
-            return Optional.of(new ModelGuide(parsed));
-        } catch (JsonProcessingException invalidJson) {
-            log.debug("Rejected non-JSON visual locator output");
-            return Optional.empty();
-        }
-    }
-
-    record ModelRegion(
-            int pageNumber,
-            String label,
-            String visibleDescription,
-            int x,
-            int y,
-            int width,
-            int height,
-            List<String> supportedClaimRefs) {
-        ModelRegion {
-            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
-            supportedClaimRefs = supportedClaimRefs == null ? List.of() : List.copyOf(supportedClaimRefs);
-        }
-    }
-
-    record ModelGuide(List<ModelRegion> regions) {
-        ModelGuide {
-            regions = regions == null ? List.of() : List.copyOf(regions.stream().limit(2).toList());
-        }
-    }
-
-    static Diagnostic diagnosticFor(Rejection rejection) {
-        return switch (rejection) {
-            case NONE -> Diagnostic.NO_REGION;
-            case EXPLICIT_NO_REGION -> Diagnostic.EXPLICIT_NO_REGION;
-            case MALFORMED_JSON -> Diagnostic.MALFORMED_RESPONSE;
-            case UNSUPPORTED_SCOPE -> Diagnostic.UNSUPPORTED_SCOPE;
-            case INVALID_GEOMETRY -> Diagnostic.INVALID_GEOMETRY;
-            case NON_CHINESE_OBSERVATION -> Diagnostic.NON_CHINESE_OBSERVATION;
-        };
-    }
-
-    enum Rejection {
-        NONE,
-        EXPLICIT_NO_REGION,
-        MALFORMED_JSON,
-        UNSUPPORTED_SCOPE,
-        INVALID_GEOMETRY,
-        NON_CHINESE_OBSERVATION
     }
 
     private record GuideAttempt(LocateGuideResult guide, boolean retryable, Rejection rejection) {}

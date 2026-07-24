@@ -138,13 +138,13 @@ final class VisualCropAcceptancePolicy {
         return "The previous crop occupied too much of the page, was a portrait strip spanning neighbouring score examples, or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, one score reference, or worked state that directly helps the cited step. If the claim names one scoring pattern, include only that pattern's card row or compact group; do not include another animal's examples or partial rows above or below. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
     }
 
-    static SpringAiVisualRegionLocator.ModelRegion normalizedGeometry(
-            SpringAiVisualRegionLocator.ModelRegion region) {
+    static VisualLocatorResponsePolicy.ModelRegion normalizedGeometry(
+            VisualLocatorResponsePolicy.ModelRegion region) {
         int x = Math.max(0, Math.min(980, region.x()));
         int y = Math.max(0, Math.min(980, region.y()));
         int width = Math.max(20, Math.min(region.width(), 1_000 - x));
         int height = Math.max(20, Math.min(region.height(), 1_000 - y));
-        return new SpringAiVisualRegionLocator.ModelRegion(
+        return new VisualLocatorResponsePolicy.ModelRegion(
                 region.pageNumber(),
                 region.label(),
                 region.visibleDescription(),
