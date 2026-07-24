@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-import type { AppLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 export interface RuleCitation {
   chunkId: string
@@ -76,6 +76,7 @@ interface UseLessonAnswersOptions {
 
 /** Keeps a question attached to the exact lesson and chapter that created it. */
 export function useLessonAnswers(options: UseLessonAnswersOptions) {
+  const { t } = useLocale()
   const question = ref('')
   const answer = ref<StructuredRuleAnswer | null>(null)
   const answeredQuestion = ref('')
@@ -121,7 +122,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (!csrfResponse.ok) throw new Error('无法建立安全会话，请稍后重试。')
+      if (!csrfResponse.ok) throw new Error(t('lesson.answer.error.session'))
       const csrf = (await csrfResponse.json()) as CsrfResponse
       const previousTurn = answerTurns.value.at(-1)
       const response = await fetch(`/api/v1/document-versions/${context.documentVersionId}/answers`, {
@@ -142,7 +143,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         await options.requestLogin()
         return
       }
-      if (!response.ok) throw new Error('暂时无法回答这个问题，请稍后重试。')
+      if (!response.ok) throw new Error(t('lesson.answer.error.unavailable'))
       const creation = (await response.json()) as AnswerCreation
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
       const received = creation.answer
@@ -152,7 +153,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
       options.onReceived(context, text, received)
     } catch (error) {
       if (!isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) return
-      answerError.value = error instanceof Error ? error.message : '提问失败，请稍后重试。'
+      answerError.value = error instanceof Error ? error.message : t('lesson.answer.error.request')
     } finally {
       if (isCurrentAnswerRequest(answerRequest, lessonRequest, context.planId)) {
         answerLoading.value = false
