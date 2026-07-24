@@ -10,7 +10,7 @@ CORPUS_TIMEOUT_MINUTES ?= 20
 CORPUS_RESTART ?=
 CORPUS_REFRESH_PLAN ?=
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -120,3 +120,9 @@ deployment-up: ## Build and start separate API and worker containers with local 
 
 deployment-down: ## Stop the split API/worker deployment and retain named-volume data
 	@sh scripts/run-deployment.sh down
+
+production-up: ## Build and start the HTTPS-ready production Compose topology
+	@sh scripts/run-production.sh up
+
+production-down: ## Stop the production Compose topology and retain named-volume data
+	@sh scripts/run-production.sh down
