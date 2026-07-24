@@ -1,7 +1,6 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.EvidenceVerifier;
-import com.rulepilot.assistant.EvidenceVerifier.VerificationStatus;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
@@ -58,6 +57,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final RuleDataVersion ruleDataVersion;
     private final ConfirmedRulingLookup confirmedRulings;
     private final AnswerPublicationValidator publicationValidator;
+    private final AnswerEvidenceAdmissionGate evidenceAdmissionGate;
     private final GeneratedContentCritic critic;
     private final AnswerRunLifecycle runLifecycle;
     private final AuditedAgentInvocations invocations;
@@ -95,6 +95,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.ruleDataVersion = ruleDataVersion;
         this.confirmedRulings = confirmedRulings;
         this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
+        this.evidenceAdmissionGate = new AnswerEvidenceAdmissionGate(publicationValidator);
         this.critic = critic;
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
@@ -273,23 +274,12 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             cacheMisses.increment();
         }
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(assistantRunId, understood, context, username);
-        List<HybridEvidenceHit> evidence = retrievalResult.evidence();
-        if (retrievalResult.state() == AnswerEvidenceRetriever.State.CONFLICTING) {
-            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突，无法可靠回答。");
+        AnswerEvidenceAdmissionGate.Admission admission = evidenceAdmissionGate.admit(
+                context.documentVersionId(), retrievalResult);
+        if (!admission.ready()) {
+            return safe(context.documentVersionId(), admission.failureStatus(), admission.failureMessage());
         }
-        if (retrievalResult.state() == AnswerEvidenceRetriever.State.UNAVAILABLE) {
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "规则检索暂时不可用，尚未生成答案。");
-        }
-        if (evidence.isEmpty()) {
-            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "没有找到可引用的规则依据。");
-        }
-        var evidenceVerification = publicationValidator.verifySources(context.documentVersionId(), evidence);
-        if (evidenceVerification.status() == VerificationStatus.VERSION_CONFLICT) {
-            return safe(context.documentVersionId(), AnswerStatus.VERSION_CONFLICT, "检索证据与当前规则版本不一致。");
-        }
-        if (!evidenceVerification.verified()) {
-            return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "检索证据存在冲突或不足，无法可靠回答。");
-        }
+        List<HybridEvidenceHit> evidence = admission.evidence();
         ModelDraft draft;
         ModelRequest modelRequest;
         try {
