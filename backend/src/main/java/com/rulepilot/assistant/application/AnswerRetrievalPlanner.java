@@ -42,31 +42,8 @@ public final class AnswerRetrievalPlanner {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
         String currentSection = knownSection(context.currentLessonSection());
-        List<RetrievalIntent> intents = new ArrayList<>();
-        String endgameResolutionQuery = endgameResolutionQuery(question.normalizedQuestion());
-        if (endgameResolutionQuery != null) {
-            intents.add(intent(endgameResolutionQuery, RetrievalPurpose.ENDGAME_RESOLUTION));
-        }
-        String exhaustedSourceQuery = exhaustedSourceQuery(question.normalizedQuestion());
-        if (exhaustedSourceQuery != null) {
-            intents.add(intent(exhaustedSourceQuery, RetrievalPurpose.EXHAUSTED_SOURCE));
-        }
-        String endTurnProcedureQuery = endTurnProcedureQuery(question.normalizedQuestion());
-        if (endTurnProcedureQuery != null) {
-            intents.add(intent(endTurnProcedureQuery, RetrievalPurpose.END_TURN_PROCEDURE));
-        }
-        String stateTransitionQuery = stateTransitionQuery(question.normalizedQuestion());
-        if (stateTransitionQuery != null) {
-            intents.add(intent(stateTransitionQuery, RetrievalPurpose.STATE_TRANSITION));
-        }
-        String roundResetQuery = roundResetQuery(question.normalizedQuestion());
-        if (roundResetQuery != null) {
-            intents.add(intent(roundResetQuery, RetrievalPurpose.ROUND_RESET));
-        }
-        String deferredTurnQuery = deferredTurnQuery(question.normalizedQuestion());
-        if (deferredTurnQuery != null) {
-            intents.add(intent(deferredTurnQuery, RetrievalPurpose.DEFERRED_TURN));
-        }
+        List<RetrievalIntent> intents = new ArrayList<>(
+                AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion()));
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
@@ -130,7 +107,7 @@ public final class AnswerRetrievalPlanner {
             append(query, String.join(" ", question.terms()));
         }
         append(query, facets(question.type()));
-        append(query, endgameResolutionTerms(question.normalizedQuestion()));
+        append(query, AnswerRetrievalProcedureIntents.endgameResolutionTerms(question.normalizedQuestion()));
         if (context.currentLessonSection() != null) {
             append(query, context.currentLessonSection().replace('_', ' '));
         }
@@ -162,28 +139,6 @@ public final class AnswerRetrievalPlanner {
             case RULE_QUERY -> "rule definition timing restriction exception 规则 定义 时机 限制 例外";
             case SITUATION_QUERY -> "legal action prerequisite timing cost exception 合法行动 前置条件 时机 费用 例外";
         };
-    }
-
-    private static String endgameResolutionTerms(String question) {
-        if (!isEndgameResolutionQuestion(question)) return null;
-        String terms = "end game end condition end of round final scoring winner tie resolution "
-                + "游戏结束 结束条件 轮末 最终计分 胜者 平局 结算";
-        return containsAny(question, "tie", "tied", "平局", "同分")
-                ? terms + " tiebreak tie breaker most gold coins 平局 同分 决胜 金币"
-                : terms;
-    }
-
-    private static String endgameResolutionQuery(String question) {
-        String terms = endgameResolutionTerms(question);
-        return terms == null ? null : bounded(question + " " + terms);
-    }
-
-    private static boolean isEndgameResolutionQuestion(String question) {
-        boolean mentionsEndTrigger = containsAny(
-                question, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
-        boolean mentionsResolution = containsAny(
-                question, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
-        return mentionsEndTrigger && mentionsResolution;
     }
 
     private static Set<String> inferredSections(UnderstoodQuestion question, String currentSection) {
@@ -235,7 +190,7 @@ public final class AnswerRetrievalPlanner {
         }
     }
 
-    private static boolean containsAny(String text, String... indicators) {
+    static boolean containsAny(String text, String... indicators) {
         return Arrays.stream(indicators).anyMatch(text::contains);
     }
 
@@ -269,119 +224,11 @@ public final class AnswerRetrievalPlanner {
         }
     }
 
-    private static String stateTransitionQuery(String question) {
-        boolean actorExits = containsAny(
-                question,
-                "leaves play", "becomes inactive", "cannot continue", "runs out", "out of cards", "empty hand", "no cards",
-                "退出", "失去行动资格", "无法继续", "用完", "出完", "无牌", "没有手牌", "手牌为零");
-        boolean asksNextActor = containsAny(
-                question,
-                "who acts next", "who starts", "who leads", "next trick", "turn order", "next player",
-                "谁行动", "谁开始", "谁领出", "下一墩", "下一位", "由谁");
-        if (!actorExits || !asksNextActor) return null;
-        return bounded(question + " state transition successor actor replacement active player skipped turn order "
-                + "状态变化 后继行动者 替代玩家 跳过 行动顺序 例外");
-    }
-
-    private static String exhaustedSourceQuery(String question) {
-        boolean asksAboutSourceArea = containsAny(
-                question,
-                "draw zone",
-                "draw dice",
-                "draw amount",
-                "deck",
-                "pile",
-                "supply",
-                "pool",
-                "draw",
-                "take",
-                "refill",
-                "抽",
-                "摸",
-                "取",
-                "补",
-                "拿",
-                "牌堆",
-                "供应",
-                "区域");
-        boolean asksAboutShortage = containsAny(
-                question,
-                "not enough",
-                "insufficient",
-                "empty",
-                "runs out",
-                "不足",
-                "不够",
-                "用完",
-                "没有骰子");
-        if (!asksAboutSourceArea || !asksAboutShortage) return null;
-        return bounded(question + " source area supply pile deck depleted empty insufficient discard return recycle "
-                + "refill reshuffle continue procedure 资源区 牌堆 供应区 耗尽 为空 弃置 回收 移回 补充 洗混 继续");
-    }
-
-    private static String endTurnProcedureQuery(String question) {
-        boolean asksAfterTurn = containsAny(
-                question,
-                "end turn",
-                "ends turn",
-                "finish turn",
-                "after turn",
-                "after my turn",
-                "结束回合",
-                "结束自己的回合",
-                "结束本回合",
-                "完成回合",
-                "回合结束");
-        boolean asksForEventProcedure = containsAny(
-                question,
-                "draw",
-                "reveal",
-                "resolve",
-                "alert",
-                "event",
-                "card",
-                "抽",
-                "翻",
-                "结算",
-                "执行",
-                "警报",
-                "事件",
-                "牌");
-        if (!asksAfterTurn || !asksForEventProcedure) return null;
-        return bounded("completed turn draw reveal resolve event effect next player procedure "
-                + "完成回合后 抽取 展示 执行 结算 事件 效果 下一位玩家 流程 " + question);
-    }
-
-    private static String roundResetQuery(String question) {
-        boolean asksRoundEnd = containsAny(
-                question, "end of round", "round ends", "round end", "一轮结束", "轮次结束", "回合结束", "轮结束");
-        boolean asksReset = containsAny(question, "recover", "return", "reset", "回收", "归还", "回到", "重置", "拿回");
-        if (!asksRoundEnd || !asksReset) return null;
-        return bounded(question + " end of round recover return reset refresh used pieces conditional "
-                + "round reset state transition 一轮结束 回收 返回 重置 刷新 条件");
-    }
-
-    private static String deferredTurnQuery(String question) {
-        boolean asksLaterTurn = containsAny(
-                question, "next time", "next turn", "later turn", "下一次轮到", "下次轮到", "之后轮到");
-        boolean asksAboutRemainingPieces = containsAny(
-                question,
-                "remaining pieces", "unused pieces", "remaining actions", "unused actions", "remaining dice", "unused dice",
-                "剩余组件", "未用组件", "剩余行动", "未用行动", "剩下的骰子", "剩余骰子", "未用骰子");
-        if (!asksLaterTurn || !asksAboutRemainingPieces) return null;
-        return bounded(question + " worked example player turn ends remaining pieces later turn use action "
-                + "round ends turn sequence 示例回合 剩余组件 下次回合 使用 行动顺序");
-    }
-
-    private static String bounded(String value) {
+    static String bounded(String value) {
         String normalized = value.replaceAll("\\s+", " ").strip();
         return normalized.length() <= MAX_QUERY_LENGTH
                 ? normalized
                 : normalized.substring(0, MAX_QUERY_LENGTH).strip();
-    }
-
-    private static RetrievalIntent intent(String query, RetrievalPurpose purpose) {
-        return new RetrievalIntent(query, Set.of(), null, false, purpose);
     }
 
     public enum RetrievalPurpose {
