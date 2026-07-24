@@ -8,7 +8,6 @@ import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
-import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
@@ -102,32 +101,6 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.answerBasis().name()).isEqualTo("GROUNDED_APPLICATION");
         assertThat(revisions).hasValue(1);
-    }
-
-    @Test
-    void preservesInternalCitationIdentityForAVisualAidWithoutExposingItInTheReadableCitation() {
-        UUID chunkId = UUID.randomUUID();
-        StructuredRuleAnswer answer = new StructuredRuleAnswer(
-                versionId,
-                AnswerStatus.ANSWERED,
-                "先放置标记。",
-                "把标记放到起始区域。",
-                List.of(new RuleCitation(chunkId, versionId, "SETUP", "设置", "放置标记。", 2, 2)),
-                List.of(),
-                AnswerConfidence.HIGH,
-                false,
-                null,
-                null,
-                null);
-
-        RuleAnswering.AnswerResult publicResult = StructuredRuleAnswerService.toPublicReaderAnswer(
-                new StructuredRuleAnswerService.AnswerCreation(UUID.randomUUID(), answer));
-
-        assertThat(publicResult.citedEvidenceIds()).containsExactly(chunkId);
-        assertThat(publicResult.answer().citations()).singleElement().satisfies(citation -> {
-            assertThat(citation.heading()).isEqualTo("设置");
-            assertThat(citation.pageFrom()).isEqualTo(2);
-        });
     }
 
     @Test

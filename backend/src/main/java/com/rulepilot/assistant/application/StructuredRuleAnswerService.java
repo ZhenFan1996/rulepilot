@@ -20,9 +20,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
-import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
-import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
@@ -41,7 +39,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -180,28 +177,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                         outputLanguage),
                 "public-reader",
                 null);
-        return toPublicReaderAnswer(creation);
-    }
-
-    static RuleAnswering.AnswerResult toPublicReaderAnswer(AnswerCreation creation) {
-        StructuredRuleAnswer answer = creation.answer();
-        return new RuleAnswering.AnswerResult(
-                creation.assistantRunId(),
-                new RuleAnswering.Answer(
-                        answer.status().name(),
-                        answer.shortVerdict(),
-                        answer.explanation(),
-                        answer.citations().stream()
-                                .map(citation -> new RuleAnswering.Citation(
-                                        citation.heading(), citation.pageFrom(), citation.pageTo()))
-                                .toList(),
-                        answer.exceptions(),
-                        answer.confidence().name(),
-                        answer.answerBasis() == null ? null : answer.answerBasis().name(),
-                        answer.clarification()),
-                answer.citations().stream()
-                        .map(RuleCitation::chunkId)
-                        .collect(Collectors.toUnmodifiableSet()));
+        return AnswerOutcomePolicy.publicReaderAnswer(creation.assistantRunId(), creation.answer());
     }
 
     public AnswerCreation evaluateWithRun(
@@ -273,7 +249,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             boolean useCache) {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
-            return clarification(understood);
+            return AnswerOutcomePolicy.clarification(understood);
         }
         var confirmed = invocations.invoke(
                 assistantRunId,
@@ -286,7 +262,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
-            return fromConfirmedRuling(confirmed.get());
+            return AnswerOutcomePolicy.confirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
         Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(understood, context, gameSessionId) : Optional.empty();
@@ -612,27 +588,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}
 
-    private StructuredRuleAnswer fromConfirmedRuling(ConfirmedRulingLookup.ConfirmedAnswer ruling) {
-        List<RuleCitation> citations = ruling.citations().stream().map(citation -> new RuleCitation(
-                citation.chunkId(), citation.documentVersionId(), citation.sectionType(), citation.heading(),
-                citation.excerpt(), citation.pageFrom(), citation.pageTo())).toList();
-        return new StructuredRuleAnswer(
-                ruling.documentVersionId(), AnswerStatus.ANSWERED, ruling.shortVerdict(), ruling.explanation(),
-                citations, ruling.exceptions(), AnswerConfidence.valueOf(ruling.confidence()), ruling.official(),
-                ruling.rulingId(), ruling.version(), null);
-    }
-
-    private StructuredRuleAnswer clarification(UnderstoodQuestion question) {
-        String missing = question.missingContext().stream().map(Enum::name).sorted().collect(Collectors.joining(", "));
-        return new StructuredRuleAnswer(
-                question.documentVersionId(), AnswerStatus.CLARIFICATION_REQUIRED,
-                "需要补充上下文后才能查证规则。", "缺少信息：" + missing, List.of(), List.of(),
-                AnswerConfidence.LOW, false, null, null, "请补充 " + missing + "。");
-    }
-
     private StructuredRuleAnswer safe(UUID versionId, AnswerStatus status, String message) {
-        return new StructuredRuleAnswer(
-                versionId, status, message, message, List.of(), List.of(), AnswerConfidence.LOW,
-                false, null, null, null);
+        return AnswerOutcomePolicy.safeFailure(versionId, status, message);
     }
 }
