@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
 
+import { useLocale } from '@/lib/locale'
 import { normalizeVoiceTranscript } from '@/lib/voiceQuestion'
 
 defineProps<{
@@ -55,7 +56,8 @@ const browserWindow = window as typeof window & {
 const Recognition = browserWindow.SpeechRecognition ?? browserWindow.webkitSpeechRecognition
 const supported = Boolean(Recognition)
 const listening = ref(false)
-const language = ref(navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')
+const { locale, t } = useLocale()
+const language = ref(locale.value === 'en' ? 'en-US' : 'zh-CN')
 const interimText = ref('')
 const finalText = ref('')
 const errorMessage = ref('')
@@ -63,20 +65,20 @@ let recognition: BrowserSpeechRecognition | null = null
 let recognitionFailed = false
 
 const buttonLabel = computed(() => {
-  if (!supported) return '当前浏览器不支持语音输入'
-  if (listening.value) return '停止并使用语音文字'
-  return '用语音输入问题'
+  if (!supported) return t('voice.unsupported')
+  if (listening.value) return t('voice.stop')
+  return t('voice.start')
 })
 
 function errorLabel(error: string) {
   const labels: Record<string, string> = {
-    'not-allowed': '未获得麦克风权限；你仍可继续键盘输入。',
-    'service-not-allowed': '浏览器语音服务不可用；你仍可继续键盘输入。',
-    'audio-capture': '没有找到可用麦克风。',
-    'network': '语音服务暂时无法连接。',
-    'no-speech': '没有听到清晰语音，请靠近麦克风重试。',
+    'not-allowed': t('voice.error.notAllowed'),
+    'service-not-allowed': t('voice.error.service'),
+    'audio-capture': t('voice.error.capture'),
+    'network': t('voice.error.network'),
+    'no-speech': t('voice.error.noSpeech'),
   }
-  return labels[error] ?? '语音识别没有完成，请重试或改用键盘。'
+  return labels[error] ?? t('voice.error.fallback')
 }
 
 function complete() {
@@ -121,7 +123,7 @@ function start() {
   } catch {
     recognition = null
     recognitionFailed = false
-    errorMessage.value = '无法启动麦克风，请重试或改用键盘。'
+    errorMessage.value = t('voice.error.start')
   }
 }
 
@@ -146,17 +148,17 @@ onUnmounted(() => recognition?.abort())
       >
         {{ buttonLabel }}
       </button>
-      <select v-model="language" class="min-h-11 rounded-xl border border-ink/15 bg-canvas px-3 text-sm" :disabled="disabled || listening || !supported" aria-label="语音识别语言">
-        <option value="zh-CN">普通话</option>
+      <select v-model="language" class="min-h-11 rounded-xl border border-ink/15 bg-canvas px-3 text-sm" :disabled="disabled || listening || !supported" :aria-label="t('voice.language')">
+        <option value="zh-CN">{{ t('voice.chinese') }}</option>
         <option value="en-US">English</option>
       </select>
     </div>
     <p v-if="listening" class="max-w-md text-xs font-semibold leading-5 text-copper" role="status">
-      {{ interimText || '正在聆听…说完后再次点按按钮。' }}
+      {{ interimText || t('voice.listening') }}
     </p>
     <p v-else-if="errorMessage" class="max-w-md text-xs leading-5 text-red-700" role="alert">{{ errorMessage }}</p>
     <p v-else class="max-w-md text-xs leading-5 text-ink/45">
-      音频不由 RulePilot 保存；浏览器或操作系统的语音服务可能处理音频，可随时改用键盘。
+      {{ t('voice.privacy') }}
     </p>
   </div>
 </template>

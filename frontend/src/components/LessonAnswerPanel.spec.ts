@@ -1,7 +1,8 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import LessonAnswerPanel from './LessonAnswerPanel.vue'
+import { setLocale } from '@/lib/locale'
 
 const answered = {
   status: 'ANSWERED' as const,
@@ -37,6 +38,8 @@ const baseProps = {
 }
 
 describe('LessonAnswerPanel', () => {
+  afterEach(() => setLocale('zh-CN'))
+
   it('keeps the question entry surface event-driven for the lesson reader', async () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: baseProps,
@@ -95,5 +98,26 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('update:edited-verdict')).toEqual([['更新后的裁定']])
     expect(wrapper.emitted('update:edited-explanation')).toEqual([['更新后的解释']])
     expect(wrapper.emitted('saveRulingRevision')).toHaveLength(1)
+  })
+
+  it('localizes the personal answer thread when the player selects English', () => {
+    setLocale('en')
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: answered,
+        answeredQuestion: 'When do I resolve this?',
+        answerTurns: [{ question: 'When do I resolve this?', answer: answered, learningIntent: null }],
+      },
+      global: {
+        stubs: { VoiceQuestionCapture: true },
+      },
+    })
+
+    expect(wrapper.text()).toContain('What is unclear in this step?')
+    expect(wrapper.text()).toContain('Ask a question')
+    expect(wrapper.text()).toContain('How this answer was reached')
+    expect(wrapper.text()).toContain('Applied to your stated situation')
+    expect(wrapper.text()).toContain('Page 4')
   })
 })
