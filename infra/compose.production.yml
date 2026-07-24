@@ -1,4 +1,12 @@
 services:
+  postgres:
+    image: rulepilot-postgres:local
+    build:
+      context: ../infra/postgres
+      dockerfile: Dockerfile.runtime
+    volumes: !override
+      - postgres-data:/var/lib/postgresql/data
+
   api:
     image: rulepilot-backend:local
     build:
@@ -9,9 +17,9 @@ services:
 
   worker:
     image: rulepilot-backend:local
-    build:
-      context: ../backend
-      dockerfile: Dockerfile.runtime
+    # Reuse the API runtime image. Building both services concurrently against
+    # the same image tag causes Docker to race while exporting the image.
+    build: !reset null
     environment:
       JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
 

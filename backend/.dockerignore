@@ -1,6 +1,7 @@
 ._*
 **/._*
 target/*
+!target/
 !target/rulepilot-backend-*.jar
 .idea/
 *.iml

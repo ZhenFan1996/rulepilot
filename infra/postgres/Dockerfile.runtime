@@ -1,0 +1,5 @@
+FROM pgvector/pgvector:0.8.2-pg17
+
+# Docker Desktop volumes may preserve restrictive source modes. Keep this
+# initialization script readable by the postgres user in production images.
+COPY --chmod=644 init/001-enable-vector.sql /docker-entrypoint-initdb.d/001-enable-vector.sql
