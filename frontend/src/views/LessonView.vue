@@ -19,9 +19,7 @@ import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
   type CsrfResponse,
-  type LearningIntent,
 } from '@/composables/useLessonAnswers'
-import { buildCardQuestion } from '@/lib/cardOcr'
 import {
   useLessonSupportingContent,
   type MediaWarningCode,
@@ -32,6 +30,7 @@ import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonGenerationPresentation } from '@/composables/useLessonGenerationPresentation'
 import { useConditionalPolling } from '@/composables/useConditionalPolling'
 import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehensionFeedback'
+import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import {
   finishSection,
@@ -50,7 +49,6 @@ import {
   teachingActivityCursor,
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
-import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
 import { useLocale } from '@/lib/locale'
 
 interface TeachingPlan {
@@ -200,6 +198,19 @@ const {
       resetRuling()
     }
   },
+})
+
+const {
+  askCurrentSection,
+  requestLearningHelp,
+  useCardText,
+  useVoiceTranscript,
+} = useLessonQuestionInput({
+  question,
+  currentSectionTitle: () => currentSection.value?.title ?? null,
+  submitQuestion,
+  clearAnswerFeedback,
+  closeCardOcr: () => { cardOcrOpen.value = false },
 })
 
 const {
@@ -687,46 +698,11 @@ function selectSection(index: number) {
   seekToChapter(index)
 }
 
-function learningPrompt(intent: LearningIntent) {
-  const title = currentSection.value?.title ?? t('lesson.answer.sectionFallback')
-  switch (intent) {
-    case 'SIMPLIFY':
-      return t('lesson.answer.prompt.simplify', { title })
-    case 'EXAMPLE':
-      return t('lesson.answer.prompt.example', { title })
-    case 'WHY':
-      return t('lesson.answer.prompt.why', { title })
-    case 'EXCEPTIONS':
-      return t('lesson.answer.prompt.exceptions', { title })
-  }
-}
-
 function focusQuestionPanel() {
   const input = document.getElementById('lesson-question') as HTMLTextAreaElement | null
   if (!input) return
   input.scrollIntoView({ behavior: 'smooth', block: 'center' })
   window.setTimeout(() => input.focus(), 250)
-}
-
-async function askCurrentSection() {
-  await submitQuestion(question.value.trim(), null)
-}
-
-async function requestLearningHelp(intent: LearningIntent) {
-  const prompt = learningPrompt(intent)
-  question.value = prompt
-  await submitQuestion(prompt, intent)
-}
-
-function useCardText(text: string) {
-  question.value = buildCardQuestion(text, t('cardOcr.questionPrefix'))
-  cardOcrOpen.value = false
-  clearAnswerFeedback()
-}
-
-function useVoiceTranscript(text: string) {
-  question.value = mergeVoiceQuestion(question.value, text)
-  clearAnswerFeedback()
 }
 
 async function csrfToken() {
