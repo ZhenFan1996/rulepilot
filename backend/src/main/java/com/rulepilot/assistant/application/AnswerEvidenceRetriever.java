@@ -40,6 +40,7 @@ final class AnswerEvidenceRetriever {
     private final RuleEvidenceLookup evidenceLookup;
     private final AuditedAgentInvocations invocations;
     private final AnswerModelGateway modelGateway;
+    private final AnswerVisualEvidenceEnricher visualEvidenceEnricher;
 
     AnswerEvidenceRetriever(
             HybridRuleSearch retrieval,
@@ -52,6 +53,7 @@ final class AnswerEvidenceRetriever {
         this.evidenceLookup = evidenceLookup;
         this.invocations = invocations;
         this.modelGateway = modelGateway;
+        this.visualEvidenceEnricher = new AnswerVisualEvidenceEnricher(evidenceLookup, invocations);
     }
 
     Result retrieve(UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
@@ -194,7 +196,7 @@ final class AnswerEvidenceRetriever {
         }
         Set<Integer> visualPagePriority = new LinkedHashSet<>(directQuestionVisualFactPages);
         visualPagePriority.addAll(requiredVisualFactPages);
-        Set<UUID> visualEvidenceIds = mergeVisualPageEvidence(
+        Set<UUID> visualEvidenceIds = visualEvidenceEnricher.enrich(
                 assistantRunId, context.documentVersionId(), evidenceById, visualFactsByPage, visualPagePriority);
         List<HybridEvidenceHit> selectedEvidence = AnswerEvidenceSelectionPolicy.select(
                 question.normalizedQuestion(), evidenceById, intentAnchors.values(), visualEvidenceIds);
@@ -333,91 +335,6 @@ final class AnswerEvidenceRetriever {
     private String normalizeIntentComparison(String value) {
         if (value == null) return "";
         return value.strip().replaceAll("[?？!！;；,，]+$", "").strip();
-    }
-
-    private Set<UUID> mergeVisualPageEvidence(
-            UUID assistantRunId,
-            UUID documentVersionId,
-            Map<UUID, HybridEvidenceHit> evidenceById,
-            Map<Integer, PageFactMatch> factsByPage,
-            Set<Integer> requiredPages) {
-        if (factsByPage.isEmpty()) return Set.of();
-        Set<Integer> pages = new LinkedHashSet<>();
-        requiredPages.stream().filter(factsByPage::containsKey).forEach(pages::add);
-        factsByPage.values().stream()
-                .sorted(Comparator.comparingDouble(PageFactMatch::score).reversed()
-                        .thenComparingInt(PageFactMatch::pageNumber))
-                .map(PageFactMatch::pageNumber)
-                .forEach(pages::add);
-        Set<Integer> selectedPages = pages.stream().limit(4).collect(Collectors.toCollection(LinkedHashSet::new));
-        List<RuleEvidenceHit> pageSources;
-        try {
-            pageSources = invocations.invoke(
-                    assistantRunId,
-                    ActivityType.TOOL,
-                    "readVisualRulebookFactPages",
-                    selectedPages.size(),
-                    "Original rulebook pages " + selectedPages + " for visual facts retrieved",
-                    () -> evidenceLookup.findByPageNumbers(documentVersionId, selectedPages),
-                    sources -> sources.size() * 80);
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException lookupFailure) {
-            LOGGER.warn(
-                    "Optional visual source-page lookup failed for document version {}: {}",
-                    documentVersionId,
-                    lookupFailure.getClass().getSimpleName());
-            return Set.of();
-        }
-        Set<UUID> enriched = new LinkedHashSet<>();
-        Map<Integer, Integer> rankByPage = new LinkedHashMap<>();
-        int rank = 1;
-        for (Integer page : selectedPages) rankByPage.put(page, rank++);
-        for (RuleEvidenceHit source : pageSources) {
-            if (source.pageFrom() != source.pageTo()) continue;
-            PageFactMatch fact = factsByPage.get(source.pageFrom());
-            if (fact == null) continue;
-            HybridEvidenceHit existing = evidenceById.get(source.chunkId());
-            if (existing != null && !AnswerEvidencePolicy.isVisualPlaceholder(existing)) {
-                RuleEvidenceHit textSource = existing.evidence();
-                RuleEvidenceHit enrichedSource = new RuleEvidenceHit(
-                        textSource.chunkId(),
-                        textSource.documentVersionId(),
-                        textSource.sectionType(),
-                        textSource.heading(),
-                        textSource.excerpt() + "\n\n" + fact.evidenceText(),
-                        textSource.pageFrom(),
-                        textSource.pageTo(),
-                        Math.max(textSource.score(), fact.score()));
-                evidenceById.put(source.chunkId(), new HybridEvidenceHit(
-                        enrichedSource,
-                        Math.max(existing.score(), fact.score()),
-                        existing.fullTextRank() == null
-                                ? rankByPage.get(source.pageFrom())
-                                : Math.min(existing.fullTextRank(), rankByPage.get(source.pageFrom())),
-                        existing.vectorRank(),
-                        existing.currentSectionBoosted()));
-                enriched.add(source.chunkId());
-                continue;
-            }
-            RuleEvidenceHit visualSource = new RuleEvidenceHit(
-                    source.chunkId(),
-                    source.documentVersionId(),
-                    source.sectionType(),
-                    source.heading(),
-                    fact.evidenceText(),
-                    source.pageFrom(),
-                    source.pageTo(),
-                    Math.max(0.01, fact.score()));
-            evidenceById.put(source.chunkId(), new HybridEvidenceHit(
-                    visualSource,
-                    Math.max(0.01, fact.score()),
-                    rankByPage.get(source.pageFrom()),
-                    null,
-                    false));
-            enriched.add(source.chunkId());
-        }
-        return Set.copyOf(enriched);
     }
 
     private List<String> rewriteCrossLanguageQueries(
