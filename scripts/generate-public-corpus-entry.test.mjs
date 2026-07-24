@@ -6,6 +6,7 @@ import {
   selectEntry,
   selectReusableDocument,
   slugify,
+  hasPublicCover,
   summarizeLesson,
   summarizeRunProgress,
   resetGeneratedLessonStateForPlanRefresh,
@@ -87,6 +88,12 @@ test('summarizes player-visible lesson density and visual grounding', () => {
     evidenceStatuses: ['SUPPORTED', 'CITED_DRAFT'],
     sectionTitles: ['设置', '算分'],
   })
+})
+
+test('accepts a readable rulebook front cover when no external cover metadata exists', () => {
+  assert.equal(hasPublicCover({ gameCover: { imageUrl: 'https://publisher.example/cover.jpg' } }, false), true)
+  assert.equal(hasPublicCover({ gameCover: null }, true), true)
+  assert.equal(hasPublicCover({ gameCover: null }, false), false)
 })
 
 test('keeps the reusable source checkpoint while refreshing the generated lesson state', () => {

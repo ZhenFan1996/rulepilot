@@ -82,6 +82,10 @@ export function summarizeLesson(lesson) {
   }
 }
 
+export function hasPublicCover(publicLesson, rulebookFrontAvailable) {
+  return Boolean(publicLesson?.gameCover?.imageUrl) || rulebookFrontAvailable === true
+}
+
 export function summarizeRunProgress(details) {
   if (!details?.run) return String(details)
   const budget = details.budget ?? {}
@@ -182,6 +186,15 @@ class RulePilotClient {
       const match = value.match(/(?:^|,\s*)SESSION=([^;]+)/)
       if (match) this.cookie = `SESSION=${match[1]}`
     }
+  }
+
+  async rulebookFrontCoverAvailable(planId) {
+    const response = await this.fetch(`${this.baseUrl}/api/public/lessons/${encodeURIComponent(planId)}/cover`, {
+      method: 'HEAD',
+      headers: { Authorization: this.authorization },
+    })
+    this.captureSession(response)
+    return response.ok && response.headers.get('content-type')?.toLowerCase().startsWith('image/jpeg')
   }
 }
 
@@ -519,10 +532,13 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
 
   const lesson = await client.request(`/api/v1/teaching-plans/${state.plan.id}/illustrated-lessons/latest`)
   const publicLesson = await client.request(`/api/public/lessons/${state.plan.id}`)
+  const hasRegisteredCover = Boolean(publicLesson.gameCover?.imageUrl)
+  const hasRulebookFrontCover = hasRegisteredCover ? false : await client.rulebookFrontCoverAvailable(state.plan.id)
   const result = {
     ...summarizeLesson(lesson),
     publicTitle: publicLesson.rulebookTitle,
-    hasCover: Boolean(publicLesson.gameCover?.imageUrl),
+    hasCover: hasPublicCover(publicLesson, hasRulebookFrontCover),
+    coverSource: hasRegisteredCover ? 'REGISTERED' : hasRulebookFrontCover ? 'RULEBOOK_FRONT' : 'MISSING',
     hasOfficialRulebook: Boolean(publicLesson.officialSourceUrl),
     visualEnrichmentState: state.visual.state,
     visualActivityCount: state.visual.activityCount ?? null,
