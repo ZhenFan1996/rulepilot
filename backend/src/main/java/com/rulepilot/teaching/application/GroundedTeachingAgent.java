@@ -2,14 +2,11 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
-import com.rulepilot.assistant.AssistantReadTools.SearchRuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
-import com.rulepilot.assistant.EvidenceVerifier.EvidenceSource;
-import com.rulepilot.assistant.EvidenceVerifier.VerificationRequest;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.teaching.TeachingLessonModel;
@@ -50,7 +47,6 @@ public class GroundedTeachingAgent {
     static final String GENERATOR_VERSION = "adaptive-teaching-v35-endgame-check-fidelity";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
-    private static final int EVIDENCE_PER_INTENT = 3;
     /*
      * The cited base lesson is published section by section.  Whole-lesson review improves it,
      * but must not turn a usable first read into an unbounded rewrite job.
@@ -58,10 +54,9 @@ public class GroundedTeachingAgent {
     private static final int MAX_POST_PUBLICATION_REVIEW_PASSES = 1;
     private final AssistantReadTools tools;
     private final TeachingLessonModel model;
-    private final EvidenceVerifier evidenceVerifier;
     private final GeneratedContentCritic critic;
     private final AuditedAgentInvocations invocations;
-    private final TeachingVisualEvidenceResolver visualEvidenceResolver;
+    private final TeachingSectionEvidenceRetriever evidenceRetriever;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
     private final TeachingReviewCorrectionPolicy reviewCorrectionPolicy = new TeachingReviewCorrectionPolicy();
@@ -81,11 +76,12 @@ public class GroundedTeachingAgent {
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
         this.tools = tools;
         this.model = model;
-        this.evidenceVerifier = evidenceVerifier;
         this.critic = critic;
         this.invocations = invocations;
-        this.visualEvidenceResolver = new TeachingVisualEvidenceResolver(
+        TeachingVisualEvidenceResolver visualEvidenceResolver = new TeachingVisualEvidenceResolver(
                 tools, invocations, visualFacts, visualCatalog);
+        this.evidenceRetriever = new TeachingSectionEvidenceRetriever(
+                tools, evidenceVerifier, invocations, visualEvidenceResolver);
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
         this.maxToolCalls = Math.max(1, maxToolCalls);
@@ -281,14 +277,14 @@ public class GroundedTeachingAgent {
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, "REUSED_VERIFIED_SECTION");
             return new SectionOutcome(planned.position(), reusable, null, 0);
         }
-        EvidenceResolution resolution = retrieveSectionEvidence(
+        TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
         if (!resolution.verified()) {
             recordPublication(
                     assistantRunId,
                     planned,
                     ActivityOutcome.REJECTED,
-                    resolution.state() == EvidenceState.EMPTY
+                    resolution.state() == TeachingSectionEvidenceRetriever.State.EMPTY
                             ? mode.noEvidenceCategory()
                             : mode.invalidEvidenceCategory());
             return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
@@ -312,59 +308,6 @@ public class GroundedTeachingAgent {
             recordPublication(assistantRunId, planned, ActivityOutcome.REJECTED, mode.withheldCategory());
             return new SectionOutcome(planned.position(), lessonAssembly.insufficient(planned), null, resolution.toolCalls());
         }
-    }
-
-    private EvidenceResolution retrieveSectionEvidence(
-            TeachingPlan plan,
-            TeachingPlan.PlannedSection planned,
-            UUID assistantRunId,
-            int queryBudget,
-            boolean bindVisualPageEvidence) {
-        Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
-        List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
-        boolean conflictingEvidence = false;
-        int toolCalls = 0;
-        for (String query : TeachingEvidenceRetrievalPolicy.queries(planned, queryBudget)) {
-            toolCalls++;
-            try {
-                List<RuleEvidence> retrieved = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.TOOL,
-                        operationName("searchRuleEvidence", planned.position()),
-                        estimateTokens(query),
-                        "Version-scoped rule evidence retrieved",
-                        () -> retrieve(plan.documentVersionId(), planned.topicKey(), query),
-                        this::evidenceTokens);
-                evidenceByIntent.add(retrieved);
-                for (RuleEvidence source : retrieved) {
-                    RuleEvidence existing = evidenceById.putIfAbsent(source.chunkId(), source);
-                    if (existing != null && !sameEvidence(existing, source)) {
-                        conflictingEvidence = true;
-                        break;
-                    }
-                }
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException retrievalFailure) {
-                log.warn("Teaching evidence retrieval failed for topic {}: {}", planned.topicKey(), retrievalFailure.getMessage());
-            }
-            if (conflictingEvidence) break;
-        }
-        List<RuleEvidence> evidence = conflictingEvidence
-                ? List.of()
-                : TeachingEvidenceRetrievalPolicy.balancedEvidence(evidenceByIntent);
-        if (bindVisualPageEvidence) {
-            evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
-        }
-        if (evidence.isEmpty()) {
-            return new EvidenceResolution(List.of(), toolCalls, EvidenceState.EMPTY);
-        }
-        boolean verified = evidenceVerifier.verify(new VerificationRequest(
-                        plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
-                .verified();
-        return verified
-                ? new EvidenceResolution(evidence, toolCalls, EvidenceState.VERIFIED)
-                : new EvidenceResolution(List.of(), toolCalls, EvidenceState.INVALID);
     }
 
     private SectionOutcome await(Future<SectionOutcome> future) {
@@ -452,17 +395,6 @@ public class GroundedTeachingAgent {
                 previousLesson,
                 REUSABLE_GENERATOR_VERSIONS,
                 model.supportsVisualEvidence(plan.createdBy()));
-    }
-
-    private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {
-        return List.copyOf(tools.searchRuleEvidence(new SearchRuleEvidence(
-                        documentVersionId,
-                        TeachingEvidenceRetrievalPolicy.focusedQuery(query),
-                        EVIDENCE_PER_INTENT,
-                        Set.of(),
-                        null,
-                        true,
-                        true)));
     }
 
     private void reviewPublishedLesson(
@@ -714,38 +646,11 @@ public class GroundedTeachingAgent {
                 "DRAFT_WITHHELD_AFTER_REPAIR_BUDGET");
     }
 
-    private enum EvidenceState { VERIFIED, EMPTY, INVALID }
-
-    private record EvidenceResolution(List<RuleEvidence> evidence, int toolCalls, EvidenceState state) {
-        boolean verified() {
-            return state == EvidenceState.VERIFIED;
-        }
-    }
-
     private record SectionOutcome(
             int position,
             LessonSection section,
             TeachingSectionDraftCandidate reviewCandidate,
             int retrievalToolCalls) {}
-
-    private boolean sameEvidence(RuleEvidence first, RuleEvidence second) {
-        return first.chunkId().equals(second.chunkId())
-                && first.documentVersionId().equals(second.documentVersionId())
-                && first.sectionType().equals(second.sectionType())
-                && first.heading().equals(second.heading())
-                && first.pageFrom() == second.pageFrom()
-                && first.pageTo() == second.pageTo();
-    }
-
-    private EvidenceSource toVerifierEvidence(RuleEvidence evidence) {
-        return new EvidenceSource(
-                evidence.chunkId(), evidence.documentVersionId(), evidence.sectionType(), evidence.excerpt(),
-                evidence.pageFrom(), evidence.pageTo());
-    }
-
-    private int evidenceTokens(List<RuleEvidence> evidence) {
-        return evidence.stream().mapToInt(source -> estimateTokens(source.excerpt())).sum();
-    }
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
