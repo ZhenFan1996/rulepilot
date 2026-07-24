@@ -56,6 +56,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final ConfirmedRulingLookup confirmedRulings;
     private final AnswerPublicationValidator publicationValidator;
     private final AnswerEvidenceAdmissionGate evidenceAdmissionGate;
+    private final AnswerDraftComposer draftComposer;
     private final AnswerPostPublicationReviewer postPublicationReviewer;
     private final AnswerRunLifecycle runLifecycle;
     private final AuditedAgentInvocations invocations;
@@ -94,6 +95,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.confirmedRulings = confirmedRulings;
         this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
         this.evidenceAdmissionGate = new AnswerEvidenceAdmissionGate(publicationValidator);
+        this.draftComposer = new AnswerDraftComposer(modelGateway);
         this.postPublicationReviewer = new AnswerPostPublicationReviewer(critic, modelGateway, publicationValidator);
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
@@ -278,72 +280,23 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             return safe(context.documentVersionId(), admission.failureStatus(), admission.failureMessage());
         }
         List<HybridEvidenceHit> evidence = admission.evidence();
-        ModelDraft draft;
         ModelRequest modelRequest;
         try {
             modelRequest = modelRequestFactory.create(understood, context, evidence);
-            draft = modelGateway.compose(assistantRunId, username, gameSessionId, modelRequest);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
-        if (draft == null) {
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+        AnswerDraftComposer.Result draftResult = draftComposer.compose(
+                assistantRunId, username, gameSessionId, modelRequest);
+        if (!draftResult.ready()) {
+            return safe(
+                    context.documentVersionId(),
+                    draftResult.failureStatus(),
+                    draftResult.failureMessage());
         }
-        if (!draft.answerable()) {
-            draft = reviseEvidenceBackedAbstention(
-                    assistantRunId, username, gameSessionId, modelRequest, draft);
-        }
-        if (!draft.answerable()) {
-            draft = AnswerReplenishmentPolicy.directFallback(modelRequest).orElse(null);
-            if (draft == null) {
-                return safe(context.documentVersionId(), AnswerStatus.INSUFFICIENT_EVIDENCE, "现有证据未能直接回答这个问题。");
-            }
-        }
-        draft = AnswerReplenishmentPolicy.replaceMisdirectedDraft(modelRequest, draft);
-        draft = AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(modelRequest, draft);
-        List<String> playerFacingRepair = AnswerPlayerFacingRepairPolicy.feedbackFor(modelRequest, draft);
-        if (!playerFacingRepair.isEmpty()) {
-            try {
-                draft = revisePlayerFacingDraft(
-                        assistantRunId, username, gameSessionId, modelRequest, draft, playerFacingRepair);
-                if (AnswerRepairOutcomePolicy.shouldRetryWithEvidencedSuccessor(
-                        modelRequest, draft, playerFacingRepair)) {
-                    draft = revisePlayerFacingDraft(
-                            assistantRunId,
-                            username,
-                            gameSessionId,
-                            modelRequest,
-                            AnswerRepairOutcomePolicy.retryDraft(draft),
-                            AnswerRepairOutcomePolicy.successorRetryFeedback(playerFacingRepair));
-                }
-            } catch (RuleAnswerModelTimeoutException exception) {
-                return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "视觉规则消歧超时，可以稍后重试或直接查看规则引用。");
-            } catch (RuntimeException exception) {
-                return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答修订结果未通过结构校验。");
-            }
-            if (draft == null || !draft.answerable()) {
-                return safe(
-                        context.documentVersionId(),
-                        AnswerStatus.INSUFFICIENT_EVIDENCE,
-                        AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair));
-            }
-            draft = AnswerDraftSafetyPolicy.normalizeSingleMappedVisualGlyph(
-                    draft, AnswerVisualEvidencePolicy.resolvedComponents(modelRequest, draft));
-            draft = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
-            draft = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(draft);
-            Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =
-                    AnswerRepairOutcomePolicy.publicationFailure(modelRequest, draft);
-            if (failure.isPresent()) {
-                return safe(context.documentVersionId(), failure.get().status(), failure.get().message());
-            }
-        }
-        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(modelRequest, draft);
-        if (!preparation.ready()) {
-            return safe(context.documentVersionId(), preparation.failureStatus(), preparation.failureMessage());
-        }
-        draft = preparation.draft();
+        ModelDraft draft = draftResult.draft();
         StructuredRuleAnswer answer;
         try {
             answer = publicationValidator.publish(context.documentVersionId(), draft, evidence);
@@ -375,41 +328,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             saveCached(cacheKey.get(), answer);
         }
         return answer;
-    }
-
-    private ModelDraft reviseEvidenceBackedAbstention(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft) {
-        return modelGateway.revise(
-                assistantRunId,
-                username,
-                gameSessionId,
-                modelRequest,
-                previousDraft,
-                AnswerEvidenceReconsiderationPolicy.feedbackFor(modelRequest),
-                "reconsiderEvidenceBackedAbstention",
-                "Evidence-backed table abstention reconsidered");
-    }
-
-    private ModelDraft revisePlayerFacingDraft(
-            UUID assistantRunId,
-            String username,
-            UUID gameSessionId,
-            ModelRequest modelRequest,
-            ModelDraft previousDraft,
-            List<String> feedback) {
-        return modelGateway.revise(
-                assistantRunId,
-                username,
-                gameSessionId,
-                modelRequest,
-                previousDraft,
-                feedback,
-                "repairPlayerFacingRuleAnswer",
-                "Ambiguous visual identity or internal evidence language repaired");
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
