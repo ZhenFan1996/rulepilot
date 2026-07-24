@@ -10,6 +10,13 @@ import type {
   SpeechCue,
 } from '@/composables/lessonSupportingContent'
 
+export type MediaWarningCode =
+  | 'QUALITY_UNAVAILABLE'
+  | 'AUDIO_UNAVAILABLE'
+  | 'VIDEO_UNAVAILABLE'
+  | 'AUDIO_LOAD_FAILED'
+  | 'SOURCE_LANGUAGE_MEDIA'
+
 interface LoadSupportingContentRequest {
   planId: string
   isCurrent: () => boolean
@@ -25,7 +32,7 @@ export function useLessonSupportingContent() {
   const narration = ref<NarrationScript | null>(null)
   const video = ref<ChapterVideo | null>(null)
   const mediaConsistency = ref<MediaConsistencyReport | null>(null)
-  const mediaWarnings = ref<string[]>([])
+  const mediaWarningCodes = ref<MediaWarningCode[]>([])
   const audioAvailable = ref(false)
   const narrationProvider = ref('')
   const narrationDurationMillis = ref(0)
@@ -34,8 +41,8 @@ export function useLessonSupportingContent() {
   const narrationPlaying = ref(false)
   const narrationRestoreTarget = ref<number | null>(null)
 
-  function addMediaWarning(message: string) {
-    if (!mediaWarnings.value.includes(message)) mediaWarnings.value.push(message)
+  function addMediaWarning(code: MediaWarningCode) {
+    if (!mediaWarningCodes.value.includes(code)) mediaWarningCodes.value.push(code)
   }
 
   function clearSupportingContent() {
@@ -46,7 +53,7 @@ export function useLessonSupportingContent() {
     comprehension.value = null
     comprehensionSaving.value = null
     comprehensionError.value = ''
-    mediaWarnings.value = []
+    mediaWarningCodes.value = []
     audioAvailable.value = false
     narrationProvider.value = ''
     narrationDurationMillis.value = 0
@@ -89,7 +96,7 @@ export function useLessonSupportingContent() {
     ])
     if (!request.isCurrent()) return
     if (loadedQuality) quality.value = loadedQuality
-    else addMediaWarning('讲解诊断暂不可用，不影响继续阅读。')
+    else addMediaWarning('QUALITY_UNAVAILABLE')
     if (loadedComprehension) comprehension.value = loadedComprehension
     else comprehensionError.value = '学习检查暂时无法读取，不影响继续看讲解。'
     if (loadedNarration) {
@@ -99,10 +106,10 @@ export function useLessonSupportingContent() {
       narrationCues.value = loadedNarration.cues
       audioAvailable.value = true
     } else {
-      addMediaWarning('语音暂不可用，已保留完整图文讲解。')
+      addMediaWarning('AUDIO_UNAVAILABLE')
     }
     if (loadedVideo) video.value = loadedVideo
-    else addMediaWarning('视频暂不可用，可继续使用图文或语音讲解。')
+    else addMediaWarning('VIDEO_UNAVAILABLE')
     mediaConsistency.value = loadedConsistency
     const restoredNarration = Number(localStorage.getItem(request.narrationPositionKey()))
     if (Number.isFinite(restoredNarration) && restoredNarration >= 0 && restoredNarration < narrationDurationMillis.value) {
@@ -119,7 +126,7 @@ export function useLessonSupportingContent() {
     narration,
     video,
     mediaConsistency,
-    mediaWarnings,
+    mediaWarningCodes,
     audioAvailable,
     narrationProvider,
     narrationDurationMillis,

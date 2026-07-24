@@ -25,6 +25,7 @@ import {
 import { buildCardQuestion } from '@/lib/cardOcr'
 import {
   useLessonSupportingContent,
+  type MediaWarningCode,
 } from '@/composables/useLessonSupportingContent'
 import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/useLessonNarrationPlayback'
 import type {
@@ -152,7 +153,7 @@ const {
   narration,
   video,
   mediaConsistency,
-  mediaWarnings,
+  mediaWarningCodes,
   audioAvailable,
   narrationDurationMillis,
   narrationCues,
@@ -163,6 +164,8 @@ const {
   clearSupportingContent,
   loadSupportingContent: loadSupportingContentForCurrentLesson,
 } = useLessonSupportingContent()
+
+const mediaWarnings = computed(() => mediaWarningCodes.value.map(mediaWarningMessage))
 
 const planId = computed(() => String(route.params.planId ?? ''))
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
@@ -429,7 +432,7 @@ const {
     saveProgress()
   },
   addWarning: addMediaWarning,
-  audioFailureMessage: () => t('lesson.reader.audio.loadFailed'),
+  audioFailureWarning: 'AUDIO_LOAD_FAILED',
 })
 
 function refreshOfflineKnowledge(targetPlanId = planId.value) {
@@ -1016,6 +1019,16 @@ function visualKindLabel(kind: LessonSection['visualKind']) {
   }[kind]
 }
 
+function mediaWarningMessage(code: MediaWarningCode) {
+  return {
+    QUALITY_UNAVAILABLE: t('lesson.reader.media.qualityUnavailable'),
+    AUDIO_UNAVAILABLE: t('lesson.reader.media.audioUnavailable'),
+    VIDEO_UNAVAILABLE: t('lesson.reader.media.videoUnavailable'),
+    AUDIO_LOAD_FAILED: t('lesson.reader.media.audioLoadFailed'),
+    SOURCE_LANGUAGE_MEDIA: t('lesson.reader.media.sourceLanguageOnly'),
+  }[code]
+}
+
 function selectMediaMode(mode: MediaMode) {
   if (!mediaModeAvailable(mode)) return
   mediaMode.value = mode
@@ -1056,7 +1069,7 @@ watch(locale, () => {
   resetConversation()
   if (locale.value === 'en' && mediaMode.value !== 'TEXT') {
     mediaMode.value = 'TEXT'
-    addMediaWarning('English reading uses the text guide; narration and video remain in the source language.')
+    addMediaWarning('SOURCE_LANGUAGE_MEDIA')
   }
   void applySelectedLocale()
 })

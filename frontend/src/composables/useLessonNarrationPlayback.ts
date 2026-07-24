@@ -1,5 +1,6 @@
 import { computed, ref, type Ref } from 'vue'
 
+import type { MediaWarningCode } from '@/composables/useLessonSupportingContent'
 import type { SpeechCue } from '@/composables/lessonSupportingContent'
 
 export type LessonMediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
@@ -15,8 +16,8 @@ interface LessonNarrationPlaybackOptions {
   mediaMode: Ref<LessonMediaMode>
   currentSectionIndex: Readonly<Ref<number>>
   synchronizeChapter: (chapterIndex: number) => void
-  addWarning: (message: string) => void
-  audioFailureMessage: () => string
+  addWarning: (code: MediaWarningCode) => void
+  audioFailureWarning: MediaWarningCode
 }
 
 export function useLessonNarrationPlayback(options: LessonNarrationPlaybackOptions) {
@@ -82,7 +83,7 @@ export function useLessonNarrationPlayback(options: LessonNarrationPlaybackOptio
     options.audioAvailable.value = false
     narrationPlayer.value?.pause()
     if (options.mediaMode.value === 'AUDIO') options.mediaMode.value = 'TEXT'
-    options.addWarning(options.audioFailureMessage())
+    options.addWarning(options.audioFailureWarning)
   }
 
   async function toggleNarration() {

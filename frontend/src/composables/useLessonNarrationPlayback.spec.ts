@@ -46,7 +46,7 @@ function createPlayback({
     currentSectionIndex: activeSection,
     synchronizeChapter,
     addWarning,
-    audioFailureMessage: () => 'Audio could not load.',
+    audioFailureWarning: 'AUDIO_LOAD_FAILED',
   })
 
   return {
@@ -111,7 +111,7 @@ describe('useLessonNarrationPlayback', () => {
     fixture.playback.onNarrationError()
     expect(fixture.audioAvailable.value).toBe(false)
     expect(fixture.activeMediaMode.value).toBe('TEXT')
-    expect(fixture.addWarning).toHaveBeenCalledWith('Audio could not load.')
+    expect(fixture.addWarning).toHaveBeenCalledWith('AUDIO_LOAD_FAILED')
     expect(player.pause).toHaveBeenCalledOnce()
   })
 })

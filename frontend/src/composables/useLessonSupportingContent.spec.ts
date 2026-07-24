@@ -37,9 +37,7 @@ describe('useLessonSupportingContent', () => {
     expect(content.narration.value?.id).toBe('script-1')
     expect(content.audioAvailable.value).toBe(true)
     expect(content.narrationMillis.value).toBe(4_200)
-    expect(content.mediaWarnings.value).toEqual([
-      '视频暂不可用，可继续使用图文或语音讲解。',
-    ])
+    expect(content.mediaWarningCodes.value).toEqual(['VIDEO_UNAVAILABLE'])
   })
 
   it('drops optional content that returns after the selected lesson changed', async () => {
@@ -64,6 +62,6 @@ describe('useLessonSupportingContent', () => {
     await loading
 
     expect(content.quality.value).toBeNull()
-    expect(content.mediaWarnings.value).toEqual([])
+    expect(content.mediaWarningCodes.value).toEqual([])
   })
 })
