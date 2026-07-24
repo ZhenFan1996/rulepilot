@@ -7,16 +7,12 @@ import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,10 +30,9 @@ public class VisualLessonEnricher {
     private final VisualSectionPrioritizer prioritizer;
     private final VisualReaderCropPolicy cropPolicy;
     private final VisualLessonMergePolicy mergePolicy;
-    private final VisualLessonStepLocator stepLocator;
+    private final VisualLessonSectionEnricher sectionEnricher;
     private final int maxSections;
     private final int maxVisualStepsPerSection;
-    private final int requestParallelism;
 
     @Autowired
     public VisualLessonEnricher(
@@ -54,13 +49,6 @@ public class VisualLessonEnricher {
         this.prioritizer = prioritizer;
         this.cropPolicy = new VisualReaderCropPolicy();
         this.mergePolicy = new VisualLessonMergePolicy(cropPolicy);
-        this.stepLocator = new VisualLessonStepLocator(
-                pageImages,
-                visualPageFacts,
-                candidates,
-                locator,
-                cropPolicy,
-                new VisualStepRelevancePolicy());
         if (maxSections < 1 || maxSections > 20) {
             throw new IllegalArgumentException("visual section limit must be between one and twenty");
         }
@@ -72,7 +60,18 @@ public class VisualLessonEnricher {
         }
         this.maxSections = maxSections;
         this.maxVisualStepsPerSection = maxVisualStepsPerSection;
-        this.requestParallelism = requestParallelism;
+        this.sectionEnricher = new VisualLessonSectionEnricher(
+                cropPolicy,
+                mergePolicy,
+                new VisualLessonStepLocator(
+                        pageImages,
+                        visualPageFacts,
+                        candidates,
+                        locator,
+                        cropPolicy,
+                        new VisualStepRelevancePolicy()),
+                maxVisualStepsPerSection,
+                requestParallelism);
     }
 
     public VisualLessonEnricher(
@@ -149,14 +148,15 @@ public class VisualLessonEnricher {
         for (int sectionIndex = 0; sectionIndex < readerReadyLesson.sections().size(); sectionIndex++) {
             LessonSection section = readerReadyLesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
-            SectionResult enriched = enrichSection(map, documentVersionId, section, modelConfigurationOwner, progress);
-            SectionResult distinct = keepDistinctVisuals(section, enriched, acceptedVisuals);
-            sectionResults.add(distinct);
-            currentSections.set(sectionIndex, distinct.section());
-            if (distinct.outcome() != null) {
-                SectionProgress update = new SectionProgress(section.position(), section.title(), distinct.outcome());
+            VisualLessonSectionEnricher.Result enriched = sectionEnricher.enrich(
+                    map, documentVersionId, section, modelConfigurationOwner, progress, acceptedVisuals);
+            SectionResult sectionResult = sectionResult(enriched);
+            sectionResults.add(sectionResult);
+            currentSections.set(sectionIndex, sectionResult.section());
+            if (sectionResult.outcome() != null) {
+                SectionProgress update = new SectionProgress(section.position(), section.title(), sectionResult.outcome());
                 progress.sectionFinished(update);
-                if (distinct.outcome().outcome() == Outcome.ADDED) {
+                if (sectionResult.outcome().outcome() == Outcome.ADDED) {
                     progress.sectionUpdated(update, lessonWithSections(readerReadyLesson, currentSections));
                 }
             }
@@ -173,107 +173,13 @@ public class VisualLessonEnricher {
                 original.generatorVersion(), original.createdAt());
     }
 
-    private SectionResult enrichSection(
-            com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
-            UUID documentVersionId,
-            LessonSection section,
-            String modelConfigurationOwner,
-            VisualProgressListener progress) {
-        int existingVisualSteps = (int) section.steps().stream()
-                .filter(step -> step.kind() == TeachingMove.VISUAL && !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
-                .count();
-        if (existingVisualSteps >= maxVisualStepsPerSection) {
-            return result(section, Outcome.ALREADY_PRESENT);
-        }
-        List<VisualRegionLocator.LocatedRegion> accepted = new ArrayList<>();
-        Outcome rejected = null;
-        int availableStepSlots = (int) section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
-                .count();
-        int limit = Math.min(maxVisualStepsPerSection - existingVisualSteps, availableStepSlots);
-        List<LessonStep> targets = visualTargets(section, limit);
-        if (targets.isEmpty()) return result(section, Outcome.NO_CITED_CANDIDATE);
-        try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
-            List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
-                    .map(step -> executor.submit(() -> locateWithProgress(
-                            understanding, documentVersionId, section, step, modelConfigurationOwner, progress)))
-                    .toList();
-            for (Future<VisualLessonStepLocator.Result> attempt : attempts) {
-                VisualLessonStepLocator.Result location = awaitLocation(attempt);
-                if (location.region() != null) accepted.add(location.region());
-                else if (location.rejection() != null) rejected = location.rejection();
-            }
-        }
-        if (accepted.isEmpty()) return result(section, rejected == null ? Outcome.LOCATOR_RETURNED_NONE : rejected);
-        VisualLessonMergePolicy.MergedVisualSection merged = mergePolicy.mergeVisualIntoSupportedSteps(section, accepted);
-        if (merged.addedCount() == 0) return result(section, Outcome.REJECTED_UNKNOWN_EVIDENCE);
-        return new SectionResult(merged.section(), new SectionOutcome(
-                section.position(), Outcome.ADDED, addedSummary(section.position(), merged.addedCount())));
-    }
-
-    /**
-     * Independent steps can inspect different cited pages at the same time. The fixed-size executor is intentionally
-     * tiny and matches the provider-facing visual executor, so this shortens a player's wait without accumulating an
-     * unbounded paid-image queue or changing the exact-step validation contract.
-     */
-    private VisualLessonStepLocator.Result locateWithProgress(
-            com.rulepilot.ingestion.layout.RulebookUnderstanding understanding,
-            UUID documentVersionId,
-            LessonSection section,
-            LessonStep step,
-            String modelConfigurationOwner,
-            VisualProgressListener progress) {
-        VisualTarget target = new VisualTarget(section.position(), section.title(), step.position(), step.heading());
-        progress.targetStarted(target);
-        VisualLessonStepLocator.Result location = stepLocator.locate(
-                understanding, documentVersionId, section, step, modelConfigurationOwner);
-        progress.targetFinished(target, location.region() == null
-                ? location.rejection() == null ? Outcome.LOCATOR_RETURNED_NONE : location.rejection()
-                : Outcome.ADDED);
-        return location;
-    }
-
-    private VisualLessonStepLocator.Result awaitLocation(Future<VisualLessonStepLocator.Result> attempt) {
-        try {
-            return attempt.get();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("visual lesson enrichment was interrupted", interrupted);
-        } catch (ExecutionException failed) {
-            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
-            throw new IllegalStateException("visual lesson enrichment failed", failed.getCause());
-        }
-    }
-
-    /**
-     * Vision is strongest when it is asked to ground one player action at a time. Passing every paragraph from a
-     * section invites a model to attach a perfectly real diagram to the wrong neighbouring rule.
-     */
-    private List<LessonStep> visualTargets(LessonSection section, int limit) {
-        return section.steps().stream()
-                .filter(step -> step.kind() != TeachingMove.VISUAL || cropPolicy.needsTighterReaderCrop(step.visualFocus()))
-                .filter(step -> !step.sourcePages().isEmpty() && !step.sourceChunkIds().isEmpty())
-                .sorted(java.util.Comparator.comparingInt(this::visualAffinity).reversed()
-                        .thenComparingInt(LessonStep::position))
-                .limit(limit)
-                .toList();
-    }
-
-    private int visualAffinity(LessonStep step) {
-        String target = (step.heading() + " " + step.text()).toLowerCase(java.util.Locale.ROOT);
-        int score = 0;
-        for (String cue : List.of(
-                "图标", "符号", "卡牌", "卡片", "玩家板", "棋盘", "网格", "地图", "轨道", "骰子", "资源",
-                "令牌", "标记", "方块", "建筑", "放置", "建造", "布局", "计分", "分数", "示例", "组件",
-                "icon", "symbol", "card", "board", "grid", "map", "track", "dice", "resource", "token",
-                "marker", "building", "score", "example", "component")) {
-            if (target.contains(cue)) score++;
-        }
-        return score;
-    }
-
-    private SectionResult result(LessonSection section, Outcome outcome) {
-        return new SectionResult(section, new SectionOutcome(section.position(), outcome, outcomeSummary(section.position(), outcome)));
+    private SectionResult sectionResult(VisualLessonSectionEnricher.Result result) {
+        String summary = result.outcome() == Outcome.ADDED
+                ? addedSummary(result.section().position(), result.addedCount())
+                : outcomeSummary(result.section().position(), result.outcome());
+        return new SectionResult(
+                result.section(),
+                new SectionOutcome(result.section().position(), result.outcome(), summary));
     }
 
     private String addedSummary(int sectionPosition, int count) {
@@ -388,22 +294,5 @@ public class VisualLessonEnricher {
     }
 
     private record SectionResult(LessonSection section, SectionOutcome outcome) {}
-
-    /**
-     * A crop is a reading aid, not decorative repetition. Keep the first grounded use of a substantially identical
-     * viewport and leave later steps as their original rule prose so a player does not see the same diagram twice.
-     */
-    private SectionResult keepDistinctVisuals(
-            LessonSection original,
-            SectionResult candidate,
-            List<VisualFocus> acceptedVisuals) {
-        if (candidate.outcome() == null || candidate.outcome().outcome() != Outcome.ADDED) return candidate;
-        VisualLessonMergePolicy.DistinctVisualSection distinct =
-                mergePolicy.keepDistinctVisuals(original, candidate.section(), acceptedVisuals);
-        if (!distinct.hadDuplicate()) return candidate;
-        if (distinct.addedCount() == 0) return result(original, Outcome.REJECTED_DUPLICATE);
-        return new SectionResult(distinct.section(), new SectionOutcome(
-                original.position(), Outcome.ADDED, addedSummary(original.position(), distinct.addedCount())));
-    }
 
 }
