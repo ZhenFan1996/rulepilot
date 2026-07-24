@@ -7,6 +7,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -78,18 +79,19 @@ public class UploadedDocumentIngestion {
         documents.markExtracting(documentVersionId);
         long extractionStartedAt = System.nanoTime();
         var pages = extractor.extract(documents.open(documentVersionId));
-        recordParsePhase("extraction", extractionStartedAt);
+        long extractionNanos = recordParsePhase("extraction", extractionStartedAt);
         documents.replacePages(documentVersionId, pages);
         int totalPages = pages.size();
         progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
         AtomicInteger renderedPageCount = new AtomicInteger();
+        AtomicLong pageStorageNanos = new AtomicLong();
         int updateInterval = renderingUpdateInterval(totalPages);
         long renderingStartedAt = System.nanoTime();
         int renderedPageCountResult = pageImageRenderer.render(
                 documents.open(documentVersionId), image -> {
                     long pageStorageStartedAt = System.nanoTime();
                     pageImages.store(documentVersionId, image);
-                    recordParsePhase("page-storage", pageStorageStartedAt);
+                    pageStorageNanos.addAndGet(recordParsePhase("page-storage", pageStorageStartedAt));
                     int completedPages = renderedPageCount.incrementAndGet();
                     if (completedPages % updateInterval == 0 || completedPages == totalPages) {
                         progress.update(
@@ -101,7 +103,7 @@ public class UploadedDocumentIngestion {
                                 false);
                     }
                 });
-        recordParsePhase("render-and-store", renderingStartedAt);
+        long renderingAndStoreNanos = recordParsePhase("render-and-store", renderingStartedAt);
         if (renderedPageCountResult != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
@@ -111,7 +113,14 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "STRUCTURING", 75, totalPages, totalPages, false);
         long structuringStartedAt = System.nanoTime();
         structures.organize(documentVersionId, pages);
-        recordParsePhase("structuring", structuringStartedAt);
+        long structuringNanos = recordParsePhase("structuring", structuringStartedAt);
+        LOGGER.info(
+                "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageMs={}, structuringMs={}",
+                totalPages,
+                milliseconds(extractionNanos),
+                milliseconds(renderingAndStoreNanos),
+                milliseconds(pageStorageNanos.get()),
+                milliseconds(structuringNanos));
     }
 
     private void chunk(UUID documentVersionId) {
@@ -147,11 +156,17 @@ public class UploadedDocumentIngestion {
         return Math.max(1, (int) Math.ceil(totalPages / (double) (MAX_RENDERING_PROGRESS_EVENTS - 1)));
     }
 
-    private void recordParsePhase(String phase, long startedAt) {
+    private long recordParsePhase(String phase, long startedAt) {
+        long duration = System.nanoTime() - startedAt;
         Timer.builder(PARSE_PHASE_DURATION_METRIC)
                 .description("Document parse phase duration")
                 .tag("phase", phase)
                 .register(metrics)
-                .record(System.nanoTime() - startedAt, TimeUnit.NANOSECONDS);
+                .record(duration, TimeUnit.NANOSECONDS);
+        return duration;
+    }
+
+    private long milliseconds(long duration) {
+        return TimeUnit.NANOSECONDS.toMillis(duration);
     }
 }
