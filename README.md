@@ -173,6 +173,25 @@ make deployment-down
 
 `api` 角色负责 HTTP、Outbox 发布和队列指标，不消费文档任务；`worker` 角色只消费幂等的解析、切片与 Embedding 阶段，不启动 HTTP 服务或重复发布 Outbox。两种角色仍来自同一个模块化单体制品，不拆分业务代码仓库。
 
+### 生产部署与 CI/CD
+
+GitHub Actions 会在 Pull Request 和 `main` 推送时运行后端、前端、架构、集成和 E2E 校验。`main` 的 CI 全绿后，生产部署工作流会构建不可变的后端 JAR 与前端静态资源，并通过 SSH 将该提交发布到服务器；它不会把 `.env`、规则书、用户上传或模型密钥打包进发布包。
+
+在 GitHub 的 `production` Environment 中配置以下 Secrets 后即可启用自动部署：
+
+- `DEPLOY_HOST`：生产服务器地址；
+- `DEPLOY_USER`：受限的部署 SSH 用户；
+- `DEPLOY_SSH_PRIVATE_KEY`：该用户专用的私钥；
+- `DEPLOY_KNOWN_HOSTS`：已核验的服务器 SSH 主机密钥；
+- `DEPLOY_SSH_PORT`：可选，默认 `22`。
+
+可选的 Environment Variable `DEPLOY_PATH` 默认为 `/opt/rulepilot`。服务器在该目录保留 `.env`，每次部署在 `releases/` 创建一个提交标识的发布目录，并在成功后更新 `current` 软链接。生产拓扑通过以下命令串行启动 API、前端网关和 Worker，避免单核主机在冷启动时争抢数据库：
+
+```sh
+make production-up
+make production-down
+```
+
 另开一个终端可载入完整演示数据：
 
 ```sh
@@ -347,6 +366,8 @@ make security-test
 make e2e
 make compose-up
 make compose-down
+make production-up
+make production-down
 make verify
 ```
 

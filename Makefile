@@ -100,3 +100,9 @@ deployment-up: ## Build and start separate API and worker containers with local 
 
 deployment-down: ## Stop the split API/worker deployment and retain named-volume data
 	@sh scripts/run-deployment.sh down
+
+production-up: ## Build and start the HTTPS-ready production Compose topology
+	@sh scripts/run-production.sh up
+
+production-down: ## Stop the production Compose topology and retain named-volume data
+	@sh scripts/run-production.sh down

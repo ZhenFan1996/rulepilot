@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: rulepilot-postgres:local
+    build:
+      context: ../infra/postgres
+      dockerfile: Dockerfile.runtime
+    volumes: !override
+      - postgres-data:/var/lib/postgresql/data
+
+  api:
+    image: rulepilot-backend:local
+    build:
+      context: ../backend
+      dockerfile: Dockerfile.runtime
+    environment:
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m
+
+  worker:
+    image: rulepilot-backend:local
+    # Reuse the API runtime image. Building both services concurrently against
+    # the same image tag causes Docker to race while exporting the image.
+    build: !reset null
+    environment:
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
+
+  frontend:
+    image: rulepilot-frontend:local
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.runtime
+    ports:
+      - "${RULEPILOT_HTTP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  gateway:
+    image: caddy:2.10.2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:
