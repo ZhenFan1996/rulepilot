@@ -498,6 +498,11 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
+    expect(wrapper.text()).toContain('← My guides')
+    expect(wrapper.text()).toContain('Read publicly')
+    expect(wrapper.text()).toContain('Start a game')
+    expect(wrapper.text()).toContain('This guide')
+    expect(wrapper.text()).toContain('4 players · 2 new players · 30 min')
     await wrapper.findAll('button').find((button) => button.text() === 'Walk through an example')!.trigger('click')
     await flushPromises()
 
