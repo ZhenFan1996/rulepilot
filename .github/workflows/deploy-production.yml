@@ -1,0 +1,143 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA, tag, or branch to deploy
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy RulePilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment:
+      name: production
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.ref }}
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build immutable deployment artifacts
+        run: |
+          ./mvnw -q -DskipTests package
+        working-directory: backend
+
+      - name: Build frontend artifact
+        run: |
+          npm ci
+          npm run build
+        working-directory: frontend
+
+      - name: Configure production SSH trust
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
+            if [[ -z "${!required_secret}" ]]; then
+              echo "Missing required production deployment secret: ${required_secret}" >&2
+              exit 1
+            fi
+          done
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Package release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "DEPLOY_RELEASE_ID=$(git rev-parse HEAD)-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+          tar \
+            --exclude=.git \
+            --exclude=.env \
+            --exclude='.env.*' \
+            --exclude=.local \
+            --exclude=frontend/node_modules \
+            -czf "$RUNNER_TEMP/rulepilot-release.tar.gz" .
+          sha256sum "$RUNNER_TEMP/rulepilot-release.tar.gz"
+
+      - name: Upload release bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -P "$DEPLOY_SSH_PORT" \
+            "$RUNNER_TEMP/rulepilot-release.tar.gz" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/rulepilot-${DEPLOY_RELEASE_ID}.tar.gz"
+
+      - name: Activate release and verify production health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" "$DEPLOY_RELEASE_ID" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$1
+          release_id=$2
+          archive="/tmp/rulepilot-${release_id}.tar.gz"
+          release_dir="${application_root}/releases/${release_id}"
+
+          test -f "${application_root}/.env"
+          install -d -m 0755 "${release_dir}"
+          tar -xzf "${archive}" -C "${release_dir}"
+          ln -s "${application_root}/.env" "${release_dir}/.env"
+
+          cd "${release_dir}"
+          sh scripts/run-production.sh config
+          make production-up
+
+          ln -sfn "${release_dir}" "${application_root}/current"
+          rm -f "${archive}"
+          printf 'Activated production release %s\n' "${release_id}"
+          REMOTE
