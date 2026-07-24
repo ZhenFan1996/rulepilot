@@ -20,8 +20,17 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.amqp.core.Message;
+import org.springframework.context.annotation.Lazy;
 
 class DocumentProcessingWorkerTest {
+
+    @Test
+    void remainsEagerWhenTheWorkerProfileDefersUnusedApplicationBeans() {
+        assertThat(DocumentProcessingWorker.class.getAnnotation(Lazy.class))
+                .isNotNull()
+                .extracting(Lazy::value)
+                .isEqualTo(false);
+    }
 
     @Test
     void dispatchesSupportedVersionToIngestion() {
