@@ -14,7 +14,7 @@ export function normalizeCardText(value: string, limit = CARD_TEXT_LIMIT) {
   return normalized.slice(0, limit).trimEnd()
 }
 
-export function buildCardQuestion(recognizedText: string) {
+export function buildCardQuestion(recognizedText: string, prefix = QUESTION_PREFIX) {
   const cardText = normalizeCardText(recognizedText)
-  return cardText ? `${QUESTION_PREFIX}${cardText}` : ''
+  return cardText ? `${prefix}${cardText}` : ''
 }

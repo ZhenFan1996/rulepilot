@@ -2,25 +2,49 @@
 import { computed, onUnmounted, ref } from 'vue'
 
 import { normalizeCardText } from '@/lib/cardOcr'
+import { useLocale } from '@/lib/locale'
 
 const emit = defineEmits<{
   close: []
   recognized: [text: string]
 }>()
 
+type ProgressStatus =
+  | 'cardOcr.status.waitingForPhoto'
+  | 'cardOcr.status.ready'
+  | 'cardOcr.status.starting'
+  | 'cardOcr.status.loadingCore'
+  | 'cardOcr.status.initializing'
+  | 'cardOcr.status.loadingLanguage'
+  | 'cardOcr.status.preparing'
+  | 'cardOcr.status.recognizing'
+  | 'cardOcr.status.processing'
+  | 'cardOcr.status.completed'
+  | 'cardOcr.status.incomplete'
+
+type ErrorStatus =
+  | ''
+  | 'cardOcr.error.fileType'
+  | 'cardOcr.error.fileSize'
+  | 'cardOcr.error.noText'
+  | 'cardOcr.error.failed'
+
+const { locale, t } = useLocale()
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFile = ref<File | null>(null)
 const previewUrl = ref('')
 const recognizedText = ref('')
-const errorMessage = ref('')
+const errorStatus = ref<ErrorStatus>('')
 const progress = ref(0)
-const progressLabel = ref('等待选择卡牌照片')
+const progressStatus = ref<ProgressStatus>('cardOcr.status.waitingForPhoto')
 const recognizing = ref(false)
-const language = ref<'chi_sim+eng' | 'eng'>('chi_sim+eng')
+const language = ref<'chi_sim+eng' | 'eng'>(locale.value === 'en' ? 'eng' : 'chi_sim+eng')
 let activeWorker: Awaited<ReturnType<typeof import('tesseract.js')['createWorker']>> | null = null
 
 const progressPercent = computed(() => Math.round(progress.value * 100))
 const canUseText = computed(() => normalizeCardText(recognizedText.value).length > 0)
+const errorMessage = computed(() => errorStatus.value ? t(errorStatus.value) : '')
+const progressLabel = computed(() => t(progressStatus.value))
 
 function replacePreview(file: File | null) {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
@@ -34,46 +58,46 @@ function chooseFile() {
 function onFileSelected(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] ?? null
-  errorMessage.value = ''
+  errorStatus.value = ''
   recognizedText.value = ''
   progress.value = 0
-  progressLabel.value = '等待开始识别'
+  progressStatus.value = 'cardOcr.status.ready'
 
   if (!file) return
   if (!file.type.startsWith('image/')) {
     selectedFile.value = null
     replacePreview(null)
-    errorMessage.value = '请选择 JPG、PNG、HEIC 或其他图片文件。'
+    errorStatus.value = 'cardOcr.error.fileType'
     return
   }
   if (file.size > 12 * 1024 * 1024) {
     selectedFile.value = null
     replacePreview(null)
-    errorMessage.value = '卡牌照片不能超过 12 MiB。'
+    errorStatus.value = 'cardOcr.error.fileSize'
     return
   }
   selectedFile.value = file
   replacePreview(file)
 }
 
-function readableStatus(status: string) {
-  const labels: Record<string, string> = {
-    'loading tesseract core': '正在载入本地 OCR 核心',
-    'initializing tesseract': '正在初始化文字识别',
-    'loading language traineddata': '正在载入中英文识别数据',
-    'initializing api': '正在准备识别模型',
-    'recognizing text': '正在识别卡牌文字',
+function progressStatusFor(status: string): ProgressStatus {
+  const labels: Record<string, ProgressStatus> = {
+    'loading tesseract core': 'cardOcr.status.loadingCore',
+    'initializing tesseract': 'cardOcr.status.initializing',
+    'loading language traineddata': 'cardOcr.status.loadingLanguage',
+    'initializing api': 'cardOcr.status.preparing',
+    'recognizing text': 'cardOcr.status.recognizing',
   }
-  return labels[status] ?? '正在处理卡牌照片'
+  return labels[status] ?? 'cardOcr.status.processing'
 }
 
 async function recognize() {
   if (!selectedFile.value || recognizing.value) return
   recognizing.value = true
-  errorMessage.value = ''
+  errorStatus.value = ''
   recognizedText.value = ''
   progress.value = 0
-  progressLabel.value = '正在启动浏览器 OCR'
+  progressStatus.value = 'cardOcr.status.starting'
 
   try {
     const { createWorker, OEM, PSM } = await import('tesseract.js')
@@ -83,7 +107,7 @@ async function recognize() {
       langPath: '/ocr-assets/v7/lang',
       logger(message) {
         progress.value = Number.isFinite(message.progress) ? message.progress : 0
-        progressLabel.value = readableStatus(message.status)
+        progressStatus.value = progressStatusFor(message.status)
       },
     })
     await activeWorker.setParameters({
@@ -93,16 +117,14 @@ async function recognize() {
     const result = await activeWorker.recognize(selectedFile.value, { rotateAuto: true })
     recognizedText.value = normalizeCardText(result.data.text)
     progress.value = 1
-    progressLabel.value = '识别完成，请核对文字'
+    progressStatus.value = 'cardOcr.status.completed'
     if (!recognizedText.value) {
-      throw new Error('没有识别出清晰文字，请让卡牌充满画面并避免反光后重试。')
+      errorStatus.value = 'cardOcr.error.noText'
     }
-  } catch (error) {
+  } catch {
     progress.value = 0
-    progressLabel.value = '识别未完成'
-    errorMessage.value = error instanceof Error
-      ? error.message
-      : '卡牌识别失败，请检查网络或换一张更清晰的照片。'
+    progressStatus.value = 'cardOcr.status.incomplete'
+    errorStatus.value = 'cardOcr.error.failed'
   } finally {
     await activeWorker?.terminate().catch(() => undefined)
     activeWorker = null
@@ -136,11 +158,11 @@ onUnmounted(() => {
     >
       <div class="flex items-start justify-between gap-4">
         <div>
-          <p class="text-xs font-semibold text-copper">识别卡牌文字</p>
-          <h3 id="card-ocr-title" class="mt-2 font-display text-3xl font-semibold">拍照识别卡牌文字</h3>
-          <p class="mt-2 text-sm leading-6 text-ink/60">识别在浏览器内完成；照片不会上传到 RulePilot 或第三方服务。</p>
+          <p class="text-xs font-semibold text-copper">{{ t('cardOcr.eyebrow') }}</p>
+          <h3 id="card-ocr-title" class="mt-2 font-display text-3xl font-semibold">{{ t('cardOcr.title') }}</h3>
+          <p class="mt-2 text-sm leading-6 text-ink/60">{{ t('cardOcr.description') }}</p>
         </div>
-        <button class="grid size-11 shrink-0 place-items-center rounded-full border border-ink/15 text-xl" :disabled="recognizing" aria-label="关闭卡牌识别" @click="close">×</button>
+        <button class="grid size-11 shrink-0 place-items-center rounded-full border border-ink/15 text-xl" :disabled="recognizing" :aria-label="t('cardOcr.close')" @click="close">×</button>
       </div>
 
       <input
@@ -159,15 +181,15 @@ onUnmounted(() => {
           :disabled="recognizing"
           @click="chooseFile"
         >
-          <img v-if="previewUrl" :src="previewUrl" alt="待识别的卡牌照片" class="h-full w-full object-contain">
-          <span v-else class="m-auto max-w-48 px-5 text-sm font-semibold leading-6 text-indigo">点按拍摄卡牌，或从设备中选择已有照片</span>
-          <span v-if="previewUrl" class="absolute inset-x-3 bottom-3 rounded-xl bg-black/65 px-3 py-2 text-xs font-semibold text-white">点按更换照片</span>
+          <img v-if="previewUrl" :src="previewUrl" :alt="t('cardOcr.previewAlt')" class="h-full w-full object-contain">
+          <span v-else class="m-auto max-w-48 px-5 text-sm font-semibold leading-6 text-indigo">{{ t('cardOcr.choosePhoto') }}</span>
+          <span v-if="previewUrl" class="absolute inset-x-3 bottom-3 rounded-xl bg-black/65 px-3 py-2 text-xs font-semibold text-white">{{ t('cardOcr.changePhoto') }}</span>
         </button>
 
         <div class="flex flex-col">
-          <label for="ocr-language" class="text-sm font-semibold">卡牌文字</label>
+          <label for="ocr-language" class="text-sm font-semibold">{{ t('cardOcr.language') }}</label>
           <select id="ocr-language" v-model="language" class="mt-2 min-h-11 rounded-xl border border-ink/15 bg-canvas px-3" :disabled="recognizing">
-            <option value="chi_sim+eng">简体中文 + English</option>
+            <option value="chi_sim+eng">{{ t('cardOcr.language.bilingual') }}</option>
             <option value="eng">English</option>
           </select>
 
@@ -187,16 +209,16 @@ onUnmounted(() => {
             :disabled="!selectedFile || recognizing"
             @click="recognize"
           >
-            {{ recognizing ? '正在本地识别…' : '开始识别文字' }}
+            {{ recognizing ? t('cardOcr.recognizing') : t('cardOcr.recognize') }}
           </button>
-          <p class="mt-3 text-xs leading-5 text-ink/45">首次使用需联网下载 OCR 运行文件和语言数据；完成后浏览器可复用缓存。</p>
+          <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('cardOcr.downloadHint') }}</p>
         </div>
       </div>
 
       <p v-if="errorMessage" class="mt-5 rounded-2xl bg-red-50 px-4 py-3 text-sm leading-6 text-red-700" role="alert">{{ errorMessage }}</p>
 
       <div v-if="recognizedText" class="mt-5">
-        <label for="recognized-card-text" class="text-sm font-semibold">核对识别结果</label>
+        <label for="recognized-card-text" class="text-sm font-semibold">{{ t('cardOcr.review') }}</label>
         <textarea
           id="recognized-card-text"
           v-model="recognizedText"
@@ -205,8 +227,8 @@ onUnmounted(() => {
           class="mt-2 w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none focus:border-indigo focus:ring-4 focus:ring-indigo/10"
         />
         <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p class="text-xs text-ink/45">{{ recognizedText.length }}/620 · 请先修正错字，再交给规则检索。</p>
-          <button type="button" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="!canUseText" @click="useRecognizedText">带入本节提问</button>
+          <p class="text-xs text-ink/45">{{ t('cardOcr.reviewHint', { count: recognizedText.length }) }}</p>
+          <button type="button" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="!canUseText" @click="useRecognizedText">{{ t('cardOcr.useText') }}</button>
         </div>
       </div>
     </section>

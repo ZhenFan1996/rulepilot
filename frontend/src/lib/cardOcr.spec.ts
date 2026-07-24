@@ -15,6 +15,12 @@ describe('card OCR text', () => {
     )
   })
 
+  it('keeps the grounding instruction in the player-selected language', () => {
+    expect(buildCardQuestion('Gain 2 light.', 'Explain how this card is resolved in this chapter using the current rulebook version:\n')).toBe(
+      'Explain how this card is resolved in this chapter using the current rulebook version:\nGain 2 light.',
+    )
+  })
+
   it('limits untrusted OCR text before it enters the question form', () => {
     expect(normalizeCardText('a'.repeat(900))).toHaveLength(620)
   })

@@ -106,7 +106,7 @@ type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
 
 const route = useRoute()
 const router = useRouter()
-const { locale } = useLocale()
+const { locale, t } = useLocale()
 const loading = ref(true)
 const errorMessage = ref('')
 const online = ref(navigator.onLine)
@@ -826,7 +826,7 @@ async function requestLearningHelp(intent: LearningIntent) {
 }
 
 function useCardText(text: string) {
-  question.value = buildCardQuestion(text)
+  question.value = buildCardQuestion(text, t('cardOcr.questionPrefix'))
   cardOcrOpen.value = false
   clearAnswerFeedback()
 }
