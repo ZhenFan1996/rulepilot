@@ -7,7 +7,6 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.teaching.TeachingLessonModel;
-import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
@@ -15,10 +14,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +22,7 @@ import org.slf4j.LoggerFactory;
  * Produces one source-cited lesson section from selected evidence.
  *
  * <p>The caller owns section ordering, retrieval, and publication. This boundary owns only untrusted model output:
- * request assembly, visual/text recovery, normalization, evidence validation, and the matching audit activities.</p>
+ * model calls, visual/text recovery, normalization, evidence validation, and the matching audit activities.</p>
  */
 final class TeachingSectionDraftComposer {
 
@@ -34,7 +30,7 @@ final class TeachingSectionDraftComposer {
 
     private final TeachingLessonModel model;
     private final AuditedAgentInvocations invocations;
-    private final VisualRulebookPageFacts visualFacts;
+    private final TeachingSectionModelRequestFactory requestFactory;
     private final TeachingSectionCandidateValidator candidateValidator;
     private final LessonDraftPresentationNormalizer presentationNormalizer = new LessonDraftPresentationNormalizer();
     private final TeachingDraftRecoveryPolicy draftRecoveryPolicy = new TeachingDraftRecoveryPolicy();
@@ -46,7 +42,7 @@ final class TeachingSectionDraftComposer {
             VisualRulebookPageFacts visualFacts) {
         this.model = model;
         this.invocations = invocations;
-        this.visualFacts = visualFacts;
+        this.requestFactory = new TeachingSectionModelRequestFactory(visualFacts);
         this.candidateValidator = new TeachingSectionCandidateValidator(evidenceVerifier);
     }
 
@@ -59,34 +55,22 @@ final class TeachingSectionDraftComposer {
             UUID assistantRunId,
             int sectionIndex,
             boolean includeVisualEvidence) {
-        boolean requiresVisualGrounding = includeVisualEvidence
-                || TeachingVisualEvidenceSelector.hasVisualPageEvidence(evidence);
-        List<TeachingLessonModel.PageImageInput> pageImages = requiresVisualGrounding
-                ? TeachingVisualEvidenceSelector.select(
-                        planned, evidence, model.supportsVisualEvidence(plan.createdBy()))
-                : List.of();
-        if (!pageImages.isEmpty()) {
+        TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
+                plan,
+                planned,
+                pacing,
+                priorSections,
+                evidence,
+                includeVisualEvidence,
+                model.supportsVisualEvidence(plan.createdBy()));
+        if (!modelRequest.pageImages().isEmpty()) {
             log.info(
                     "Teaching topic {} selected visual evidence pages {}",
                     planned.topicKey(),
-                    pageImages.stream().map(TeachingLessonModel.PageImageInput::pageNumber).toList());
+                    modelRequest.pageImages().stream()
+                            .map(TeachingLessonModel.PageImageInput::pageNumber)
+                            .toList());
         }
-        TeachingLessonModel.SectionRequest modelRequest = new TeachingLessonModel.SectionRequest(
-                planned.topicKey(),
-                planned.title(),
-                planned.objective(),
-                planned.coverageTags(),
-                plan.playerCount(),
-                plan.beginnerCount(),
-                plan.durationMinutes(),
-                pacing.durationSeconds(),
-                pacing.maxSteps(),
-                priorSections,
-                modelEvidence(plan.documentVersionId(), evidence),
-                pageImages,
-                planned.retrievalQueries(),
-                plan.createdBy(),
-                chapterScope(plan, planned));
         SectionDraft draft;
         try {
             draft = invocations.invoke(
@@ -271,30 +255,6 @@ final class TeachingSectionDraftComposer {
         return candidateValidator.validate(plan, planned, evidence, modelRequest, draft, evidenceStatus);
     }
 
-    private List<EvidenceInput> modelEvidence(UUID documentVersionId, List<RuleEvidence> evidence) {
-        Set<Integer> pages = evidence.stream()
-                .filter(source -> source.pageFrom() == source.pageTo())
-                .map(RuleEvidence::pageFrom)
-                .collect(Collectors.toSet());
-        Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
-                .collect(Collectors.toMap(
-                        VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText));
-        return evidence.stream().map(source -> toModelEvidence(source, factsByPage)).toList();
-    }
-
-    private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
-        String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
-        String excerpt = visualFact == null ? evidence.excerpt() : evidence.excerpt() + "\n\n" + visualFact;
-        return new EvidenceInput(
-                evidence.chunkId(),
-                evidence.sectionType(),
-                evidence.heading(),
-                excerpt,
-                evidence.pageFrom(),
-                evidence.pageTo());
-    }
-
     void recordValidation(
             UUID runId,
             TeachingPlan.PlannedSection section,
@@ -316,23 +276,6 @@ final class TeachingSectionDraftComposer {
                 "fallbackVisualTeachingSection|" + section.position(),
                 ActivityOutcome.SUCCEEDED,
                 "Visual composition unavailable; continuing with cited text");
-    }
-
-    private static String chapterScope(TeachingPlan plan, TeachingPlan.PlannedSection current) {
-        String chapters = plan.sections().stream()
-                .map(section -> (section.position() == current.position() ? "【当前章节】" : "")
-                        + "第" + section.position() + "章《" + section.title() + "》："
-                        + boundedChapterObjective(section.objective()))
-                .collect(Collectors.joining("\n"));
-        String scope = "完整章节分工（仅界定讲解边界，不是规则事实）：\n" + chapters
-                + "\n当前章节只完整讲解自己的目标。其他章节已经明确负责的机制，只保留本章理解所必需的"
-                + "阶段名、顺序、即时选择或结果；不要复述它们的触发、数量、成本、例外、计算、完整流程或图例映射。";
-        return scope.length() <= 4_000 ? scope : scope.substring(0, 3_999) + "…";
-    }
-
-    private static String boundedChapterObjective(String objective) {
-        String value = objective == null ? "" : objective.strip();
-        return value.length() <= 280 ? value : value.substring(0, 279) + "…";
     }
 
     private int estimateTokens(String value) {
