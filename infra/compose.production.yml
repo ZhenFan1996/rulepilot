@@ -6,6 +6,17 @@ services:
       dockerfile: Dockerfile.runtime
     volumes: !override
       - postgres-data:/var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=30
+    mem_limit: 192m
 
   api:
     image: rulepilot-backend:local
@@ -13,7 +24,11 @@ services:
       context: ../backend
       dockerfile: Dockerfile.runtime
     environment:
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -XX:+UseSerialGC
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
+    mem_limit: 400m
 
   worker:
     image: rulepilot-backend:local
@@ -21,7 +36,23 @@ services:
     # the same image tag causes Docker to race while exporting the image.
     build: !reset null
     environment:
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx400m -XX:+UseSerialGC
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
+      SPRING_RABBITMQ_LISTENER_SIMPLE_CONCURRENCY: "1"
+      SPRING_RABBITMQ_LISTENER_SIMPLE_MAX_CONCURRENCY: "1"
+      SPRING_RABBITMQ_LISTENER_SIMPLE_PREFETCH: "1"
+      MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
+    mem_limit: 600m
+
+  prometheus:
+    profiles: ["observability"]
+
+  tempo:
+    profiles: ["observability"]
+
+  grafana:
+    profiles: ["observability"]
 
   frontend:
     image: rulepilot-frontend:local

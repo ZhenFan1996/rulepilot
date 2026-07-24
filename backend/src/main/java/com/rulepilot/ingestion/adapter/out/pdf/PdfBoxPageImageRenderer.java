@@ -6,6 +6,9 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Iterator;
 import java.util.function.Consumer;
 import javax.imageio.IIOImage;
@@ -14,7 +17,7 @@ import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
 import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.io.RandomAccessReadBuffer;
+import org.apache.pdfbox.io.IOUtils;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
@@ -40,23 +43,43 @@ public class PdfBoxPageImageRenderer implements PdfPageImageRenderer {
         if (input == null || pageConsumer == null) {
             throw new IllegalArgumentException("PDF input and page image consumer are required");
         }
-        try (input;
-                RandomAccessReadBuffer source = new RandomAccessReadBuffer(input);
-                PDDocument document = Loader.loadPDF(source)) {
-            if (document.getNumberOfPages() > maxPages) {
-                throw new PdfExtractionException("PDF exceeds the configured page limit");
+        Path temporaryPdf = null;
+        try (input) {
+            temporaryPdf = Files.createTempFile("rulepilot-render-", ".pdf");
+            Files.copy(input, temporaryPdf, StandardCopyOption.REPLACE_EXISTING);
+            try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
+                if (document.getNumberOfPages() > maxPages) {
+                    throw new PdfExtractionException("PDF exceeds the configured page limit");
+                }
+                PDFRenderer renderer = new PDFRenderer(document);
+                for (int index = 0; index < document.getNumberOfPages(); index++) {
+                    BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
+                    try {
+                        pageConsumer.accept(new RenderedPageImage(
+                                index + 1, encodeJpeg(image), image.getWidth(), image.getHeight()));
+                    } finally {
+                        image.flush();
+                    }
+                }
+                return document.getNumberOfPages();
             }
-            PDFRenderer renderer = new PDFRenderer(document);
-            for (int index = 0; index < document.getNumberOfPages(); index++) {
-                BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
-                pageConsumer.accept(new RenderedPageImage(
-                        index + 1, encodeJpeg(image), image.getWidth(), image.getHeight()));
-            }
-            return document.getNumberOfPages();
         } catch (PdfExtractionException exception) {
             throw exception;
         } catch (IOException exception) {
             throw new PdfExtractionException("could not render PDF page images", exception);
+        } finally {
+            deleteTemporaryPdf(temporaryPdf);
+        }
+    }
+
+    private void deleteTemporaryPdf(Path temporaryPdf) {
+        if (temporaryPdf == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(temporaryPdf);
+        } catch (IOException exception) {
+            temporaryPdf.toFile().deleteOnExit();
         }
     }
 

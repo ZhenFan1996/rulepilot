@@ -6,7 +6,9 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import javax.imageio.ImageIO;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -32,7 +34,7 @@ class PdfBoxPageImageRendererTest {
         }
         var rendered = new ArrayList<com.rulepilot.document.DocumentPageImageStore.RenderedPageImage>();
 
-        int count = new PdfBoxPageImageRenderer(10).render(new ByteArrayInputStream(pdf), rendered::add);
+        int count = new PdfBoxPageImageRenderer(10).render(chunked(pdf), rendered::add);
 
         assertThat(count).isEqualTo(1);
         assertThat(rendered).singleElement().satisfies(image -> {
@@ -52,5 +54,14 @@ class PdfBoxPageImageRendererTest {
         } catch (IOException exception) {
             throw new AssertionError(exception);
         }
+    }
+
+    private InputStream chunked(byte[] content) {
+        return new FilterInputStream(new ByteArrayInputStream(content)) {
+            @Override
+            public int read(byte[] buffer, int offset, int length) throws IOException {
+                return super.read(buffer, offset, Math.min(length, 17));
+            }
+        };
     }
 }
