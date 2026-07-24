@@ -12,6 +12,7 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessing.ExtractedPage;
 import com.rulepilot.document.DocumentProcessing.ExtractedTextBlock;
 import com.rulepilot.document.DocumentProcessingStage;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.UUID;
@@ -30,8 +31,9 @@ class UploadedDocumentIngestionTest {
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
-                documents, extractor, renderer, pageImages, progress, structures, embeddings);
+                documents, extractor, renderer, pageImages, progress, structures, embeddings, metrics);
         UUID versionId = UUID.randomUUID();
         List<ExtractedPage> pages = List.of(
                 page(1, "Setup"),
@@ -60,6 +62,18 @@ class UploadedDocumentIngestionTest {
         verify(progress).update(versionId, "STRUCTURING", 75, 3, 3, false);
         verify(documents).markStructuring(versionId);
         verify(structures).organize(versionId, pages);
+        assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
+                        .tag("phase", "extraction").timer().count())
+                .isOne();
+        assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
+                        .tag("phase", "render-and-store").timer().count())
+                .isOne();
+        assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
+                        .tag("phase", "page-storage").timer().count())
+                .isEqualTo(3);
+        assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
+                        .tag("phase", "structuring").timer().count())
+                .isOne();
     }
 
     @Test
@@ -79,8 +93,9 @@ class UploadedDocumentIngestionTest {
         ProcessingProgressTracker progress = Mockito.mock(ProcessingProgressTracker.class);
         RuleStructureService structures = Mockito.mock(RuleStructureService.class);
         RuleChunkEmbeddingService embeddings = Mockito.mock(RuleChunkEmbeddingService.class);
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         UploadedDocumentIngestion ingestion = new UploadedDocumentIngestion(
-                documents, extractor, renderer, pageImages, progress, structures, embeddings);
+                documents, extractor, renderer, pageImages, progress, structures, embeddings, metrics);
         UUID versionId = UUID.randomUUID();
         when(documents.pages(versionId)).thenReturn(List.of(new DocumentProcessing.PageView(1, "Setup", 5)));
 
