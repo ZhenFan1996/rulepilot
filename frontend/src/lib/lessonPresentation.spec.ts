@@ -37,4 +37,18 @@ describe('player-facing lesson groups', () => {
       expect.objectContaining({ title: 'Root', count: 1, plan: expect.objectContaining({ id: 'three' }) }),
     ])
   })
+
+  it('keeps versions of the same uploaded rulebook together and prefers the strongest continuation', () => {
+    const plans = groupPlansForReading([
+      { id: 'newer-planned', documentVersionId: 'rulebook-1', gameTitle: 'Ahoy Rules', createdAt: '2026-07-24T09:00:00Z' },
+      { id: 'older-readable', documentVersionId: 'rulebook-1', gameTitle: 'Ahoy Rules', createdAt: '2026-07-23T09:00:00Z' },
+      { id: 'separate-upload', documentVersionId: 'rulebook-2', gameTitle: 'Ahoy Rules', createdAt: '2026-07-24T10:00:00Z' },
+    ], (plan) => plan.id === 'older-readable' ? 10 : 0)
+
+    expect(plans).toEqual([
+      expect.objectContaining({ title: 'Ahoy', count: 2, plan: expect.objectContaining({ id: 'older-readable' }) }),
+      expect.objectContaining({ title: 'Ahoy', count: 1, plan: expect.objectContaining({ id: 'separate-upload' }) }),
+    ])
+    expect(plans[0]?.plans).toHaveLength(2)
+  })
 })

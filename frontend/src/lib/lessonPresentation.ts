@@ -17,6 +17,7 @@ export interface PresentedPlan<T extends { gameTitle: string }> {
   plan: T
   title: string
   count: number
+  plans: T[]
 }
 
 export function playerFacingTitle(rawTitle: string): string {
@@ -55,21 +56,42 @@ export function deduplicatePublicLessons<T extends PublicLessonIdentity>(lessons
   return result
 }
 
-export function groupPlansForReading<T extends { gameTitle: string }>(plans: T[]): PresentedPlan<T>[] {
+export function groupPlansForReading<T extends { gameTitle: string; documentVersionId?: string; createdAt?: string }>(
+  plans: T[],
+  priority: (plan: T) => number = () => 0,
+): PresentedPlan<T>[] {
   const positions = new Map<string, number>()
   const result: PresentedPlan<T>[] = []
   for (const plan of plans) {
     const title = playerFacingTitle(plan.gameTitle)
-    const key = titleKey(title)
+    const key = plan.documentVersionId?.trim() ? `document:${plan.documentVersionId}` : `title:${titleKey(title)}`
     const previousPosition = positions.get(key)
     if (previousPosition === undefined) {
       positions.set(key, result.length)
-      result.push({ plan, title, count: 1 })
+      result.push({ plan, title, count: 1, plans: [plan] })
       continue
     }
-    result[previousPosition]!.count += 1
+    const entry = result[previousPosition]!
+    entry.count += 1
+    entry.plans.push(plan)
+    if (shouldPreferPlan(plan, entry.plan, priority)) {
+      entry.plan = plan
+      entry.title = title
+    }
   }
   return result
+}
+
+function shouldPreferPlan<T extends { createdAt?: string }>(candidate: T, current: T, priority: (plan: T) => number) {
+  const priorityDifference = priority(candidate) - priority(current)
+  if (priorityDifference !== 0) return priorityDifference > 0
+  return timestamp(candidate.createdAt) > timestamp(current.createdAt)
+}
+
+function timestamp(value: string | undefined) {
+  if (!value) return 0
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? 0 : parsed
 }
 
 function publicLessonScore(lesson: PublicLessonIdentity): number {

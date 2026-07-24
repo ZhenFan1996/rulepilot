@@ -192,6 +192,68 @@ describe('LessonsView', () => {
     expect(wrapper.text()).not.toContain('正在自动重试')
     wrapper.unmount()
   })
+
+  it('shows one best continuation per uploaded rulebook until a player asks for history', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') {
+        return Response.json([
+          {
+            id: 'new-plan', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
+            durationMinutes: 30, gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-24T10:00:00Z',
+            sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
+          },
+          {
+            id: 'readable-plan', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
+            durationMinutes: 30, gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-23T10:00:00Z',
+            sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
+          },
+          {
+            id: 'pending-plan', documentVersionId: 'version-2', playerCount: 4, beginnerCount: 4,
+            durationMinutes: 30, gameTitle: 'Root Rules', premise: '', createdAt: '2026-07-24T11:00:00Z',
+            sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
+          },
+        ])
+      }
+      if (path.includes('/api/v1/assistant-runs/latest') && path.includes('readable-plan')) {
+        return Response.json({
+          run: { id: 'run-1', state: 'COMPLETED', createdAt: '2026-07-23T10:00:00Z', updatedAt: '2026-07-23T10:01:00Z', completedAt: '2026-07-23T10:01:00Z', lastErrorCode: null },
+          budget: { usedModelCalls: 3, maxModelCalls: 144 }, activities: [],
+        })
+      }
+      if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
+      if (path.includes('/illustrated-lessons/latest') && path.includes('readable-plan')) {
+        return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [{ evidenceStatus: 'SUPPORTED' }] })
+      }
+      if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('共 3 个版本，按 2 本规则书整理；1 本可以继续阅读。')
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(1)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(0)
+    expect(wrapper.text()).toContain('同一本规则书的 1 个历史版本已收起。')
+
+    const pending = wrapper.findAll('button').find((button) => button.text().includes('待处理 1'))
+    expect(pending).toBeDefined()
+    await pending!.trigger('click')
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(1)
+
+    const showAll = wrapper.findAll('button').find((button) => button.text().includes('查看全部 3 个版本'))
+    expect(showAll).toBeDefined()
+    await showAll!.trigger('click')
+
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Ahoy').length).toBe(2)
+    expect(wrapper.findAll('h2').filter((heading) => heading.text() === 'Root').length).toBe(1)
+    expect(wrapper.text()).toContain('收起历史版本')
+    wrapper.unmount()
+  })
 })
 
 function createMemoryRouter() {

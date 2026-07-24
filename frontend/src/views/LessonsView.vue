@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import { playerFacingTitle } from '@/lib/lessonPresentation'
+import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import {
   mergeTeachingRunProgress,
   processedTeachingChapterCount,
@@ -40,6 +40,7 @@ interface PlanProgress {
 }
 
 interface CsrfResponse { headerName: string; token: string }
+type PlanFilter = 'READABLE' | 'PENDING' | 'ALL'
 
 const route = useRoute()
 const router = useRouter()
@@ -52,6 +53,8 @@ const launchingPlanId = ref('')
 const deletingPlanId = ref('')
 const cleanupLoading = ref(false)
 const cleanupMessage = ref('')
+const showingAllVersions = ref(false)
+const planFilter = ref<PlanFilter>('READABLE')
 const now = ref(Date.now())
 const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
@@ -59,7 +62,6 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 
-const readableCount = computed(() => Object.values(progress.value).filter((item) => item.lesson).length)
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 
 function stateOf(planId: string) {
@@ -99,6 +101,52 @@ function stateClass(planId: string) {
 
 function displayPlanTitle(plan: TeachingPlan) {
   return playerFacingTitle(plan.gameTitle)
+}
+
+function continuationPriority(plan: TeachingPlan) {
+  const item = progress.value[plan.id]
+  if (item?.lesson?.status === 'COMPLETE') return 600
+  if (item?.lesson?.status === 'DRAFT_READY' && item.run && !terminalStates.has(item.run.run.state)) return 550
+  if (item?.lesson?.status === 'DRAFT_READY') return 500
+  if (item?.lesson?.status === 'INCOMPLETE') return 400
+  if (item?.run && !terminalStates.has(item.run.run.state)) return 300
+  if (item?.run?.run.state === 'FAILED') return 100
+  return 200
+}
+
+const planGroups = computed(() => groupPlansForReading(plans.value, continuationPriority))
+const planGroupByPlanId = computed(() => {
+  const groups = new Map<string, typeof planGroups.value[number]>()
+  for (const group of planGroups.value) {
+    for (const plan of group.plans) groups.set(plan.id, group)
+  }
+  return groups
+})
+const selectedPlans = computed(() => showingAllVersions.value ? plans.value : planGroups.value.map((group) => group.plan))
+const selectedPlanFilter = computed<PlanFilter>(() => planFilter.value === 'READABLE' && readableGroupCount.value === 0
+  ? 'PENDING'
+  : planFilter.value)
+const displayedPlans = computed(() => selectedPlans.value.filter((plan) => {
+  if (selectedPlanFilter.value === 'ALL') return true
+  return selectedPlanFilter.value === 'READABLE'
+    ? Boolean(progress.value[plan.id]?.lesson)
+    : !progress.value[plan.id]?.lesson
+}))
+const readableGroupCount = computed(() => planGroups.value.filter((group) => Boolean(progress.value[group.plan.id]?.lesson)).length)
+const pendingGroupCount = computed(() => planGroups.value.length - readableGroupCount.value)
+
+function versionCount(planId: string) {
+  return planGroupByPlanId.value.get(planId)?.count ?? 1
+}
+
+function showAllVersions() {
+  showingAllVersions.value = true
+  planFilter.value = 'ALL'
+}
+
+function hideAllVersions() {
+  showingAllVersions.value = false
+  planFilter.value = 'READABLE'
 }
 
 function elapsedLabel(plan: TeachingPlan) {
@@ -348,7 +396,16 @@ onBeforeUnmount(() => {
 
       <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">任务已经交给后台。你可以留在这里看进度，也可以先去做别的。</p>
       <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
-      <p v-if="plans.length" class="mt-6 text-sm text-ink/45">共 {{ plans.length }} 份，{{ readableCount }} 份已有内容可以阅读。</p>
+      <div v-if="plans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
+        <p>共 {{ plans.length }} 个版本，按 {{ planGroups.length }} 本规则书整理；{{ readableGroupCount }} 本可以继续阅读。</p>
+        <button v-if="plans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo/30 underline-offset-4 hover:decoration-indigo" @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? '收起历史版本' : `查看全部 ${plans.length} 个版本` }}</button>
+      </div>
+
+      <div v-if="plans.length" class="mt-5 flex flex-wrap gap-2" role="group" aria-label="讲解筛选">
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'READABLE' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'READABLE'" @click="planFilter = 'READABLE'">可阅读 {{ readableGroupCount }}</button>
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'PENDING' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'PENDING'" @click="planFilter = 'PENDING'">待处理 {{ pendingGroupCount }}</button>
+        <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">全部 {{ planGroups.length }}</button>
+      </div>
 
       <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">正在读取讲解…</div>
 
@@ -363,8 +420,14 @@ onBeforeUnmount(() => {
         <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">添加规则书</RouterLink>
       </div>
 
+      <div v-else-if="displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
+        <h2 class="font-display text-2xl font-semibold">这里还没有可阅读的讲解</h2>
+        <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">先从待处理的规则书开始生成，或添加一本新的规则书。</p>
+        <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">查看待处理</button>
+      </div>
+
       <ol v-else class="mt-10 grid gap-5 md:grid-cols-2">
-        <li v-for="plan in plans" :key="plan.id" class="rounded-xl border border-ink/10 bg-paper p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
+        <li v-for="plan in displayedPlans" :key="plan.id" class="rounded-xl border border-ink/10 bg-paper p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
@@ -397,6 +460,7 @@ onBeforeUnmount(() => {
           </div>
           <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
           <p v-if="progressErrors[plan.id]" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" role="status">暂时没拿到最新进度，正在自动重试。生成任务不会受影响。</p>
+          <p v-if="!showingAllVersions && versionCount(plan.id) > 1" class="mt-3 text-xs leading-5 text-ink/45">同一本规则书的 {{ versionCount(plan.id) - 1 }} 个历史版本已收起。</p>
           <dl class="mt-5 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
             <div><dt class="text-ink/45">新手人数</dt><dd class="mt-1 font-semibold">{{ plan.beginnerCount }} 人</dd></div>
             <div><dt class="text-ink/45">计划时长</dt><dd class="mt-1 font-semibold">{{ plan.durationMinutes }} 分钟</dd></div>
