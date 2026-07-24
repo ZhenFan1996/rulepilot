@@ -28,6 +28,7 @@ public class RedisProcessingProgressStore implements ProcessingProgressStore {
                 "stage", progress.stage(),
                 "percentage", Integer.toString(progress.percentage()),
                 "processedPages", Integer.toString(progress.processedPages()),
+                "totalPages", Integer.toString(progress.totalPages()),
                 "complete", Boolean.toString(progress.complete())));
         redis.expire(key, RETENTION);
     }
@@ -42,6 +43,7 @@ public class RedisProcessingProgressStore implements ProcessingProgressStore {
                 value(values, "stage"),
                 Integer.parseInt(value(values, "percentage")),
                 Integer.parseInt(value(values, "processedPages")),
+                optionalInteger(values, "totalPages", Integer.parseInt(value(values, "processedPages"))),
                 Boolean.parseBoolean(value(values, "complete"))));
     }
 
@@ -51,6 +53,11 @@ public class RedisProcessingProgressStore implements ProcessingProgressStore {
             throw new IllegalStateException("processing progress is incomplete");
         }
         return value.toString();
+    }
+
+    private int optionalInteger(Map<Object, Object> values, String field, int fallback) {
+        Object value = values.get(field);
+        return value == null ? fallback : Integer.parseInt(value.toString());
     }
 
     private String key(UUID versionId) {

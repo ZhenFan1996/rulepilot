@@ -24,7 +24,17 @@ public class ProcessingProgressTracker {
     }
 
     public void update(UUID versionId, String stage, int percentage, int processedPages, boolean complete) {
-        ProgressSnapshot snapshot = new ProgressSnapshot(stage, percentage, processedPages, complete);
+        update(versionId, stage, percentage, processedPages, processedPages, complete);
+    }
+
+    public void update(
+            UUID versionId,
+            String stage,
+            int percentage,
+            int processedPages,
+            int totalPages,
+            boolean complete) {
+        ProgressSnapshot snapshot = new ProgressSnapshot(stage, percentage, processedPages, totalPages, complete);
         try {
             store.save(versionId, snapshot);
         } catch (RuntimeException exception) {
@@ -54,9 +64,14 @@ public class ProcessingProgressTracker {
         });
     }
 
-    public record ProgressSnapshot(String stage, int percentage, int processedPages, boolean complete) {
+    public record ProgressSnapshot(String stage, int percentage, int processedPages, int totalPages, boolean complete) {
         public ProgressSnapshot {
-            if (stage == null || stage.isBlank() || percentage < 0 || percentage > 100 || processedPages < 0) {
+            if (stage == null
+                    || stage.isBlank()
+                    || percentage < 0
+                    || percentage > 100
+                    || processedPages < 0
+                    || totalPages < processedPages) {
                 throw new IllegalArgumentException("processing progress is invalid");
             }
         }

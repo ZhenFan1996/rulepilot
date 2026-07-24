@@ -30,7 +30,7 @@ interface TeachingPreparationRun {
     outcome: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'
   }>
 }
-interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; complete: boolean }
+interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; totalPages: number; complete: boolean }
 interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
@@ -67,7 +67,7 @@ const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
 const message = ref('')
 const errorMessage = ref('')
-const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number }>>({})
+const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number; totalPages: number }>>({})
 const modelConfiguration = ref<ModelConfigurationResponse | null>(null)
 const progressConnections = new Map<string, EventSource>()
 const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -95,6 +95,17 @@ function documentStatusLabel(status: string) {
     READY: t('documents.status.ready'),
     FAILED: t('documents.status.failed'),
   }[status] ?? t('documents.status.processing')
+}
+
+function progressMessage(snapshot: ProcessingSnapshot) {
+  if (snapshot.stage === 'EXTRACTING') return t('documents.progress.extracting')
+  if (snapshot.stage === 'RENDERING' && snapshot.totalPages > 0) {
+    return t('documents.progress.rendering', {
+      current: snapshot.processedPages,
+      total: snapshot.totalPages,
+    })
+  }
+  return t('documents.progress.reading', { percentage: snapshot.percentage })
 }
 
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
@@ -420,7 +431,7 @@ function watchProgress(pending: PendingRulebookLesson) {
     }
     progressRetryAttempts.set(versionId, 0)
     progress.value = { ...progress.value, [versionId]: snapshot }
-    message.value = t('documents.progress.reading', { percentage: snapshot.percentage })
+    message.value = progressMessage(snapshot)
     if (snapshot.complete) {
       void handleTerminalProgress(pending, snapshot.stage)
     }
@@ -482,16 +493,18 @@ function scheduleProgressReconnect(pending: PendingRulebookLesson) {
 function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
   try {
     const snapshot = JSON.parse(value) as Partial<ProcessingSnapshot>
-    return typeof snapshot.stage === 'string'
+    if (!(typeof snapshot.stage === 'string'
       && snapshot.stage.length > 0
       && typeof snapshot.percentage === 'number'
       && snapshot.percentage >= 0
       && snapshot.percentage <= 100
       && typeof snapshot.processedPages === 'number'
       && snapshot.processedPages >= 0
-      && typeof snapshot.complete === 'boolean'
-      ? snapshot as ProcessingSnapshot
-      : null
+      && typeof snapshot.complete === 'boolean')) return null
+    const totalPages = typeof snapshot.totalPages === 'number' && snapshot.totalPages >= snapshot.processedPages
+      ? snapshot.totalPages
+      : snapshot.processedPages
+    return { ...snapshot, totalPages } as ProcessingSnapshot
   } catch {
     return null
   }

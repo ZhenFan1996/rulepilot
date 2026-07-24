@@ -4,6 +4,7 @@ import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentPageImageStore;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -14,6 +15,9 @@ import org.springframework.stereotype.Service;
 public class UploadedDocumentIngestion {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(UploadedDocumentIngestion.class);
+    private static final int RENDERING_START_PERCENTAGE = 40;
+    private static final int RENDERING_COMPLETE_PERCENTAGE = 65;
+    private static final int MAX_RENDERING_PROGRESS_EVENTS = 20;
 
     private final DocumentProcessing documents;
     private final PdfPageExtractor extractor;
@@ -67,12 +71,27 @@ public class UploadedDocumentIngestion {
         documents.markExtracting(documentVersionId);
         var pages = extractor.extract(documents.open(documentVersionId));
         documents.replacePages(documentVersionId, pages);
-        int renderedPages = pageImageRenderer.render(
-                documents.open(documentVersionId), image -> pageImages.store(documentVersionId, image));
-        if (renderedPages != pages.size()) {
+        int totalPages = pages.size();
+        progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
+        AtomicInteger renderedPageCount = new AtomicInteger();
+        int updateInterval = renderingUpdateInterval(totalPages);
+        int renderedPageCountResult = pageImageRenderer.render(
+                documents.open(documentVersionId), image -> {
+                    pageImages.store(documentVersionId, image);
+                    int completedPages = renderedPageCount.incrementAndGet();
+                    if (completedPages % updateInterval == 0 || completedPages == totalPages) {
+                        progress.update(
+                                documentVersionId,
+                                "RENDERING",
+                                renderingPercentage(completedPages, totalPages),
+                                completedPages,
+                                totalPages,
+                                false);
+                    }
+                });
+        if (renderedPageCountResult != totalPages) {
             throw new IllegalStateException("rendered page count does not match extracted page count");
         }
-        progress.update(documentVersionId, "EXTRACTING", 65, pages.size(), false);
     }
 
     private void chunk(UUID documentVersionId) {
@@ -100,5 +119,21 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "INDEXING", 95, pageCount, false);
         documents.markReady(documentVersionId);
         progress.update(documentVersionId, "READY", 100, pageCount, true);
+    }
+
+    static int renderingPercentage(int completedPages, int totalPages) {
+        if (totalPages <= 0 || completedPages < 0 || completedPages > totalPages) {
+            throw new IllegalArgumentException("rendering page progress is invalid");
+        }
+        return RENDERING_START_PERCENTAGE
+                + (int) Math.round((RENDERING_COMPLETE_PERCENTAGE - RENDERING_START_PERCENTAGE)
+                        * (completedPages / (double) totalPages));
+    }
+
+    static int renderingUpdateInterval(int totalPages) {
+        if (totalPages <= 0) {
+            throw new IllegalArgumentException("rendering page count must be positive");
+        }
+        return Math.max(1, (int) Math.ceil(totalPages / (double) (MAX_RENDERING_PROGRESS_EVENTS - 1)));
     }
 }

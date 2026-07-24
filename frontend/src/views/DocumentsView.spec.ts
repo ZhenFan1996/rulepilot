@@ -59,6 +59,25 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('shows rendered page position instead of a generic reading wait', async () => {
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+    })
+    vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    FakeEventSource.instances[0]!.emitProgress({
+      stage: 'RENDERING', percentage: 52, processedPages: 14, totalPages: 28, complete: false,
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在生成图解页面：第 14 / 28 页')
+    wrapper.unmount()
+  })
+
   it('shows an honest resumable stage while visual pages are being organized', async () => {
     vi.useFakeTimers()
     rememberPendingRulebookLesson(localStorage, 'player', {
