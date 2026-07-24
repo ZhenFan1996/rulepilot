@@ -35,7 +35,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -509,21 +508,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private Optional<AnswerCacheKey> cacheKey(
             UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
-        String conversationScopedQuestion = context.previousQuestion() == null
-                ? question.normalizedQuestion()
-                : context.previousQuestion().toLowerCase(Locale.ROOT) + " -> " + question.normalizedQuestion();
-        conversationScopedQuestion = ANSWER_POLICY_VERSION + ":" + context.outputLanguage().name() + ":" + conversationScopedQuestion;
-        if (gameSessionId != null) {
-            conversationScopedQuestion = "LIVE_TABLE:" + conversationScopedQuestion;
-        }
-        if (context.learningIntent() != null) {
-            conversationScopedQuestion = context.learningIntent().name() + ":" + conversationScopedQuestion;
-        }
         try {
-            return Optional.of(new AnswerCacheKey(
-                    context.documentVersionId(), ruleDataVersion.current(context.documentVersionId()),
-                    conversationScopedQuestion, context.currentLessonSection(),
-                    context.gamePhase(), context.playerCount(), context.activeExpansions(), context.outputLanguage()));
+            return Optional.of(AnswerCacheScopePolicy.key(
+                    ANSWER_POLICY_VERSION,
+                    ruleDataVersion.current(context.documentVersionId()),
+                    question,
+                    context,
+                    gameSessionId));
         } catch (IllegalArgumentException unavailableRuleDataVersion) {
             LOGGER.warn(
                     "Rule data version is unavailable for document version {}; bypassing answer cache",
