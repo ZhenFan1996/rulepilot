@@ -26,9 +26,9 @@ import { buildCardQuestion } from '@/lib/cardOcr'
 import {
   useLessonSupportingContent,
 } from '@/composables/useLessonSupportingContent'
+import { useLessonNarrationPlayback, type LessonMediaMode } from '@/composables/useLessonNarrationPlayback'
 import type {
   LessonComprehensionReport,
-  SpeechCue,
 } from '@/composables/lessonSupportingContent'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import {
@@ -105,7 +105,7 @@ interface LessonSection {
   }>
 }
 
-type MediaMode = 'TEXT' | 'AUDIO' | 'VIDEO'
+type MediaMode = LessonMediaMode
 
 const route = useRoute()
 const router = useRouter()
@@ -120,8 +120,6 @@ const localizationStatus = ref<'PENDING' | 'RUNNING' | 'READY' | 'FAILED' | null
 const localizationPreparing = ref(false)
 let localizationRefreshTimer: ReturnType<typeof setTimeout> | undefined
 const mediaMode = ref<MediaMode>('TEXT')
-const narrationPlayer = ref<HTMLAudioElement | null>(null)
-const narrationRate = ref(1)
 const progress = ref<LessonProgress>(initialLessonProgress())
 const ruling = ref<ConfirmedRuling | null>(null)
 const rulingSaving = ref(false)
@@ -337,11 +335,6 @@ function hasVisualAid(sectionPosition: number, stepPosition: number) {
 const currentNarration = computed(() => narration.value?.chapters[progress.value.currentIndex] ?? null)
 const currentVideoChapter = computed(() => video.value?.chapters[progress.value.currentIndex] ?? null)
 const narrationAudioUrl = computed(() => `/api/v1/teaching-plans/${planId.value}/narration/audio`)
-const activeCue = computed(() =>
-  narrationCues.value.find(
-    (cue) => narrationMillis.value >= cue.startMillis && narrationMillis.value < cue.endMillis,
-  ) ?? null,
-)
 const activeVideoFrame = computed(() => {
   const chapter = currentVideoChapter.value
   if (!chapter) return null
@@ -403,6 +396,41 @@ function saveProgress() {
   const key = progressKey()
   if (key) localStorage.setItem(key, JSON.stringify(progress.value))
 }
+
+const {
+  narrationPlayer,
+  narrationRate,
+  activeCue,
+  narrationPositionKey,
+  onNarrationLoaded,
+  onNarrationTimeUpdate,
+  onNarrationSeeked,
+  onNarrationPaused,
+  onNarrationError,
+  toggleNarration,
+  seekToChapter,
+  seekToSegment,
+  replayCurrentSegment,
+  cycleNarrationRate,
+  seekNarration,
+  formatDuration,
+} = useLessonNarrationPlayback({
+  lessonId: computed(() => lesson.value?.id ?? null),
+  durationMillis: narrationDurationMillis,
+  cues: narrationCues,
+  narrationMillis,
+  narrationPlaying,
+  narrationRestoreTarget,
+  audioAvailable,
+  mediaMode,
+  currentSectionIndex: computed(() => progress.value.currentIndex),
+  synchronizeChapter: (chapterIndex) => {
+    progress.value = { ...progress.value, currentIndex: chapterIndex }
+    saveProgress()
+  },
+  addWarning: addMediaWarning,
+  audioFailureMessage: () => t('lesson.reader.audio.loadFailed'),
+})
 
 function refreshOfflineKnowledge(targetPlanId = planId.value) {
   offlineKnowledge.value = loadOfflineKnowledge(targetPlanId)
@@ -977,123 +1005,6 @@ function finish(outcome: 'completed' | 'skipped') {
   progress.value = finishSection(progress.value, lesson.value.sections.length, outcome)
   waitingForNextChapter.value = waitForNext
   saveProgress()
-}
-
-function narrationPositionKey() {
-  return lesson.value ? `rulepilot:narration-position:${lesson.value.id}` : ''
-}
-
-function saveNarrationPosition() {
-  const key = narrationPositionKey()
-  if (key) localStorage.setItem(key, String(Math.round(narrationMillis.value)))
-}
-
-function onNarrationLoaded() {
-  const player = narrationPlayer.value
-  if (!player) return
-  player.playbackRate = narrationRate.value
-  const restored = Number(localStorage.getItem(narrationPositionKey()))
-  if (Number.isFinite(restored) && restored >= 0 && restored < narrationDurationMillis.value) {
-    narrationRestoreTarget.value = restored
-    narrationMillis.value = restored
-    player.currentTime = restored / 1_000
-  }
-}
-
-function onNarrationTimeUpdate() {
-  const player = narrationPlayer.value
-  if (!player || narrationRestoreTarget.value !== null) return
-  narrationMillis.value = Math.round(player.currentTime * 1_000)
-  const cue = activeCue.value
-  if (mediaMode.value === 'VIDEO' && cue && progress.value.currentIndex !== cue.chapterPosition - 1) {
-    progress.value = { ...progress.value, currentIndex: cue.chapterPosition - 1 }
-    saveProgress()
-  }
-  if (narrationPlaying.value) saveNarrationPosition()
-}
-
-function onNarrationSeeked() {
-  const player = narrationPlayer.value
-  const target = narrationRestoreTarget.value
-  if (!player || target === null) return
-  const current = Math.round(player.currentTime * 1_000)
-  if (Math.abs(current - target) > 200) return
-  narrationRestoreTarget.value = null
-  narrationMillis.value = current
-}
-
-function onNarrationPaused() {
-  if (narrationPlaying.value) {
-    onNarrationTimeUpdate()
-    saveNarrationPosition()
-  }
-  narrationPlaying.value = false
-}
-
-function onNarrationError() {
-  audioAvailable.value = false
-  narrationPlayer.value?.pause()
-  if (mediaMode.value === 'AUDIO') mediaMode.value = 'TEXT'
-  addMediaWarning('音轨加载失败，已切换到图文讲解。')
-}
-
-async function toggleNarration() {
-  const player = narrationPlayer.value
-  if (!player || !audioAvailable.value) return
-  if (player.paused) await player.play()
-  else player.pause()
-}
-
-function seekToChapter(index: number) {
-  const cue = narrationCues.value.find((candidate) => candidate.chapterPosition === index + 1)
-  seekToCue(cue)
-}
-
-function seekToSegment(segmentPosition: number) {
-  const cue = narrationCues.value.find(
-    (candidate) =>
-      candidate.chapterPosition === progress.value.currentIndex + 1 &&
-      candidate.segmentPosition === segmentPosition,
-  )
-  seekToCue(cue, true)
-}
-
-function seekToCue(cue: SpeechCue | undefined, play = false) {
-  const player = narrationPlayer.value
-  if (!player || !cue) return
-  narrationRestoreTarget.value = cue.startMillis
-  player.currentTime = cue.startMillis / 1_000
-  narrationMillis.value = cue.startMillis
-  saveNarrationPosition()
-  if (play) void player.play()
-}
-
-function replayCurrentSegment() {
-  const fallback = narrationCues.value.find(
-    (cue) => cue.chapterPosition === progress.value.currentIndex + 1,
-  )
-  seekToCue(activeCue.value ?? fallback, true)
-}
-
-function cycleNarrationRate() {
-  const rates = [0.75, 1, 1.25, 1.5, 2]
-  const currentIndex = rates.indexOf(narrationRate.value)
-  narrationRate.value = rates[(currentIndex + 1) % rates.length] ?? 1
-  if (narrationPlayer.value) narrationPlayer.value.playbackRate = narrationRate.value
-}
-
-function seekNarration(millis: number) {
-  const player = narrationPlayer.value
-  if (!player) return
-  narrationRestoreTarget.value = null
-  player.currentTime = millis / 1_000
-  narrationMillis.value = millis
-  saveNarrationPosition()
-}
-
-function formatDuration(millis: number) {
-  const seconds = Math.floor(millis / 1_000)
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function visualKindLabel(kind: LessonSection['visualKind']) {
