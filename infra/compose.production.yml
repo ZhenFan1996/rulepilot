@@ -4,12 +4,16 @@ services:
     build:
       context: ../backend
       dockerfile: Dockerfile.runtime
+    environment:
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx384m
 
   worker:
     image: rulepilot-backend:local
     build:
       context: ../backend
       dockerfile: Dockerfile.runtime
+    environment:
+      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
 
   frontend:
     image: rulepilot-frontend:local
