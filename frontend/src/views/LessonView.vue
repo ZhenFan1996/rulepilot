@@ -32,13 +32,8 @@ import { useConditionalPolling } from '@/composables/useConditionalPolling'
 import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehensionFeedback'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
 import { useLessonResume } from '@/composables/useLessonResume'
+import { useLessonReaderProgress } from '@/composables/useLessonReaderProgress'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
-import {
-  finishSection,
-  initialLessonProgress,
-  restoreLessonProgress,
-  type LessonProgress,
-} from '@/lib/lessonProgress'
 import {
   cacheOfflineAnswer,
   cacheOfflineRuling,
@@ -113,7 +108,6 @@ const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const sourceLesson = ref<IllustratedLesson | null>(null)
 const mediaMode = ref<MediaMode>('TEXT')
-const progress = ref<LessonProgress>(initialLessonProgress())
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
 const teachingRun = ref<TeachingRunProgress | null>(null)
@@ -121,7 +115,6 @@ const visualEnrichmentRun = ref<TeachingRunProgress | null>(null)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
-const waitingForNextChapter = ref(false)
 const generationNow = ref(Date.now())
 let generationClockTimer: ReturnType<typeof setInterval> | undefined
 let lessonViewDisposed = false
@@ -150,6 +143,24 @@ const {
 const mediaWarnings = computed(() => mediaWarningCodes.value.map(mediaWarningMessage))
 
 const planId = computed(() => String(route.params.planId ?? ''))
+const {
+  progress,
+  waitingForNextChapter,
+  progressPercent,
+  reset: resetLessonProgress,
+  restore: restoreLessonReaderProgress,
+  selectSection,
+  synchronizeChapter,
+  previousSection,
+  finish: finishSectionProgress,
+} = useLessonReaderProgress({
+  lesson,
+  onSectionSelected: (index) => {
+    resetConversation(true)
+    resetRuling()
+    seekToChapter(index)
+  },
+})
 const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
 const {
   question,
@@ -369,10 +380,6 @@ const activeVideoFrame = computed(() => {
     ) ?? chapter.frames[0] ?? null
   )
 })
-const completedCount = computed(() => new Set([...progress.value.completed, ...progress.value.skipped]).size)
-const progressPercent = computed(() =>
-  lesson.value?.sections.length ? Math.round((completedCount.value / lesson.value.sections.length) * 100) : 0,
-)
 const supportedSectionCount = computed(
   () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
 )
@@ -413,15 +420,6 @@ function moveMeta(kind: LessonSection['steps'][number]['kind'] | undefined) {
   return teachingMoveMeta[kind ?? 'DO']
 }
 
-function progressKey() {
-  return lesson.value ? `rulepilot:lesson-progress:${lesson.value.id}` : ''
-}
-
-function saveProgress() {
-  const key = progressKey()
-  if (key) localStorage.setItem(key, JSON.stringify(progress.value))
-}
-
 const {
   narrationPlayer,
   narrationRate,
@@ -450,8 +448,7 @@ const {
   mediaMode,
   currentSectionIndex: computed(() => progress.value.currentIndex),
   synchronizeChapter: (chapterIndex) => {
-    progress.value = { ...progress.value, currentIndex: chapterIndex }
-    saveProgress()
+    synchronizeChapter(chapterIndex)
   },
   addWarning: addMediaWarning,
   audioFailureWarning: 'AUDIO_LOAD_FAILED',
@@ -507,7 +504,7 @@ function resetLessonReader() {
   lesson.value = null
   sourceLesson.value = null
   resetLessonLocalization()
-  progress.value = initialLessonProgress()
+  resetLessonProgress()
   resetConversation(true)
   resetRuling()
   offlineKnowledge.value = []
@@ -548,7 +545,6 @@ async function loadLesson() {
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
   generationFinishedMessage.value = ''
-  waitingForNextChapter.value = false
   clearSupportingContent()
   if (!targetPlanId) {
     await router.replace({ name: 'lessons' })
@@ -588,13 +584,7 @@ async function loadLesson() {
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = t('lesson.generation.refreshFailed')
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
-    progress.value = {
-      ...restoreLessonProgress(
-          localStorage.getItem(`rulepilot:lesson-progress:${lesson.value.id}`),
-        lesson.value.sections.length,
-      ),
-      paused: false,
-    }
+    restoreLessonReaderProgress()
     if (generationActive.value) generationPolling.schedule()
     else await loadSupportingContent(targetPlanId, request)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
@@ -679,17 +669,9 @@ async function refreshGeneration() {
     generationRefreshError.value = ''
 
     if (lessonReplaced) {
-      progress.value = {
-        ...restoreLessonProgress(
-          localStorage.getItem(`rulepilot:lesson-progress:${acceptedLesson.id}`),
-          acceptedLesson.sections.length,
-        ),
-        paused: false,
-      }
+      restoreLessonReaderProgress()
       selectSection(progress.value.currentIndex)
-      waitingForNextChapter.value = false
     } else if (acceptedLesson.sections.length > previousCount && waitingForNextChapter.value) {
-      waitingForNextChapter.value = false
       selectSection(previousCount)
     }
 
@@ -705,15 +687,6 @@ async function refreshGeneration() {
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) generationPolling.schedule()
   }
-}
-
-function selectSection(index: number) {
-  waitingForNextChapter.value = false
-  progress.value = { ...progress.value, currentIndex: index }
-  resetConversation(true)
-  resetRuling()
-  saveProgress()
-  seekToChapter(index)
 }
 
 function focusQuestionPanel() {
@@ -733,17 +706,8 @@ async function csrfToken() {
   return (await response.json()) as CsrfResponse
 }
 
-function previousSection() {
-  if (progress.value.currentIndex === 0) return
-  selectSection(progress.value.currentIndex - 1)
-}
-
 function finish(outcome: 'completed' | 'skipped') {
-  if (!lesson.value || progress.value.paused) return
-  const waitForNext = lessonStillGrowing.value && readingCurrentLastChapter.value
-  progress.value = finishSection(progress.value, lesson.value.sections.length, outcome)
-  waitingForNextChapter.value = waitForNext
-  saveProgress()
+  finishSectionProgress(outcome, lessonStillGrowing.value && readingCurrentLastChapter.value)
 }
 
 function visualKindLabel(kind: LessonSection['visualKind']) {
