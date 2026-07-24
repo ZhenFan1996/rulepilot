@@ -40,7 +40,10 @@ import org.apache.pdfbox.text.TextPosition;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** PDFBox adapter that opens a rulebook once, then extracts layout and renders visual evidence from that session. */
+/**
+ * PDFBox adapter that stages a rulebook once, then uses short-lived extraction and rendering sessions over that local
+ * source.
+ */
 @Component
 public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
 
@@ -85,9 +88,18 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
         try (input) {
             temporaryPdf = Files.createTempFile("rulepilot-prepare-", ".pdf");
             Files.copy(input, temporaryPdf, StandardCopyOption.REPLACE_EXISTING);
+            List<DocumentProcessing.ExtractedPage> extractedPages;
             try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
                 validateDocument(document, maxPages);
-                extractedPagesConsumer.accept(extractPages(document, maxExtractedCharacters));
+                extractedPages = extractPages(document, maxExtractedCharacters);
+            }
+            extractedPagesConsumer.accept(extractedPages);
+            // Text extraction warms PDFBox resource caches across the whole rulebook. Closing that session before
+            // 200-DPI rendering keeps the one-core / 560 MiB Worker from retaining both cache populations at once.
+            try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
+                if (document.getNumberOfPages() > maxPages) {
+                    throw new PdfExtractionException("PDF exceeds the configured page limit");
+                }
                 renderPages(document, pageImageConsumer);
             }
         } catch (PdfExtractionException exception) {
