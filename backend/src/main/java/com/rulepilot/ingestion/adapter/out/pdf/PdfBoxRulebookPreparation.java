@@ -19,11 +19,14 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
+import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageOutputStream;
+import javax.imageio.stream.ImageInputStream;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSBase;
@@ -37,6 +40,7 @@ import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.text.TextPosition;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -66,17 +70,25 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     private final int maxPages;
     private final int maxExtractedCharacters;
     private final int renderSessionPages;
+    private final VisualRenderer visualRenderer;
 
+    @Autowired
     public PdfBoxRulebookPreparation(
             @Value("${rulepilot.document.max-pdf-pages:500}") int maxPages,
             @Value("${rulepilot.document.max-extracted-characters:5000000}") int maxExtractedCharacters,
-            @Value("${rulepilot.document.render-session-pages:4}") int renderSessionPages) {
+            @Value("${rulepilot.document.render-session-pages:4}") int renderSessionPages,
+            @Value("${rulepilot.document.visual-renderer:poppler}") String visualRenderer) {
         if (maxPages < 1 || maxExtractedCharacters < 1 || renderSessionPages < 1) {
             throw new IllegalArgumentException("PDF extraction limits and render session size must be positive");
         }
         this.maxPages = maxPages;
         this.maxExtractedCharacters = maxExtractedCharacters;
         this.renderSessionPages = renderSessionPages;
+        this.visualRenderer = VisualRenderer.from(visualRenderer);
+    }
+
+    PdfBoxRulebookPreparation(int maxPages, int maxExtractedCharacters, int renderSessionPages) {
+        this(maxPages, maxExtractedCharacters, renderSessionPages, "pdfbox");
     }
 
     @Override
@@ -143,6 +155,15 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
 
     private void renderPages(
             Path temporaryPdf, int expectedPageCount, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        if (visualRenderer == VisualRenderer.POPPLER) {
+            renderPagesWithPoppler(temporaryPdf, expectedPageCount, pageImageConsumer);
+            return;
+        }
+        renderPagesWithPdfBox(temporaryPdf, expectedPageCount, pageImageConsumer);
+    }
+
+    private void renderPagesWithPdfBox(
+            Path temporaryPdf, int expectedPageCount, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
         for (int batchStart = 0; batchStart < expectedPageCount; batchStart += renderSessionPages) {
             try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
                 if (document.getNumberOfPages() != expectedPageCount) {
@@ -160,6 +181,111 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
                     }
                 }
             }
+        }
+    }
+
+    private void renderPagesWithPoppler(
+            Path temporaryPdf, int expectedPageCount, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        Path outputDirectory = Files.createTempDirectory("rulepilot-poppler-render-");
+        try {
+            for (int batchStart = 0; batchStart < expectedPageCount; batchStart += renderSessionPages) {
+                int batchEnd = Math.min(batchStart + renderSessionPages, expectedPageCount);
+                renderPopplerBatch(temporaryPdf, outputDirectory, batchStart + 1, batchEnd);
+                for (int pageNumber = batchStart + 1; pageNumber <= batchEnd; pageNumber++) {
+                    Path renderedPage = locatePopplerPage(outputDirectory, pageNumber);
+                    try {
+                        PageDimensions dimensions = jpegDimensions(renderedPage);
+                        pageImageConsumer.accept(new RenderedPageImage(
+                                pageNumber, Files.readAllBytes(renderedPage), dimensions.width(), dimensions.height()));
+                    } finally {
+                        Files.deleteIfExists(renderedPage);
+                    }
+                }
+            }
+        } finally {
+            deleteTemporaryDirectory(outputDirectory);
+        }
+    }
+
+    private void renderPopplerBatch(Path pdf, Path outputDirectory, int firstPage, int lastPage) throws IOException {
+        List<String> command = List.of(
+                "pdftoppm",
+                "-r", String.valueOf((int) RENDER_DPI),
+                "-jpeg",
+                "-jpegopt", "quality=" + Math.round(JPEG_QUALITY * 100),
+                "-f", String.valueOf(firstPage),
+                "-l", String.valueOf(lastPage),
+                pdf.toString(),
+                outputDirectory.resolve("page").toString());
+        Process process = new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .start();
+        try {
+            if (process.waitFor() != 0) {
+                throw new IOException("Poppler could not render the rulebook pages");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Poppler rendering was interrupted", interrupted);
+        }
+    }
+
+    private Path locatePopplerPage(Path outputDirectory, int pageNumber) throws IOException {
+        try (Stream<Path> entries = Files.list(outputDirectory)) {
+            return entries
+                    .filter(path -> path.getFileName().toString().startsWith("page-"))
+                    .filter(path -> path.getFileName().toString().endsWith(".jpg"))
+                    .filter(path -> popplerPageNumber(path.getFileName().toString()) == pageNumber)
+                    .findFirst()
+                    .orElseThrow(() -> new IOException("Poppler did not create rendered page " + pageNumber));
+        }
+    }
+
+    private int popplerPageNumber(String filename) {
+        String page = filename.substring("page-".length(), filename.length() - ".jpg".length());
+        try {
+            return Integer.parseInt(page);
+        } catch (NumberFormatException invalidFilename) {
+            return -1;
+        }
+    }
+
+    private PageDimensions jpegDimensions(Path renderedPage) throws IOException {
+        try (ImageInputStream input = ImageIO.createImageInputStream(renderedPage.toFile())) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) {
+                throw new IOException("Poppler output is not a readable JPEG");
+            }
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input, true, true);
+                return new PageDimensions(reader.getWidth(0), reader.getHeight(0));
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    private void deleteTemporaryDirectory(Path directory) {
+        try (Stream<Path> entries = Files.list(directory)) {
+            entries.forEach(this::deleteTemporaryPath);
+        } catch (IOException cleanupFailure) {
+            directory.toFile().deleteOnExit();
+            return;
+        }
+        try {
+            Files.deleteIfExists(directory);
+        } catch (IOException cleanupFailure) {
+            directory.toFile().deleteOnExit();
+        }
+    }
+
+    private void deleteTemporaryPath(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException cleanupFailure) {
+            path.toFile().deleteOnExit();
         }
     }
 
@@ -267,16 +393,19 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
 
         @Override
         protected void endPage(PDPage page) throws IOException {
+            if (textByPage.size() == blocksByPage.size()) {
+                textByPage.add("");
+            }
             blocksByPage.add(List.copyOf(blocks));
             super.endPage(page);
         }
 
         String capturedText(int pageNumber) {
-            return textByPage.get(pageNumber - 1);
+            return pageNumber <= textByPage.size() ? textByPage.get(pageNumber - 1) : "";
         }
 
         List<DocumentProcessing.ExtractedTextBlock> capturedBlocks(int pageNumber) {
-            return blocksByPage.get(pageNumber - 1);
+            return pageNumber <= blocksByPage.size() ? blocksByPage.get(pageNumber - 1) : List.of();
         }
 
         @Override
@@ -310,6 +439,27 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
 
         private int normalized(float value, float dimension) {
             return Math.max(0, Math.min(1_000, Math.round(value * 1_000 / dimension)));
+        }
+    }
+
+    private record PageDimensions(int width, int height) {
+        private PageDimensions {
+            if (width < 1 || height < 1) {
+                throw new IllegalArgumentException("rendered page dimensions are invalid");
+            }
+        }
+    }
+
+    private enum VisualRenderer {
+        PDFBOX,
+        POPPLER;
+
+        private static VisualRenderer from(String configured) {
+            try {
+                return valueOf(configured.strip().toUpperCase(java.util.Locale.ROOT));
+            } catch (RuntimeException invalidRenderer) {
+                throw new IllegalArgumentException("rulebook visual renderer must be pdfbox or poppler", invalidRenderer);
+            }
         }
     }
 }

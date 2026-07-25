@@ -21,6 +21,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 class PdfBoxRulebookPreparationTest {
@@ -162,6 +163,22 @@ class PdfBoxRulebookPreparationTest {
         assertThat(renderedPageNumbers).containsExactly(1, 2, 3, 4, 5);
     }
 
+    @Test
+    void rendersReadableJpegsWithPopplerWhenTheRuntimeProvidesIt() throws IOException {
+        Assumptions.assumeTrue(popplerAvailable());
+        List<RenderedPageImage> rendered = new ArrayList<>();
+
+        new PdfBoxRulebookPreparation(10, 10_000, 2, "poppler")
+                .prepare(chunked(pdfWithPages(2)), ignored -> {}, rendered::add);
+
+        assertThat(rendered).extracting(RenderedPageImage::pageNumber).containsExactly(1, 2);
+        assertThat(rendered).allSatisfy(image -> {
+            assertThat(image.content()).startsWith((byte) 0xFF, (byte) 0xD8);
+            assertThat(image.width()).isGreaterThan(1_600);
+            assertThat(image.height()).isGreaterThan(2_000);
+        });
+    }
+
     private PdfBoxRulebookPreparation preparation(int maxPages, int maxExtractedCharacters) {
         return new PdfBoxRulebookPreparation(maxPages, maxExtractedCharacters, 4);
     }
@@ -203,5 +220,20 @@ class PdfBoxRulebookPreparationTest {
                 return super.read(buffer, offset, Math.min(length, 17));
             }
         };
+    }
+
+    private boolean popplerAvailable() {
+        try {
+            Process process = new ProcessBuilder("pdftoppm", "-v")
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start();
+            return process.waitFor() == 0;
+        } catch (IOException unavailable) {
+            return false;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 }

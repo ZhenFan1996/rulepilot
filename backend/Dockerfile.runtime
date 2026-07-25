@@ -1,6 +1,10 @@
 FROM eclipse-temurin:21-jre-jammy
 
-RUN groupadd --system rulepilot && useradd --system --gid rulepilot --home-dir /app rulepilot
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes poppler-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system rulepilot \
+    && useradd --system --gid rulepilot --home-dir /app rulepilot
 WORKDIR /app
 COPY --chown=rulepilot:rulepilot target/rulepilot-backend-*.jar app.jar
 USER rulepilot
