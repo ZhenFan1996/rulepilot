@@ -102,7 +102,7 @@ final class TeachingSectionEvidenceRetriever {
                 Set.of(),
                 null,
                 true,
-                true)));
+                false)));
     }
 
     private boolean sameEvidence(RuleEvidence first, RuleEvidence second) {

@@ -63,6 +63,7 @@ class TeachingSectionEvidenceRetrieverTest {
         TeachingSectionEvidenceRetriever retriever = retriever(request -> {
             assertThat(request.documentVersionId()).isEqualTo(documentVersionId);
             assertThat(request.includeAdjacentContext()).isTrue();
+            assertThat(request.includePageImages()).isFalse();
             return List.of(wrongVersion);
         });
 
