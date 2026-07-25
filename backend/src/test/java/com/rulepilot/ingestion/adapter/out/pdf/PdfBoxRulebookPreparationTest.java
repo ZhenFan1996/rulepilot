@@ -27,7 +27,7 @@ class PdfBoxRulebookPreparationTest {
 
     @Test
     void rejectsDocumentsOverThePageLimitBeforeCallingConsumers() throws IOException {
-        var preparation = new PdfBoxRulebookPreparation(1, 10_000);
+        var preparation = preparation(1, 10_000);
 
         assertThatThrownBy(() -> preparation.prepare(chunked(pdfWithPages(2)), ignored -> {}, ignored -> {}))
                 .isInstanceOf(PdfExtractionException.class)
@@ -47,7 +47,7 @@ class PdfBoxRulebookPreparationTest {
         }
         List<ExtractedPage> pages = new ArrayList<>();
 
-        new PdfBoxRulebookPreparation(10, 10_000).prepare(chunked(pdf), pages::addAll, ignored -> {});
+        preparation(10, 10_000).prepare(chunked(pdf), pages::addAll, ignored -> {});
 
         assertThat(pages).hasSize(1);
     }
@@ -64,7 +64,7 @@ class PdfBoxRulebookPreparationTest {
             pdf = output.toByteArray();
         }
 
-        assertThatThrownBy(() -> new PdfBoxRulebookPreparation(10, 10_000).prepare(chunked(pdf), ignored -> {}, ignored -> {}))
+        assertThatThrownBy(() -> preparation(10, 10_000).prepare(chunked(pdf), ignored -> {}, ignored -> {}))
                 .isInstanceOf(PdfExtractionException.class)
                 .hasMessage("PDF contains active or embedded content");
     }
@@ -93,7 +93,7 @@ class PdfBoxRulebookPreparationTest {
         List<ExtractedPage> pages = new ArrayList<>();
         List<RenderedPageImage> rendered = new ArrayList<>();
 
-        new PdfBoxRulebookPreparation(10, 10_000).prepare(
+        preparation(10, 10_000).prepare(
                 chunked(pdf),
                 extracted -> {
                     callbacks.add("pages");
@@ -121,8 +121,8 @@ class PdfBoxRulebookPreparationTest {
             BufferedImage decoded = read(image.content());
             assertThat(decoded.getWidth()).isEqualTo(image.width());
             assertThat(decoded.getHeight()).isEqualTo(image.height());
-            assertThat(decoded.getWidth()).isGreaterThan(1_400);
-            assertThat(decoded.getHeight()).isGreaterThan(1_800);
+            assertThat(decoded.getWidth()).isGreaterThan(1_600);
+            assertThat(decoded.getHeight()).isGreaterThan(2_000);
         });
     }
 
@@ -137,7 +137,7 @@ class PdfBoxRulebookPreparationTest {
         }
         List<ExtractedPage> pages = new ArrayList<>();
 
-        new PdfBoxRulebookPreparation(10, 10_000).prepare(chunked(pdf), pages::addAll, ignored -> {});
+        preparation(10, 10_000).prepare(chunked(pdf), pages::addAll, ignored -> {});
 
         assertThat(pages).extracting(ExtractedPage::text).containsExactly("SETUP", "SCORING");
         assertThat(pages.getFirst().textBlocks()).extracting(block -> block.text()).containsExactly("SETUP");
@@ -150,6 +150,20 @@ class PdfBoxRulebookPreparationTest {
             assertThat(PdfBoxRulebookPreparation.configuredRenderer(document).isSubsamplingAllowed())
                     .isTrue();
         }
+    }
+
+    @Test
+    void rendersEveryPageInOrderWhenTheEvidenceSessionIsBounded() throws IOException {
+        List<Integer> renderedPageNumbers = new ArrayList<>();
+
+        new PdfBoxRulebookPreparation(10, 10_000, 2)
+                .prepare(chunked(pdfWithPages(5)), ignored -> {}, image -> renderedPageNumbers.add(image.pageNumber()));
+
+        assertThat(renderedPageNumbers).containsExactly(1, 2, 3, 4, 5);
+    }
+
+    private PdfBoxRulebookPreparation preparation(int maxPages, int maxExtractedCharacters) {
+        return new PdfBoxRulebookPreparation(maxPages, maxExtractedCharacters, 4);
     }
 
     private byte[] pdfWithPages(int pages) throws IOException {

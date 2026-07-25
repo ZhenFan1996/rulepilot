@@ -59,22 +59,24 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             COSName.getPDFName("RichMedia"),
             COSName.getPDFName("FileAttachment"));
     // Small inline resource icons are rule-bearing evidence. At 120 DPI they can collapse into nearby bullet marks
-    // on compact publisher page sizes. 170 DPI was visually checked against 200 DPI on icon-dense setup and scoring
-    // pages; it retains those rule-bearing marks while rendering 28% fewer pixels on the constrained Worker.
-    private static final float RENDER_DPI = 170;
+    // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
+    private static final float RENDER_DPI = 200;
     private static final float JPEG_QUALITY = 0.90f;
 
     private final int maxPages;
     private final int maxExtractedCharacters;
+    private final int renderSessionPages;
 
     public PdfBoxRulebookPreparation(
             @Value("${rulepilot.document.max-pdf-pages:500}") int maxPages,
-            @Value("${rulepilot.document.max-extracted-characters:5000000}") int maxExtractedCharacters) {
-        if (maxPages < 1 || maxExtractedCharacters < 1) {
-            throw new IllegalArgumentException("PDF extraction limits must be positive");
+            @Value("${rulepilot.document.max-extracted-characters:5000000}") int maxExtractedCharacters,
+            @Value("${rulepilot.document.render-session-pages:4}") int renderSessionPages) {
+        if (maxPages < 1 || maxExtractedCharacters < 1 || renderSessionPages < 1) {
+            throw new IllegalArgumentException("PDF extraction limits and render session size must be positive");
         }
         this.maxPages = maxPages;
         this.maxExtractedCharacters = maxExtractedCharacters;
+        this.renderSessionPages = renderSessionPages;
     }
 
     @Override
@@ -95,14 +97,9 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
                 extractedPages = extractPages(document, maxExtractedCharacters);
             }
             extractedPagesConsumer.accept(extractedPages);
-            // Text extraction warms PDFBox resource caches across the whole rulebook. Closing that session before
-            // 170-DPI rendering keeps the one-core / 560 MiB Worker from retaining both cache populations at once.
-            try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
-                if (document.getNumberOfPages() > maxPages) {
-                    throw new PdfExtractionException("PDF exceeds the configured page limit");
-                }
-                renderPages(document, pageImageConsumer);
-            }
+            // PDFBox retains decoded resources in a document session. Rendering short page batches prevents an
+            // illustrated rulebook from accumulating every prior spread's artwork in the constrained Worker heap.
+            renderPages(temporaryPdf, extractedPages.size(), pageImageConsumer);
         } catch (PdfExtractionException exception) {
             throw exception;
         } catch (IOException exception) {
@@ -139,15 +136,24 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
         return List.copyOf(pages);
     }
 
-    private void renderPages(PDDocument document, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
-        PDFRenderer renderer = configuredRenderer(document);
-        for (int index = 0; index < document.getNumberOfPages(); index++) {
-            BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
-            try {
-                pageImageConsumer.accept(new RenderedPageImage(
-                        index + 1, encodeJpeg(image), image.getWidth(), image.getHeight()));
-            } finally {
-                image.flush();
+    private void renderPages(
+            Path temporaryPdf, int expectedPageCount, Consumer<RenderedPageImage> pageImageConsumer) throws IOException {
+        for (int batchStart = 0; batchStart < expectedPageCount; batchStart += renderSessionPages) {
+            try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
+                if (document.getNumberOfPages() != expectedPageCount) {
+                    throw new PdfExtractionException("PDF page count changed while preparing visual evidence");
+                }
+                PDFRenderer renderer = configuredRenderer(document);
+                int batchEnd = Math.min(batchStart + renderSessionPages, expectedPageCount);
+                for (int index = batchStart; index < batchEnd; index++) {
+                    BufferedImage image = renderer.renderImageWithDPI(index, RENDER_DPI, ImageType.RGB);
+                    try {
+                        pageImageConsumer.accept(new RenderedPageImage(
+                                index + 1, encodeJpeg(image), image.getWidth(), image.getHeight()));
+                    } finally {
+                        image.flush();
+                    }
+                }
             }
         }
     }
@@ -199,7 +205,7 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     static PDFRenderer configuredRenderer(PDDocument document) {
         PDFRenderer renderer = new PDFRenderer(document);
         // Rulebooks commonly embed print-resolution artwork. PDFBox can decode only the pixels needed for the
-        // requested 170 DPI output, preserving crop dimensions while avoiding needless memory and CPU work.
+        // requested 200 DPI output, preserving crop dimensions while avoiding needless memory and CPU work.
         renderer.setSubsamplingAllowed(true);
         return renderer;
     }
