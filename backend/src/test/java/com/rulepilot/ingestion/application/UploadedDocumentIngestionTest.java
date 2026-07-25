@@ -3,6 +3,7 @@ package com.rulepilot.ingestion.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -19,6 +20,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.mockito.InOrder;
 
 class UploadedDocumentIngestionTest {
 
@@ -63,6 +65,9 @@ class UploadedDocumentIngestionTest {
         verify(documents).markStructuring(versionId);
         verify(documents).open(versionId);
         verify(structures).organize(versionId, pages);
+        InOrder persistenceBeforeImages = inOrder(structures, pageImages);
+        persistenceBeforeImages.verify(structures).organize(versionId, pages);
+        persistenceBeforeImages.verify(pageImages, Mockito.times(3)).store(Mockito.eq(versionId), any());
         assertThat(metrics.find(UploadedDocumentIngestion.PARSE_PHASE_DURATION_METRIC)
                         .tag("phase", "extraction").timer().count())
                 .isOne();

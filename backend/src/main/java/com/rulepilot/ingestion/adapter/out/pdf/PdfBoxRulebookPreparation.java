@@ -92,14 +92,19 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             temporaryPdf = Files.createTempFile("rulepilot-prepare-", ".pdf");
             Files.copy(input, temporaryPdf, StandardCopyOption.REPLACE_EXISTING);
             List<DocumentProcessing.ExtractedPage> extractedPages;
+            int expectedPageCount;
             try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
                 validateDocument(document, maxPages);
                 extractedPages = extractPages(document, maxExtractedCharacters);
+                expectedPageCount = extractedPages.size();
             }
             extractedPagesConsumer.accept(extractedPages);
+            // The consumer has durably stored page text and derived structure. Do not keep its page/block graph
+            // reachable while PDFBox allocates visual evidence; that graph can dominate the Worker heap.
+            extractedPages = null;
             // PDFBox retains decoded resources in a document session. Rendering short page batches prevents an
             // illustrated rulebook from accumulating every prior spread's artwork in the constrained Worker heap.
-            renderPages(temporaryPdf, extractedPages.size(), pageImageConsumer);
+            renderPages(temporaryPdf, expectedPageCount, pageImageConsumer);
         } catch (PdfExtractionException exception) {
             throw exception;
         } catch (IOException exception) {

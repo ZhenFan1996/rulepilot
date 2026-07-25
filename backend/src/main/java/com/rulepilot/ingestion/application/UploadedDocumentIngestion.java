@@ -5,11 +5,9 @@ import com.rulepilot.document.DocumentProcessingStage;
 import com.rulepilot.document.DocumentPageImageStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,8 +75,8 @@ public class UploadedDocumentIngestion {
         progress.update(documentVersionId, "EXTRACTING", 30, 0, false);
         documents.markExtracting(documentVersionId);
         long extractionStartedAt = System.nanoTime();
-        AtomicReference<List<DocumentProcessing.ExtractedPage>> extractedPages = new AtomicReference<>();
         AtomicLong extractionNanos = new AtomicLong();
+        AtomicLong structuringNanos = new AtomicLong();
         AtomicInteger totalPageCount = new AtomicInteger();
         AtomicLong renderingStartedAt = new AtomicLong();
         AtomicInteger renderedPageCount = new AtomicInteger();
@@ -86,11 +84,16 @@ public class UploadedDocumentIngestion {
         pdfPreparation.prepare(
                 documents.open(documentVersionId),
                 pages -> {
-                    extractedPages.set(pages);
                     extractionNanos.set(recordParsePhase("extraction", extractionStartedAt));
                     documents.replacePages(documentVersionId, pages);
                     int totalPages = pages.size();
                     totalPageCount.set(totalPages);
+                    // The positioned extraction can be very large for illustrated rulebooks. Persist every derived
+                    // structure before image rendering so neither this lambda nor the PDF adapter must retain the
+                    // full page/block graph while PDFBox decodes artwork.
+                    long structuringStartedAt = System.nanoTime();
+                    structures.organize(documentVersionId, pages);
+                    structuringNanos.set(recordParsePhase("structuring", structuringStartedAt));
                     progress.update(documentVersionId, "RENDERING", RENDERING_START_PERCENTAGE, 0, totalPages, false);
                     renderingStartedAt.set(System.nanoTime());
                 },
@@ -113,9 +116,8 @@ public class UploadedDocumentIngestion {
                                 false);
                     }
                 });
-        List<DocumentProcessing.ExtractedPage> pages = extractedPages.get();
         int totalPages = totalPageCount.get();
-        if (pages == null || totalPages < 1) {
+        if (totalPages < 1) {
             throw new IllegalStateException("PDF preparation completed without extracted pages");
         }
         long renderingAndStoreNanos = recordParsePhase("render-and-store", renderingStartedAt.get());
@@ -126,16 +128,13 @@ public class UploadedDocumentIngestion {
         // next queue stage adds substantial work on a small worker and can only reproduce these same source blocks.
         documents.markStructuring(documentVersionId);
         progress.update(documentVersionId, "STRUCTURING", 75, totalPages, totalPages, false);
-        long structuringStartedAt = System.nanoTime();
-        structures.organize(documentVersionId, pages);
-        long structuringNanos = recordParsePhase("structuring", structuringStartedAt);
         LOGGER.info(
                 "Document parse completed: pages={}, extractionMs={}, renderAndStoreMs={}, pageStorageMs={}, structuringMs={}",
                 totalPages,
                 milliseconds(extractionNanos.get()),
                 milliseconds(renderingAndStoreNanos),
                 milliseconds(pageStorageNanos.get()),
-                milliseconds(structuringNanos));
+                milliseconds(structuringNanos.get()));
     }
 
     private void chunk(UUID documentVersionId) {
