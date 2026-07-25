@@ -52,6 +52,7 @@ public class GroundedTeachingAgent {
     private final TeachingPublishedLessonReviewer publishedLessonReviewer;
     private final int maxToolCalls;
     private final int baseSectionParallelism;
+    private final int baseMaxRetrievalQueriesPerSection;
 
     @Autowired
     public GroundedTeachingAgent(
@@ -63,7 +64,9 @@ public class GroundedTeachingAgent {
             VisualRulebookPageFacts visualFacts,
             VisualRulebookPageCatalogModel visualCatalog,
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
-            @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism) {
+            @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism,
+            @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
+                    int baseMaxRetrievalQueriesPerSection) {
         this.tools = tools;
         this.model = model;
         this.invocations = invocations;
@@ -81,6 +84,30 @@ public class GroundedTeachingAgent {
                 new TeachingReviewCorrectionPolicy());
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
+        this.baseMaxRetrievalQueriesPerSection = Math.max(1, baseMaxRetrievalQueriesPerSection);
+    }
+
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog,
+            int maxToolCalls,
+            int baseSectionParallelism) {
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                visualFacts,
+                visualCatalog,
+                maxToolCalls,
+                baseSectionParallelism,
+                3);
     }
 
     public GroundedTeachingAgent(
@@ -101,7 +128,8 @@ public class GroundedTeachingAgent {
                 visualFacts,
                 VisualRulebookPageCatalogModel.unavailable(),
                 maxToolCalls,
-                baseSectionParallelism);
+                baseSectionParallelism,
+                3);
     }
 
     public GroundedTeachingAgent(
@@ -121,7 +149,8 @@ public class GroundedTeachingAgent {
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
                 maxToolCalls,
-                baseSectionParallelism);
+                baseSectionParallelism,
+                3);
     }
 
     public GroundedTeachingAgent(
@@ -140,6 +169,7 @@ public class GroundedTeachingAgent {
                 VisualRulebookPageFacts.empty(),
                 VisualRulebookPageCatalogModel.unavailable(),
                 maxToolCalls,
+                3,
                 3);
     }
 
@@ -180,7 +210,7 @@ public class GroundedTeachingAgent {
         Instant createdAt = Instant.now();
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
         Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
-        int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
+        int queriesPerTopic = baseQueryBudget(plan);
         List<LessonSection> sections = new ArrayList<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         TeachingPlan.PlannedSection first = plan.sections().getFirst();
@@ -255,6 +285,11 @@ public class GroundedTeachingAgent {
                 queriesPerTopic,
                 planned.position() - 1,
                 GenerationMode.PROGRESSIVE_BASE);
+    }
+
+    private int baseQueryBudget(TeachingPlan plan) {
+        int shareOfGlobalBudget = Math.max(1, maxToolCalls / plan.sections().size());
+        return Math.min(baseMaxRetrievalQueriesPerSection, shareOfGlobalBudget);
     }
 
     private SectionOutcome generateSection(

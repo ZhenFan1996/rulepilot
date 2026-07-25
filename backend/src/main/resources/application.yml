@@ -129,6 +129,9 @@ rulepilot:
       max-pool-size: ${TEACHING_BACKGROUND_MAX_POOL_SIZE:4}
       queue-capacity: ${TEACHING_BACKGROUND_QUEUE_CAPACITY:20}
     base-section-parallelism: ${TEACHING_BASE_SECTION_PARALLELISM:3}
+    # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
+    # post-publication review instead of delaying the first complete, cited lesson.
+    base-max-retrieval-queries-per-section: ${TEACHING_BASE_MAX_RETRIEVAL_QUERIES_PER_SECTION:3}
   visual:
     provider: ${VISUAL_PROVIDER:fake}
     model-provider: ${VISUAL_MODEL_PROVIDER:gemini}

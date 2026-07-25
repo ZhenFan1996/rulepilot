@@ -1066,6 +1066,47 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void capsTheProgressiveBaseAtThreeOriginalLanguageQueriesPerSection() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger retrievalCalls = new AtomicInteger();
+        TeachingPlan multiIntentPlan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                4,
+                2,
+                20,
+                "Game",
+                "Premise",
+                List.of(new PlannedSection(
+                        1,
+                        "setup",
+                        "Setup",
+                        "Explain setup.",
+                        true,
+                        false,
+                        List.of("setup", "starting pieces", "player aids", "setup exceptions"),
+                        List.of("setup"))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> {
+                    retrievalCalls.incrementAndGet();
+                    return List.of(evidence(chunkId, versionId));
+                },
+                request -> oneStepDraft(chunkId, "按引用完成这一节。"),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                72,
+                3);
+
+        agent.createBase(multiIntentPlan, UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(retrievalCalls).hasValue(3);
+    }
+
+    @Test
     void keepsACompleteCitedDraftReadableWhenPostPublicationReviewCannotContinue() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
