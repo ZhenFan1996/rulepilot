@@ -121,8 +121,8 @@ class PdfBoxRulebookPreparationTest {
             BufferedImage decoded = read(image.content());
             assertThat(decoded.getWidth()).isEqualTo(image.width());
             assertThat(decoded.getHeight()).isEqualTo(image.height());
-            assertThat(decoded.getWidth()).isGreaterThan(1_600);
-            assertThat(decoded.getHeight()).isGreaterThan(2_000);
+            assertThat(decoded.getWidth()).isGreaterThan(1_400);
+            assertThat(decoded.getHeight()).isGreaterThan(1_800);
         });
     }
 

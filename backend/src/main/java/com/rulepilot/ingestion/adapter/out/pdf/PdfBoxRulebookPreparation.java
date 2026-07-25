@@ -59,8 +59,9 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             COSName.getPDFName("RichMedia"),
             COSName.getPDFName("FileAttachment"));
     // Small inline resource icons are rule-bearing evidence. At 120 DPI they can collapse into nearby bullet marks
-    // on compact publisher page sizes, which makes both visual models and reader crops unreliable.
-    private static final float RENDER_DPI = 200;
+    // on compact publisher page sizes. 170 DPI was visually checked against 200 DPI on icon-dense setup and scoring
+    // pages; it retains those rule-bearing marks while rendering 28% fewer pixels on the constrained Worker.
+    private static final float RENDER_DPI = 170;
     private static final float JPEG_QUALITY = 0.90f;
 
     private final int maxPages;
@@ -95,7 +96,7 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
             }
             extractedPagesConsumer.accept(extractedPages);
             // Text extraction warms PDFBox resource caches across the whole rulebook. Closing that session before
-            // 200-DPI rendering keeps the one-core / 560 MiB Worker from retaining both cache populations at once.
+            // 170-DPI rendering keeps the one-core / 560 MiB Worker from retaining both cache populations at once.
             try (PDDocument document = Loader.loadPDF(temporaryPdf.toFile(), IOUtils.createTempFileOnlyStreamCache())) {
                 if (document.getNumberOfPages() > maxPages) {
                     throw new PdfExtractionException("PDF exceeds the configured page limit");
@@ -198,7 +199,7 @@ public class PdfBoxRulebookPreparation implements PdfRulebookPreparation {
     static PDFRenderer configuredRenderer(PDDocument document) {
         PDFRenderer renderer = new PDFRenderer(document);
         // Rulebooks commonly embed print-resolution artwork. PDFBox can decode only the pixels needed for the
-        // requested 200 DPI output, preserving crop dimensions while avoiding needless memory and CPU work.
+        // requested 170 DPI output, preserving crop dimensions while avoiding needless memory and CPU work.
         renderer.setSubsamplingAllowed(true);
         return renderer;
     }
