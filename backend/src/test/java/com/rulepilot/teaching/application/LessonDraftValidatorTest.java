@@ -60,6 +60,38 @@ class LessonDraftValidatorTest {
                 .withMessageContaining("tight focus region");
     }
 
+    @Test
+    void requiresEveryCitedPlayerCountValueInsteadOfOnlyTheRequestedGameSize() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "END",
+                        "End of Game",
+                        "The first player to collect the listed treasures triggers the end: 2 Players: 7, 3 Players: 6, 4 Players: 5.",
+                        12,
+                        12));
+        SectionDraft incomplete = draft(chunkId, "在 4 人游戏中，先拿到 5 个宝藏会触发结束。");
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> LessonDraftValidator.validatePlayerCountConditionalValues(incomplete, evidence))
+                .withMessageContaining("every listed player-count/value condition");
+
+        SectionDraft complete = draft(chunkId, "达到对应宝藏数才触发结束：2、3、4 人分别为 7、6、5 个。");
+        LessonDraftValidator.validatePlayerCountConditionalValues(complete, evidence);
+    }
+
+    private SectionDraft draft(UUID chunkId, String text) {
+        return new SectionDraft(
+                "结束条件",
+                VisualKind.REFERENCE_CARD,
+                "按人数检查宝藏数。",
+                List.of(chunkId),
+                List.of(new StepDraft("检查结束", TeachingMove.FLOW, text, List.of(chunkId))));
+    }
+
     private SectionRequest request(UUID chunkId) {
         return new SectionRequest(
                 "setup",

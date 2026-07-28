@@ -39,6 +39,8 @@ final class LessonDraftValidator {
             "(?i)(?:(?:清理|cleanup).{0,56}(?:不执行|不进行|不检查|does not check|do not check).{0,56}"
                     + "(?:游戏结束|结束检查|end game|game end)|"
                     + "(?:游戏结束|结束检查|end game|game end).{0,80}(?:最终计分阶段|final scoring phase))");
+    private static final Pattern PLAYER_COUNT_VALUE = Pattern.compile(
+            "(?i)(?<!\\d)(\\d{1,2})\\s*(?:players?|人)\\s*(?:[:：=\\-–—]\\s*)?(?:[^\\d\\r\\n]{0,32})?(\\d{1,4})(?!\\d)");
 
     private LessonDraftValidator() {}
 
@@ -69,6 +71,51 @@ final class LessonDraftValidator {
         }
         return List.copyOf(citationIds);
     }
+
+    /**
+     * A public lesson must not reduce a cited player-count table to the currently selected player count. The check is
+     * deliberately narrow: it applies only when the cited excerpts contain two or more explicit player-count/value
+     * rows, and it accepts compact prose such as "2、3、4 人分别为 7、6、5".
+     */
+    static void validatePlayerCountConditionalValues(SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
+        Set<UUID> citedEvidenceIds = new LinkedHashSet<>(draft.visualCitationIds());
+        draft.steps().forEach(step -> citedEvidenceIds.addAll(step.citationIds()));
+        List<PlayerCountValue> conditions = citedEvidenceIds.stream()
+                .map(allowedEvidence::get)
+                .filter(java.util.Objects::nonNull)
+                .flatMap(evidence -> playerCountValues(evidence.excerpt()).stream())
+                .toList();
+        if (conditions.stream().map(PlayerCountValue::playerCount).distinct().count() < 2) return;
+        Set<String> requiredNumbers = conditions.stream()
+                .flatMap(condition -> java.util.stream.Stream.of(condition.playerCount(), condition.value()))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
+                .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))
+                .collect(Collectors.joining("\n"));
+        boolean complete = requiredNumbers.stream().allMatch(number -> containsNumber(playerFacingText, number));
+        if (!complete) {
+            throw new IllegalArgumentException(
+                    "When cited evidence gives values by player count, teach every listed player-count/value condition "
+                            + "instead of reducing it to one example.");
+        }
+    }
+
+    private static List<PlayerCountValue> playerCountValues(String excerpt) {
+        if (excerpt == null || excerpt.isBlank()) return List.of();
+        var matcher = PLAYER_COUNT_VALUE.matcher(excerpt);
+        List<PlayerCountValue> values = new ArrayList<>();
+        while (matcher.find()) {
+            values.add(new PlayerCountValue(matcher.group(1), matcher.group(2)));
+        }
+        return List.copyOf(values);
+    }
+
+    private static boolean containsNumber(String text, String number) {
+        return Pattern.compile("(?<!\\d)" + Pattern.quote(number) + "(?!\\d)").matcher(text).find();
+    }
+
+    private record PlayerCountValue(String playerCount, String value) {}
 
     static void validateVisualBlockEvidence(
             SectionDraft draft,

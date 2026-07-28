@@ -1,0 +1,11 @@
+Conditional-value fidelity revision v25:
+- A rule may give several values for the same procedure because of player count, mode, level, round, component type,
+  or another printed condition. When the current evidence gives two or more condition/value rows, preserve the whole
+  mapping in the player-facing lesson. Do not replace it with only the value for the requested player count, a single
+  illustrative row, or a vague phrase such as "it varies by player count".
+- State every supported condition and its value in a compact, scannable form. For example, if a source lists three
+  player counts and three thresholds, teach all three thresholds, while keeping the trigger, timing, and result that
+  follow the table. Never fill missing rows from convention or arithmetic.
+- Before returning a section containing a conditional table, recount the printed rows and verify that every
+  player-count/value condition, cost bracket, score threshold, or other material conditional value is still present
+  in the prose. A short summary is allowed only when it retains every evidenced value and which condition selects it.
