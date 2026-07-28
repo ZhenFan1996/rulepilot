@@ -200,6 +200,33 @@ class VisualRulebookCatalogerTest {
         assertThat(peakRequests).hasValue(1);
     }
 
+    @Test
+    void groupsVisualCatalogRequestsIntoBoundedTwoPageBatches() {
+        UUID documentVersionId = UUID.randomUUID();
+        List<List<Integer>> batches = new java.util.ArrayList<>();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    batches.add(request.pages().stream().map(page -> page.pageNumber()).toList());
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
+                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                                    page.pageNumber(), "PAGE", "Visible rule", List.of("page")))
+                            .toList());
+                },
+                new InMemoryFacts());
+
+        cataloger.catalogVisualPages(
+                documentVersionId,
+                List.of(page(1), page(2), page(3), page(4), page(5)),
+                "Example game",
+                "owner",
+                null);
+
+        assertThat(batches).containsExactly(List.of(1, 2), List.of(3, 4), List.of(5));
+    }
+
     private static VisualRulebookCataloger cataloger(
             DocumentPageImages pageImages,
             VisualRulebookPageCatalogModel model,

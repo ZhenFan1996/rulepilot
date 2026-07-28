@@ -17,6 +17,12 @@ import org.junit.jupiter.api.Test;
 class TeachingPlanServiceTest {
 
     @Test
+    void usesDeterministicCoverageInsteadOfAModelRevisionForVisualOnlyRulebooks() {
+        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(true)).isFalse();
+        assertThat(TeachingPlanService.requiresModelSourcePageCoverageRevision(false)).isTrue();
+    }
+
+    @Test
     void cancelsASlowVisualCatalogBatchInsteadOfWaitingForTheProviderTimeout() throws InterruptedException {
         FutureTask<VisualRulebookPageCatalogModel.CatalogDraft> slowCatalog = new FutureTask<>(() -> {
             Thread.sleep(5_000);

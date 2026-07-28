@@ -126,17 +126,27 @@ public class TeachingPlanService {
                         playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
             }
         }
-        var outlineBeforeCoverageRevision = outline;
-        outline = refineSourcePageCoverage(outlineRequest, outline, pages, assistantRunId, documentPages, scope.documentTitle());
-        if (TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(outlineBeforeCoverageRevision, outline)) {
-            outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+        if (requiresModelSourcePageCoverageRevision(visualOnly)) {
+            var outlineBeforeCoverageRevision = outline;
+            outline = refineSourcePageCoverage(
+                    outlineRequest, outline, pages, assistantRunId, documentPages, scope.documentTitle());
+            if (TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(outlineBeforeCoverageRevision, outline)) {
+                outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+            } else if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "skipRedundantTeachingOutlineOwnership",
+                        ActivityOutcome.SUCCEEDED,
+                        "Source-page coverage did not change chapter ownership; skipped a duplicate outline revision");
+            }
         } else if (assistantRunId != null) {
             invocations.record(
                     assistantRunId,
                     ActivityType.VALIDATION,
-                    "skipRedundantTeachingOutlineOwnership",
+                    "skipVisualOutlineCoverageRevision",
                     ActivityOutcome.SUCCEEDED,
-                    "Source-page coverage did not change chapter ownership; skipped a duplicate outline revision");
+                    "Visual catalog pages use deterministic whole-rulebook coverage validation; skipped a redundant model revision");
         }
         try {
             if (visualOnly) VisualOutlineEvidencePolicy.validateVisualFastBaseline(outline);
@@ -273,6 +283,10 @@ public class TeachingPlanService {
             }
         }
         return current;
+    }
+
+    static boolean requiresModelSourcePageCoverageRevision(boolean visualOnly) {
+        return !visualOnly;
     }
 
     private TeachingOutlineModel.OutlineDraft refineSourcePageCoverage(

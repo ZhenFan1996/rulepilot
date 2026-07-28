@@ -46,9 +46,9 @@ import org.springframework.stereotype.Component;
 class VisualRulebookCataloger {
 
     private static final Logger log = LoggerFactory.getLogger(VisualRulebookCataloger.class);
-    // Three prepared pages fit in Qwen's bounded structured-response budget while reducing a visual-only rulebook
-    // from eight provider round trips to six. Four pages can truncate the JSON ledger before the final page.
-    private static final int VISUAL_CATALOG_BATCH_SIZE = 3;
+    // Two prepared pages keep Qwen's vision latency and JSON response bounded. With the production concurrency of
+    // two, an eight-page rulebook completes in two balanced waves instead of leaving a third, long-tail batch.
+    private static final int VISUAL_CATALOG_BATCH_SIZE = 2;
 
     private final DocumentPageImages pageImages;
     private final VisualRulebookPageCatalogModel visualCatalog;
