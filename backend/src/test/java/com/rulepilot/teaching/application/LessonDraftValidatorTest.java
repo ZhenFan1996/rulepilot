@@ -102,6 +102,24 @@ class LessonDraftValidatorTest {
                 draft(chunkId, "回合结束时，金钱和英雄都不能超过 5。"), evidence);
     }
 
+    @Test
+    void doesNotMoveACitedConditionalTableIntoASectionThatDoesNotMentionItsPlayerCounts() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "END",
+                        "End of Game",
+                        "The first player to collect the listed treasures triggers the end: 2 Players: 7, 3 Players: 6, 4 Players: 5.",
+                        12,
+                        12));
+
+        LessonDraftValidator.validatePlayerCountConditionalValues(
+                draft(chunkId, "收集宝藏越多越接近胜利。"), evidence);
+    }
+
     private SectionDraft draft(UUID chunkId, String text) {
         return new SectionDraft(
                 "结束条件",

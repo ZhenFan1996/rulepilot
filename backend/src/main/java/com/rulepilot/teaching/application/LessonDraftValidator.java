@@ -93,6 +93,11 @@ final class LessonDraftValidator {
         String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
                 .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))
                 .collect(Collectors.joining("\n"));
+        boolean refersToAListedPlayerCount = conditions.stream()
+                .map(PlayerCountValue::playerCount)
+                .distinct()
+                .anyMatch(playerCount -> containsPlayerCount(playerFacingText, playerCount));
+        if (!refersToAListedPlayerCount) return;
         boolean complete = requiredNumbers.stream().allMatch(number -> containsNumber(playerFacingText, number));
         if (!complete) {
             throw new IllegalArgumentException(
@@ -113,6 +118,12 @@ final class LessonDraftValidator {
 
     private static boolean containsNumber(String text, String number) {
         return Pattern.compile("(?<!\\d)" + Pattern.quote(number) + "(?!\\d)").matcher(text).find();
+    }
+
+    private static boolean containsPlayerCount(String text, String playerCount) {
+        return Pattern.compile("(?i)(?<!\\d)" + Pattern.quote(playerCount) + "\\s*(?:players?|人)")
+                .matcher(text)
+                .find();
     }
 
     private record PlayerCountValue(String playerCount, String value) {}
