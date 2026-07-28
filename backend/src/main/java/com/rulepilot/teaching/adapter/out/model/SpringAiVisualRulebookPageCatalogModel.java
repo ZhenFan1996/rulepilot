@@ -25,6 +25,9 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    // Two source pages share one catalog response. This preserves cross-page icon matching while keeping a single
+    // vision request inside the interactive timeout instead of allowing a detailed ledger to expand indefinitely.
+    private static final int MAX_CATALOG_COMPLETION_TOKENS = 1_200;
 
     private static final String SYSTEM = """
             You are a meticulous board-game rulebook visual reader. Inspect only the supplied page images.
@@ -110,6 +113,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(OpenAiChatOptions.builder()
                     .model(models.modelNameFor(Role.VISUAL, owner))
+                    .maxTokens(MAX_CATALOG_COMPLETION_TOKENS)
                     .extraBody(Map.of("enable_thinking", false))
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
         }
