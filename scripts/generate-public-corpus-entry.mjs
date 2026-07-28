@@ -333,6 +333,18 @@ async function latestRun(client, planId, mode) {
   }
 }
 
+/** Starts a missing lesson run instead of waiting indefinitely for an event that only a client can trigger. */
+export async function ensureTeachingRun(client, planId) {
+  const existing = await latestRun(client, planId, 'TEACHING')
+  if (existing && !FAILED_RUN_STATES.has(existing.run.state)) {
+    return { runId: existing.run.id, state: existing.run.state, reused: true }
+  }
+  const launch = await client.request(`/api/v1/teaching-plans/${planId}/illustrated-lessons`, {
+    method: 'POST',
+  })
+  return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
+}
+
 async function uploadEntry(client, entry, pdfPath, editionId) {
   const bytes = await readFile(pdfPath)
   const form = new FormData()
@@ -507,15 +519,9 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     await checkpoint(outputPath, state)
     progress(state, '重新启动失败的讲解任务，复用已有提纲与规则书')
   } else if (!state.teaching) {
-    const details = await poll(
-      '等待讲解任务启动',
-      state,
-      () => latestRun(client, state.plan.id, 'TEACHING'),
-      (value) => value !== null,
-      deadline,
-    )
-    state.teaching = { runId: details.run.id, state: details.run.state }
+    state.teaching = await ensureTeachingRun(client, state.plan.id)
     await checkpoint(outputPath, state)
+    progress(state, state.teaching.reused ? '复用已有讲解任务' : '已启动讲解任务')
   }
   if (state.teaching.state !== 'COMPLETED') {
     const details = await poll(

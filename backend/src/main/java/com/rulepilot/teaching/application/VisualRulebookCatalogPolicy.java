@@ -3,7 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -90,13 +89,12 @@ final class VisualRulebookCatalogPolicy {
                 .toList();
     }
 
-    static List<List<Integer>> crossPageIconBatches(List<Integer> pages, int legendPage) {
-        List<Integer> targets = pages.stream().filter(page -> page != legendPage).toList();
-        if (targets.isEmpty()) return List.of(List.of(legendPage));
-        List<List<Integer>> batches = new ArrayList<>();
-        batches.add(List.of(legendPage));
-        targets.forEach(page -> batches.add(List.of(legendPage, page)));
-        return List.copyOf(batches);
+    /**
+     * A response is accepted only when it covers every supplied image. Keep pages independent so a partial visual
+     * response can never discard a legend or a gameplay page that has already been read successfully.
+     */
+    static List<List<Integer>> singlePageBatches(List<Integer> pages) {
+        return pages.stream().map(List::of).toList();
     }
 
     private static PageInput pageInput(int pageNumber, PageFact fact) {

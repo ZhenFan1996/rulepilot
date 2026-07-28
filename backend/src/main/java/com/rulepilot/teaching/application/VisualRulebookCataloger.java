@@ -46,11 +46,6 @@ import org.springframework.stereotype.Component;
 class VisualRulebookCataloger {
 
     private static final Logger log = LoggerFactory.getLogger(VisualRulebookCataloger.class);
-    // A single scanned page is the unit that can be retried and persisted safely. In production, a two-page Qwen
-    // request has shown a much worse tail than the same two pages independently; bounded parallelism recovers the
-    // throughput without making the first usable plan wait for an oversized JSON response.
-    private static final int VISUAL_CATALOG_BATCH_SIZE = 1;
-
     private final DocumentPageImages pageImages;
     private final VisualRulebookPageCatalogModel visualCatalog;
     private final VisualRulebookPageFacts visualFacts;
@@ -116,7 +111,7 @@ class VisualRulebookCataloger {
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
-                : catalogPageFacts(documentVersionId, requiredFacts, null, rulebookTitle, owner, assistantRunId);
+                : catalogPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId);
         if (!cached.isEmpty() && !requiredFacts.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -169,7 +164,7 @@ class VisualRulebookCataloger {
         try {
             fresh = missing.isEmpty()
                     ? List.of()
-                    : catalogPageFacts(documentVersionId, missing, null, rulebookTitle, owner, assistantRunId);
+                    : catalogPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId);
         } catch (RuntimeException visualFailure) {
             log.warn(
                     "Sparse-page visual coverage probe skipped for document {} pages {}",
@@ -214,7 +209,6 @@ class VisualRulebookCataloger {
             List<PageFact> interpreted = catalogPageFacts(
                     documentVersionId,
                     uncatalogedPages,
-                    VisualOutlineEvidencePolicy.iconLegendPage(documentPages).orElse(null),
                     rulebookTitle,
                     owner,
                     assistantRunId);
@@ -242,20 +236,15 @@ class VisualRulebookCataloger {
     private List<PageFact> catalogPageFacts(
             UUID documentVersionId,
             Set<Integer> pageNumbers,
-            Integer iconLegendPage,
             String rulebookTitle,
             String owner,
             UUID assistantRunId) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
-        List<List<Integer>> batches = iconLegendPage != null && pageNumbers.contains(iconLegendPage)
-                ? VisualRulebookCatalogPolicy.crossPageIconBatches(orderedPages, iconLegendPage)
-                : java.util.stream.IntStream.range(0, orderedPages.size())
-                        .boxed()
-                        .collect(Collectors.groupingBy(
-                                index -> index / VISUAL_CATALOG_BATCH_SIZE,
-                                LinkedHashMap::new,
-                                Collectors.mapping(orderedPages::get, Collectors.toList())))
-                        .values().stream().toList();
+        // A legend must not be bundled with a gameplay page. Vision providers occasionally return a valid summary
+        // for only one of two supplied images; treating that partial response as an all-or-nothing pair discarded
+        // the usable page and could abort a photographed rulebook's planning run. Each page remains independently
+        // retryable and durable; the later outline model can combine their stored facts when it needs the legend.
+        List<List<Integer>> batches = VisualRulebookCatalogPolicy.singlePageBatches(orderedPages);
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new ArrayList<>();
         List<Integer> failedPages = new ArrayList<>();

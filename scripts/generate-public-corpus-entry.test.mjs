@@ -13,6 +13,7 @@ import {
   summarizeLesson,
   summarizeRunProgress,
   resetGeneratedLessonStateForPlanRefresh,
+  ensureTeachingRun,
 } from './generate-public-corpus-entry.mjs'
 
 test('selects one qualified title without accepting excluded or fuzzy entries', () => {
@@ -135,6 +136,40 @@ test('keeps the reusable source checkpoint while refreshing the generated lesson
     catalog: { editionId: 'edition-1' },
     document: { id: 'document-1', versionId: 'version-1', status: 'READY' },
   })
+})
+
+test('starts a teaching run when a reused plan has no existing lesson run', async () => {
+  const calls = []
+  const client = {
+    request: async (path, options = {}) => {
+      calls.push({ path, options })
+      if (path.includes('/assistant-runs/latest')) return null
+      return { assistantRunId: 'teach-1', state: 'RECEIVED', reused: false }
+    },
+  }
+
+  const run = await ensureTeachingRun(client, 'plan-1')
+
+  assert.deepEqual(run, { runId: 'teach-1', state: 'RECEIVED', reused: false })
+  assert.deepEqual(calls, [
+    { path: '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1', options: {} },
+    { path: '/api/v1/teaching-plans/plan-1/illustrated-lessons', options: { method: 'POST' } },
+  ])
+})
+
+test('reuses a successful teaching run instead of creating a duplicate', async () => {
+  const calls = []
+  const client = {
+    request: async (path) => {
+      calls.push(path)
+      return { run: { id: 'teach-existing', state: 'COMPLETED' } }
+    },
+  }
+
+  const run = await ensureTeachingRun(client, 'plan-1')
+
+  assert.deepEqual(run, { runId: 'teach-existing', state: 'COMPLETED', reused: true })
+  assert.deepEqual(calls, ['/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'])
 })
 
 test('reuses an assigned document with the same official source and checksum', () => {

@@ -8,13 +8,8 @@ import org.junit.jupiter.api.Test;
 class VisualRulebookCatalogPolicyTest {
 
     @Test
-    void pairsEveryIconTargetWithItsLegendAndKeepsTheLegendFirst() {
-        assertThat(VisualRulebookCatalogPolicy.crossPageIconBatches(List.of(2, 5, 7), 5))
-                .containsExactly(
-                        List.of(5),
-                        List.of(5, 2),
-                        List.of(5, 7));
-        assertThat(VisualRulebookCatalogPolicy.crossPageIconBatches(List.of(5), 5))
-                .containsExactly(List.of(5));
+    void keepsEveryVisualPageIndependent() {
+        assertThat(VisualRulebookCatalogPolicy.singlePageBatches(List.of(2, 5, 7)))
+                .containsExactly(List.of(2), List.of(5), List.of(7));
     }
 }
