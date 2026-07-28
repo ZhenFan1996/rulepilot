@@ -63,6 +63,44 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void retriesEachPageWhenACombinedVisualBatchFails() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger calls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    calls.incrementAndGet();
+                    if (request.pages().size() > 1) {
+                        throw new IllegalArgumentException("combined response was truncated");
+                    }
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
+                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                                    page.pageNumber(),
+                                    "PAGE " + page.pageNumber(),
+                                    "Visible rule on page " + page.pageNumber(),
+                                    List.of("page " + page.pageNumber())))
+                            .toList());
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId,
+                List.of(page(1), page(2), page(3)),
+                "Example game",
+                "owner",
+                null);
+
+        assertThat(calls).hasValue(4);
+        assertThat(inputs).allSatisfy(input -> assertThat(input.text()).contains("Visible rule on page"));
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(1, 2, 3);
+    }
+
+    @Test
     void reusesAnchoredFactsWithoutCallingTheVisionModelAgain() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();

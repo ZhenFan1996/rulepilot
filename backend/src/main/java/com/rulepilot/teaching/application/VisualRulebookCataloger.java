@@ -258,27 +258,19 @@ class VisualRulebookCataloger {
                         .values().stream().toList();
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new ArrayList<>();
+        List<Integer> failedPages = new ArrayList<>();
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         ExecutorService executor = Executors.newFixedThreadPool(parallelism);
         try {
             List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream
                     .range(0, batches.size())
-                    .mapToObj(batchIndex -> executor.submit(() -> {
-                        List<PageImageInput> images = pageImages.read(
-                                        documentVersionId, new LinkedHashSet<>(batches.get(batchIndex)))
-                                .stream()
-                                .map(image -> new PageImageInput(
-                                        image.pageNumber(), image.mediaType(), image.content()))
-                                .toList();
-                        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
-                        return invokeModel(
-                                assistantRunId,
-                                "inspectRulebookVisualBatch|" + (batchIndex + 1),
-                                Math.max(1, images.size() * 800),
-                                "Rulebook visual batch interpreted",
-                                () -> visualCatalog.summarize(request),
-                                this::catalogOutputTokens);
-                    }))
+                    .mapToObj(batchIndex -> executor.submit(() -> catalogBatch(
+                            documentVersionId,
+                            batches.get(batchIndex),
+                            owner,
+                            rulebookTitle,
+                            assistantRunId,
+                            "inspectRulebookVisualBatch|" + (batchIndex + 1))))
                     .toList();
             for (int index = 0; index < futures.size(); index++) {
                 try {
@@ -297,8 +289,17 @@ class VisualRulebookCataloger {
                             batches.get(index),
                             documentVersionId,
                             failedBatch);
+                    failedPages.addAll(batches.get(index));
                 }
             }
+            retryFailedPages(
+                    documentVersionId,
+                    failedPages,
+                    owner,
+                    rulebookTitle,
+                    assistantRunId,
+                    executor,
+                    summaries);
         } finally {
             executor.shutdownNow();
         }
@@ -318,6 +319,63 @@ class VisualRulebookCataloger {
                         summary.keywords(),
                         summary.visualAnchors()))
                 .toList();
+    }
+
+    /**
+     * A multi-page JSON response can fail even when every individual page is readable. Retry only the failed pages
+     * as independent requests so a temporary provider truncation cannot turn a visual rulebook into an unusable
+     * lesson plan. Failed single-page retries remain absent and are still handled by the evidence policy.
+     */
+    private void retryFailedPages(
+            UUID documentVersionId,
+            List<Integer> failedPages,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            ExecutorService executor,
+            List<VisualRulebookPageCatalogModel.PageSummary> summaries) {
+        if (failedPages.isEmpty()) return;
+        List<Integer> retryPages = failedPages.stream().distinct().toList();
+        List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> retries = retryPages.stream()
+                .map(pageNumber -> executor.submit(() -> catalogBatch(
+                        documentVersionId,
+                        List.of(pageNumber),
+                        owner,
+                        rulebookTitle,
+                        assistantRunId,
+                        "inspectRulebookVisualRetry|" + pageNumber)))
+                .toList();
+        for (int index = 0; index < retries.size(); index++) {
+            try {
+                summaries.addAll(awaitCatalog(retries.get(index), visualCatalogTimeout).pages());
+            } catch (RuntimeException retryFailure) {
+                log.warn(
+                        "Visual page retry skipped page {} for document {}",
+                        retryPages.get(index),
+                        documentVersionId,
+                        retryFailure);
+            }
+        }
+    }
+
+    private VisualRulebookPageCatalogModel.CatalogDraft catalogBatch(
+            UUID documentVersionId,
+            List<Integer> batch,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            String operation) {
+        List<PageImageInput> images = pageImages.read(documentVersionId, new LinkedHashSet<>(batch)).stream()
+                .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
+                .toList();
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
+        return invokeModel(
+                assistantRunId,
+                operation,
+                Math.max(1, images.size() * 800),
+                "Rulebook visual batch interpreted",
+                () -> visualCatalog.summarize(request),
+                this::catalogOutputTokens);
     }
 
     static VisualRulebookPageCatalogModel.CatalogDraft awaitCatalog(
