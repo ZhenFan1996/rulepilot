@@ -29,8 +29,8 @@ class TeachingOutlineImagePreparerTest {
         BufferedImage result = ImageIO.read(new ByteArrayInputStream(prepared.content()));
 
         assertThat(prepared.mediaType()).isEqualTo("image/jpeg");
-        assertThat(result.getWidth()).isEqualTo(1600);
-        assertThat(result.getHeight()).isEqualTo(1200);
+        assertThat(result.getWidth()).isEqualTo(1024);
+        assertThat(result.getHeight()).isEqualTo(768);
     }
 
     @Test
@@ -55,7 +55,7 @@ class TeachingOutlineImagePreparerTest {
         TeachingLessonModel.PageImageInput prepared = preparer.prepare(
                 new TeachingLessonModel.PageImageInput(8, "image/jpeg", encoded.toByteArray(), 1800, 2400));
 
-        assertThat(prepared.width()).isEqualTo(1200);
-        assertThat(prepared.height()).isEqualTo(1600);
+        assertThat(prepared.width()).isEqualTo(768);
+        assertThat(prepared.height()).isEqualTo(1024);
     }
 }

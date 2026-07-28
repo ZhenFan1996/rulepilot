@@ -19,10 +19,10 @@ import javax.imageio.stream.ImageOutputStream;
 /** Reduces overview images before they are sent to a vision model; original pages remain stored unchanged. */
 final class TeachingOutlineImagePreparer {
 
-    // Rulebook pages often encode the decisive exception in small callouts. Keep those labels readable for the
-    // rule-writing pass; each chapter sends at most two pages, so this does not widen the request unboundedly.
-    private static final int MAX_EDGE_PIXELS = 1_600;
-    private static final float JPEG_QUALITY = 0.90f;
+    // Keep an input page large enough for icons and callouts, but not so large that a two-page vision batch spends
+    // its whole request budget rasterizing pixels. The original page stays in object storage for reader-facing crops.
+    private static final int MAX_EDGE_PIXELS = 1_024;
+    private static final float JPEG_QUALITY = 0.85f;
 
     PageImageInput prepare(PageImageInput input) {
         try {
