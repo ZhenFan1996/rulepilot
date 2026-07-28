@@ -78,4 +78,37 @@ class LessonDraftPresentationNormalizerTest {
         assertThat(LessonDraftPresentationNormalizer.containsInternalShortEvidenceReference("effectE12"))
                 .isFalse();
     }
+
+    @Test
+    void repairsMissingStepPresentationMetadataWithoutChangingTheCitedRuleText() {
+        UUID evidence = UUID.randomUUID();
+        SectionRequest request = new SectionRequest(
+                "setup",
+                "完成开局",
+                "让玩家完成开局布置",
+                List.of("setup"),
+                2,
+                1,
+                15,
+                120,
+                3,
+                List.of(),
+                List.of(new EvidenceInput(evidence, "SETUP", "开局", "把主棋盘放到桌面中央。", 1, 1)),
+                List.of());
+        SectionDraft draft = new SectionDraft(
+                "完成开局",
+                VisualKind.TABLE_LAYOUT,
+                "把主棋盘放到桌面中央。",
+                List.of(evidence),
+                List.of(new StepDraft(null, null, "把主棋盘放到桌面中央。", List.of(evidence), null)));
+
+        SectionDraft normalized = normalizer.normalize(draft, request);
+
+        assertThat(normalized.steps()).singleElement().satisfies(step -> {
+            assertThat(step.heading()).isEqualTo("本步要点");
+            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
+            assertThat(step.text()).isEqualTo("把主棋盘放到桌面中央。");
+            assertThat(step.citationIds()).containsExactly(evidence);
+        });
+    }
 }

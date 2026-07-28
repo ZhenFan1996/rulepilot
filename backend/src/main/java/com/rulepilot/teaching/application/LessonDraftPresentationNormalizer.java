@@ -19,6 +19,8 @@ import java.util.stream.IntStream;
 /** Normalizes untrusted lesson-draft presentation without creating or changing a rule claim. */
 final class LessonDraftPresentationNormalizer {
 
+    private static final String FALLBACK_STEP_HEADING = "本步要点";
+    private static final int MAX_STEP_HEADING_CHARACTERS = 32;
     private static final Pattern UNRESOLVED_PDF_MARKER = Pattern.compile("\\[([A-Za-z][A-Za-z _-]{0,30})]");
     private static final Pattern UNRESOLVED_EMOJI_ICON = Pattern.compile("[\\x{1F300}-\\x{1FAFF}]");
     private static final Map<String, String> PLAYER_FACING_EMOJI_ICON_LABELS = Map.ofEntries(
@@ -57,6 +59,7 @@ final class LessonDraftPresentationNormalizer {
     SectionDraft normalize(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
         SectionDraft normalized = normalizePlayerText(draft);
         normalized = normalizeSectionTitle(normalized, request);
+        normalized = normalizeStepMetadata(normalized);
         normalized = normalizePresentationMetadata(normalized, request.pageImages().isEmpty());
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
         normalized = normalizeVisualFocusLabels(normalized);
@@ -114,6 +117,33 @@ final class LessonDraftPresentationNormalizer {
                     request.title().strip(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), draft.steps());
         }
         return draft;
+    }
+
+    /** A missing presentation label is not a missing rule claim; retain the cited text and use a neutral label. */
+    private SectionDraft normalizeStepMetadata(SectionDraft draft) {
+        if (draft == null || draft.steps() == null) return draft;
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null) {
+                steps.add(null);
+                continue;
+            }
+            String heading = step.heading();
+            if (heading == null || heading.isBlank() || heading.length() > MAX_STEP_HEADING_CHARACTERS) {
+                heading = FALLBACK_STEP_HEADING;
+                changed = true;
+            }
+            TeachingMove kind = step.kind();
+            if (kind == null) {
+                kind = TeachingMove.UNDERSTAND;
+                changed = true;
+            }
+            steps.add(new StepDraft(heading, kind, step.text(), step.citationIds(), step.visualFocus()));
+        }
+        return changed
+                ? new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
     }
 
     private String playerFacingText(String value) {

@@ -32,7 +32,9 @@ public class TeachingPlanService {
     private static final Logger log = LoggerFactory.getLogger(TeachingPlanService.class);
     private static final int MAX_PAGE_CATALOG_CHARACTERS = 3_200;
     private static final int MAX_OUTLINE_PAGE_IMAGES = 4;
-    private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 3;
+    // The first focused rewrite receives every detected boundary conflict. Repeating whole-outline rewrites tends to
+    // oscillate on wording while delaying a fully cited lesson; section-level validation still protects every claim.
+    private static final int MAX_CHAPTER_OWNERSHIP_REFINEMENTS = 1;
     private static final int MAX_SOURCE_COVERAGE_REFINEMENTS = 1;
     private static final String VISUAL_PAGE_CATALOG =
             "页面文字无法提取；请依据随附的规则书页面图像理解此页内容。";
