@@ -119,6 +119,23 @@ final class TeachingSectionDraftComposer {
                         repair,
                         ActivityOutcome.REJECTED,
                         TeachingDraftRejectionCategory.from(rejectedDraft));
+                SectionDraft timingPreserved = draftRecoveryPolicy.preserveCitedEndOfRoundTiming(draft, evidence);
+                if (timingPreserved != draft) {
+                    try {
+                        LessonSection accepted = validatedSection(
+                                plan, planned, evidence, modelRequest, timingPreserved, EvidenceStatus.CITED_DRAFT);
+                        recordValidation(
+                                assistantRunId,
+                                planned,
+                                repair,
+                                ActivityOutcome.SUCCEEDED,
+                                "END_OF_ROUND_TIMING_GUARDRAIL_APPLIED");
+                        return new TeachingSectionDraftCandidate(
+                                sectionIndex, planned, evidence, modelRequest, timingPreserved, accepted);
+                    } catch (IllegalArgumentException correctedDraftStillInvalid) {
+                        draft = timingPreserved;
+                    }
+                }
                 if (draftRecoveryPolicy.shouldFallbackToCitedText(
                         hasPageImages, hasOnlyVisualPageEvidence, repair)) {
                     return fallbackToTextDraft(

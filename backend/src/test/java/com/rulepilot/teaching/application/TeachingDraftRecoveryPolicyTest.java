@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.TeachingLessonModel.EvidenceInput;
 import com.rulepilot.teaching.TeachingLessonModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel.SectionDraft;
@@ -89,7 +90,40 @@ class TeachingDraftRecoveryPolicyTest {
         assertThat(policy.preserveTextOnlyPresentationMetadata(revised, revised)).isSameAs(revised);
         assertThat(policy.textFallbackFeedback("STEP_CITATIONS_MISSING"))
                 .containsExactly(
-                        "Keep this section text-only and preserve all grounded rule coverage. STEP_CITATIONS_MISSING");
+                "Keep this section text-only and preserve all grounded rule coverage. STEP_CITATIONS_MISSING");
+    }
+
+    @Test
+    void preservesCitedEndOfRoundTimingWithoutDiscardingTheStepCitation() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence endOfRound = new RuleEvidence(
+                evidenceId,
+                UUID.randomUUID(),
+                "ENDGAME",
+                "End game",
+                "The game ends at the end of a round when the last card is taken.",
+                8,
+                8);
+        StepDraft immediateEnding = new StepDraft(
+                "检查终局",
+                TeachingMove.CHECK,
+                "拿走最后一张卡后，游戏立即结束。",
+                List.of(evidenceId));
+        SectionDraft draft = new SectionDraft(
+                "结束",
+                VisualKind.REFERENCE_CARD,
+                "查看结束条件。",
+                List.of(evidenceId),
+                List.of(immediateEnding));
+
+        SectionDraft corrected = policy.preserveCitedEndOfRoundTiming(draft, List.of(endOfRound));
+
+        assertThat(corrected).isNotSameAs(draft);
+        assertThat(corrected.steps().getFirst().citationIds()).containsExactly(evidenceId);
+        assertThat(corrected.steps().getFirst().text()).isEqualTo("触发这一终局条件后，先完成当前轮次；游戏在本轮结束时结束。");
+        assertThat(LessonDraftValidator.claimsImmediateEndingForEndOfRoundTrigger(
+                        corrected.steps().getFirst().text(), List.of(endOfRound)))
+                .isFalse();
     }
 
     private SectionRequest request(List<PageImageInput> pageImages) {
