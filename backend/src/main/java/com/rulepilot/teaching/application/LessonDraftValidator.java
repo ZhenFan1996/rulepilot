@@ -41,6 +41,9 @@ final class LessonDraftValidator {
                     + "(?:游戏结束|结束检查|end game|game end).{0,80}(?:最终计分阶段|final scoring phase))");
     private static final Pattern PLAYER_COUNT_VALUE = Pattern.compile(
             "(?i)(?<!\\d)(\\d{1,2})\\s*(?:players?|人)\\s*(?:(?:[:：=]|[-–—])\\s*|(?:need|needs|require|requires|须|需要|为)\\s*)(\\d{1,4})(?!\\d)");
+    private static final Pattern PLAYER_COUNT_RANGE = Pattern.compile(
+            "(?i)(?:if\\s+playing\\s+with|for)\\s*([0-9\\s,;/\\p{L}–—-]{3,48})\\s*players?");
+    private static final Pattern NUMBER = Pattern.compile("(?<!\\d)(\\d{1,2})(?!\\d)");
 
     private LessonDraftValidator() {}
 
@@ -110,6 +113,41 @@ final class LessonDraftValidator {
         }
     }
 
+    /** Ensures a public explanation does not silently shrink an evidenced player-count range to its requested size. */
+    static void validatePlayerCountConditionalScopes(SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
+        Set<UUID> citedEvidenceIds = new LinkedHashSet<>(draft.visualCitationIds());
+        draft.steps().forEach(step -> citedEvidenceIds.addAll(step.citationIds()));
+        List<PlayerCountRange> ranges = citedEvidenceIds.stream()
+                .map(allowedEvidence::get)
+                .filter(java.util.Objects::nonNull)
+                .flatMap(evidence -> playerCountRanges(evidence.excerpt()).stream())
+                .toList();
+        if (ranges.isEmpty()) return;
+
+        String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
+                .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))
+                .collect(Collectors.joining("\n"));
+        boolean refersToARangedPlayerCount = ranges.stream()
+                .flatMap(range -> range.playerCounts().stream())
+                .distinct()
+                .anyMatch(playerCount -> containsPlayerCount(playerFacingText, playerCount));
+        if (!refersToARangedPlayerCount) return;
+
+        Set<String> requiredPlayerCounts = ranges.stream()
+                .flatMap(range -> range.playerCounts().stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (requiredPlayerCounts.stream().allMatch(playerCount -> containsPlayerCount(playerFacingText, playerCount))) {
+            return;
+        }
+        String citedRanges = ranges.stream()
+                .map(PlayerCountRange::sourcePhrase)
+                .distinct()
+                .collect(Collectors.joining("; "));
+        throw new IllegalArgumentException(
+                "When cited evidence states a player-count range, preserve every listed player count instead of "
+                        + "narrowing it to the requested game size. Include these direct cited conditions: " + citedRanges);
+    }
+
     private static List<PlayerCountValue> playerCountValues(String excerpt) {
         if (excerpt == null || excerpt.isBlank()) return List.of();
         var matcher = PLAYER_COUNT_VALUE.matcher(excerpt);
@@ -118,6 +156,20 @@ final class LessonDraftValidator {
             values.add(new PlayerCountValue(matcher.group(1), matcher.group(2)));
         }
         return List.copyOf(values);
+    }
+
+    private static List<PlayerCountRange> playerCountRanges(String excerpt) {
+        if (excerpt == null || excerpt.isBlank()) return List.of();
+        var matcher = PLAYER_COUNT_RANGE.matcher(excerpt);
+        List<PlayerCountRange> ranges = new ArrayList<>();
+        while (matcher.find()) {
+            String phrase = matcher.group().strip();
+            var numberMatcher = NUMBER.matcher(matcher.group(1));
+            Set<String> playerCounts = new LinkedHashSet<>();
+            while (numberMatcher.find()) playerCounts.add(numberMatcher.group(1));
+            if (playerCounts.size() >= 2) ranges.add(new PlayerCountRange(phrase, Set.copyOf(playerCounts)));
+        }
+        return List.copyOf(ranges);
     }
 
     private static boolean containsNumber(String text, String number) {
@@ -131,6 +183,8 @@ final class LessonDraftValidator {
     }
 
     private record PlayerCountValue(String playerCount, String value) {}
+
+    private record PlayerCountRange(String sourcePhrase, Set<String> playerCounts) {}
 
     static void validateVisualBlockEvidence(
             SectionDraft draft,

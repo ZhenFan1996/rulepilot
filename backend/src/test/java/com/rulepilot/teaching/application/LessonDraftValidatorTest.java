@@ -121,6 +121,31 @@ class LessonDraftValidatorTest {
                 draft(chunkId, "收集宝藏越多越接近胜利。"), evidence);
     }
 
+    @Test
+    void requiresEveryCitedPlayerCountInAConditionalRange() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "END",
+                        "End of Game",
+                        "At the end of the 7th round (if playing with 2 or 3 players) or the 10th round (if playing with 4 or 5 players) the game ends.",
+                        10,
+                        10));
+        SectionDraft narrowed = draft(chunkId, "4人游戏在第10轮结束后结束。");
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> LessonDraftValidator.validatePlayerCountConditionalScopes(narrowed, evidence))
+                .withMessageContaining("every listed player count")
+                .withMessageContaining("if playing with 2 or 3 players")
+                .withMessageContaining("if playing with 4 or 5 players");
+
+        LessonDraftValidator.validatePlayerCountConditionalScopes(
+                draft(chunkId, "2人或3人游戏在第7轮结束，4人或5人游戏在第10轮结束。"), evidence);
+    }
+
     private SectionDraft draft(UUID chunkId, String text) {
         return new SectionDraft(
                 "结束条件",

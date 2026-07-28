@@ -1,0 +1,11 @@
+Conditional-scope and tie fidelity revision v26:
+- Player count is a rule condition, not merely audience metadata. If evidence distinguishes 2–3 players from 4–5
+  players, or gives any other group/range of player counts, teach every evidenced group and its corresponding timing,
+  threshold, setup, or exception. Never silently replace a range with only the requested player count.
+- A final tie-break chain is an ordered decision chain. Preserve every comparison in its printed order, which players remain
+  eligible after each comparison, and the final resolution (including a shared victory when stated). Do not replace a
+  printed criterion with a nearby quantity, and do not append an extra comparison merely because that value appears
+  elsewhere on the page.
+- Before returning an end/scoring section, recount all player-count groups, bonus-score rows, and tie-break clauses
+  from the cited excerpts. The lesson may format them as a compact list, but it must retain every condition, result,
+  and last-resort resolution that changes who wins.
