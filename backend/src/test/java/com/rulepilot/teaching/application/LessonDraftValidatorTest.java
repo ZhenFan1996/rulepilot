@@ -83,6 +83,25 @@ class LessonDraftValidatorTest {
         LessonDraftValidator.validatePlayerCountConditionalValues(complete, evidence);
     }
 
+    @Test
+    void ignoresOrdinarySentencesThatMentionPlayersAndOtherNumbersButAreNotAConditionalValueTable() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "ACTIONS",
+                        "Recruit",
+                        "If you have more than five gold or five heroes, you must discard down to five of each. "
+                                + "All players then draw 3 cards.",
+                        7,
+                        7));
+
+        LessonDraftValidator.validatePlayerCountConditionalValues(
+                draft(chunkId, "回合结束时，金钱和英雄都不能超过 5。"), evidence);
+    }
+
     private SectionDraft draft(UUID chunkId, String text) {
         return new SectionDraft(
                 "结束条件",

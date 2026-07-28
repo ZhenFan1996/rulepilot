@@ -40,7 +40,7 @@ final class LessonDraftValidator {
                     + "(?:游戏结束|结束检查|end game|game end)|"
                     + "(?:游戏结束|结束检查|end game|game end).{0,80}(?:最终计分阶段|final scoring phase))");
     private static final Pattern PLAYER_COUNT_VALUE = Pattern.compile(
-            "(?i)(?<!\\d)(\\d{1,2})\\s*(?:players?|人)\\s*(?:[:：=\\-–—]\\s*)?(?:[^\\d\\r\\n]{0,32})?(\\d{1,4})(?!\\d)");
+            "(?i)(?<!\\d)(\\d{1,2})\\s*(?:players?|人)\\s*(?:(?:[:：=]|[-–—])\\s*|(?:need|needs|require|requires|须|需要|为)\\s*)(\\d{1,4})(?!\\d)");
 
     private LessonDraftValidator() {}
 
