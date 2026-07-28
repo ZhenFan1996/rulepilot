@@ -174,7 +174,7 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
 
     private boolean hasCompleteEndingEvidence(String text) {
         boolean endingTrigger = containsAny(text, List.of(
-                "end of game", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间"));
+                "end of game", "game end", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间"));
         boolean resolution = containsAny(text, List.of(
                 "winner", "victory", "how to win", "scoring", "score", "tie",
                 "获胜", "胜者", "胜利", "计分", "分数", "平局"));

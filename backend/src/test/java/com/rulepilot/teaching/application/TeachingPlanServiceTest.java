@@ -406,6 +406,22 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void acceptsGameEndHeadingWhenVisibleFactsAlsoResolveScoringAndTheWinner() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("GAMEPLAY", "Turn phases and actions.")),
+                new PageInput(3, visualCatalogPage(
+                        "GAME END; SCORING", "The game ends when the final card is taken. The highest score wins.")));
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
+
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
+    }
+
+    @Test
     void bindsAVisualCoreTopicToExistingDirectPageFactsBeforeRejectingThePlan() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),

@@ -128,6 +128,21 @@ class FakeTeachingOutlineModelTest {
                 .contains(1);
     }
 
+    @Test
+    void recognizesGameEndAsAnEndgameHeadingWhenTheVisibleFactsResolveTheWinner() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "SET UP", "setup steps and starting resources"),
+                        visualPage(2, "GAMEPLAY", "turn phases and actions"),
+                        visualPage(3, "GAME END; SCORING", "The game ends when the final card is taken. The highest score wins.")),
+                List.of()));
+
+        assertThat(topicPages(outline, "结束、计分与胜者")).contains(3);
+    }
+
     private List<Integer> topicPages(com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft outline, String title) {
         return outline.topics().stream()
                 .filter(topic -> topic.title().equals(title))
