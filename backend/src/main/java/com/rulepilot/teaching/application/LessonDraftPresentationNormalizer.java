@@ -60,6 +60,7 @@ final class LessonDraftPresentationNormalizer {
         SectionDraft normalized = normalizePlayerText(draft);
         normalized = normalizeSectionTitle(normalized, request);
         normalized = normalizeStepMetadata(normalized);
+        normalized = normalizeTextOnlyVisualSteps(normalized, request.pageImages().isEmpty());
         normalized = normalizePresentationMetadata(normalized, request.pageImages().isEmpty());
         normalized = alignVisualStepsWithPageEvidence(normalized, request);
         normalized = normalizeVisualFocusLabels(normalized);
@@ -140,6 +141,29 @@ final class LessonDraftPresentationNormalizer {
                 changed = true;
             }
             steps.add(new StepDraft(heading, kind, step.text(), step.citationIds(), step.visualFocus()));
+        }
+        return changed
+                ? new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
+    }
+
+    /**
+     * A model can mislabel otherwise grounded prose as VISUAL even though this request intentionally has no page
+     * image. Retain its cited rule text, but remove the nonexistent crop contract rather than withholding the whole
+     * section for a presentation-only error.
+     */
+    private SectionDraft normalizeTextOnlyVisualSteps(SectionDraft draft, boolean textOnly) {
+        if (!textOnly || draft == null || draft.steps() == null) return draft;
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.kind() != TeachingMove.VISUAL) {
+                steps.add(step);
+                continue;
+            }
+            steps.add(new StepDraft(
+                    step.heading(), TeachingMove.UNDERSTAND, step.text(), step.citationIds(), null));
+            changed = true;
         }
         return changed
                 ? new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)

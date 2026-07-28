@@ -111,4 +111,41 @@ class LessonDraftPresentationNormalizerTest {
             assertThat(step.citationIds()).containsExactly(evidence);
         });
     }
+
+    @Test
+    void turnsAnUnexpectedVisualStepIntoGroundedTextWhenNoPageWasAttached() {
+        UUID evidence = UUID.randomUUID();
+        SectionRequest request = new SectionRequest(
+                "turn",
+                "进行回合",
+                "说明回合流程",
+                List.of("core_loop"),
+                4,
+                4,
+                30,
+                120,
+                3,
+                List.of(),
+                List.of(new EvidenceInput(evidence, "TURN", "Turn", "选择一张行动牌并结算主行动。", 5, 5)),
+                List.of());
+        SectionDraft draft = new SectionDraft(
+                "进行回合",
+                VisualKind.FLOW_DIAGRAM,
+                "选择并结算行动。",
+                List.of(evidence),
+                List.of(new StepDraft(
+                        "结算行动",
+                        TeachingMove.VISUAL,
+                        "选择一张行动牌并结算主行动。",
+                        List.of(evidence),
+                        new VisualFocusDraft(5, "行动区", 10, 10, 200, 200))));
+
+        SectionDraft normalized = normalizer.normalize(draft, request);
+
+        assertThat(normalized.steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
+            assertThat(step.text()).isEqualTo("选择一张行动牌并结算主行动。");
+            assertThat(step.visualFocus()).isNull();
+        });
+    }
 }
