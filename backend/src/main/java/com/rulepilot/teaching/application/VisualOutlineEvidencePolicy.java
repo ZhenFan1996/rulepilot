@@ -289,8 +289,8 @@ final class VisualOutlineEvidencePolicy {
         boolean endingTrigger = containsAny(facts,
                 "end of game", "game end", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间");
         boolean triggerCondition = containsAny(facts,
-                "when ", "once ", "reaches", "reach ", "taken", "trigger", "at least",
-                "当", "一旦", "达到", "触发", "完成");
+                "when ", "once ", "reaches", "reach ", "taken", "at least",
+                "当", "一旦", "达到");
         return endingTrigger && triggerCondition;
     }
 

@@ -454,7 +454,7 @@ class TeachingPlanServiceTest {
                 new PageInput(16, visualCatalogPage(
                         "END OF GAME", "任一玩家达到至少40分即触发游戏结束；本回合结束后再确定胜者。")),
                 new PageInput(26, visualCatalogPage(
-                        "SET DICE", "A card ability can set dice during the roll phase.")));
+                        "SET DICE; YOU WIN!", "若游戏结束时获胜能力被触发，立即获胜；该卡也可在掷骰阶段设定骰子。")));
         OutlineDraft misplacedEnding = new OutlineDraft(
                 "Game", "Premise", List.of(
                         topicWithTags("setup", List.of("setup"), List.of(1)),
