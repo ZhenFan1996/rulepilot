@@ -54,6 +54,7 @@ class VisualRulebookCataloger {
     private final AuditedAgentInvocations invocations;
     private final Duration visualCatalogTimeout;
     private final int visualCoverageProbePages;
+    private final int visualRequestParallelism;
 
     VisualRulebookCataloger(
             DocumentPageImages pageImages,
@@ -61,7 +62,8 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
-            @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages) {
+            @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages,
+            @Value("${rulepilot.visual.request-parallelism:1}") int visualRequestParallelism) {
         this.pageImages = pageImages;
         this.visualCatalog = visualCatalog;
         this.visualFacts = visualFacts;
@@ -73,8 +75,12 @@ class VisualRulebookCataloger {
             throw new IllegalArgumentException("visual coverage probe pages must be between one and "
                     + VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES);
         }
+        if (visualRequestParallelism < 1 || visualRequestParallelism > 4) {
+            throw new IllegalArgumentException("visual request parallelism must be between one and four");
+        }
         this.visualCatalogTimeout = visualCatalogTimeout;
         this.visualCoverageProbePages = visualCoverageProbePages;
+        this.visualRequestParallelism = visualRequestParallelism;
     }
 
     boolean available(String owner) {
@@ -258,7 +264,7 @@ class VisualRulebookCataloger {
                         .values().stream().toList();
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new ArrayList<>();
-        int parallelism = Math.min(4, batches.size());
+        int parallelism = Math.min(visualRequestParallelism, batches.size());
         ExecutorService executor = Executors.newFixedThreadPool(parallelism);
         try {
             List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream

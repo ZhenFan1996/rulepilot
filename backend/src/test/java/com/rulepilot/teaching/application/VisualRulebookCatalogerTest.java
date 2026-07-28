@@ -93,10 +93,59 @@ class VisualRulebookCatalogerTest {
         assertThat(modelCalls).hasValue(0);
     }
 
+    @Test
+    void respectsConfiguredVisualRequestParallelism() {
+        UUID documentVersionId = UUID.randomUUID();
+        AtomicInteger activeRequests = new AtomicInteger();
+        AtomicInteger peakRequests = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    int active = activeRequests.incrementAndGet();
+                    peakRequests.accumulateAndGet(active, Math::max);
+                    try {
+                        Thread.sleep(25);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(interrupted);
+                    } finally {
+                        activeRequests.decrementAndGet();
+                    }
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
+                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                                    page.pageNumber(),
+                                    "PAGE " + page.pageNumber(),
+                                    "Visible rule " + page.pageNumber(),
+                                    List.of("page " + page.pageNumber())))
+                            .toList());
+                },
+                new InMemoryFacts(),
+                1);
+
+        cataloger.catalogVisualPages(
+                documentVersionId,
+                List.of(page(1), page(2), page(3), page(4)),
+                "Example game",
+                "owner",
+                null);
+
+        assertThat(peakRequests).hasValue(1);
+    }
+
     private static VisualRulebookCataloger cataloger(
             DocumentPageImages pageImages,
             VisualRulebookPageCatalogModel model,
             VisualRulebookPageFacts facts) {
+        return cataloger(pageImages, model, facts, 1);
+    }
+
+    private static VisualRulebookCataloger cataloger(
+            DocumentPageImages pageImages,
+            VisualRulebookPageCatalogModel model,
+            VisualRulebookPageFacts facts,
+            int visualRequestParallelism) {
         return new VisualRulebookCataloger(
                 pageImages,
                 model,
@@ -115,7 +164,8 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 Duration.ofSeconds(2),
-                4);
+                4,
+                visualRequestParallelism);
     }
 
     private static PageView page(int pageNumber) {
