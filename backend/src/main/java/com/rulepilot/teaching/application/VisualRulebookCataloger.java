@@ -109,30 +109,22 @@ class VisualRulebookCataloger {
                     ActivityOutcome.SUCCEEDED,
                     "Reused " + cached.size() + " page-scoped visual facts from this immutable rulebook version");
         }
-        // Existing ledgers are authoritative. A compact-anchor backfill adds only new verified rectangles and cannot
-        // rewrite facts that may already support a published lesson.
-        List<PageFact> fresh = cached.isEmpty()
-                ? catalogPageFacts(documentVersionId, requestedPages, null, rulebookTitle, owner, assistantRunId)
-                : anchorlessPages.isEmpty()
-                        ? List.of()
-                        : catalogPageFacts(documentVersionId, anchorlessPages, null, rulebookTitle, owner, assistantRunId);
-        if (!cached.isEmpty() && !anchorlessPages.isEmpty() && assistantRunId != null) {
+        // A visual-only rulebook cannot form an evidence-bound outline from a partial ledger. Preserve the existing
+        // facts, but catalog every missing page as well as anchorless cached pages before handing evidence to the
+        // planner. This avoids a stale partial attempt permanently deferring the rest of a rulebook.
+        Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
+        requiredFacts.addAll(anchorlessPages);
+        List<PageFact> fresh = requiredFacts.isEmpty()
+                ? List.of()
+                : catalogPageFacts(documentVersionId, requiredFacts, null, rulebookTitle, owner, assistantRunId);
+        if (!cached.isEmpty() && !requiredFacts.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
                     ActivityType.VALIDATION,
-                    "backfillVisualAnchors",
+                    "completeVisualPageFacts",
                     ActivityOutcome.SUCCEEDED,
-                    "Rechecked " + anchorlessPages.size()
-                            + " cached visual page(s) for compact icon, diagram, and example anchors");
-        }
-        if (!cached.isEmpty() && !missingPages.isEmpty() && assistantRunId != null) {
-            invocations.record(
-                    assistantRunId,
-                    ActivityType.VALIDATION,
-                    "deferUncatalogedVisualPages",
-                    ActivityOutcome.REJECTED,
-                    "Deferred " + missingPages.size()
-                            + " uncataloged page(s) to focused visual retrieval; cached page facts can start the lesson");
+                    "Completed " + requiredFacts.size()
+                            + " missing or anchorless visual page(s) before visual-only outline planning");
         }
         List<PageFact> facts = cached.isEmpty()
                 ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)

@@ -95,6 +95,33 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void completesMissingPagesWhenAVisualOnlyRulebookHasPartialCachedFacts() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        facts.merge(documentVersionId, List.of(fact(1, "COVER")));
+        java.util.concurrent.atomic.AtomicReference<List<Integer>> requestedPages = new java.util.concurrent.atomic.AtomicReference<>();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    requestedPages.set(request.pages().stream().map(page -> page.pageNumber()).toList());
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
+                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
+                                    page.pageNumber(), "PAGE " + page.pageNumber(), "Visible rule", List.of("page")))
+                            .toList());
+                },
+                facts);
+
+        cataloger.catalogVisualPages(documentVersionId, List.of(page(1), page(2), page(3)), "Example game", "owner", null);
+
+        assertThat(requestedPages.get()).containsExactly(2, 3);
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(1, 2, 3);
+    }
+
+    @Test
     void respectsConfiguredVisualRequestParallelism() {
         UUID documentVersionId = UUID.randomUUID();
         AtomicInteger activeRequests = new AtomicInteger();
