@@ -50,7 +50,7 @@ wait_for_frontend() {
 	frontend_address=${RULEPILOT_HTTP_PORT:-80}
 	attempt=1
 	while [ "$attempt" -le 18 ]; do
-		if curl -fsS "http://${frontend_address}/" >/dev/null 2>&1; then
+		if curl -fsS "http://127.0.0.1:${frontend_address}/" >/dev/null 2>&1; then
 			echo "Production frontend is ready."
 			return
 		fi
