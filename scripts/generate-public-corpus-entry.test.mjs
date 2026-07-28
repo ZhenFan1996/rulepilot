@@ -9,6 +9,7 @@ import {
   selectReusableDocument,
   slugify,
   hasPublicCover,
+  publicCoverRequestPath,
   summarizeLesson,
   summarizeRunProgress,
   resetGeneratedLessonStateForPlanRefresh,
@@ -108,6 +109,11 @@ test('accepts a readable rulebook front cover when no external cover metadata ex
   assert.equal(hasPublicCover({ gameCover: { imageUrl: 'https://publisher.example/cover.jpg' } }, false), true)
   assert.equal(hasPublicCover({ gameCover: null }, true), true)
   assert.equal(hasPublicCover({ gameCover: null }, false), false)
+})
+
+test('uses the same encoded public-cover route for durable corpus warm-up', () => {
+  assert.equal(publicCoverRequestPath('plan / one'), '/api/public/lessons/plan%20%2F%20one/cover')
+  assert.throws(() => publicCoverRequestPath(''), /identifier is required/)
 })
 
 test('keeps the reusable source checkpoint while refreshing the generated lesson state', () => {

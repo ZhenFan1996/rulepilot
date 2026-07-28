@@ -94,6 +94,11 @@ export function hasPublicCover(publicLesson, rulebookFrontAvailable) {
   return Boolean(publicLesson?.gameCover?.imageUrl) || rulebookFrontAvailable === true
 }
 
+export function publicCoverRequestPath(planId) {
+  if (!planId || typeof planId !== 'string') throw new Error('public lesson identifier is required')
+  return `/api/public/lessons/${encodeURIComponent(planId)}/cover`
+}
+
 export function summarizeRunProgress(details) {
   if (!details?.run) return String(details)
   const budget = details.budget ?? {}
@@ -197,12 +202,30 @@ class RulePilotClient {
   }
 
   async rulebookFrontCoverAvailable(planId) {
-    const response = await this.fetch(`${this.baseUrl}/api/public/lessons/${encodeURIComponent(planId)}/cover`, {
+    const response = await this.fetch(`${this.baseUrl}${publicCoverRequestPath(planId)}`, {
       method: 'HEAD',
       headers: { Authorization: this.authorization },
     })
     this.captureSession(response)
     return response.ok && response.headers.get('content-type')?.toLowerCase().startsWith('image/jpeg')
+  }
+
+  /**
+   * A public card must never make its first reader wait for a publisher/BGG fetch. Corpus generation owns this
+   * bounded warm-up step and waits until the durable thumbnail endpoint has returned a real JPEG.
+   */
+  async cachePublicCover(planId) {
+    const headers = new Headers({ Authorization: this.authorization })
+    if (this.cookie) headers.set('Cookie', this.cookie)
+    const response = await this.fetch(`${this.baseUrl}${publicCoverRequestPath(planId)}`, { headers })
+    this.captureSession(response)
+    if (!response.ok) throw new Error(`Could not cache public cover (HTTP ${response.status})`)
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    const content = await response.arrayBuffer()
+    if (!contentType.startsWith('image/jpeg') || content.byteLength === 0) {
+      throw new Error('Public cover warm-up did not return a JPEG')
+    }
+    return content.byteLength
   }
 }
 
@@ -543,10 +566,12 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   const publicLesson = await client.request(`/api/public/lessons/${state.plan.id}`)
   const hasRegisteredCover = Boolean(publicLesson.gameCover?.imageUrl)
   const hasRulebookFrontCover = hasRegisteredCover ? false : await client.rulebookFrontCoverAvailable(state.plan.id)
+  const coverCachedBytes = await client.cachePublicCover(state.plan.id)
   const result = {
     ...summarizeLesson(lesson),
     publicTitle: publicLesson.rulebookTitle,
     hasCover: hasPublicCover(publicLesson, hasRulebookFrontCover),
+    coverCachedBytes,
     coverSource: hasRegisteredCover ? 'REGISTERED' : hasRulebookFrontCover ? 'RULEBOOK_FRONT' : 'MISSING',
     hasOfficialRulebook: Boolean(publicLesson.officialSourceUrl),
     visualEnrichmentState: state.visual.state,
