@@ -17,18 +17,21 @@ public class IllustratedLessonLauncher {
 
     private final IllustratedLessonService lessons;
     private final AssistantRuns runs;
-    private final TaskExecutor executor;
+    private final TaskExecutor lessonExecutor;
+    private final TaskExecutor visualEnrichmentExecutor;
     private final VisualLessonEnrichmentService visuals;
 
     @Autowired
     public IllustratedLessonLauncher(
             IllustratedLessonService lessons,
             AssistantRuns runs,
-            @Qualifier("teachingGenerationExecutor") TaskExecutor executor,
+            @Qualifier("teachingGenerationExecutor") TaskExecutor lessonExecutor,
+            @Qualifier("visualEnrichmentExecutor") TaskExecutor visualEnrichmentExecutor,
             VisualLessonEnrichmentService visuals) {
         this.lessons = lessons;
         this.runs = runs;
-        this.executor = executor;
+        this.lessonExecutor = lessonExecutor;
+        this.visualEnrichmentExecutor = visualEnrichmentExecutor;
         this.visuals = visuals;
     }
 
@@ -36,7 +39,15 @@ public class IllustratedLessonLauncher {
             IllustratedLessonService lessons,
             AssistantRuns runs,
             TaskExecutor executor) {
-        this(lessons, runs, executor, null);
+        this(lessons, runs, executor, executor, null);
+    }
+
+    public IllustratedLessonLauncher(
+            IllustratedLessonService lessons,
+            AssistantRuns runs,
+            TaskExecutor executor,
+            VisualLessonEnrichmentService visuals) {
+        this(lessons, runs, executor, executor, visuals);
     }
 
     public synchronized LessonLaunch launch(UUID teachingPlanId, String ownerUsername) {
@@ -50,7 +61,7 @@ public class IllustratedLessonLauncher {
 
         RunSnapshot run = lessons.begin(teachingPlanId, ownerUsername);
         try {
-            executor.execute(() -> {
+            lessonExecutor.execute(() -> {
                 var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
                 lessons.finish(outcome);
                 if (visuals != null && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
@@ -69,7 +80,7 @@ public class IllustratedLessonLauncher {
         var launch = visuals.launch(teachingPlanId, ownerUsername);
         if (launch.reused()) return launch;
         try {
-            executor.execute(() -> visuals.enrichLatest(teachingPlanId, new RunSnapshot(
+            visualEnrichmentExecutor.execute(() -> visuals.enrichLatest(teachingPlanId, new RunSnapshot(
                     launch.assistantRunId(),
                     AssistantRunMode.VISUAL_ENRICHMENT,
                     teachingPlanId,

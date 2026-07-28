@@ -34,6 +34,12 @@ services:
       TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
       TEACHING_BACKGROUND_MAX_POOL_SIZE: "1"
       TEACHING_BACKGROUND_QUEUE_CAPACITY: "3"
+      # Verified local crops are optional post-publication work. Keep their small queue separate from the base
+      # lesson worker so a fresh upload can start immediately while an older lesson gains illustrations.
+      VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"
+      VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"
+      VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "1"
+      VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
       # Scanned rules are interpreted one page at a time. Three network-bound requests avoid a single oversized
       # multimodal response serializing a whole book while remaining below the worker's small-host memory limit.
       VISUAL_REQUEST_PARALLELISM: "3"

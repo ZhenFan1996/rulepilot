@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
@@ -64,6 +65,33 @@ class IllustratedLessonLauncherTest {
 
         verify(lessons).finish(outcome);
         verify(visuals).launch(planId, "alice");
+        verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
+    }
+
+    @Test
+    void sends_optional_visual_work_to_its_own_executor() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        var visuals = mock(VisualLessonEnrichmentService.class);
+        AtomicReference<Runnable> queuedVisualWork = new AtomicReference<>();
+        TaskExecutor lessonExecutor = Runnable::run;
+        TaskExecutor visualExecutor = queuedVisualWork::set;
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(planId, "alice")).thenReturn(run);
+        var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
+        when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
+                UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
+        var launcher = new IllustratedLessonLauncher(lessons, runs, lessonExecutor, visualExecutor, visuals);
+
+        launcher.launch(planId, "alice");
+
+        verify(lessons).finish(outcome);
+        verify(visuals).launch(planId, "alice");
+        verify(visuals, never()).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
+        assertThat(queuedVisualWork.get()).isNotNull();
+
+        queuedVisualWork.get().run();
+
         verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }
 

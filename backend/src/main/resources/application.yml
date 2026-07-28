@@ -129,6 +129,12 @@ rulepilot:
       core-pool-size: ${TEACHING_BACKGROUND_CORE_POOL_SIZE:2}
       max-pool-size: ${TEACHING_BACKGROUND_MAX_POOL_SIZE:4}
       queue-capacity: ${TEACHING_BACKGROUND_QUEUE_CAPACITY:20}
+    # Local image crops improve an already published lesson. Their queue is deliberately independent so they can
+    # never make a new text-first lesson wait behind optional vision work.
+    visual-enrichment:
+      core-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE:1}
+      max-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE:1}
+      queue-capacity: ${VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY:2}
     base-section-parallelism: ${TEACHING_BASE_SECTION_PARALLELISM:3}
     # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
     # post-publication review instead of delaying the first complete, cited lesson.
@@ -144,6 +150,10 @@ rulepilot:
     # opt into two or three independent step checks; the zero-capacity executor still rejects excess work rather than
     # allowing a slow vision provider to build an expensive queue.
     request-parallelism: ${VISUAL_REQUEST_PARALLELISM:1}
+    # Crop discovery can be much more expensive than the initial page catalog. Keep it conservative by default;
+    # a verified crop arrives progressively and is never worth delaying another player's base lesson.
+    enrichment:
+      request-parallelism: ${VISUAL_ENRICHMENT_REQUEST_PARALLELISM:1}
     # Inspect only a small distributed sample of unowned sparse-text pages before coverage refinement. A cataloged
     # page still needs a concrete gameplay observation before it can create a teaching topic.
     coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}

@@ -44,7 +44,7 @@ public class VisualLessonEnricher {
             VisualSectionPrioritizer prioritizer,
             @Value("${rulepilot.visual.max-sections:12}") int maxSections,
             @Value("${rulepilot.visual.max-steps-per-section:6}") int maxVisualStepsPerSection,
-            @Value("${rulepilot.visual.request-parallelism:1}") int requestParallelism) {
+            @Value("${rulepilot.visual.enrichment.request-parallelism:1}") int requestParallelism) {
         this.understanding = understanding;
         this.prioritizer = prioritizer;
         this.cropPolicy = new VisualReaderCropPolicy();

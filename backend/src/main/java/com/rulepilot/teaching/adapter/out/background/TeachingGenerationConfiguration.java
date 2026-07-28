@@ -27,6 +27,25 @@ class TeachingGenerationConfiguration {
     }
 
     /**
+     * Keeps optional crop discovery from occupying the only lesson-generation worker on a small host. A player can
+     * start the next text-first lesson while previously published chapters continue to gain verified illustrations.
+     */
+    @Bean(name = "visualEnrichmentExecutor")
+    ThreadPoolTaskExecutor visualEnrichmentExecutor(
+            @Value("${rulepilot.teaching.visual-enrichment.core-pool-size:1}") int corePoolSize,
+            @Value("${rulepilot.teaching.visual-enrichment.max-pool-size:1}") int maxPoolSize,
+            @Value("${rulepilot.teaching.visual-enrichment.queue-capacity:2}") int queueCapacity) {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(corePoolSize);
+        executor.setMaxPoolSize(maxPoolSize);
+        executor.setQueueCapacity(queueCapacity);
+        executor.setThreadNamePrefix("visual-enrichment-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.setTaskDecorator(DelegatingSecurityContextRunnable::new);
+        return executor;
+    }
+
+    /**
      * Vision calls are deliberately isolated from base lesson generation. A tiny configurable concurrency lets a
      * player receive independent icon/component crops sooner, while the zero-capacity queue still rejects excess work
      * instead of accumulating costly provider calls.
