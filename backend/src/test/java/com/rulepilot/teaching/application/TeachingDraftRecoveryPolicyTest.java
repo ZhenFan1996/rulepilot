@@ -42,6 +42,19 @@ class TeachingDraftRecoveryPolicyTest {
     }
 
     @Test
+    void givesAnActionableRepairForADanglingPlayerChoice() {
+        assertThat(policy.repairFeedback(
+                        "Finish every player-facing instruction; do not end it with an unanswered either/or alternative.",
+                        false,
+                        false))
+                .containsExactly(
+                        "Finish every player-facing instruction; do not end it with an unanswered either/or alternative.",
+                        "Rewrite the dangling alternative as a complete grounded instruction. If the cited rule gives an "
+                                + "exclusive choice, state every branch and its result; otherwise retain only the resolved cited "
+                                + "procedure. Do not end any player-facing step with “还是”, “或者”, or another unanswered alternative.");
+    }
+
+    @Test
     void removes_page_images_without_losing_the_grounded_request_context() {
         SectionRequest visualRequest = request(List.of(new PageImageInput(2, "image/png", new byte[] {1}, 640, 480)));
 

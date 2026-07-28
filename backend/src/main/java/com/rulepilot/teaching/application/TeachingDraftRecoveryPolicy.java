@@ -21,6 +21,10 @@ final class TeachingDraftRecoveryPolicy {
             + "Keep the grounded text, but repair one VISUAL step: cite an attached-page E-reference and return a "
             + "compact 0-1000 focus rectangle that contains the icon, component group, board area, flow, or worked "
             + "state named in that step. Do not fall back to text-only.";
+    private static final String UNRESOLVED_ALTERNATIVE_REPAIR_GUIDANCE = "Rewrite the dangling alternative as a "
+            + "complete grounded instruction. If the cited rule gives an exclusive choice, state every branch and its "
+            + "result; otherwise retain only the resolved cited procedure. Do not end any player-facing step with “还是”, "
+            + "“或者”, or another unanswered alternative.";
 
     int maxRepairAttempts(boolean hasPageImages) {
         return hasPageImages ? 1 : MAX_TEXT_REPAIR_ATTEMPTS;
@@ -37,8 +41,12 @@ final class TeachingDraftRecoveryPolicy {
     }
 
     List<String> repairFeedback(String diagnostic, boolean hasPageImages, boolean visualLocalizationFailure) {
-        if (!hasPageImages || !visualLocalizationFailure) return List.of(diagnostic);
-        return List.of(diagnostic, VISUAL_REPAIR_GUIDANCE);
+        List<String> feedback = new ArrayList<>(List.of(diagnostic));
+        if (diagnostic != null && diagnostic.contains("unanswered either/or alternative")) {
+            feedback.add(UNRESOLVED_ALTERNATIVE_REPAIR_GUIDANCE);
+        }
+        if (hasPageImages && visualLocalizationFailure) feedback.add(VISUAL_REPAIR_GUIDANCE);
+        return List.copyOf(feedback);
     }
 
     List<String> textFallbackFeedback(String diagnostic) {
