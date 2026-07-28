@@ -63,7 +63,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void retriesEachPageWhenACombinedVisualBatchFails() {
+    void retriesOnlyTheFailedPageWhenItsInitialVisualRequestFails() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger calls = new AtomicInteger();
@@ -73,8 +73,8 @@ class VisualRulebookCatalogerTest {
                         .toList(),
                 request -> {
                     calls.incrementAndGet();
-                    if (request.pages().size() > 1) {
-                        throw new IllegalArgumentException("combined response was truncated");
+                    if (request.pages().getFirst().pageNumber() == 1 && calls.get() == 1) {
+                        throw new IllegalArgumentException("first page response was truncated");
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
                             .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
@@ -137,13 +137,13 @@ class VisualRulebookCatalogerTest {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         facts.merge(documentVersionId, List.of(fact(1, "COVER")));
-        java.util.concurrent.atomic.AtomicReference<List<Integer>> requestedPages = new java.util.concurrent.atomic.AtomicReference<>();
+        List<List<Integer>> requestedBatches = new java.util.ArrayList<>();
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> pages.stream()
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
                         .toList(),
                 request -> {
-                    requestedPages.set(request.pages().stream().map(page -> page.pageNumber()).toList());
+                    requestedBatches.add(request.pages().stream().map(page -> page.pageNumber()).toList());
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
                             .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
                                     page.pageNumber(), "PAGE " + page.pageNumber(), "Visible rule", List.of("page")))
@@ -153,7 +153,7 @@ class VisualRulebookCatalogerTest {
 
         cataloger.catalogVisualPages(documentVersionId, List.of(page(1), page(2), page(3)), "Example game", "owner", null);
 
-        assertThat(requestedPages.get()).containsExactly(2, 3);
+        assertThat(requestedBatches).containsExactly(List.of(2), List.of(3));
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
@@ -201,7 +201,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void groupsVisualCatalogRequestsIntoBoundedTwoPageBatches() {
+    void catalogsEachPhotographedPageIndependently() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> batches = new java.util.ArrayList<>();
         VisualRulebookCataloger cataloger = cataloger(
@@ -224,7 +224,31 @@ class VisualRulebookCatalogerTest {
                 "owner",
                 null);
 
-        assertThat(batches).containsExactly(List.of(1, 2), List.of(3, 4), List.of(5));
+        assertThat(batches).containsExactly(List.of(1), List.of(2), List.of(3), List.of(4), List.of(5));
+    }
+
+    @Test
+    void reusesAnchorlessFactsBecauseAnchorsAreOptionalCropHints() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        facts.merge(documentVersionId, List.of(new PageFact(
+                1, "SETUP", "Visible setup instruction.", List.of("setup"), List.of())));
+        AtomicInteger modelCalls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> {
+                    throw new AssertionError("cached page facts must avoid an image read");
+                },
+                request -> {
+                    modelCalls.incrementAndGet();
+                    throw new AssertionError("anchorless facts must not be recataloged");
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(inputs.getFirst().text()).contains("Visible setup instruction");
+        assertThat(modelCalls).hasValue(0);
     }
 
     private static VisualRulebookCataloger cataloger(

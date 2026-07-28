@@ -46,9 +46,10 @@ import org.springframework.stereotype.Component;
 class VisualRulebookCataloger {
 
     private static final Logger log = LoggerFactory.getLogger(VisualRulebookCataloger.class);
-    // Two prepared pages keep Qwen's vision latency and JSON response bounded. With the production concurrency of
-    // two, an eight-page rulebook completes in two balanced waves instead of leaving a third, long-tail batch.
-    private static final int VISUAL_CATALOG_BATCH_SIZE = 2;
+    // A single scanned page is the unit that can be retried and persisted safely. In production, a two-page Qwen
+    // request has shown a much worse tail than the same two pages independently; bounded parallelism recovers the
+    // throughput without making the first usable plan wait for an oversized JSON response.
+    private static final int VISUAL_CATALOG_BATCH_SIZE = 1;
 
     private final DocumentPageImages pageImages;
     private final VisualRulebookPageCatalogModel visualCatalog;
@@ -100,7 +101,6 @@ class VisualRulebookCataloger {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
         Set<Integer> missingPages = VisualRulebookCatalogPolicy.missingPages(requestedPages, cached);
-        Set<Integer> anchorlessPages = VisualRulebookCatalogPolicy.anchorlessPages(cached);
         if (!cached.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -109,11 +109,11 @@ class VisualRulebookCataloger {
                     ActivityOutcome.SUCCEEDED,
                     "Reused " + cached.size() + " page-scoped visual facts from this immutable rulebook version");
         }
-        // A visual-only rulebook cannot form an evidence-bound outline from a partial ledger. Preserve the existing
-        // facts, but catalog every missing page as well as anchorless cached pages before handing evidence to the
-        // planner. This avoids a stale partial attempt permanently deferring the rest of a rulebook.
+        // A visual-only rulebook cannot form an evidence-bound outline from a partial ledger. Preserve every
+        // successfully cataloged page and only request missing pages. Visual anchors are optional crop-discovery
+        // hints, not a condition for trusting the page's factual ledger; retrying an anchorless page made every
+        // subsequent plan pay again for otherwise usable visual evidence.
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
-        requiredFacts.addAll(anchorlessPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
                 : catalogPageFacts(documentVersionId, requiredFacts, null, rulebookTitle, owner, assistantRunId);
@@ -124,7 +124,7 @@ class VisualRulebookCataloger {
                     "completeVisualPageFacts",
                     ActivityOutcome.SUCCEEDED,
                     "Completed " + requiredFacts.size()
-                            + " missing or anchorless visual page(s) before visual-only outline planning");
+                            + " missing visual page(s) before visual-only outline planning");
         }
         List<PageFact> facts = cached.isEmpty()
                 ? VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh)
@@ -274,7 +274,10 @@ class VisualRulebookCataloger {
                     .toList();
             for (int index = 0; index < futures.size(); index++) {
                 try {
-                    summaries.addAll(awaitCatalog(futures.get(index), visualCatalogTimeout).pages());
+                    List<VisualRulebookPageCatalogModel.PageSummary> completed =
+                            awaitCatalog(futures.get(index), visualCatalogTimeout).pages();
+                    summaries.addAll(completed);
+                    persistCompletedFacts(documentVersionId, completed);
                 } catch (RuntimeException failedBatch) {
                     String operation = "inspectRulebookVisualBatch|" + (index + 1);
                     if (catalogTimedOut(failedBatch)) {
@@ -322,9 +325,27 @@ class VisualRulebookCataloger {
     }
 
     /**
-     * A multi-page JSON response can fail even when every individual page is readable. Retry only the failed pages
-     * as independent requests so a temporary provider truncation cannot turn a visual rulebook into an unusable
-     * lesson plan. Failed single-page retries remain absent and are still handled by the evidence policy.
+     * Keep already-completed page work after a later provider timeout, cancellation, or process restart. A later
+     * attempt can then request only the unfinished source pages instead of re-reading an entire photographed book.
+     */
+    private void persistCompletedFacts(
+            UUID documentVersionId, List<VisualRulebookPageCatalogModel.PageSummary> completed) {
+        if (completed == null || completed.isEmpty()) return;
+        visualFacts.merge(
+                documentVersionId,
+                completed.stream()
+                        .map(summary -> new PageFact(
+                                summary.pageNumber(),
+                                summary.printedTerms(),
+                                summary.factualSummary(),
+                                summary.keywords(),
+                                summary.visualAnchors()))
+                        .toList());
+    }
+
+    /**
+     * Retry only failed pages so a temporary provider error cannot discard the rest of a visual rulebook's ledger.
+     * Failed single-page retries remain absent and are still handled by the evidence policy.
      */
     private void retryFailedPages(
             UUID documentVersionId,
@@ -347,7 +368,10 @@ class VisualRulebookCataloger {
                 .toList();
         for (int index = 0; index < retries.size(); index++) {
             try {
-                summaries.addAll(awaitCatalog(retries.get(index), visualCatalogTimeout).pages());
+                List<VisualRulebookPageCatalogModel.PageSummary> completed =
+                        awaitCatalog(retries.get(index), visualCatalogTimeout).pages();
+                summaries.addAll(completed);
+                persistCompletedFacts(documentVersionId, completed);
             } catch (RuntimeException retryFailure) {
                 log.warn(
                         "Visual page retry skipped page {} for document {}",

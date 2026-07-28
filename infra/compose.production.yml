@@ -26,15 +26,17 @@ services:
     environment:
       # Spring's API call graph does not need the JVM's 1 MiB default thread stacks. Halving them leaves useful
       # cgroup headroom for requests on this 1-core host without constraining the lesson-generation heap.
-      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC
+      # Let Serial GC return memory after an upload or a burst of generated lesson data. The default free-heap
+      # ratio kept most of the 320 MiB maximum committed while idle and forced this 2 GiB host into swap.
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
       # This host has one CPU and 1.6 GiB available to containers. A single bounded lesson run keeps reader
       # requests responsive instead of allowing multiple large Agent contexts to contend with PDF uploads.
       TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
       TEACHING_BACKGROUND_MAX_POOL_SIZE: "1"
       TEACHING_BACKGROUND_QUEUE_CAPACITY: "3"
-      # Qwen visual catalog calls run outside the JVM. Allow two bounded requests so one slow provider response
-      # cannot serialize an entire rulebook, but keep the catalog timeout above the measured worst-case response.
-      VISUAL_REQUEST_PARALLELISM: "2"
+      # Scanned rules are interpreted one page at a time. Four network-bound requests avoid a single oversized
+      # multimodal response serializing a whole book while remaining below the worker's small-host memory limit.
+      VISUAL_REQUEST_PARALLELISM: "4"
       VISUAL_CATALOG_TIMEOUT: PT75S
       # The first public pass gives each high-value chapter up to two useful crops. Further enrichment is optional
       # and must never turn a reader's page request into a long queue of full-resolution vision calls.
@@ -61,7 +63,7 @@ services:
     # the same image tag causes Docker to race while exporting the image.
     build: !reset null
     environment:
-      JAVA_TOOL_OPTIONS: -Xms96m -Xmx352m -XX:+UseSerialGC
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx352m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
       SPRING_RABBITMQ_LISTENER_SIMPLE_CONCURRENCY: "1"
