@@ -100,9 +100,13 @@ final class LessonDraftValidator {
         if (!refersToAListedPlayerCount) return;
         boolean complete = requiredNumbers.stream().allMatch(number -> containsNumber(playerFacingText, number));
         if (!complete) {
+            String citedRows = conditions.stream()
+                    .distinct()
+                    .map(condition -> condition.playerCount() + " players: " + condition.value())
+                    .collect(Collectors.joining("; "));
             throw new IllegalArgumentException(
                     "When cited evidence gives values by player count, teach every listed player-count/value condition "
-                            + "instead of reducing it to one example.");
+                            + "instead of reducing it to one example. Include these direct cited rows: " + citedRows);
         }
     }
 

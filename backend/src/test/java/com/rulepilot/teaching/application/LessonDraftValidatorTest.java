@@ -77,7 +77,8 @@ class LessonDraftValidatorTest {
 
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> LessonDraftValidator.validatePlayerCountConditionalValues(incomplete, evidence))
-                .withMessageContaining("every listed player-count/value condition");
+                .withMessageContaining("every listed player-count/value condition")
+                .withMessageContaining("2 players: 7; 3 players: 6; 4 players: 5");
 
         SectionDraft complete = draft(chunkId, "达到对应宝藏数才触发结束：2、3、4 人分别为 7、6、5 个。");
         LessonDraftValidator.validatePlayerCountConditionalValues(complete, evidence);
