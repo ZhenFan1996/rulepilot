@@ -51,7 +51,9 @@ services:
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
     # PDF pages are stored outside the heap while they are resized for a vision call. The 320 MiB heap cap stays
     # fixed; this extra native headroom prevents the API cgroup from throttling those short-lived image buffers.
-    mem_limit: 560m
+    # The API keeps its Java heap at 320 MiB. A 640 MiB cgroup leaves measured room for two short-lived resized
+    # image buffers without forcing kernel reclaim, while the host retains more than 250 MiB for the other services.
+    mem_limit: 640m
 
   worker:
     image: rulepilot-backend:local
