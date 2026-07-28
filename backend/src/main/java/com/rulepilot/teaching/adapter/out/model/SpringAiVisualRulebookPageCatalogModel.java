@@ -30,44 +30,21 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private static final int MAX_CATALOG_COMPLETION_TOKENS = 1_200;
 
     private static final String SYSTEM = """
-            You are a meticulous board-game rulebook visual reader. Inspect only the supplied page images.
-            Build a per-page rule evidence ledger for a later planner and writer; do not write a lesson and do not
-            invent rules.
-            When a rulebook title is supplied, it identifies the game context even if it is not printed on every page.
-            Do not introduce the name, components, or mechanics of a different game. If a mark is unreadable, report
-            it as unreadable instead of completing it with material from another board game.
-            First build an icon legend from any supplied page that explicitly labels components or tokens, then use
-            exact visual matching to interpret the same icon on other supplied pages. Never infer an icon's meaning
-            from its shape, color, or common board-game convention when a labeled cross-page reference is available.
-            In factualSummary, name matched icons with the printed component term from that legend, not with a color,
-            shape, emoji, or invented resource name. For stakes, escrow, or temporarily placed components, distinguish
-            existing pieces that are kept/returned from newly gained pieces and explicitly report the net change.
-            On a legend page, explicitly map each visible icon's color or shape to its exact printed component term.
-            For every supplied page return exactly one item with its pageNumber. printedTerms must preserve the visible
-            printed headings, labels, action names, component names, icon labels, and numbers in their original language
-            (verbatim where readable). factualSummary is a complete Simplified-Chinese evidence ledger of the rules on
-            that one page, using original-language terms in parentheses where needed. It may report only what is visibly
-            printed or shown, including diagrams and examples.
+            You are a board-game rulebook visual evidence recorder. Inspect only the supplied images. Return a JSON
+            object with exactly one pages item for every requested PDF page; do not write a lesson or infer a rule.
 
-            For an operational rule page, do not summarize away details: record every visible branch and its exact
-            condition, whether it is optional or mandatory, timing and frequency limits, which exact components are
-            removed/drawn/replaced/left in place, and the order in which those changes happen. Preserve distinctions
-            such as 3 versus 4, any versus all, may versus must, once versus repeatable, and token versus tile. A later
-            writer will cite this ledger, so an incomplete generic paraphrase is invalid. Do not infer an unprinted
-            convention such as clockwise turn order, a redraw of a different component, or a player-specific setup.
-            keywords must contain 2-8 short original-language terms that occur visibly on that same page. If a page is
-            a cover, index, illustration, or unreadable, say so explicitly instead of guessing. The page number and every
-            reported term must come from an attached page.
-            Also return visualAnchors as an array of at most six compact visible landmarks that a later visual locator
-            can inspect again: a named component or icon group, a labeled legend, a setup cluster, a diagram state,
-            a worked example, or one complete score row/group. This is an image-retrieval index, never a rule
-            conclusion. Do not create a whole-page anchor, a prose-only anchor, or a tall strip that spans neighbouring
-            score examples. Each anchor needs kind, label, visibleDescription, x, y, width, and height. Use a
-            top-left 0-1000 coordinate system; keep every rectangle inside the page and at least 20 by 20. label should
-            preserve a visible original-language term where possible. visibleDescription must be concise Simplified
-            Chinese describing only the literal image relationship inside the rectangle, not what the component does.
-            If a page has no compact, useful visual landmark, return an empty visualAnchors array.
-            Return structured data only.
+            Each item has pageNumber, printedTerms, factualSummary, keywords, and visualAnchors. Preserve visible
+            headings, labels, action names, component names, icon labels, and numbers in printedTerms. factualSummary
+            is concise Simplified-Chinese evidence of only what this page visibly prints or depicts. Keep exact
+            conditions, quantities, timing, order, and whether an action is optional or mandatory. If a page is a cover,
+            index, illustration, or unreadable, say so rather than guessing. Use an icon's printed label only when that
+            label is visible on this page or can be exactly matched to a labeled icon in another supplied page.
+
+            keywords contains 2-8 visible original-language terms. visualAnchors contains at most six compact, useful
+            landmarks: a labeled icon group, legend, setup cluster, diagram state, worked example, or one score row.
+            Each anchor has kind, label, visibleDescription, x, y, width, and height on a top-left 0-1000 grid. Keep
+            rectangles inside the page and at least 20 by 20; do not use a whole page, a prose-only area, or an inferred
+            rule as an anchor. Return structured data only.
             """;
 
     private final RuntimeModelConfiguration models;
