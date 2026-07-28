@@ -49,6 +49,7 @@ final class TeachingSectionCandidateValidator {
         List<UUID> visualCitationIds = LessonDraftValidator.validatedVisualCitationIds(draft, allowedEvidence);
         LessonDraftValidator.validatePlayerCountConditionalValues(draft, allowedEvidence);
         LessonDraftValidator.validatePlayerCountConditionalScopes(draft, allowedEvidence);
+        LessonDraftValidator.validateSharedTieResolution(draft, allowedEvidence);
         List<Claim> reviewClaims = LessonDraftValidator.reviewClaims(draft, visualCitationIds);
         List<EvidenceClaim> generatedClaims = reviewClaims.stream()
                 .map(claim -> new EvidenceClaim(claim.text(), claim.citationIds()))

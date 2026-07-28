@@ -139,6 +139,31 @@ class TeachingDraftRecoveryPolicyTest {
                 .isFalse();
     }
 
+    @Test
+    void restoresEveryCitedPlayerCountRoundPairWhenTheDraftNarrowsTheAudience() {
+        UUID evidenceId = UUID.randomUUID();
+        RuleEvidence endSchedule = new RuleEvidence(
+                evidenceId,
+                UUID.randomUUID(),
+                "END",
+                "End of Game",
+                "At the end of the 7th round (if playing with 2 or 3 players) or the 10th round (if playing with 4 or 5 players) the game ends.",
+                10,
+                10);
+        SectionDraft narrowed = new SectionDraft(
+                "结束",
+                VisualKind.REFERENCE_CARD,
+                "检查结束时间。",
+                List.of(evidenceId),
+                List.of(new StepDraft("结束时间", TeachingMove.FLOW, "4人游戏在第10轮结束。", List.of(evidenceId))));
+
+        SectionDraft repaired = policy.preserveCitedPlayerCountRoundSchedule(narrowed, List.of(endSchedule));
+
+        assertThat(repaired.steps().getFirst().text())
+                .contains("2、3人均在第7轮结束", "4、5人均在第10轮结束");
+        assertThat(repaired.steps().getFirst().citationIds()).containsExactly(evidenceId);
+    }
+
     private SectionRequest request(List<PageImageInput> pageImages) {
         UUID evidenceId = UUID.randomUUID();
         return new SectionRequest(

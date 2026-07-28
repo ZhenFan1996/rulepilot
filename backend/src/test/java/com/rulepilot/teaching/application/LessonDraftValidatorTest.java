@@ -146,6 +146,30 @@ class LessonDraftValidatorTest {
                 draft(chunkId, "2人或3人游戏在第7轮结束，4人或5人游戏在第10轮结束。"), evidence);
     }
 
+    @Test
+    void requiresTheCitedSharedVictoryAtTheEndOfATieBreakChain() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "SCORING",
+                        "Tie",
+                        "In case of a tie, compare completed missions, then Doubloons, then tokens on the Player board. Further ties result in a shared victory.",
+                        10,
+                        10));
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> LessonDraftValidator.validateSharedTieResolution(
+                        draft(chunkId, "平局时比较任务数和达布隆数；仍平局则比较韧性。"), evidence))
+                .withMessageContaining("shared victory")
+                .withMessageContaining("printed comparison order");
+
+        LessonDraftValidator.validateSharedTieResolution(
+                draft(chunkId, "平局时依次比较任务数、达布隆数和玩家板令牌数；仍平局则共享胜利。"), evidence);
+    }
+
     private SectionDraft draft(UUID chunkId, String text) {
         return new SectionDraft(
                 "结束条件",

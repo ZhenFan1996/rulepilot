@@ -44,6 +44,11 @@ final class LessonDraftValidator {
     private static final Pattern PLAYER_COUNT_RANGE = Pattern.compile(
             "(?i)(?:if\\s+playing\\s+with|for)\\s*([0-9\\s,;/\\p{L}–—-]{3,48})\\s*players?");
     private static final Pattern NUMBER = Pattern.compile("(?<!\\d)(\\d{1,2})(?!\\d)");
+    private static final Pattern SHARED_TIE_SOURCE = Pattern.compile(
+            "(?i)(?:shared\s+(?:victory|win)|share\s+(?:the\s+)?victory|共同获胜|并列获胜)");
+    private static final Pattern TIE_LANGUAGE = Pattern.compile("(?i)(?:平局|并列|\\btie\\b)");
+    private static final Pattern SHARED_TIE_LANGUAGE = Pattern.compile(
+            "(?i)(?:共享(?:胜利|获胜)?|共同获胜|并列获胜|\\bshared\s+(?:victory|win)\\b)");
 
     private LessonDraftValidator() {}
 
@@ -146,6 +151,27 @@ final class LessonDraftValidator {
         throw new IllegalArgumentException(
                 "When cited evidence states a player-count range, preserve every listed player count instead of "
                         + "narrowing it to the requested game size. Include these direct cited conditions: " + citedRanges);
+    }
+
+    /** A cited shared-victory fallback is material: a lesson cannot replace it with another comparison or silence. */
+    static void validateSharedTieResolution(SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
+        Set<UUID> citedEvidenceIds = new LinkedHashSet<>(draft.visualCitationIds());
+        draft.steps().forEach(step -> citedEvidenceIds.addAll(step.citationIds()));
+        boolean citesSharedTieResolution = citedEvidenceIds.stream()
+                .map(allowedEvidence::get)
+                .filter(java.util.Objects::nonNull)
+                .map(RuleEvidence::excerpt)
+                .filter(java.util.Objects::nonNull)
+                .anyMatch(excerpt -> SHARED_TIE_SOURCE.matcher(excerpt).find());
+        if (!citesSharedTieResolution) return;
+        String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
+                .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))
+                .collect(Collectors.joining("\n"));
+        if (TIE_LANGUAGE.matcher(playerFacingText).find() && !SHARED_TIE_LANGUAGE.matcher(playerFacingText).find()) {
+            throw new IllegalArgumentException(
+                    "The cited tie-break chain ends in a shared victory. Preserve that final resolution and the "
+                            + "printed comparison order instead of adding another criterion.");
+        }
     }
 
     private static List<PlayerCountValue> playerCountValues(String excerpt) {

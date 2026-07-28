@@ -119,6 +119,7 @@ final class TeachingSectionDraftComposer {
                         repair,
                         ActivityOutcome.REJECTED,
                         TeachingDraftRejectionCategory.from(rejectedDraft));
+                IllegalArgumentException effectiveRejection = rejectedDraft;
                 SectionDraft timingPreserved = draftRecoveryPolicy.preserveCitedEndOfRoundTiming(draft, evidence);
                 if (timingPreserved != draft) {
                     try {
@@ -134,6 +135,31 @@ final class TeachingSectionDraftComposer {
                                 sectionIndex, planned, evidence, modelRequest, timingPreserved, accepted);
                     } catch (IllegalArgumentException correctedDraftStillInvalid) {
                         draft = timingPreserved;
+                        effectiveRejection = correctedDraftStillInvalid;
+                    }
+                }
+                SectionDraft playerCountSchedulePreserved =
+                        draftRecoveryPolicy.preserveCitedPlayerCountRoundSchedule(draft, evidence);
+                if (playerCountSchedulePreserved != draft) {
+                    try {
+                        LessonSection accepted = validatedSection(
+                                plan,
+                                planned,
+                                evidence,
+                                modelRequest,
+                                playerCountSchedulePreserved,
+                                EvidenceStatus.CITED_DRAFT);
+                        recordValidation(
+                                assistantRunId,
+                                planned,
+                                repair,
+                                ActivityOutcome.SUCCEEDED,
+                                "PLAYER_COUNT_ROUND_SCHEDULE_GUARDRAIL_APPLIED");
+                        return new TeachingSectionDraftCandidate(
+                                sectionIndex, planned, evidence, modelRequest, playerCountSchedulePreserved, accepted);
+                    } catch (IllegalArgumentException correctedDraftStillInvalid) {
+                        draft = playerCountSchedulePreserved;
+                        effectiveRejection = correctedDraftStillInvalid;
                     }
                 }
                 if (draftRecoveryPolicy.shouldFallbackToCitedText(
@@ -148,13 +174,13 @@ final class TeachingSectionDraftComposer {
                             repair + 1);
                 }
                 if (repair == maxRepairAttempts) {
-                    throw rejectedDraft;
+                    throw effectiveRejection;
                 }
-                String diagnostic = rejectedDraft.getMessage() == null
+                String diagnostic = effectiveRejection.getMessage() == null
                         ? "The previous draft failed lesson validation."
-                        : rejectedDraft.getMessage();
+                        : effectiveRejection.getMessage();
                 List<String> feedback = draftRecoveryPolicy.repairFeedback(
-                        diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
+                        diagnostic, hasPageImages, isVisualLocalizationFailure(effectiveRejection));
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
