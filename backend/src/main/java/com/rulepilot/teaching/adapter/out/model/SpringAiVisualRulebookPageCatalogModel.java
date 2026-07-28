@@ -25,9 +25,10 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    // Two source pages share one catalog response. This preserves cross-page icon matching while keeping a single
-    // vision request inside the interactive timeout instead of allowing a detailed ledger to expand indefinitely.
-    private static final int MAX_CATALOG_COMPLETION_TOKENS = 1_200;
+    // Three source pages share one catalog response. This preserves cross-page icon matching while keeping a single
+    // vision request inside the interactive timeout. The value leaves enough room for three factual ledgers without
+    // cutting off Qwen's JSON response mid-array.
+    private static final int MAX_CATALOG_COMPLETION_TOKENS = 1_800;
 
     private static final String SYSTEM = """
             You are a board-game rulebook visual evidence recorder. Inspect only the supplied images. Return a JSON
