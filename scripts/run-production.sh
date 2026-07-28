@@ -68,6 +68,9 @@ case "${1:-config}" in
 		echo "Production deployment configuration is valid."
 		;;
 	up)
+		# rsync can preserve a developer's restrictive target/ umask. Docker must be
+		# able to traverse it or it silently reuses a stale application layer.
+		chmod -R a+rX "$ROOT_DIR/backend/target"
 		compose up -d --build --wait postgres redis rabbitmq minio prometheus tempo grafana
 		compose up -d --build --no-deps api
 		wait_for_api
