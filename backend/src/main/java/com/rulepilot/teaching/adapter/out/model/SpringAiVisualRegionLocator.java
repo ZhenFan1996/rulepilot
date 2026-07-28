@@ -137,6 +137,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             """;
 
     private final RuntimeModelConfiguration models;
+    private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
 
     public SpringAiVisualRegionLocator(RuntimeModelConfiguration models) {
         this.models = models;
@@ -342,6 +343,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {
         boolean qwen = "qwen".equals(models.providerFor(Role.VISUAL, owner));
+        List<VisualRegionLocator.PageImage> preparedPages = request.pages().stream().map(images::prepare).toList();
         var prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if (qwen) {
             prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner)));
@@ -371,7 +373,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                                     : "Candidate rectangles")
                             .param("candidates", VisualLocatorResponsePolicy.candidatePromptPayload(request.candidates(), qwen))
                             .param("correction", correction);
-                    request.pages().forEach(page -> user.media(
+                    preparedPages.forEach(page -> user.media(
                             MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
                 })
                 .call()
@@ -461,6 +463,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     static OpenAiChatOptions.Builder qwenJsonOptions(String modelName) {
         return OpenAiChatOptions.builder()
                 .model(modelName)
+                .maxTokens(800)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }

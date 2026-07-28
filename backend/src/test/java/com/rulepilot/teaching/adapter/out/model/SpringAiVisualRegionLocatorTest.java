@@ -91,6 +91,7 @@ class SpringAiVisualRegionLocatorTest {
         var options = SpringAiVisualRegionLocator.qwenJsonOptions("qwen3-vl-plus").build();
 
         assertThat(options.getModel()).isEqualTo("qwen3-vl-plus");
+        assertThat(options.getMaxTokens()).isEqualTo(800);
         assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
         assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
     }

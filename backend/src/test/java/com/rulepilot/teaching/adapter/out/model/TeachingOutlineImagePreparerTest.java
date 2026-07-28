@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.VisualRegionLocator;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -57,5 +58,21 @@ class TeachingOutlineImagePreparerTest {
 
         assertThat(prepared.width()).isEqualTo(768);
         assertThat(prepared.height()).isEqualTo(1024);
+    }
+
+    @Test
+    void reducesLargeVisualLocatorPagesBeforeVisionModelUse() throws Exception {
+        BufferedImage source = new BufferedImage(2400, 1800, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+
+        VisualRegionLocator.PageImage prepared = preparer.prepare(
+                new VisualRegionLocator.PageImage(5, "image/jpeg", encoded.toByteArray()));
+        BufferedImage result = ImageIO.read(new ByteArrayInputStream(prepared.content()));
+
+        assertThat(prepared.pageNumber()).isEqualTo(5);
+        assertThat(prepared.mediaType()).isEqualTo("image/jpeg");
+        assertThat(result.getWidth()).isEqualTo(1024);
+        assertThat(result.getHeight()).isEqualTo(768);
     }
 }

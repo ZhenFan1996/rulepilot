@@ -2,6 +2,7 @@ package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingLessonModel;
+import com.rulepilot.teaching.VisualRegionLocator;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -44,6 +45,17 @@ final class TeachingOutlineImagePreparer {
                     input.pageNumber(), "image/jpeg", encode(resized), resized.getWidth(), resized.getHeight());
         } catch (IOException exception) {
             throw new UncheckedIOException("could not prepare rulebook lesson page image", exception);
+        }
+    }
+
+    VisualRegionLocator.PageImage prepare(VisualRegionLocator.PageImage input) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(input.content()));
+            if (source == null) throw new IllegalArgumentException("rulebook visual locator page image cannot be decoded");
+            BufferedImage resized = resize(source);
+            return new VisualRegionLocator.PageImage(input.pageNumber(), "image/jpeg", encode(resized));
+        } catch (IOException exception) {
+            throw new UncheckedIOException("could not prepare rulebook visual locator page", exception);
         }
     }
 

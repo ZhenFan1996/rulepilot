@@ -36,6 +36,10 @@ services:
       # cannot serialize an entire rulebook, but keep the catalog timeout above the measured worst-case response.
       VISUAL_REQUEST_PARALLELISM: "2"
       VISUAL_CATALOG_TIMEOUT: PT75S
+      # The first public pass gives each high-value chapter up to two useful crops. Further enrichment is optional
+      # and must never turn a reader's page request into a long queue of full-resolution vision calls.
+      VISUAL_MAX_SECTIONS: "4"
+      VISUAL_MAX_STEPS_PER_SECTION: "2"
       SERVER_TOMCAT_THREADS_MAX: "32"
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
@@ -47,7 +51,7 @@ services:
       MANAGEMENT_TRACING_SAMPLING_PROBABILITY: "0.0"
     # PDF pages are stored outside the heap while they are resized for a vision call. The 320 MiB heap cap stays
     # fixed; this extra native headroom prevents the API cgroup from throttling those short-lived image buffers.
-    mem_limit: 480m
+    mem_limit: 560m
 
   worker:
     image: rulepilot-backend:local
