@@ -143,6 +143,21 @@ class FakeTeachingOutlineModelTest {
         assertThat(topicPages(outline, "结束、计分与胜者")).contains(3);
     }
 
+    @Test
+    void recognizesATriggeredGameEndBeforeTheWinnerRuleIsStated() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "SET UP", "setup steps and starting resources"),
+                        visualPage(2, "GAMEPLAY", "turn phases and actions"),
+                        visualPage(3, "END OF GAME", "任一玩家达到至少40分即触发游戏结束；完成本回合后再比较胜利点。")),
+                List.of()));
+
+        assertThat(topicPages(outline, "结束、计分与胜者")).contains(3);
+    }
+
     private List<Integer> topicPages(com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft outline, String title) {
         return outline.topics().stream()
                 .filter(topic -> topic.title().equals(title))

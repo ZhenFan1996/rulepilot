@@ -447,6 +447,27 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void bindsAnEndTriggerPageEvenWhenWinnerResolutionIsOnAnotherPage() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Turn phases and actions.")),
+                new PageInput(16, visualCatalogPage(
+                        "END OF GAME", "任一玩家达到至少40分即触发游戏结束；本回合结束后再确定胜者。")),
+                new PageInput(26, visualCatalogPage(
+                        "SET DICE", "A card ability can set dice during the roll phase.")));
+        OutlineDraft misplacedEnding = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(26))));
+
+        OutlineDraft repaired = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(misplacedEnding, pages);
+
+        assertThat(repaired.topics().get(2).sourcePageNumbers()).containsExactly(16, 26);
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(repaired, pages);
+    }
+
+    @Test
     void prioritizesDirectVisualCoreEvidenceWithoutExceedingTheFivePageTopicLimit() {
         List<PageInput> pages = List.of(
                 new PageInput(1, visualCatalogPage("SET UP", "Setup: distribute starting resources.")),

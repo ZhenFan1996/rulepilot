@@ -272,7 +272,7 @@ final class VisualOutlineEvidencePolicy {
             case "core_loop" -> containsAny(facts,
                     "how to play", "gameplay", "turn", "round", "phase", "roll phase", "run phase", "action",
                     "move", "游戏流程", "回合", "轮次", "阶段", "行动", "移动");
-            case "end" -> hasCompleteEndingEvidence(facts);
+            case "end" -> hasEndConditionEvidence(facts);
             case "scoring" -> containsAny(facts,
                     "winner", "victory", "how to win", "scoring", "score", "points",
                     "获胜", "胜者", "胜利", "计分", "分数", "平局");
@@ -280,13 +280,18 @@ final class VisualOutlineEvidencePolicy {
         };
     }
 
-    private static boolean hasCompleteEndingEvidence(String facts) {
+    /**
+     * An end-condition page is sufficient evidence for the end chapter even when winner, tie, or scoring details
+     * live on a following page. Requiring all of those facts on one page made scanned books bind their end chapter
+     * to an unrelated card that happened to say "win" and skipped the actual trigger.
+     */
+    private static boolean hasEndConditionEvidence(String facts) {
         boolean endingTrigger = containsAny(facts,
                 "end of game", "game end", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间");
-        boolean resolution = containsAny(facts,
-                "winner", "victory", "how to win", "scoring", "score", "tie",
-                "获胜", "胜者", "胜利", "计分", "分数", "平局");
-        return endingTrigger && resolution;
+        boolean triggerCondition = containsAny(facts,
+                "when ", "once ", "reaches", "reach ", "taken", "trigger", "at least",
+                "当", "一旦", "达到", "触发", "完成");
+        return endingTrigger && triggerCondition;
     }
 
     private static boolean containsAny(String value, String... needles) {
