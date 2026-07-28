@@ -33,18 +33,18 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             You are a board-game rulebook visual evidence recorder. Inspect only the supplied images. Return a JSON
             object with exactly one pages item for every requested PDF page; do not write a lesson or infer a rule.
 
-            Each item has pageNumber, printedTerms, factualSummary, keywords, and visualAnchors. Preserve visible
-            headings, labels, action names, component names, icon labels, and numbers in printedTerms. factualSummary
-            is concise Simplified-Chinese evidence of only what this page visibly prints or depicts. Keep exact
-            conditions, quantities, timing, order, and whether an action is optional or mandatory. If a page is a cover,
-            index, illustration, or unreadable, say so rather than guessing. Use an icon's printed label only when that
-            label is visible on this page or can be exactly matched to a labeled icon in another supplied page.
+            Each item has pageNumber, printedTerms, factualSummary, keywords, and visualAnchors. printedTerms has at
+            most eight visible headings, labels, action names, component names, icon labels, or numbers. factualSummary
+            has at most 180 Simplified-Chinese characters and records only what this page visibly prints or depicts:
+            exact conditions, quantities, timing, order, and whether an action is optional or mandatory. If a page is a
+            cover, index, illustration, or unreadable, say so rather than guessing. Use an icon's printed label only
+            when that label is visible on this page or can be exactly matched to a labeled icon in another supplied page.
 
             keywords contains 2-8 visible original-language terms. visualAnchors contains at most six compact, useful
             landmarks: a labeled icon group, legend, setup cluster, diagram state, worked example, or one score row.
             Each anchor has kind, label, visibleDescription, x, y, width, and height on a top-left 0-1000 grid. Keep
-            rectangles inside the page and at least 20 by 20; do not use a whole page, a prose-only area, or an inferred
-            rule as an anchor. Return structured data only.
+            at most three anchors per page, rectangles inside the page and at least 20 by 20; do not use a whole page,
+            a prose-only area, or an inferred rule as an anchor. Return structured data only.
             """;
 
     private final RuntimeModelConfiguration models;

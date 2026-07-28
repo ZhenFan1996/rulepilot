@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 class VisualRulebookCatalogerTest {
 
     @Test
-    void retainsCompletedPageFactsWhenOneVisualBatchFails() {
+    void retainsCompletedPageFactsWhenALaterVisualBatchFails() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         VisualRulebookCataloger cataloger = cataloger(
@@ -32,8 +32,8 @@ class VisualRulebookCatalogerTest {
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
                         .toList(),
                 request -> {
-                    if (request.pages().stream().anyMatch(page -> page.pageNumber() == 3)) {
-                        throw new IllegalStateException("provider rejected page three");
+                    if (request.pages().stream().anyMatch(page -> page.pageNumber() == 4)) {
+                        throw new IllegalStateException("provider rejected page four");
                     }
                     return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
                             .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
@@ -47,18 +47,19 @@ class VisualRulebookCatalogerTest {
 
         List<PageInput> inputs = cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3)),
+                List.of(page(1), page(2), page(3), page(4)),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(inputs).extracting(PageInput::pageNumber).containsExactly(1, 2, 3);
+        assertThat(inputs).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4);
         assertThat(inputs.getFirst().text()).contains("PAGE 1", "A visible rule on page 1");
         assertThat(inputs.get(1).text()).contains("PAGE 2", "A visible rule on page 2");
-        assertThat(inputs.getLast().text()).contains("No factual visual claim", "page 3");
-        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+        assertThat(inputs.get(2).text()).contains("PAGE 3", "A visible rule on page 3");
+        assertThat(inputs.getLast().text()).contains("No factual visual claim", "page 4");
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4)))
                 .extracting(PageFact::pageNumber)
-                .containsExactly(1, 2);
+                .containsExactly(1, 2, 3);
     }
 
     @Test
