@@ -274,6 +274,35 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void prioritizesAnUnownedLateEndgamePageOverRoutineEarlierPages() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(new TopicDraft(
+                        "setup",
+                        "游戏设置",
+                        "说明标准设置。",
+                        true,
+                        false,
+                        List.of("SETUP"),
+                        List.of("setup"),
+                        List.of(2))));
+
+        String feedback = TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(
+                        outline,
+                        List.of(
+                                new PageInput(3, "ACTION: draw one card."),
+                                new PageInput(4, "ROUND: continue clockwise."),
+                                new PageInput(5, "ADVANCED RULES: special action."),
+                                new PageInput(6, "VARIANT: optional setup."),
+                                new PageInput(16, "END OF GAME: no cards remain in the stock.")))
+                .orElseThrow();
+
+        assertThat(feedback).contains("Page 16", "END OF GAME");
+        assertThat(feedback.indexOf("Page 16")).isLessThan(feedback.indexOf("Page 3"));
+    }
+
+    @Test
     void samplesOnlyUnownedSparsePagesThatTheTextCoverageCannotAlreadyExplain() {
         OutlineDraft outline = new OutlineDraft(
                 "Game", "Premise", List.of(topic("setup", false, List.of(2))));

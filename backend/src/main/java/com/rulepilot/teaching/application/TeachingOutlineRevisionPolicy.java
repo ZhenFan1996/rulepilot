@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Comparator;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -100,6 +101,8 @@ final class TeachingOutlineRevisionPolicy {
         List<PageInput> missing = pages.stream()
                 .filter(TeachingOutlineRevisionPolicy::isSubstantiveRulebookPage)
                 .filter(page -> !boundPages.contains(page.pageNumber()))
+                .sorted(Comparator.comparingInt(TeachingOutlineRevisionPolicy::coveragePriority)
+                        .thenComparingInt(PageInput::pageNumber))
                 .limit(4)
                 .toList();
         if (missing.isEmpty()) return Optional.empty();
@@ -160,9 +163,27 @@ final class TeachingOutlineRevisionPolicy {
         if (text.contains(VISUAL_CATALOG_PREFIX.toLowerCase(Locale.ROOT))) {
             return hasConcreteVisualGameplayEvidence(text);
         }
-        return text.matches("(?s).*\\b(?:setup|turn|action|round|gameplay|game end|score|rule|component|"
+        return containsAny(text, List.of(
+                        "end of game", "game end", "end condition", "final scoring", "victory point",
+                        "游戏结束", "终局", "结束条件", "最终计分", "胜利点"))
+                || text.matches("(?s).*\\b(?:setup|turn|action|round|gameplay|score|rule|component|"
                 + "card|token|player|must|may|place|move|discard|variant|advanced)\\b.*")
                 || text.matches("(?s).*(?:设置|回合|行动|结束|计分|规则|组件|卡牌|令牌|玩家|必须|可以|放置|移动|弃牌|变体|高级).*" );
+    }
+
+    /**
+     * A bounded coverage repair must see a late quick-reference finale before routine early pages. Otherwise an
+     * outline can satisfy broad page coverage while missing the one page that defines when play actually ends.
+     */
+    private static int coveragePriority(PageInput page) {
+        String text = page.text() == null ? "" : page.text().toLowerCase(Locale.ROOT);
+        if (containsAny(text, List.of(
+                "end of game", "game ends", "game end", "end condition", "final scoring", "victory point",
+                "游戏结束", "终局", "结束条件", "最终计分", "胜利点"))) {
+            return 0;
+        }
+        if (containsAny(text, List.of("exception", "variant", "tie", "例外", "变体", "平局"))) return 1;
+        return 2;
     }
 
     private static boolean hasConcreteVisualGameplayEvidence(String normalizedText) {
