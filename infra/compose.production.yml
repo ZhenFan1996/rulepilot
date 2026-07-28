@@ -24,7 +24,9 @@ services:
       context: ../backend
       dockerfile: Dockerfile.runtime
     environment:
-      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -XX:+UseSerialGC
+      # Spring's API call graph does not need the JVM's 1 MiB default thread stacks. Halving them leaves useful
+      # cgroup headroom for requests on this 1-core host without constraining the lesson-generation heap.
+      JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC
       # This host has one CPU and 1.6 GiB available to containers. A single bounded lesson run keeps reader
       # requests responsive instead of allowing multiple large Agent contexts to contend with PDF uploads.
       TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
