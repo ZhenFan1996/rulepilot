@@ -155,15 +155,13 @@ final class LessonDraftValidator {
 
     /** A cited shared-victory fallback is material: a lesson cannot replace it with another comparison or silence. */
     static void validateSharedTieResolution(SectionDraft draft, Map<UUID, RuleEvidence> allowedEvidence) {
-        Set<UUID> citedEvidenceIds = new LinkedHashSet<>(draft.visualCitationIds());
-        draft.steps().forEach(step -> citedEvidenceIds.addAll(step.citationIds()));
-        boolean citesSharedTieResolution = citedEvidenceIds.stream()
-                .map(allowedEvidence::get)
-                .filter(java.util.Objects::nonNull)
+        // The model must not be able to omit the one citation that carries the shared-victory fallback and thereby
+        // sidestep this check. The retrieval set is already restricted to the current section's evidence.
+        boolean retrievedSharedTieResolution = allowedEvidence.values().stream()
                 .map(RuleEvidence::excerpt)
                 .filter(java.util.Objects::nonNull)
                 .anyMatch(excerpt -> SHARED_TIE_SOURCE.matcher(excerpt).find());
-        if (!citesSharedTieResolution) return;
+        if (!retrievedSharedTieResolution) return;
         String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
                 .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))
                 .collect(Collectors.joining("\n"));

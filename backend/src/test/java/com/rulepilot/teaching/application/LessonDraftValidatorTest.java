@@ -170,6 +170,36 @@ class LessonDraftValidatorTest {
                 draft(chunkId, "平局时依次比较任务数、达布隆数和玩家板令牌数；仍平局则共享胜利。"), evidence);
     }
 
+    @Test
+    void requiresSharedVictoryEvenWhenTheDraftOmitsTheRelevantCitation() {
+        UUID tieBreakEvidenceId = UUID.randomUUID();
+        UUID otherEvidenceId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                tieBreakEvidenceId,
+                new RuleEvidence(
+                        tieBreakEvidenceId,
+                        UUID.randomUUID(),
+                        "SCORING",
+                        "Tie",
+                        "In case of a tie, compare completed missions, then Doubloons, then tokens on the Player board. Further ties result in a shared victory.",
+                        10,
+                        10),
+                otherEvidenceId,
+                new RuleEvidence(
+                        otherEvidenceId,
+                        UUID.randomUUID(),
+                        "SCORING",
+                        "Bonus",
+                        "The player with the most Followers gains one bonus victory point.",
+                        10,
+                        10));
+
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> LessonDraftValidator.validateSharedTieResolution(
+                        draft(otherEvidenceId, "平局时依次比较任务数、达布隆数、玩家板令牌数和随从数量。"), evidence))
+                .withMessageContaining("shared victory");
+    }
+
     private SectionDraft draft(UUID chunkId, String text) {
         return new SectionDraft(
                 "结束条件",
