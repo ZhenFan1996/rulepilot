@@ -4,16 +4,11 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
-import LessonChapterContent from '@/components/LessonChapterContent.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus from '@/components/LessonGenerationStatus.vue'
 import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
-import LessonReaderChapterHeader from '@/components/LessonReaderChapterHeader.vue'
-import LessonReaderControls from '@/components/LessonReaderControls.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
-import LessonReaderSidebar from '@/components/LessonReaderSidebar.vue'
 import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
@@ -31,7 +26,6 @@ import { useLessonGenerationPresentation } from '@/composables/useLessonGenerati
 import { useConditionalPolling } from '@/composables/useConditionalPolling'
 import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehensionFeedback'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
-import { useLessonResume } from '@/composables/useLessonResume'
 import { useLessonReaderProgress } from '@/composables/useLessonReaderProgress'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import {
@@ -50,9 +44,6 @@ import { useLocale } from '@/lib/locale'
 interface TeachingPlan {
   id: string
   documentVersionId: string
-  playerCount: number
-  beginnerCount: number
-  durationMinutes: number
   gameTitle: string
   premise: string
   sections: Array<{
@@ -97,6 +88,7 @@ interface LessonSection {
 }
 
 type MediaMode = LessonMediaMode
+const availableMediaModes: MediaMode[] = ['TEXT', 'AUDIO', 'VIDEO']
 
 const route = useRoute()
 const router = useRouter()
@@ -107,6 +99,7 @@ const online = ref(navigator.onLine)
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
 const sourceLesson = ref<IllustratedLesson | null>(null)
+const answerSectionPosition = ref<number | null>(null)
 const mediaMode = ref<MediaMode>('TEXT')
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
@@ -121,13 +114,11 @@ let lessonViewDisposed = false
 let latestLessonLoad = 0
 
 const {
-  quality,
   comprehension,
   comprehensionSaving,
   comprehensionError,
   narration,
   video,
-  mediaConsistency,
   mediaWarningCodes,
   audioAvailable,
   narrationDurationMillis,
@@ -145,14 +136,10 @@ const mediaWarnings = computed(() => mediaWarningCodes.value.map(mediaWarningMes
 const planId = computed(() => String(route.params.planId ?? ''))
 const {
   progress,
-  waitingForNextChapter,
-  progressPercent,
   reset: resetLessonProgress,
   restore: restoreLessonReaderProgress,
   selectSection,
   synchronizeChapter,
-  previousSection,
-  finish: finishSectionProgress,
 } = useLessonReaderProgress({
   lesson,
   onSectionSelected: (index) => {
@@ -161,7 +148,10 @@ const {
     seekToChapter(index)
   },
 })
-const currentSection = computed(() => lesson.value?.sections[progress.value.currentIndex] ?? null)
+const answerContextSection = computed(() => {
+  if (answerSectionPosition.value === null) return null
+  return lesson.value?.sections.find((section) => section.position === answerSectionPosition.value) ?? null
+})
 const {
   question,
   answer,
@@ -176,13 +166,18 @@ const {
 } = useLessonAnswers({
   currentContext: () => {
     const activePlan = plan.value
-    const section = currentSection.value
-    if (!activePlan || !section || !online.value) return null
+    const section = answerContextSection.value
+    if (!activePlan || !online.value) return null
     return {
       planId: planId.value,
       documentVersionId: activePlan.documentVersionId,
-      playerCount: activePlan.playerCount,
-      section,
+      section: section
+        ? {
+            topicKey: section.topicKey,
+            title: section.title,
+            coverageTags: section.coverageTags,
+          }
+        : null,
       locale: locale.value,
     }
   },
@@ -191,7 +186,7 @@ const {
   requestLogin: () => router.push({ name: 'login' }),
   onReceived: (context, text, received) => {
     if (received.status === 'ANSWERED') {
-      cacheOfflineAnswer(context.planId, text, context.section.title, received)
+      cacheOfflineAnswer(context.planId, text, context.section?.title ?? t('lesson.answer.sectionFallback'), received)
       refreshOfflineKnowledge()
     }
     if (received.confirmedRulingId !== null && received.confirmedRulingVersion !== null) {
@@ -218,7 +213,7 @@ const {
   useVoiceTranscript,
 } = useLessonQuestionInput({
   question,
-  currentSectionTitle: () => currentSection.value?.title ?? null,
+  currentSectionTitle: () => answerContextSection.value?.title ?? null,
   submitQuestion,
   clearAnswerFeedback,
   closeCardOcr: () => { cardOcrOpen.value = false },
@@ -241,7 +236,7 @@ const {
   documentVersionId: computed(() => plan.value?.documentVersionId ?? null),
   answer,
   answeredQuestion,
-  currentSectionTitle: () => currentSection.value?.title ?? t('lesson.answer.sectionFallback'),
+  currentSectionTitle: () => answerContextSection.value?.title ?? t('lesson.answer.sectionFallback'),
   csrfToken,
   onApplied: (value, answered, sectionTitle) => {
     cacheOfflineRuling(planId.value, answered, sectionTitle, value)
@@ -256,42 +251,10 @@ const {
     reloadRequestFailed: () => t('lesson.answer.ruling.reloadRequestFailed'),
   },
 })
-const chapterLeadStep = computed(() => {
-  const steps = currentSection.value?.steps ?? []
-  return steps.find((step) => step.kind === 'UNDERSTAND')
-    ?? steps.find((step) => ['DO', 'FLOW'].includes(step.kind))
-    ?? steps[0]
-    ?? null
-})
-const chapterPathSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
-  step.position !== chapterLeadStep.value?.position
-  && ['UNDERSTAND', 'DO', 'FLOW', 'VISUAL'].includes(step.kind),
-))
-const chapterSupportSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
-  step.position !== chapterLeadStep.value?.position
-  && ['WATCH', 'EXAMPLE', 'LEDGER'].includes(step.kind),
-))
-const chapterCheckSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
-  step.position !== chapterLeadStep.value?.position && step.kind === 'CHECK',
-))
-const chapterVisualSteps = computed(() => (currentSection.value?.steps ?? []).filter((step) =>
-  step.position !== chapterLeadStep.value?.position && step.kind === 'VISUAL',
-))
-const chapterVisualFocus = computed(() =>
-  chapterVisualSteps.value.find((step) => step.visualFocus)?.visualFocus
-  ?? chapterLeadStep.value?.visualFocus
-  ?? null,
-)
-const currentVisualPageNumber = computed(() =>
-  chapterVisualFocus.value?.pageNumber ?? currentSection.value?.visualSourcePages[0],
-)
 const {
   generationActive,
   visualEnrichmentActive,
-  visualEnrichmentSummary,
   draftReady,
-  lessonStillGrowing,
-  readingCurrentLastChapter,
   currentGenerationText,
   generationElapsed,
   processedGenerationChapters,
@@ -321,11 +284,8 @@ const visualPolling = useConditionalPolling({
 })
 
 const {
-  visualAidResult,
-  hasVisualAid,
   recordComprehension,
   recordVisualAid,
-  recordChapterVisualAid,
 } = useLessonComprehensionFeedback({
   planId,
   online,
@@ -380,46 +340,6 @@ const activeVideoFrame = computed(() => {
     ) ?? chapter.frames[0] ?? null
   )
 })
-const supportedSectionCount = computed(
-  () => lesson.value?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0,
-)
-
-const teachingMoveMeta = {
-  UNDERSTAND: { label: '先理解', marker: '想', tone: 'bg-indigo/10 text-indigo' },
-  DO: { label: '照着做', marker: '做', tone: 'bg-copper/10 text-copper' },
-  EXAMPLE: { label: '走一遍', marker: '例', tone: 'bg-emerald-100 text-emerald-800' },
-  WATCH: { label: '别弄错', marker: '注', tone: 'bg-amber-100 text-amber-900' },
-  CHECK: { label: '检查一下', marker: '验', tone: 'bg-ink-panel text-panel-text' },
-  VISUAL: { label: '看桌面', marker: '图', tone: 'bg-indigo/10 text-indigo' },
-  FLOW: { label: '顺着走', marker: '→', tone: 'bg-sky-100 text-sky-800' },
-  LEDGER: { label: '算清楚', marker: '账', tone: 'bg-emerald-100 text-emerald-800' },
-} as const
-
-const chapterPathTitle = computed(() => {
-  if (chapterPathSteps.value.some((step) => ['DO', 'FLOW'].includes(step.kind))) return t('lesson.chapter.path.action')
-  return t('lesson.chapter.path.keyPoints')
-})
-
-function stepSourceLabel(step: LessonSection['steps'][number]) {
-  if (!step.sourcePages.length) return ''
-  return t('lesson.chapter.source', { pages: step.sourcePages.join(locale.value === 'en' ? ', ' : '、') })
-}
-
-function lessonOutcome(section: LessonSection) {
-  const tags = new Set(section.coverageTags)
-  const key = section.topicKey.toLowerCase()
-  if (tags.has('setup') || key.includes('setup')) return t('lesson.reader.outcome.setup')
-  if (tags.has('scoring') || key.includes('scor')) return t('lesson.reader.outcome.scoring')
-  if (tags.has('end') || key.includes('end')) return t('lesson.reader.outcome.end')
-  if (tags.has('action') || key.includes('action') || key.includes('turn')) return t('lesson.reader.outcome.action')
-  if (key.includes('objective') || key.includes('goal')) return t('lesson.reader.outcome.objective')
-  return t('lesson.reader.outcome.generic', { section: section.title })
-}
-
-function moveMeta(kind: LessonSection['steps'][number]['kind'] | undefined) {
-  return teachingMoveMeta[kind ?? 'DO']
-}
-
 const {
   narrationPlayer,
   narrationRate,
@@ -480,24 +400,6 @@ const {
   csrfToken,
 })
 
-const {
-  resuming: resumingLesson,
-  errorMessage: resumeError,
-  reset: resetLessonResume,
-  resume: resumeLesson,
-} = useLessonResume({
-  planId,
-  online,
-  currentRequest: () => latestLessonLoad,
-  isCurrent: isCurrentLessonLoad,
-  csrfToken,
-  onStarted: (startedPlanId) => router.push({ name: 'lessons', query: { started: startedPlanId } }),
-  messages: {
-    requestFailed: () => t('lesson.sidebar.resumeError'),
-    requestError: () => t('lesson.sidebar.resumeError'),
-  },
-})
-
 function resetLessonReader() {
   narrationPlayer.value?.pause()
   plan.value = null
@@ -507,9 +409,9 @@ function resetLessonReader() {
   resetLessonProgress()
   resetConversation(true)
   resetRuling()
+  answerSectionPosition.value = null
   offlineKnowledge.value = []
   cardOcrOpen.value = false
-  resetLessonResume()
   mediaMode.value = 'TEXT'
   narrationPlaying.value = false
   narrationRestoreTarget.value = null
@@ -671,8 +573,8 @@ async function refreshGeneration() {
     if (lessonReplaced) {
       restoreLessonReaderProgress()
       selectSection(progress.value.currentIndex)
-    } else if (acceptedLesson.sections.length > previousCount && waitingForNextChapter.value) {
-      selectSection(previousCount)
+    } else if (acceptedLesson.sections.length > previousCount) {
+      selectSection(Math.min(progress.value.currentIndex, acceptedLesson.sections.length - 1))
     }
 
     if (wasActive && !generationActive.value) {
@@ -706,10 +608,6 @@ async function csrfToken() {
   return (await response.json()) as CsrfResponse
 }
 
-function finish(outcome: 'completed' | 'skipped') {
-  finishSectionProgress(outcome, lessonStillGrowing.value && readingCurrentLastChapter.value)
-}
-
 function visualKindLabel(kind: LessonSection['visualKind']) {
   return {
     REFERENCE_CARD: t('lesson.chapter.visualKind.reference'),
@@ -741,10 +639,26 @@ function mediaModeAvailable(mode: MediaMode) {
   return true
 }
 
-function handleKeydown(event: KeyboardEvent) {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return
-  if (event.key === 'ArrowLeft') previousSection()
-  if (event.key === 'ArrowRight') finish('completed')
+function mediaModeLabel(mode: MediaMode) {
+  return mode === 'TEXT'
+    ? t('lesson.sidebar.media.text')
+    : mode === 'AUDIO'
+      ? t('lesson.sidebar.media.audio')
+      : t('lesson.sidebar.media.video')
+}
+
+function chooseAnswerScope(position: number | null) {
+  answerSectionPosition.value = position
+  resetConversation(true)
+  resetRuling()
+  if (position === null || !lesson.value) return
+  const sectionIndex = lesson.value.sections.findIndex((section) => section.position === position)
+  if (sectionIndex >= 0) selectSection(sectionIndex)
+}
+
+function askAboutSection(position: number) {
+  chooseAnswerScope(position)
+  focusQuestionPanel()
 }
 
 function updateOnlineStatus() {
@@ -762,7 +676,6 @@ onMounted(() => {
   void loadLesson()
   window.addEventListener('online', updateOnlineStatus)
   window.addEventListener('offline', updateOnlineStatus)
-  window.addEventListener('keydown', handleKeydown)
 })
 
 watch(locale, () => {
@@ -787,27 +700,19 @@ onUnmounted(() => {
   generationClockTimer = undefined
   window.removeEventListener('online', updateOnlineStatus)
   window.removeEventListener('offline', updateOnlineStatus)
-  window.removeEventListener('keydown', handleKeydown)
 })
 </script>
 
 <template>
-  <AppShell immersive>
-    <div class="min-h-screen overflow-x-hidden bg-canvas pb-28 text-ink lg:pb-8">
+  <AppShell>
+    <div class="min-h-screen overflow-x-hidden bg-canvas pb-24 text-ink lg:pb-10">
       <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
-        <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
+        <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <div class="flex items-center gap-4">
-            <LanguageSwitcher />
             <RouterLink v-if="lesson" :to="{ name: 'public-lesson', params: { planId } }" class="text-sm font-semibold text-indigo">{{ t('lesson.reader.public') }}</RouterLink>
-            <RouterLink v-if="plan && (!generationActive || draftReady)" :to="{ name: 'table-mode', params: { planId } }" class="min-h-11 rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-canvas">{{ t('lesson.reader.table') }}</RouterLink>
-            <div v-if="plan" class="hidden text-right text-xs text-ink/50 sm:block">
-              <p class="font-semibold text-ink/75">{{ t('lesson.reader.metaTitle') }}</p>
-              <p>{{ t('lesson.reader.meta', { players: plan.playerCount, beginners: plan.beginnerCount, minutes: plan.durationMinutes }) }}</p>
-            </div>
           </div>
         </div>
-        <div v-if="lesson" class="h-1 bg-ink/8"><div class="h-full bg-copper transition-all" :style="{ width: `${progressPercent}%` }" /></div>
       </header>
 
       <section v-if="locale === 'en' && lesson && localizationStatus !== 'READY'" class="border-b border-indigo/15 bg-indigo/5 px-5 py-3" role="status">
@@ -853,173 +758,116 @@ onUnmounted(() => {
         @retry="loadLesson"
       />
 
-      <div v-else class="mx-auto grid min-w-0 max-w-7xl gap-6 px-5 py-7 sm:px-8 lg:grid-cols-[18rem_1fr] lg:py-10">
-        <LessonReaderSidebar
-          :lesson-status="lesson.status"
-          :sections="lesson.sections"
-          :current-index="progress.currentIndex"
-          :completed="progress.completed"
-          :skipped="progress.skipped"
-          :progress-percent="progressPercent"
-          :supported-section-count="supportedSectionCount"
-          :lesson-still-growing="lessonStillGrowing"
-          :generation-active="generationActive"
-          :quality="quality"
-          :visual-enrichment-summary="visualEnrichmentSummary"
-          :visual-enrichment-active="visualEnrichmentActive"
-          :media-consistency="mediaConsistency"
-          :media-mode="mediaMode"
+      <article v-else class="mx-auto max-w-4xl px-5 py-9 sm:px-8 lg:py-14" data-testid="private-lesson-reader">
+        <header class="border-b border-ink/10 pb-8">
+          <p class="text-sm font-semibold text-copper">{{ t('lesson.reader.guideEyebrow') }}</p>
+          <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ plan?.gameTitle }}</h1>
+          <p class="mt-4 max-w-2xl leading-7 text-ink/60">{{ t('lesson.reader.guideDescription') }}</p>
+        </header>
+
+        <section class="mt-8 rounded-3xl border border-indigo/20 bg-indigo/[0.045] p-5 shadow-[0_18px_50px_-36px_rgba(40,57,128,0.75)] sm:p-7" aria-labelledby="private-question-title">
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">{{ t('lesson.answer.eyebrow') }}</p>
+              <h2 id="private-question-title" class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ t('lesson.answer.title') }}</h2>
+              <p class="mt-2 max-w-2xl leading-7 text-ink/60">{{ t('lesson.reader.questionDescription') }}</p>
+            </div>
+            <span class="w-fit shrink-0 rounded-full bg-paper px-3 py-1.5 text-xs font-semibold text-indigo">{{ answerContextSection ? t('lesson.answer.sectionContext', { position: answerContextSection.position }) : t('public.question.all') }}</span>
+          </div>
+
+          <div class="mt-5">
+            <p class="text-sm font-semibold text-ink/70">{{ t('lesson.reader.questionScope') }}</p>
+            <div class="mt-2 flex gap-2 overflow-x-auto pb-1">
+              <button type="button" class="min-h-10 shrink-0 rounded-xl border px-3 text-sm font-semibold transition" :class="answerSectionPosition === null ? 'border-indigo bg-paper text-indigo' : 'border-ink/12 bg-paper text-ink/60 hover:border-indigo/35'" @click="chooseAnswerScope(null)">{{ t('public.question.all') }}</button>
+              <button v-for="section in lesson.sections" :key="section.position" type="button" class="min-h-10 shrink-0 rounded-xl border px-3 text-sm font-semibold transition" :class="answerSectionPosition === section.position ? 'border-indigo bg-paper text-indigo' : 'border-ink/12 bg-paper text-ink/60 hover:border-indigo/35'" @click="chooseAnswerScope(section.position)">{{ t('public.question.chapter', { position: section.position, title: section.title }) }}</button>
+            </div>
+          </div>
+
+          <LessonAnswerPanel
+            :current-section="answerContextSection"
+            :question="question"
+            :answer="answer"
+            :answered-question="answeredQuestion"
+            :answer-turns="answerTurns"
+            :active-learning-intent="activeLearningIntent"
+            :answer-loading="answerLoading"
+            :answer-error="answerError"
+            :online="online"
+            :ruling="ruling"
+            :ruling-saving="rulingSaving"
+            :ruling-error="rulingError"
+            :ruling-conflict="rulingConflict"
+            :editing-ruling="editingRuling"
+            :edited-verdict="editedVerdict"
+            :edited-explanation="editedExplanation"
+            @update:question="question = $event"
+            @update:editing-ruling="editingRuling = $event"
+            @update:edited-verdict="editedVerdict = $event"
+            @update:edited-explanation="editedExplanation = $event"
+            @ask="askCurrentSection"
+            @request-help="requestLearningHelp"
+            @open-card-ocr="cardOcrOpen = true"
+            @voice-transcript="useVoiceTranscript"
+            @confirm-ruling="confirmAnswer"
+            @reload-ruling="reloadRuling"
+            @save-ruling-revision="saveRulingRevision"
+          />
+        </section>
+
+        <nav class="mt-8 flex gap-2 overflow-x-auto border-b border-ink/10 pb-5" :aria-label="t('lesson.reader.chapterDirectory')">
+          <a v-for="section in lesson.sections" :key="section.position" :href="`#private-chapter-${section.position}`" class="min-h-10 shrink-0 rounded-xl border border-ink/12 bg-paper px-3 py-2 text-sm font-semibold text-ink/65 transition hover:border-indigo/35 hover:text-indigo" @click="chooseAnswerScope(section.position)">{{ t('public.question.chapter', { position: section.position, title: section.title }) }}</a>
+        </nav>
+
+        <section v-for="section in lesson.sections" :id="`private-chapter-${section.position}`" :key="section.position" class="scroll-mt-24 border-b border-ink/10 py-10">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <p class="text-sm font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
+            <button type="button" class="min-h-10 rounded-lg border border-indigo/20 px-3 text-xs font-semibold text-indigo transition hover:bg-indigo/5" @click="askAboutSection(section.position)">{{ t('public.question.askChapter') }}</button>
+          </div>
+          <h2 class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ section.title }}</h2>
+          <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
+
+          <ol class="mt-7 space-y-5">
+            <li v-for="step in section.steps" :key="`${section.position}-${step.position}`" class="rounded-xl border border-ink/10 bg-paper p-5 shadow-sm sm:p-6" data-testid="private-rule-step">
+              <div class="flex gap-4">
+                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ step.position }}</span>
+                <div class="min-w-0 flex-1">
+                  <h3 class="font-display text-xl font-semibold">{{ step.heading }}</h3>
+                  <p class="mt-2 leading-7 text-ink/75">{{ step.text }}</p>
+                  <a v-if="step.visualFocus" :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-5 block overflow-hidden rounded-lg border border-ink/10 bg-canvas">
+                    <img :src="focusedPageImageUrl(step.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: step.visualFocus.label, page: step.visualFocus.pageNumber })" class="max-h-96 w-full object-contain" loading="lazy">
+                    <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
+                  </a>
+                  <a v-if="step.sourcePages.length" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-4 inline-flex text-sm text-ink/45 transition hover:text-indigo">{{ t('lesson.chapter.source', { pages: step.sourcePages.join(locale === 'en' ? ', ' : '、') }) }}</a>
+                </div>
+              </div>
+            </li>
+          </ol>
+        </section>
+
+        <LessonComprehensionPanel
+          v-if="!generationActive && (comprehension || comprehensionError)"
+          :comprehension="comprehension"
+          :error-message="comprehensionError"
+          :saving="comprehensionSaving"
           :online="online"
-          :resuming="resumingLesson"
-          :resume-error="resumeError"
-          :media-mode-available="mediaModeAvailable"
-          @select-section="selectSection"
-          @select-media-mode="selectMediaMode"
-          @resume="resumeLesson"
+          :page-image-url="pageImageUrl"
+          :focused-page-image-url="focusedPageImageUrl"
+          :visual-focus-style="visualFocusStyle"
+          @rate-task="recordComprehension"
+          @rate-visual-aid="recordVisualAid"
+          @revisit-chapter="selectSection"
         />
 
-        <section v-if="currentSection" class="min-w-0" aria-live="polite">
-          <div class="rounded-[2rem] border border-ink/10 bg-paper p-5 shadow-sm sm:p-8">
-            <LessonReaderChapterHeader
-              :section="currentSection"
-              :section-count="lesson.sections.length"
-              :outcome="lessonOutcome(currentSection)"
-              :lesson-still-growing="lessonStillGrowing"
-              :reading-current-last-chapter="readingCurrentLastChapter"
-              @ask-question="focusQuestionPanel"
-            />
-
-            <audio
-              v-if="narration"
-              ref="narrationPlayer"
-              class="hidden"
-              preload="metadata"
-              :src="narrationAudioUrl"
-              @loadedmetadata="onNarrationLoaded"
-              @seeked="onNarrationSeeked"
-              @timeupdate="onNarrationTimeUpdate"
-              @play="narrationPlaying = true"
-              @pause="onNarrationPaused"
-              @ended="narrationPlaying = false"
-              @error="onNarrationError"
-            >{{ t('lesson.reader.audio.unsupported') }}</audio>
-
-            <LessonVideoPanel
-              v-if="mediaMode === 'VIDEO'"
-              :chapter="currentVideoChapter"
-              :active-frame="activeVideoFrame"
-              :chapters="video?.chapters ?? []"
-              :active-chapter-index="progress.currentIndex"
-              :duration-millis="video?.durationMillis ?? 0"
-              :playback-millis="narrationMillis"
-              :playing="narrationPlaying"
-              :playback-rate="narrationRate"
-              :audio-available="audioAvailable"
-              :format-duration="formatDuration"
-              :visual-kind-label="visualKindLabel"
-              @seek="seekNarration"
-              @toggle-playback="toggleNarration"
-              @replay="replayCurrentSegment"
-              @cycle-rate="cycleNarrationRate"
-              @select-chapter="selectSection"
-            />
-
-            <LessonChapterContent
-              v-if="mediaMode !== 'VIDEO'"
-              :section="currentSection"
-              :lead-step="chapterLeadStep"
-              :path-steps="chapterPathSteps"
-              :support-steps="chapterSupportSteps"
-              :check-steps="chapterCheckSteps"
-              :visual-step-count="chapterVisualSteps.length"
-              :path-title="chapterPathTitle"
-              :current-visual-page-number="currentVisualPageNumber"
-              :visual-feedback-saving="comprehensionSaving"
-              :online="online"
-              :page-image-url="pageImageUrl"
-              :focused-page-image-url="focusedPageImageUrl"
-              :step-source-label="stepSourceLabel"
-              :move-meta="moveMeta"
-              :visual-kind-label="visualKindLabel"
-              :has-visual-aid="hasVisualAid"
-              :visual-aid-result="visualAidResult"
-              @rate-visual-aid="recordChapterVisualAid"
-            />
-
-            <LessonNarrationPanel
-              :visible="mediaMode === 'AUDIO'"
-              :chapter="currentNarration"
-              :active-cue="activeCue"
-              :duration-millis="narrationDurationMillis"
-              :playback-millis="narrationMillis"
-              :playing="narrationPlaying"
-              :playback-rate="narrationRate"
-              :format-duration="formatDuration"
-              @seek-segment="seekToSegment"
-              @seek="seekNarration"
-              @toggle-playback="toggleNarration"
-              @replay="replayCurrentSegment"
-              @cycle-rate="cycleNarrationRate"
-            />
-
-            <LessonComprehensionPanel
-              v-if="!generationActive && progress.currentIndex === lesson.sections.length - 1 && (comprehension || comprehensionError)"
-              :comprehension="comprehension"
-              :error-message="comprehensionError"
-              :saving="comprehensionSaving"
-              :online="online"
-              :page-image-url="pageImageUrl"
-              :focused-page-image-url="focusedPageImageUrl"
-              :visual-focus-style="visualFocusStyle"
-              @rate-task="recordComprehension"
-              @rate-visual-aid="recordVisualAid"
-              @revisit-chapter="selectSection"
-            />
-
-            <LessonAnswerPanel
-              :current-section="currentSection"
-              :question="question"
-              :answer="answer"
-              :answered-question="answeredQuestion"
-              :answer-turns="answerTurns"
-              :active-learning-intent="activeLearningIntent"
-              :answer-loading="answerLoading"
-              :answer-error="answerError"
-              :online="online"
-              :ruling="ruling"
-              :ruling-saving="rulingSaving"
-              :ruling-error="rulingError"
-              :ruling-conflict="rulingConflict"
-              :editing-ruling="editingRuling"
-              :edited-verdict="editedVerdict"
-              :edited-explanation="editedExplanation"
-              @update:question="question = $event"
-              @update:editing-ruling="editingRuling = $event"
-              @update:edited-verdict="editedVerdict = $event"
-              @update:edited-explanation="editedExplanation = $event"
-              @ask="askCurrentSection"
-              @request-help="requestLearningHelp"
-              @open-card-ocr="cardOcrOpen = true"
-              @voice-transcript="useVoiceTranscript"
-              @confirm-ruling="confirmAnswer"
-              @reload-ruling="reloadRuling"
-              @save-ruling-revision="saveRulingRevision"
-            />
+        <details v-if="!generationActive && (audioAvailable || video)" class="mt-8 rounded-3xl border border-ink/10 bg-paper p-5 sm:p-6">
+          <summary class="cursor-pointer font-semibold text-ink">{{ t('lesson.reader.mediaOptional') }}</summary>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <button v-for="mode in availableMediaModes" :key="mode" type="button" :disabled="!mediaModeAvailable(mode)" class="min-h-10 rounded-xl border px-3 text-sm font-semibold disabled:opacity-35" :class="mediaMode === mode ? 'border-indigo bg-indigo/8 text-indigo' : 'border-ink/12 text-ink/60'" @click="selectMediaMode(mode)">{{ mediaModeLabel(mode) }}</button>
           </div>
-        </section>
-      </div>
-
-      <LessonReaderControls
-        v-if="lesson"
-        :current-index="progress.currentIndex"
-        :section-count="lesson.sections.length"
-        :lesson-still-growing="lessonStillGrowing"
-        :reading-current-last-chapter="readingCurrentLastChapter"
-        :waiting-for-next-chapter="waitingForNextChapter"
-        @previous="previousSection"
-        @skip="finish('skipped')"
-        @complete="finish('completed')"
-      />
+          <audio v-if="narration" ref="narrationPlayer" class="hidden" preload="metadata" :src="narrationAudioUrl" @loadedmetadata="onNarrationLoaded" @seeked="onNarrationSeeked" @timeupdate="onNarrationTimeUpdate" @play="narrationPlaying = true" @pause="onNarrationPaused" @ended="narrationPlaying = false" @error="onNarrationError">{{ t('lesson.reader.audio.unsupported') }}</audio>
+          <LessonVideoPanel v-if="mediaMode === 'VIDEO'" :chapter="currentVideoChapter" :active-frame="activeVideoFrame" :chapters="video?.chapters ?? []" :active-chapter-index="progress.currentIndex" :duration-millis="video?.durationMillis ?? 0" :playback-millis="narrationMillis" :playing="narrationPlaying" :playback-rate="narrationRate" :audio-available="audioAvailable" :format-duration="formatDuration" :visual-kind-label="visualKindLabel" @seek="seekNarration" @toggle-playback="toggleNarration" @replay="replayCurrentSegment" @cycle-rate="cycleNarrationRate" @select-chapter="selectSection" />
+          <LessonNarrationPanel :visible="mediaMode === 'AUDIO'" :chapter="currentNarration" :active-cue="activeCue" :duration-millis="narrationDurationMillis" :playback-millis="narrationMillis" :playing="narrationPlaying" :playback-rate="narrationRate" :format-duration="formatDuration" @seek-segment="seekToSegment" @seek="seekNarration" @toggle-playback="toggleNarration" @replay="replayCurrentSegment" @cycle-rate="cycleNarrationRate" />
+        </details>
+      </article>
 
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
     </div>

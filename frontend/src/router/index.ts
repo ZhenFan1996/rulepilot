@@ -10,7 +10,6 @@ import PublicLibraryView from '@/views/PublicLibraryView.vue'
 import LessonsView from '@/views/LessonsView.vue'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
-import TableModeView from '@/views/TableModeView.vue'
 import ModelSettingsView from '@/views/ModelSettingsView.vue'
 import AccountView from '@/views/AccountView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
@@ -81,7 +80,7 @@ const router = createRouter({
     {
       path: '/table/:planId',
       name: 'table-mode',
-      component: TableModeView,
+      redirect: (to) => ({ name: 'lesson', params: { planId: to.params.planId } }),
     },
     {
       path: '/questions',

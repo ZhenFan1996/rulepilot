@@ -57,12 +57,11 @@ export interface CsrfResponse {
 interface AnswerContext {
   planId: string
   documentVersionId: string
-  playerCount: number
   section: {
     topicKey: string
     title: string
     coverageTags: string[]
-  }
+  } | null
   locale: AppLocale
 }
 
@@ -131,8 +130,9 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
         body: JSON.stringify({
           question: text,
-          currentLessonSection: [context.section.topicKey, context.section.title, ...context.section.coverageTags].join(' '),
-          playerCount: context.playerCount,
+          currentLessonSection: context.section
+            ? [context.section.topicKey, context.section.title, ...context.section.coverageTags].join(' ')
+            : null,
           previousQuestion: previousTurn?.question,
           learningIntent,
           language: context.locale,

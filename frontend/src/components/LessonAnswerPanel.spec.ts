@@ -114,7 +114,7 @@ describe('LessonAnswerPanel', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('What is unclear in this step?')
+    expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Ask a question')
     expect(wrapper.text()).toContain('How this answer was reached')
     expect(wrapper.text()).toContain('Applied to your stated situation')
