@@ -14,6 +14,7 @@ import {
   summarizeRunProgress,
   resetGeneratedLessonStateForPlanRefresh,
   ensureTeachingRun,
+  ensureVisualEnrichmentRun,
 } from './generate-public-corpus-entry.mjs'
 
 test('selects one qualified title without accepting excluded or fuzzy entries', () => {
@@ -170,6 +171,25 @@ test('reuses a successful teaching run instead of creating a duplicate', async (
 
   assert.deepEqual(run, { runId: 'teach-existing', state: 'COMPLETED', reused: true })
   assert.deepEqual(calls, ['/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1'])
+})
+
+test('starts visual enrichment for a completed legacy lesson with no visual run', async () => {
+  const calls = []
+  const client = {
+    request: async (path, options = {}) => {
+      calls.push({ path, options })
+      if (path.includes('/assistant-runs/latest')) return null
+      return { assistantRunId: 'visual-1', state: 'RECEIVED', reused: false }
+    },
+  }
+
+  const run = await ensureVisualEnrichmentRun(client, 'plan-1')
+
+  assert.deepEqual(run, { runId: 'visual-1', state: 'RECEIVED', reused: false })
+  assert.deepEqual(calls, [
+    { path: '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1', options: {} },
+    { path: '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/visuals', options: { method: 'POST' } },
+  ])
 })
 
 test('reuses an assigned document with the same official source and checksum', () => {

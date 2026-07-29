@@ -345,6 +345,21 @@ export async function ensureTeachingRun(client, planId) {
   return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
 }
 
+/**
+ * Older completed teaching runs predate visual enrichment. Start that optional follow-up explicitly instead of
+ * waiting for an event that no longer has a producer.
+ */
+export async function ensureVisualEnrichmentRun(client, planId) {
+  const existing = await latestRun(client, planId, 'VISUAL_ENRICHMENT')
+  if (existing && !FAILED_RUN_STATES.has(existing.run.state)) {
+    return { runId: existing.run.id, state: existing.run.state, reused: true }
+  }
+  const launch = await client.request(`/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/visuals`, {
+    method: 'POST',
+  })
+  return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
+}
+
 async function uploadEntry(client, entry, pdfPath, editionId) {
   const bytes = await readFile(pdfPath)
   const form = new FormData()
@@ -539,20 +554,9 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   }
 
   if (!state.visual) {
-    const details = await poll(
-      '等待局部图示任务启动',
-      state,
-      () => latestRun(client, state.plan.id, 'VISUAL_ENRICHMENT'),
-      (value) => value !== null,
-      deadline,
-    )
-    state.visual = {
-      runId: details.run.id,
-      state: details.run.state,
-      lastErrorCode: details.run.lastErrorCode,
-      activityCount: details.activities?.length ?? 0,
-    }
+    state.visual = await ensureVisualEnrichmentRun(client, state.plan.id)
     await checkpoint(outputPath, state)
+    progress(state, state.visual.reused ? '复用已有局部图示任务' : '已启动局部图示任务')
   }
   if (!TERMINAL_RUN_STATES.has(state.visual.state)) {
     const details = await poll(
