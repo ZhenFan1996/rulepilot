@@ -16,6 +16,8 @@ import {
   resetStaleServerState,
   ensureTeachingRun,
   ensureVisualEnrichmentRun,
+  ensureEnglishLocalization,
+  summarizeLocalization,
 } from './generate-public-corpus-entry.mjs'
 
 test('selects one qualified title without accepting excluded or fuzzy entries', () => {
@@ -214,6 +216,46 @@ test('starts visual enrichment for a completed legacy lesson with no visual run'
     { path: '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=plan-1', options: {} },
     { path: '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/visuals', options: { method: 'POST' } },
   ])
+})
+
+test('starts an English projection when the public corpus lesson has not been localized', async () => {
+  const calls = []
+  const client = {
+    request: async (path, options = {}) => {
+      calls.push({ path, options })
+      if (options.method !== 'POST') return { language: 'EN', status: null, failureCode: null }
+      return { language: 'EN', status: 'PENDING', failureCode: null }
+    },
+  }
+
+  const localization = await ensureEnglishLocalization(client, 'plan-1')
+
+  assert.deepEqual(localization, { state: 'PENDING', failureCode: null, reused: false })
+  assert.deepEqual(calls, [
+    { path: '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/localizations/en', options: {} },
+    {
+      path: '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/localizations/en',
+      options: { method: 'POST' },
+    },
+  ])
+})
+
+test('reuses an existing English projection and reports its bounded status', async () => {
+  const calls = []
+  const client = {
+    request: async (path) => {
+      calls.push(path)
+      return { language: 'EN', status: 'READY', failureCode: null }
+    },
+  }
+
+  assert.deepEqual(await ensureEnglishLocalization(client, 'plan-1'), {
+    state: 'READY', failureCode: null, reused: true,
+  })
+  assert.deepEqual(calls, ['/api/v1/teaching-plans/plan-1/illustrated-lessons/latest/localizations/en'])
+  assert.equal(summarizeLocalization({ status: 'RUNNING' }), '英文讲解 RUNNING')
+  assert.equal(summarizeLocalization({ status: 'FAILED', failureCode: 'MODEL_UNAVAILABLE' }),
+    '英文讲解 FAILED · MODEL_UNAVAILABLE')
 })
 
 test('reuses an assigned document with the same official source and checksum', () => {

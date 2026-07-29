@@ -109,13 +109,13 @@ export function summarizeRunProgress(details) {
 }
 
 export function resetGeneratedLessonStateForPlanRefresh(state) {
-  const { preparation, plan, teaching, visual, result, ...reusableState } = state
+  const { preparation, plan, teaching, visual, localization, result, ...reusableState } = state
   return reusableState
 }
 
 /** A local checkpoint cannot outlive a replaced development or production database. */
 export function resetStaleServerState(state) {
-  const { document, catalog, preparation, plan, teaching, visual, result, ...localState } = state
+  const { document, catalog, preparation, plan, teaching, visual, localization, result, ...localState } = state
   return localState
 }
 
@@ -264,12 +264,12 @@ async function checkpoint(path, state, change = {}) {
   await writeJson(path, state)
 }
 
-async function poll(label, state, operation, complete, deadline, interval = 2_000) {
+async function poll(label, state, operation, complete, deadline, interval = 2_000, summarize = null) {
   let previous = ''
   let lastMessageAt = 0
   while (Date.now() < deadline) {
     const value = await operation()
-    const current = value?.run ? summarizeRunProgress(value) : String(value)
+    const current = summarize ? summarize(value) : value?.run ? summarizeRunProgress(value) : String(value)
     if (current !== previous || Date.now() - lastMessageAt >= 10_000) {
       progress(state, `${label}: ${current}`)
       previous = current
@@ -364,6 +364,23 @@ export async function ensureVisualEnrichmentRun(client, planId) {
     method: 'POST',
   })
   return { runId: launch.assistantRunId, state: launch.state, reused: launch.reused }
+}
+
+/** Public corpus entries promise a readable English projection, not only an English navigation shell. */
+export async function ensureEnglishLocalization(client, planId) {
+  const path = `/api/v1/teaching-plans/${planId}/illustrated-lessons/latest/localizations/en`
+  const existing = await client.request(path)
+  if (existing.status && existing.status !== 'FAILED') {
+    return { state: existing.status, failureCode: existing.failureCode ?? null, reused: true }
+  }
+  const launch = await client.request(path, { method: 'POST' })
+  return { state: launch.status, failureCode: launch.failureCode ?? null, reused: false }
+}
+
+export function summarizeLocalization(view) {
+  if (!view) return '英文讲解状态未知'
+  const suffix = view.failureCode ? ` · ${view.failureCode}` : ''
+  return `英文讲解 ${view.status ?? 'NOT_PREPARED'}${suffix}`
 }
 
 async function uploadEntry(client, entry, pdfPath, editionId) {
@@ -586,8 +603,32 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     await checkpoint(outputPath, state)
   }
 
+  if (!state.localization || state.localization.state === 'FAILED') {
+    state.localization = await ensureEnglishLocalization(client, state.plan.id)
+    await checkpoint(outputPath, state)
+    progress(state, state.localization.reused ? '复用已有英文讲解' : '已启动英文讲解本地化')
+  }
+  if (state.localization.state !== 'READY') {
+    const localized = await poll(
+      '生成英文讲解',
+      state,
+      () => client.request(`/api/v1/teaching-plans/${state.plan.id}/illustrated-lessons/latest/localizations/en`),
+      (value) => value.status === 'READY' || value.status === 'FAILED',
+      deadline,
+      2_000,
+      summarizeLocalization,
+    )
+    state.localization.state = localized.status
+    state.localization.failureCode = localized.failureCode ?? null
+    await checkpoint(outputPath, state)
+    if (state.localization.state === 'FAILED') {
+      throw new Error(`English lesson localization failed${state.localization.failureCode ? `: ${state.localization.failureCode}` : ''}`)
+    }
+  }
+
   const lesson = await client.request(`/api/v1/teaching-plans/${state.plan.id}/illustrated-lessons/latest`)
   const publicLesson = await client.request(`/api/public/lessons/${state.plan.id}`)
+  const englishPublicLesson = await client.request(`/api/public/lessons/${state.plan.id}?language=en`)
   const hasRegisteredCover = Boolean(publicLesson.gameCover?.imageUrl)
   const hasRulebookFrontCover = hasRegisteredCover ? false : await client.rulebookFrontCoverAvailable(state.plan.id)
   const coverCachedBytes = await client.cachePublicCover(state.plan.id)
@@ -600,12 +641,16 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     hasOfficialRulebook: Boolean(publicLesson.officialSourceUrl),
     visualEnrichmentState: state.visual.state,
     visualActivityCount: state.visual.activityCount ?? null,
+    englishLocalizationState: state.localization.state,
+    hasEnglishLocalization: englishPublicLesson.contentLanguage === 'en'
+      && englishPublicLesson.localizationStatus === 'READY',
     completedAt: new Date().toISOString(),
     elapsedSeconds: Math.round((Date.now() - new Date(state.startedAt).getTime()) / 1000),
     attemptElapsedSeconds: Math.round((Date.now() - new Date(state.attemptStartedAt).getTime()) / 1000),
   }
   if (result.status === 'INCOMPLETE') throw new Error('Generated lesson is incomplete and cannot enter the public corpus')
   if (!result.hasCover || !result.hasOfficialRulebook) throw new Error('Public lesson is missing its cover or official rulebook link')
+  if (!result.hasEnglishLocalization) throw new Error('Public lesson is missing its English localization')
   await checkpoint(outputPath, state, { result })
   progress(state, `公开讲解可读：${result.sectionCount} 章、${result.stepCount} 步、${result.visualStepCount} 个局部图示（视觉任务 ${result.visualEnrichmentState}）`)
   return state
