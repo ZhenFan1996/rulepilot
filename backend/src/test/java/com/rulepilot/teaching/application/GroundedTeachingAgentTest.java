@@ -1784,7 +1784,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void rejectsVisualOutputInsteadOfFabricatingAWholePageFocus() {
+    void fallsBackToCitedTextInsteadOfPublishingAWholePageFocus() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -1829,14 +1829,17 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(compositions).hasValue(6);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(compositions).hasValue(3);
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
+            assertThat(step.visualFocus()).isNull();
+            assertThat(step.text()).isEqualTo("组装主棋盘并放到桌面中央。");
+        });
     }
 
     @Test
-    void rejectsVisualBlockWhenNoPageImageReachedTheModel() {
+    void turnsAnUnbackedVisualBlockIntoCitedTextWhenNoPageImageReachedTheModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
@@ -1860,9 +1863,12 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus())
-                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
+            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
+            assertThat(step.visualFocus()).isNull();
+            assertThat(step.text()).isEqualTo("找到版图中央的放置区域。");
+        });
     }
 
     @Test

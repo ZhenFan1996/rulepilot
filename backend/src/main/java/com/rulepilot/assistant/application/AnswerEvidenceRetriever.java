@@ -130,11 +130,15 @@ final class AnswerEvidenceRetriever {
             // The last intent is deliberately broad recall support. It may fill a genuine retrieval gap, but it
             // must never become the answer's primary anchor merely because it happens to rank a generic paragraph.
             boolean supplementaryIntent = intentIndex == intents.size() - 1;
-            if (supplementaryIntent && !intentAnchors.isEmpty()) {
-                continue;
-            }
-            selectIntentAnchor(intent, retrieved, supplementaryIntent, intentAnchors);
-            for (HybridEvidenceHit hit : retrieved) {
+            // Keep direct supplementary evidence and every visual-page observation. Compound questions regularly put
+            // their second condition in this recall pass, while a broad recap paragraph can otherwise dilute a
+            // precise primary answer. selectIntentAnchor still excludes supplementary results, so they cannot
+            // displace the primary rule as the answer's anchor.
+            List<HybridEvidenceHit> answerEvidence = supplementaryIntent && !intentAnchors.isEmpty()
+                    ? directSupplementaryEvidence(question, retrieved, intentAnchors.values())
+                    : retrieved;
+            selectIntentAnchor(intent, answerEvidence, supplementaryIntent, intentAnchors);
+            for (HybridEvidenceHit hit : answerEvidence) {
                 HybridEvidenceHit existing = evidenceById.get(hit.evidence().chunkId());
                 if (existing != null && !AnswerEvidencePolicy.sameEvidenceSnapshot(existing, hit)) {
                     conflicting = true;
@@ -271,6 +275,28 @@ final class AnswerEvidenceRetriever {
                         .reversed()
                         .thenComparing(Comparator.comparingDouble(HybridEvidenceHit::score).reversed())
                         .thenComparing(hit -> hit.evidence().chunkId()))
+                .toList();
+    }
+
+    /**
+     * A supplementary query expands the player's wording with generic rule facets. Preserve it when its text still
+     * carries the player's distinctive condition; otherwise keep the primary anchor alone. If the rulebook and
+     * question use different languages there is no honest lexical signal, so the result remains available for the
+     * model and its citation validator rather than being silently discarded.
+     */
+    private List<HybridEvidenceHit> directSupplementaryEvidence(
+            UnderstoodQuestion question,
+            List<HybridEvidenceHit> retrieved,
+            java.util.Collection<HybridEvidenceHit> primaryAnchors) {
+        Set<String> terms = intentTerms(question.normalizedQuestion());
+        int strongestPrimaryCoverage = primaryAnchors.stream()
+                .mapToInt(hit -> intentCoverage(hit, terms))
+                .max()
+                .orElse(0);
+        if (terms.isEmpty() || strongestPrimaryCoverage == 0) return retrieved;
+        int requiredCoverage = Math.min(2, strongestPrimaryCoverage);
+        return retrieved.stream()
+                .filter(hit -> intentCoverage(hit, terms) >= requiredCoverage)
                 .toList();
     }
 

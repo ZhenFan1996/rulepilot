@@ -162,7 +162,10 @@ final class TeachingDraftRecoveryPolicy {
                                 java.util.stream.Collectors.toCollection(LinkedHashSet::new))))
                 .entrySet()
                 .stream()
-                .map(entry -> String.join("、", entry.getValue()) + "人均在第" + entry.getKey() + "轮结束")
+                .map(entry -> entry.getValue().stream()
+                        .sorted(java.util.Comparator.comparingInt(Integer::parseInt))
+                        .collect(java.util.stream.Collectors.joining("、"))
+                        + "人均在第" + entry.getKey() + "轮结束")
                 .collect(java.util.stream.Collectors.joining("；", "完整人数对应为：", "。"));
         Set<UUID> scheduleEvidence = schedules.stream()
                 .map(PlayerRoundSchedule::evidenceId)

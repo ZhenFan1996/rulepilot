@@ -42,7 +42,9 @@ final class AnswerEvidenceSelectionPolicy {
             evidenceById.values().stream()
                     .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
                     .sorted(byScoreThenId())
-                    .forEach(hit -> selected.putIfAbsent(hit.evidence().chunkId(), hit));
+                    .filter(hit -> !selected.containsKey(hit.evidence().chunkId()))
+                    .limit(3 - selected.size())
+                    .forEach(hit -> selected.put(hit.evidence().chunkId(), hit));
         }
         List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(5).toList();
         return AnswerEvidencePolicy.isEndgameResolutionQuestion(normalizedQuestion)
