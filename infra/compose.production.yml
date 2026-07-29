@@ -48,9 +48,10 @@ services:
       # rendered rulebook pages in the API process and protects ordinary reading, upload, and question requests.
       VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-1}
       VISUAL_CATALOG_TIMEOUT: PT75S
-      # Produce a small first visual pass and let later feedback request more precise illustrations. This prevents
-      # one upload from monopolising the small production host after its text lesson is already usable.
-      VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-2}
+      # Publish the cited text lesson first, then give the first visual pass enough breadth to cover the major
+      # gameplay chapters. Vision still runs one request at a time on this small host, so it cannot create a burst
+      # of rendered-page buffers or delay reading and answering requests.
+      VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-6}
       VISUAL_MAX_STEPS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_STEPS_PER_SECTION:-1}
       ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
       SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
