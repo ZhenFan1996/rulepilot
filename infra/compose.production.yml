@@ -37,7 +37,7 @@ services:
       # On a single-core host, one section at a time avoids three concurrent model responses retaining large
       # evidence contexts in the web process. The reader-facing API stays responsive while the complete lesson
       # still arrives in the same ordered structure.
-      TEACHING_BASE_SECTION_PARALLELISM: "1"
+      TEACHING_BASE_SECTION_PARALLELISM: ${PRODUCTION_TEACHING_BASE_SECTION_PARALLELISM:-1}
       # Verified local crops are optional post-publication work. Keep their small queue separate from the base
       # lesson worker so a fresh upload can start immediately while an older lesson gains illustrations.
       VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"
@@ -46,14 +46,14 @@ services:
       VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
       # Vision work is optional after the cited text lesson exists. A single Qwen request avoids holding multiple
       # rendered rulebook pages in the API process and protects ordinary reading, upload, and question requests.
-      VISUAL_REQUEST_PARALLELISM: "1"
+      VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-1}
       VISUAL_CATALOG_TIMEOUT: PT75S
       # Produce a small first visual pass and let later feedback request more precise illustrations. This prevents
       # one upload from monopolising the small production host after its text lesson is already usable.
-      VISUAL_MAX_SECTIONS: "2"
-      VISUAL_MAX_STEPS_PER_SECTION: "1"
-      ANSWER_RATE_PROVIDER_CONCURRENCY: "2"
-      SERVER_TOMCAT_THREADS_MAX: "16"
+      VISUAL_MAX_SECTIONS: ${PRODUCTION_VISUAL_MAX_SECTIONS:-2}
+      VISUAL_MAX_STEPS_PER_SECTION: ${PRODUCTION_VISUAL_MAX_STEPS_PER_SECTION:-1}
+      ANSWER_RATE_PROVIDER_CONCURRENCY: ${PRODUCTION_ANSWER_PROVIDER_CONCURRENCY:-2}
+      SERVER_TOMCAT_THREADS_MAX: ${PRODUCTION_TOMCAT_MAX_THREADS:-16}
       SERVER_TOMCAT_THREADS_MIN_SPARE: "4"
       SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "4"
       SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
