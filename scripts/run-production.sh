@@ -71,7 +71,10 @@ case "${1:-config}" in
 		# rsync can preserve a developer's restrictive target/ umask. Docker must be
 		# able to traverse it or it silently reuses a stale application layer.
 		chmod -R a+rX "$ROOT_DIR/backend/target"
-		compose up -d --build --wait postgres redis rabbitmq minio prometheus tempo grafana
+		# Prometheus, Tempo, and Grafana are useful on demand but compete with
+		# player-facing traffic on the production host's small CPU and memory budget.
+		compose up -d --build --wait postgres redis rabbitmq minio
+		compose stop prometheus tempo grafana >/dev/null 2>&1 || true
 		compose up -d --build --no-deps api
 		wait_for_api
 		compose up -d --build --no-deps frontend gateway

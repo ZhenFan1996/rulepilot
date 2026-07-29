@@ -200,8 +200,10 @@ class VersionedAgentPromptsTest {
         assertThat(prompts.lessonLocalizationSystem())
                 .contains("constrained translation", "exact section and step positions", "Do not add rules");
         assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");
-        assertThat(prompts.answerRetrievalRewriteSystem()).contains("retrieval", "English phrase");
-        assertThat(prompts.answerRetrievalRewriteUser()).contains("{question}");
+        assertThat(prompts.answerRetrievalRewriteSystem())
+                .contains("retrieval", "English phrase", "search phrases", "untrusted data", "Return JSON only");
+        assertThat(prompts.answerRetrievalRewriteUser())
+                .contains("{question}", "{previousQuestion}", "{lessonSection}");
         assertThat(prompts.criticSystem())
                 .contains(
                         "MISSING_EXCEPTION",
