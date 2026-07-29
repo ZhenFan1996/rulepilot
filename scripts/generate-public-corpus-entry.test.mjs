@@ -13,6 +13,7 @@ import {
   summarizeLesson,
   summarizeRunProgress,
   resetGeneratedLessonStateForPlanRefresh,
+  resetStaleServerState,
   ensureTeachingRun,
   ensureVisualEnrichmentRun,
 } from './generate-public-corpus-entry.mjs'
@@ -136,6 +137,29 @@ test('keeps the reusable source checkpoint while refreshing the generated lesson
     source: { sha256: 'checksum' },
     catalog: { editionId: 'edition-1' },
     document: { id: 'document-1', versionId: 'version-1', status: 'READY' },
+  })
+})
+
+test('drops server identifiers when a local checkpoint outlives its server database', () => {
+  const reset = resetStaleServerState({
+    schemaVersion: 1,
+    title: 'Example Game',
+    source: { sha256: 'checksum' },
+    models: { assignments: { teaching: 'deepseek' } },
+    document: { id: 'document-old', versionId: 'version-old', status: 'READY' },
+    catalog: { editionId: 'edition-old' },
+    preparation: { runId: 'prepare-old' },
+    plan: { id: 'plan-old' },
+    teaching: { runId: 'teaching-old' },
+    visual: { runId: 'visual-old' },
+    result: { lessonId: 'lesson-old' },
+  })
+
+  assert.deepEqual(reset, {
+    schemaVersion: 1,
+    title: 'Example Game',
+    source: { sha256: 'checksum' },
+    models: { assignments: { teaching: 'deepseek' } },
   })
 })
 

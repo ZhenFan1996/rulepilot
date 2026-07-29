@@ -113,6 +113,12 @@ export function resetGeneratedLessonStateForPlanRefresh(state) {
   return reusableState
 }
 
+/** A local checkpoint cannot outlive a replaced development or production database. */
+export function resetStaleServerState(state) {
+  const { document, catalog, preparation, plan, teaching, visual, result, ...localState } = state
+  return localState
+}
+
 export function selectReusableDocument(documents, entry, checksum) {
   const expectedTitle = `${entry.title} Rules`.toLocaleLowerCase('en-US')
   return (documents ?? [])
@@ -418,8 +424,16 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
   await checkpoint(outputPath, state, { models })
   progress(state, `模型角色：讲解 ${models.assignments.teaching}，视觉 ${models.assignments.visual}，答疑 ${models.assignments.answer}，复核 ${models.assignments.critic}`)
 
+  const visibleDocuments = await client.request('/api/v1/documents')
+  if (state.document && !visibleDocuments.some((candidate) => candidate.document.id === state.document.id
+      && candidate.latestVersion.id === state.document.versionId)) {
+    state = resetStaleServerState(state)
+    await checkpoint(outputPath, state)
+    progress(state, '本地断点对应的服务器数据已不存在，按规则书校验值重新连接当前服务器')
+  }
+
   if (!state.document) {
-    const reusable = selectReusableDocument(await client.request('/api/v1/documents'), entry, checksum)
+    const reusable = selectReusableDocument(visibleDocuments, entry, checksum)
     if (reusable) {
       const change = {
         document: {
