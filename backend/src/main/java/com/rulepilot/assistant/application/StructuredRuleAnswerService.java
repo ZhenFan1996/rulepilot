@@ -45,7 +45,7 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    private static final String ANSWER_POLICY_VERSION = "answer-v67-matching-value-citation";
+    private static final String ANSWER_POLICY_VERSION = "answer-v68-executable-chapter-scope";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
