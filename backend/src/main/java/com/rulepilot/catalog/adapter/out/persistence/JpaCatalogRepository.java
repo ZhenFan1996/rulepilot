@@ -1,5 +1,6 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
+import com.rulepilot.catalog.PublicGameCoverLookup.Cover;
 import com.rulepilot.catalog.application.CatalogRepository;
 import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
@@ -15,8 +16,11 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.io.Serializable;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -149,6 +153,42 @@ public class JpaCatalogRepository implements CatalogRepository {
                 .getResultStream()
                 .map(entity -> entity.toDomain(findCompatibleEditionIds(entity.id)))
                 .toList();
+    }
+
+    @Override
+    public Map<UUID, Cover> findCoversByEditions(Collection<UUID> editionIds) {
+        if (editionIds == null || editionIds.isEmpty()) return Map.of();
+        List<GameEditionEntity> editions = entityManager
+                .createQuery(
+                        "select e from CatalogGameEditionEntity e where e.id in :editionIds", GameEditionEntity.class)
+                .setParameter("editionIds", editionIds)
+                .getResultList();
+        if (editions.isEmpty()) return Map.of();
+        Map<UUID, GameEntity> games = entityManager
+                .createQuery("select g from CatalogGameEntity g where g.id in :gameIds", GameEntity.class)
+                .setParameter("gameIds", editions.stream().map(edition -> edition.gameId).toList())
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(game -> game.id, game -> game));
+        Map<UUID, BggGameMetadataEntity> metadata = entityManager
+                .createQuery(
+                        "select m from CatalogBggGameMetadataEntity m where m.gameId in :gameIds",
+                        BggGameMetadataEntity.class)
+                .setParameter("gameIds", games.keySet())
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(value -> value.gameId, value -> value));
+        Map<UUID, Cover> result = new LinkedHashMap<>();
+        editions.forEach(edition -> {
+            GameEntity game = games.get(edition.gameId);
+            BggGameMetadataEntity bgg = metadata.get(edition.gameId);
+            if (game != null && bgg != null && !bgg.thumbnailUrl.isBlank()) {
+                result.put(
+                        edition.id,
+                        new Cover(game.name, bgg.bggId, bgg.thumbnailUrl, "https://boardgamegeek.com/boardgame/" + bgg.bggId));
+            }
+        });
+        return Map.copyOf(result);
     }
 
     private Set<UUID> findCompatibleEditionIds(UUID expansionId) {

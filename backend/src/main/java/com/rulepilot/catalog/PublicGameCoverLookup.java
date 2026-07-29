@@ -1,5 +1,7 @@
 package com.rulepilot.catalog;
 
+import java.util.Collection;
+import java.util.Map;
 import java.net.URI;
 import java.util.Optional;
 import java.util.UUID;
@@ -8,6 +10,8 @@ import java.util.UUID;
 public interface PublicGameCoverLookup {
 
     Optional<Cover> findByEdition(UUID editionId);
+
+    Map<UUID, Cover> findByEditions(Collection<UUID> editionIds);
 
     record Cover(String gameName, int bggId, String thumbnailUrl, String bggUrl) {
         public Cover {

@@ -49,11 +49,7 @@ public class PublicLessonReader {
     }
 
     static boolean isPubliclyReadable(IllustratedLesson lesson) {
-        if (lesson == null || lesson.status() == LessonStatus.INCOMPLETE) return false;
-        return lesson.sections().stream().noneMatch(section -> PlayerFacingLessonLanguagePolicy.hasSourceGap(section.title())
-                || PlayerFacingLessonLanguagePolicy.hasSourceGap(section.visualCaption())
-                || section.steps().stream().anyMatch(step -> PlayerFacingLessonLanguagePolicy.hasSourceGap(step.heading())
-                        || PlayerFacingLessonLanguagePolicy.hasSourceGap(step.text())));
+        return PlayerFacingLessonLanguagePolicy.isPubliclyReadable(lesson);
     }
 
     private PublicCover cover(PublicRulebookReferenceLookup.Reference rulebook) {

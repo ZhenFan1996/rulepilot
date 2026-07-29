@@ -1,10 +1,13 @@
 package com.rulepilot.document.application;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.RuleDocument;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -52,6 +55,8 @@ public interface RuleDocumentRepository {
     List<DocumentSummary> findByEdition(UUID editionId, String createdBy);
 
     List<DocumentSummary> findByOwner(String createdBy);
+
+    Map<UUID, Reference> findReferences(Collection<UUID> documentVersionIds);
 
     record DocumentSummary(RuleDocument document, DocumentVersion latestVersion) {}
 

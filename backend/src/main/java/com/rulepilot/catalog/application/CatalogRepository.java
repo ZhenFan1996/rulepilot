@@ -1,10 +1,13 @@
 package com.rulepilot.catalog.application;
 
+import com.rulepilot.catalog.PublicGameCoverLookup.Cover;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -35,4 +38,6 @@ public interface CatalogRepository {
     List<GameEdition> findEditions(UUID gameId);
 
     List<Expansion> findExpansions(UUID gameId);
+
+    Map<UUID, Cover> findCoversByEditions(Collection<UUID> editionIds);
 }

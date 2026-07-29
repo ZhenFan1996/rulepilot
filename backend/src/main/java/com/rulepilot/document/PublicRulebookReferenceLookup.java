@@ -1,5 +1,7 @@
 package com.rulepilot.document;
 
+import java.util.Collection;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -7,6 +9,8 @@ import java.util.UUID;
 public interface PublicRulebookReferenceLookup {
 
     Optional<Reference> findReference(UUID documentVersionId);
+
+    Map<UUID, Reference> findReferences(Collection<UUID> documentVersionIds);
 
     record Reference(UUID documentVersionId, UUID gameEditionId, String title, String officialSourceUrl, String officialCoverUrl) {
         public Reference {

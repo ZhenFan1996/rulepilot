@@ -17,7 +17,21 @@ public interface TeachingPlanRepository {
 
     List<TeachingPlan> findRecent(int limit);
 
+    /**
+     * Lightweight newest-first references for discovery views.  Callers that only need the public catalog
+     * must not hydrate every section of every candidate teaching plan.
+     */
+    List<PlanReference> findRecentReferences(int limit);
+
     Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy);
 
     void delete(UUID planId);
+
+    record PlanReference(UUID teachingPlanId, UUID documentVersionId) {
+        public PlanReference {
+            if (teachingPlanId == null || documentVersionId == null) {
+                throw new IllegalArgumentException("teaching plan reference is invalid");
+            }
+        }
+    }
 }

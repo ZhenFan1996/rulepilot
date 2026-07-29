@@ -1,9 +1,10 @@
 package com.rulepilot.teaching.application;
 
+import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.util.regex.Pattern;
 
 /** Keeps missing-source diagnostics out of prose a player is meant to follow at the table. */
-final class PlayerFacingLessonLanguagePolicy {
+public final class PlayerFacingLessonLanguagePolicy {
 
     private static final Pattern SOURCE_GAP = Pattern.compile(
             "(?iu)(?:规则待定|当前(?:可用)?[^。！？!?]{0,60}(?:未|没有|无法)[^。！？!?]{0,60}(?:说明|确定)|"
@@ -16,7 +17,14 @@ final class PlayerFacingLessonLanguagePolicy {
 
     private PlayerFacingLessonLanguagePolicy() {}
 
-    static boolean hasSourceGap(String value) {
+    public static boolean hasSourceGap(String value) {
         return value != null && SOURCE_GAP.matcher(value).find();
+    }
+
+    public static boolean isPubliclyReadable(IllustratedLesson lesson) {
+        if (lesson == null || lesson.status() == IllustratedLesson.LessonStatus.INCOMPLETE) return false;
+        return lesson.sections().stream().noneMatch(section -> hasSourceGap(section.title())
+                || hasSourceGap(section.visualCaption())
+                || section.steps().stream().anyMatch(step -> hasSourceGap(step.heading()) || hasSourceGap(step.text())));
     }
 }

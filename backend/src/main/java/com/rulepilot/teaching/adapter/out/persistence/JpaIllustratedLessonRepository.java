@@ -17,7 +17,10 @@ import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -75,6 +78,38 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
                 .map(lesson -> lesson.toDomain(findSections(lesson.id)));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<LessonSummary> findLatestSummariesByPlans(Collection<UUID> teachingPlanIds) {
+        if (teachingPlanIds == null || teachingPlanIds.isEmpty()) return List.of();
+        Map<UUID, IllustratedLessonEntity> latestByPlan = new LinkedHashMap<>();
+        entityManager
+                .createQuery(
+                        "select l from IllustratedLessonEntity l where l.teachingPlanId in :planIds "
+                                + "order by l.teachingPlanId, l.createdAt desc",
+                        IllustratedLessonEntity.class)
+                .setParameter("planIds", teachingPlanIds)
+                .getResultList()
+                .forEach(lesson -> latestByPlan.putIfAbsent(lesson.teachingPlanId, lesson));
+        if (latestByPlan.isEmpty()) return List.of();
+
+        List<IllustratedLessonSectionEntity> sectionEntities = entityManager
+                .createQuery(
+                        "select s from IllustratedLessonSectionEntity s where s.lessonId in :lessonIds "
+                                + "order by s.lessonId, s.position",
+                        IllustratedLessonSectionEntity.class)
+                .setParameter("lessonIds", latestByPlan.values().stream().map(lesson -> lesson.id).toList())
+                .getResultList();
+        Map<UUID, List<IllustratedLessonSectionEntity>> sectionsByLesson = groupSections(sectionEntities);
+        Map<UUID, List<LessonStep>> stepsBySection = findStepsBySection(sectionEntities.stream()
+                .map(section -> section.id)
+                .toList());
+
+        return latestByPlan.values().stream()
+                .map(lesson -> summary(lesson, sectionsByLesson.getOrDefault(lesson.id, List.of()), stepsBySection))
+                .toList();
+    }
+
     private List<LessonSection> findSections(UUID lessonId) {
         return entityManager
                 .createQuery(
@@ -97,6 +132,47 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
                 .stream()
                 .map(IllustratedLessonStepEntity::toDomain)
                 .toList();
+    }
+
+    private Map<UUID, List<IllustratedLessonSectionEntity>> groupSections(
+            List<IllustratedLessonSectionEntity> sections) {
+        Map<UUID, List<IllustratedLessonSectionEntity>> result = new LinkedHashMap<>();
+        sections.forEach(section -> result
+                .computeIfAbsent(section.lessonId, ignored -> new java.util.ArrayList<>())
+                .add(section));
+        return result;
+    }
+
+    private Map<UUID, List<LessonStep>> findStepsBySection(List<UUID> sectionIds) {
+        if (sectionIds.isEmpty()) return Map.of();
+        Map<UUID, List<LessonStep>> result = new LinkedHashMap<>();
+        entityManager
+                .createQuery(
+                        "select s from IllustratedLessonStepEntity s where s.lessonSectionId in :sectionIds "
+                                + "order by s.lessonSectionId, s.position",
+                        IllustratedLessonStepEntity.class)
+                .setParameter("sectionIds", sectionIds)
+                .getResultList()
+                .forEach(step -> result
+                        .computeIfAbsent(step.lessonSectionId, ignored -> new java.util.ArrayList<>())
+                        .add(step.toDomain()));
+        return result;
+    }
+
+    private LessonSummary summary(
+            IllustratedLessonEntity lesson,
+            List<IllustratedLessonSectionEntity> sectionEntities,
+            Map<UUID, List<LessonStep>> stepsBySection) {
+        List<LessonSection> sections = sectionEntities.stream()
+                .map(section -> section.toDomain(stepsBySection.getOrDefault(section.id, List.of())))
+                .toList();
+        IllustratedLesson fullLesson = lesson.toDomain(sections);
+        return new LessonSummary(
+                lesson.teachingPlanId,
+                fullLesson.status(),
+                com.rulepilot.teaching.application.PlayerFacingLessonLanguagePolicy.isPubliclyReadable(fullLesson),
+                sections.size(),
+                sections.stream().mapToInt(section -> section.steps().size()).sum());
     }
 }
 

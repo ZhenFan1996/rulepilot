@@ -10,7 +10,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -141,6 +143,12 @@ class BggCatalogImportServiceTest {
         @Override
         public List<Expansion> findExpansions(UUID gameId) {
             return List.of();
+        }
+
+        @Override
+        public Map<UUID, com.rulepilot.catalog.PublicGameCoverLookup.Cover> findCoversByEditions(
+                Collection<UUID> editionIds) {
+            return Map.of();
         }
     }
 }

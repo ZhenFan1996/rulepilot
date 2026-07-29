@@ -1,6 +1,7 @@
 package com.rulepilot.document.adapter.out.persistence;
 
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.PublicRulebookReferenceLookup.Reference;
 import com.rulepilot.document.application.RuleDocumentRepository;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
@@ -13,7 +14,10 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -337,6 +341,39 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
                 .setParameter("createdBy", createdBy)
                 .getResultList();
         return summaries(documents);
+    }
+
+    @Override
+    public Map<UUID, Reference> findReferences(Collection<UUID> documentVersionIds) {
+        if (documentVersionIds == null || documentVersionIds.isEmpty()) return Map.of();
+        List<DocumentVersionEntity> versions = entityManager
+                .createQuery(
+                        "select v from DocumentVersionEntity v where v.id in :versionIds", DocumentVersionEntity.class)
+                .setParameter("versionIds", documentVersionIds)
+                .getResultList();
+        if (versions.isEmpty()) return Map.of();
+        Map<UUID, RuleDocumentEntity> documentsById = entityManager
+                .createQuery(
+                        "select d from RuleDocumentEntity d where d.id in :documentIds", RuleDocumentEntity.class)
+                .setParameter("documentIds", versions.stream().map(version -> version.documentId).toList())
+                .getResultList()
+                .stream()
+                .collect(java.util.stream.Collectors.toMap(document -> document.id, document -> document));
+        Map<UUID, Reference> result = new LinkedHashMap<>();
+        versions.forEach(version -> {
+            RuleDocumentEntity document = documentsById.get(version.documentId);
+            if (document != null) {
+                result.put(
+                        version.id,
+                        new Reference(
+                                version.id,
+                                document.gameEditionId,
+                                document.title,
+                                document.officialSourceUrl,
+                                document.officialCoverUrl));
+            }
+        });
+        return Map.copyOf(result);
     }
 
     private List<DocumentSummary> summaries(List<RuleDocumentEntity> documents) {

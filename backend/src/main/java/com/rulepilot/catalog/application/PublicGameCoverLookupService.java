@@ -1,6 +1,9 @@
 package com.rulepilot.catalog.application;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
+import java.util.Collection;
+import java.util.Map;
+import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -24,5 +27,11 @@ class PublicGameCoverLookupService implements PublicGameCoverLookup {
                         metadata.bggId(),
                         metadata.thumbnailUrl(),
                         "https://boardgamegeek.com/boardgame/" + metadata.bggId()))));
+    }
+
+    @Override
+    public Map<UUID, Cover> findByEditions(Collection<UUID> editionIds) {
+        if (editionIds == null || editionIds.isEmpty()) return Map.of();
+        return catalog.findCoversByEditions(editionIds);
     }
 }

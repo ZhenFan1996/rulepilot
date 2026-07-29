@@ -77,6 +77,18 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
     }
 
     @Override
+    public List<PlanReference> findRecentReferences(int limit) {
+        if (limit < 1 || limit > 200) throw new IllegalArgumentException("recent plan limit is invalid");
+        return entityManager
+                .createQuery("select p from TeachingPlanEntity p order by p.createdAt desc", TeachingPlanEntity.class)
+                .setMaxResults(limit)
+                .getResultList()
+                .stream()
+                .map(plan -> new PlanReference(plan.id, plan.documentVersionId))
+                .toList();
+    }
+
+    @Override
     public Optional<TeachingPlan> findLatest(UUID documentVersionId, String createdBy) {
         return entityManager
                 .createQuery(
