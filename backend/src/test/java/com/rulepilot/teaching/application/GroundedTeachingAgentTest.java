@@ -711,7 +711,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void repairs_a_player_instruction_that_ends_with_an_unanswered_alternative() {
+    void retains_a_cited_player_choice_without_spending_the_repair_budget() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
@@ -724,9 +724,7 @@ class GroundedTeachingAgentTest {
             @Override
             public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
                 revisions.incrementAndGet();
-                assertThat(feedback).singleElement().satisfies(value -> assertThat(value)
-                        .contains("unanswered either/or alternative"));
-                return oneStepDraft(chunkId, "先按规则计算基础花费和折扣，再加入适用的额外花费。");
+                throw new AssertionError("A cited player choice must not be withheld for wording alone");
             }
         };
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
@@ -739,10 +737,9 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(revisions).hasValue(1);
+        assertThat(revisions).hasValue(0);
         assertThat(lesson.sections().getFirst().steps().getFirst().text())
-                .doesNotContain("还是先")
-                .contains("再加入");
+                .contains("还是先");
     }
 
     @Test

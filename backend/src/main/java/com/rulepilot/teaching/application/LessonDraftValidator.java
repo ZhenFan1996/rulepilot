@@ -378,13 +378,6 @@ final class LessonDraftValidator {
             throw new IllegalArgumentException(
                     "Finish every player-facing step; do not end a rule, example, or calculation with an ellipsis.");
         }
-        if (draft.steps().stream().anyMatch(step -> step != null
-                && step.kind() != TeachingMove.CHECK
-                && step.text() != null
-                && LessonDraftPresentationNormalizer.containsTrailingUnansweredAlternative(step.text()))) {
-            throw new IllegalArgumentException(
-                    "Finish every player-facing instruction; do not end it with an unanswered either/or alternative.");
-        }
         if (LessonDraftPresentationNormalizer.containsInternalEvidenceLanguage(draft.visualCaption())
                 || draft.steps().stream().anyMatch(step -> step != null
                         && (LessonDraftPresentationNormalizer.containsInternalEvidenceLanguage(step.heading())
