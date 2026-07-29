@@ -105,10 +105,15 @@ final class TeachingOutlineRevisionPolicy {
                         .thenComparingInt(PageInput::pageNumber))
                 .limit(4)
                 .toList();
-        if (missing.isEmpty()) return Optional.empty();
-        String pageCatalog = missing.stream()
-                .map(page -> "Page " + page.pageNumber() + ": " + boundedCoveragePageText(page.text()))
-                .collect(Collectors.joining("\n"));
+        List<String> requiredRepairs = new ArrayList<>();
+        if (!missing.isEmpty()) {
+            String pageCatalog = missing.stream()
+                    .map(page -> "Page " + page.pageNumber() + ": " + boundedCoveragePageText(page.text()))
+                    .collect(Collectors.joining("\n"));
+            requiredRepairs.add("Unowned substantive source pages:\n" + pageCatalog);
+        }
+        appendFinaleSourceBindingRepairs(outline, pages, requiredRepairs);
+        if (requiredRepairs.isEmpty()) return Optional.empty();
         return Optional.of("""
                 Rebuild the complete lesson outline so every substantive rulebook page has a teaching owner. The listed
                 page(s) are not currently bound to any topic's sourcePageNumbers. Add or expand a game-specific topic
@@ -118,8 +123,11 @@ final class TeachingOutlineRevisionPolicy {
                 A `[Visual page catalog]` entry is a page-local observation to navigate the original page image, not a
                 free-standing rule conclusion. Use it only to decide whether the page needs a teaching owner. Keep the
                 source page binding and do not invent an action, condition, or icon meaning that is not visibly stated.
-                Unowned substantive source pages:
-                """ + pageCatalog);
+                In particular, the game-end/final-scoring chapter must cite a direct end, defeat, victory, loss, final-score,
+                winner, or tie-rule page. A component, setup, or reward page cannot stand in for that procedure merely
+                because it uses related game terms.
+                Required source-binding repairs:
+                """ + String.join("\n", requiredRepairs));
     }
 
     static boolean isSubstantiveVisualCatalogPage(String text) {
@@ -184,6 +192,38 @@ final class TeachingOutlineRevisionPolicy {
         }
         if (containsAny(text, List.of("exception", "variant", "tie", "例外", "变体", "平局"))) return 1;
         return 2;
+    }
+
+    private static void appendFinaleSourceBindingRepairs(
+            TeachingOutlineModel.OutlineDraft outline, List<PageInput> pages, List<String> requiredRepairs) {
+        List<PageInput> directFinalePages = pages.stream()
+                .filter(TeachingOutlineRevisionPolicy::isDirectFinaleRulePage)
+                .limit(3)
+                .toList();
+        if (directFinalePages.isEmpty()) return;
+        for (TeachingOutlineModel.TopicDraft topic : outline.topics()) {
+            if (!isFinaleTopic(topic)) continue;
+            boolean directlyBound = topic.sourcePageNumbers().stream()
+                    .map(pageNumber -> pages.stream()
+                            .filter(page -> page.pageNumber() == pageNumber)
+                            .findFirst())
+                    .flatMap(Optional::stream)
+                    .anyMatch(TeachingOutlineRevisionPolicy::isDirectFinaleRulePage);
+            if (directlyBound) continue;
+            String candidates = directFinalePages.stream()
+                    .map(page -> "Page " + page.pageNumber() + ": " + boundedCoveragePageText(page.text()))
+                    .collect(Collectors.joining("\n"));
+            requiredRepairs.add("Finale chapter “" + topic.title() + "” has no direct endgame evidence. Rebind it to "
+                    + "one or more of these pages, preserving the relevant page owner if necessary:\n" + candidates);
+        }
+    }
+
+    private static boolean isDirectFinaleRulePage(PageInput page) {
+        String text = page.text() == null ? "" : page.text().toLowerCase(Locale.ROOT);
+        return containsAny(text, List.of(
+                "end of game", "game ends", "game end", "game is over", "game over", "final scoring",
+                "winner", "win the game", "victorious", "victory", "lose the game", "shared victory", "tie",
+                "游戏结束", "游戏终止", "游戏结束", "最终计分", "胜者", "获胜", "胜利", "失败", "平局", "共同获胜"));
     }
 
     private static boolean hasConcreteVisualGameplayEvidence(String normalizedText) {

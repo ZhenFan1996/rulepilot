@@ -303,6 +303,28 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void requiresTheFinaleChapterToBindADirectEndgamePageEvenWhenThatPageHasAnotherOwner() {
+        OutlineDraft outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        detailedTopic("components", "组件说明", "说明组件和奖励图标。", List.of(4, 5)),
+                        detailedTopic("round-flow", "回合流程", "说明回合阶段和伤害。", List.of(10)),
+                        detailedTopic("finish-and-score", "结束游戏并算出胜负", "说明结束触发、胜负与计分。", List.of(4, 5))));
+
+        String feedback = TeachingOutlineRevisionPolicy.sourcePageCoverageRevisionFeedback(
+                        outline,
+                        List.of(
+                                new PageInput(4, "Components: reward and player boards."),
+                                new PageInput(5, "Component anatomy and costs."),
+                                new PageInput(10, "Game End: if the boss is not destroyed, the game is over. Reduce its health to 0 to win the game.")))
+                .orElseThrow();
+
+        assertThat(feedback)
+                .contains("结束游戏并算出胜负", "no direct endgame evidence", "Page 10", "Game End");
+    }
+
+    @Test
     void samplesOnlyUnownedSparsePagesThatTheTextCoverageCannotAlreadyExplain() {
         OutlineDraft outline = new OutlineDraft(
                 "Game", "Premise", List.of(topic("setup", false, List.of(2))));
@@ -750,6 +772,10 @@ class TeachingPlanServiceTest {
     }
 
     private TopicDraft detailedTopic(String key, String title, String objective) {
+        return detailedTopic(key, title, objective, List.of(1));
+    }
+
+    private TopicDraft detailedTopic(String key, String title, String objective, List<Integer> pages) {
         return new TopicDraft(
                 key,
                 title,
@@ -758,7 +784,7 @@ class TeachingPlanServiceTest {
                 false,
                 List.of("rulebook term"),
                 List.of("core_loop"),
-                List.of(1));
+                pages);
     }
 
     private TopicDraft topicWithTags(String key, List<String> tags, List<Integer> pages) {
