@@ -122,6 +122,27 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
+    void scopesADirectSetupQuestionWhenThePlayerNamesTheSameActiveChapter() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "开局准备时，玩家需要先完成哪些关键步骤？",
+                "开局准备时，玩家需要先完成哪些关键步骤？",
+                QuestionType.RULE_QUERY,
+                List.of("开局", "准备", "步骤"),
+                Set.of(),
+                "SETUP");
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(versionId, "SETUP", null, null, Set.of()),
+                List.of("Root setup steps in order"));
+
+        assertThat(intents.getFirst().sectionTypes()).containsExactly("SETUP");
+        assertThat(intents.getFirst().currentSectionType()).isEqualTo("SETUP");
+    }
+
+    @Test
     void infersScoringScopeWithoutTrustingUnknownSectionNames() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(

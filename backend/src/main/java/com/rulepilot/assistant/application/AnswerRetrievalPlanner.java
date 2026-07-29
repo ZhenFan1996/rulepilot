@@ -42,24 +42,25 @@ public final class AnswerRetrievalPlanner {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
         String currentSection = knownSection(context.currentLessonSection());
+        Set<String> directQuestionScope = directQuestionScope(question, currentSection);
         List<RetrievalIntent> intents = new ArrayList<>(
                 AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion()));
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
-                : Set.of();
+                : directQuestionScope;
         int availableBeforeSupplementary = Math.max(1, MAX_INTENTS - intents.size() - 1);
         if (parts.size() == 1) {
             int rewriteBudget = Math.max(0, availableBeforeSupplementary - 1);
-            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget);
+            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
             intents.add(new RetrievalIntent(
                     expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection, true));
         } else {
             parts.stream().limit(availableBeforeSupplementary).forEach(part -> intents.add(new RetrievalIntent(
                     expandSearchTerms(part), learningScope, currentSection, true)));
             int rewriteBudget = Math.max(0, MAX_INTENTS - intents.size() - 1);
-            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget);
+            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
         }
         intents.add(new RetrievalIntent(
                 supplementaryQuery(question, context),
@@ -86,14 +87,21 @@ public final class AnswerRetrievalPlanner {
     }
 
     private static void addRewrittenQueries(
-            List<RetrievalIntent> intents, List<String> rewrittenQueries, int rewriteBudget) {
+            List<RetrievalIntent> intents,
+            List<String> rewrittenQueries,
+            int rewriteBudget,
+            Set<String> directQuestionScope,
+            String currentSection) {
         if (rewrittenQueries == null || rewriteBudget <= 0) return;
         rewrittenQueries.stream()
                 .map(AnswerRetrievalPlanner::bounded)
                 .filter(query -> !query.isBlank())
                 .distinct()
                 .limit(rewriteBudget)
-                .forEach(query -> intents.add(new RetrievalIntent(query, Set.of(), null)));
+                .forEach(query -> intents.add(new RetrievalIntent(
+                        query,
+                        directQuestionScope,
+                        directQuestionScope.isEmpty() ? null : currentSection)));
     }
 
     private static String expandSearchTerms(String questionPart) {
@@ -181,6 +189,25 @@ public final class AnswerRetrievalPlanner {
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
         addWhenContains(sections, text, "OBJECTIVE", "objective", "win", "目标", "获胜", "胜利");
         return sections.stream().limit(MAX_SECTION_FILTERS).collect(Collectors.toUnmodifiableSet());
+    }
+
+    /**
+     * A chapter selector stays a soft hint for ordinary questions. It becomes a hard retrieval scope only when the
+     * player explicitly asks for an executable sequence in that same rule area, preventing an overview paragraph
+     * from displacing the steps the player asked to carry out.
+     */
+    private static Set<String> directQuestionScope(UnderstoodQuestion question, String currentSection) {
+        if (currentSection == null || !asksForExecutableSequence(question.normalizedQuestion())) {
+            return Set.of();
+        }
+        return inferredSections(question, null).contains(currentSection) ? Set.of(currentSection) : Set.of();
+    }
+
+    private static boolean asksForExecutableSequence(String question) {
+        return containsAny(
+                question,
+                "step", "steps", "order", "sequence", "walk through", "first", "then",
+                "步骤", "顺序", "逐步", "先", "然后", "依次", "怎么摆", "如何摆");
     }
 
     private static void addWhenContains(
