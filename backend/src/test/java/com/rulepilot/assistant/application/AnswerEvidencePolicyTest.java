@@ -21,6 +21,9 @@ class AnswerEvidencePolicyTest {
         assertThat(AnswerEvidencePolicy.hasEndgameResolution(trigger)).isTrue();
         assertThat(AnswerEvidencePolicy.isEndgameResolutionQuestion("When does the game end and how is the winner scored?"))
                 .isTrue();
+        assertThat(AnswerEvidencePolicy.isEndgameResolutionQuestion(
+                        "如果我可以选择结束游戏，其他玩家还会继续玩吗？"))
+                .isTrue();
     }
 
     @Test

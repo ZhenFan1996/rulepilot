@@ -147,7 +147,8 @@ final class AnswerEvidencePolicy {
     static boolean isEndgameResolutionQuestion(String question) {
         String normalized = question == null ? "" : question.toLowerCase(Locale.ROOT);
         return mentionsEndTrigger(normalized)
-                && containsAny(normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
+                && (containsAny(normalized, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终")
+                        || asksEndgameCompletionProcedure(normalized));
     }
 
     static boolean requiresEndgameResolutionCitation(String question, Collection<EvidenceInput> evidence) {
@@ -196,6 +197,33 @@ final class AnswerEvidencePolicy {
 
     static boolean asksEndgameTiming(String value) {
         return containsAny(normalize(value), "when", "immediately", "何时", "什么时候", "立刻", "立即");
+    }
+
+    /**
+     * Players often ask about the consequence of an end trigger rather than scoring: whether the trigger is legal
+     * and whether everyone finishes the round. That still needs the decisive end-condition paragraph and must use
+     * the same focused retrieval path as an explicit scoring question.
+     */
+    private static boolean asksEndgameCompletionProcedure(String value) {
+        return containsAny(
+                value,
+                "can i end",
+                "may i end",
+                "choose to end",
+                "end now",
+                "players continue",
+                "other players",
+                "finish the round",
+                "same number of turns",
+                "可以结束",
+                "选择结束",
+                "能结束吗",
+                "是否结束",
+                "其他玩家",
+                "继续玩吗",
+                "继续进行",
+                "完成本轮",
+                "相同回合数");
     }
 
     static boolean requiresIconLegend(Collection<PageFactMatch> facts) {

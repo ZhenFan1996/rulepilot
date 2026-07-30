@@ -50,9 +50,10 @@ final class AnswerRetrievalProcedureIntents {
     }
 
     static String endgameResolutionTerms(String question) {
-        if (!isEndgameResolutionQuestion(question)) return null;
+        if (!AnswerEvidencePolicy.isEndgameResolutionQuestion(question)) return null;
         String terms = "end game end condition end of round final scoring winner tie resolution "
-                + "游戏结束 结束条件 轮末 最终计分 胜者 平局 结算";
+                + "finish the round equal turns remaining players continue endgame trigger "
+                + "游戏结束 结束条件 轮末 最终计分 胜者 平局 结算 完成本轮 相同回合数 其他玩家继续 触发";
         return AnswerRetrievalPlanner.containsAny(question, "tie", "tied", "平局", "同分")
                 ? terms + " tiebreak tie breaker most gold coins 平局 同分 决胜 金币"
                 : terms;
@@ -61,14 +62,6 @@ final class AnswerRetrievalProcedureIntents {
     private static String endgameResolutionQuery(String question) {
         String terms = endgameResolutionTerms(question);
         return terms == null ? null : AnswerRetrievalPlanner.bounded(question + " " + terms);
-    }
-
-    private static boolean isEndgameResolutionQuestion(String question) {
-        boolean mentionsEndTrigger = AnswerRetrievalPlanner.containsAny(
-                question, "game end", "game ends", "end condition", "end of round", "end", "游戏结束", "结束条件", "终局", "轮末", "结束");
-        boolean mentionsResolution = AnswerRetrievalPlanner.containsAny(
-                question, "score", "scoring", "tie", "winner", "final", "计分", "得分", "平局", "获胜", "最终");
-        return mentionsEndTrigger && mentionsResolution;
     }
 
     private static String stateTransitionQuery(String question) {

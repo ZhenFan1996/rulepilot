@@ -37,4 +37,15 @@ class AnswerRetrievalProcedureIntentsTest {
             assertThat(intent.query()).contains("same number", "collision", "bump", "priority", "resolution");
         });
     }
+
+    @Test
+    void expandsAnEndTriggerFollowUpIntoTheSameFocusedEndgameLookupAsScoring() {
+        var intents = AnswerRetrievalProcedureIntents.plan(
+                "如果我建满两行但有禁用地点，可以选择结束游戏吗？其他玩家还会继续玩吗？");
+
+        assertThat(intents).singleElement().satisfies(intent -> {
+            assertThat(intent.purpose()).isEqualTo(RetrievalPurpose.ENDGAME_RESOLUTION);
+            assertThat(intent.query()).contains("finish the round", "equal turns", "相同回合数", "其他玩家继续");
+        });
+    }
 }
