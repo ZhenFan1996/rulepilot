@@ -93,6 +93,19 @@ class IconEvidencePolicyTest {
         assertThat(sanitized.get(1).evidenceText()).isEmpty();
     }
 
+    @Test
+    void acceptsAnExactLabelIndependentlyReadFromTheLocalizedImageButNotADifferentLabel() {
+        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(
+                List.of(
+                        iconWithVerifiedLabel("carrot", "CARROT", "CARROT"),
+                        iconWithVerifiedLabel("cabbage", "CABBAGE", "ONION")),
+                "The PDF text layer contains no card labels.");
+
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
+        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+    }
+
     private static IconOccurrence icon(String evidence) {
         return icon("wheat", evidence);
     }
@@ -104,6 +117,21 @@ class IconEvidencePolicyTest {
                 "黄色资源符号。",
                 "代表小麦资源。",
                 evidence,
+                IconMeaningStatus.EXPLICIT,
+                100,
+                100,
+                20,
+                20);
+    }
+
+    private static IconOccurrence iconWithVerifiedLabel(String groupKey, String evidence, String verifiedLabel) {
+        return new IconOccurrence(
+                groupKey,
+                groupKey,
+                "A compact visible pictogram.",
+                "代表" + groupKey + "类别。",
+                evidence,
+                verifiedLabel,
                 IconMeaningStatus.EXPLICIT,
                 100,
                 100,

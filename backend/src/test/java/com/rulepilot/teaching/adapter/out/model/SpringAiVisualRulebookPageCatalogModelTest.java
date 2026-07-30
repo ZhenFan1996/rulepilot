@@ -124,13 +124,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void parsesDedicatedIconLocationsFromQwenArrayOrObjectShape() {
         var array = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
                 [
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
                   {"candidateIndex":1,"present":false}
                 ]
                 """, 2);
         var object = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
                 {"items":[
-                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20,"observedLabel":"WOOD"},
                   {"candidateIndex":1,"present":false}
                 ]}
                 """, 2);
@@ -138,6 +138,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         assertThat(array).isEqualTo(object);
         assertThat(array.locations()).hasSize(2);
         assertThat(array.locations().getFirst().present()).isTrue();
+        assertThat(array.locations().getFirst().observedLabel()).isEqualTo("WOOD");
         assertThat(array.locations().getLast().present()).isFalse();
     }
 
@@ -152,6 +153,20 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(result.locations().getFirst().present()).isTrue();
         assertThat(result.locations().getLast()).isEqualTo(IconLocation.absent(1));
+    }
+
+    @Test
+    void parsesCloseUpCropReviewForTheExactCandidateIndexes() {
+        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
+                {"items":[
+                  {"candidateIndex":3,"matchesAppearance":true,"x":100,"y":120,"width":300,"height":280},
+                  {"candidateIndex":7,"matchesAppearance":false}
+                ]}
+                """, List.of(3, 7));
+
+        assertThat(result.decisions()).hasSize(2);
+        assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
+        assertThat(result.decisions().getLast().matchesAppearance()).isFalse();
     }
 
     @Test
@@ -171,6 +186,25 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(candidates).contains("visible appearance=红色叉号叠加在白色纽扣图标上。");
         assertThat(candidates).doesNotContain("collect-no-buttons", "收集零个纽扣");
+    }
+
+    @Test
+    void redactsFirstPassLabelsBeforeIndependentImageLabelVerification() {
+        String candidates = SpringAiVisualRulebookPageCatalogModel.iconLocalizationCandidates(List.of(
+                new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
+                        "CARROT",
+                        "胡萝卜",
+                        "Orange card with CARROT printed above a carrot silhouette.",
+                        "代表胡萝卜类型。",
+                        "CARROT",
+                        com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.EXPLICIT,
+                        100,
+                        100,
+                        20,
+                        20)));
+
+        assertThat(candidates).contains("redacted-label");
+        assertThat(candidates).doesNotContain("CARROT", "胡萝卜");
     }
 
     @Test

@@ -96,6 +96,62 @@ class RulebookIconGlossaryPolicyTest {
         });
     }
 
+    @Test
+    void groupsAliasesOnlyWhenTheirIndependentVisualLabelsAgreeWithTheirSemanticKeys() {
+        IconOccurrence explained = iconWithVerifiedLabel(
+                "carrot",
+                "胡萝卜图标",
+                "整张卡牌中央有橙色胡萝卜插图。",
+                "代表胡萝卜类别。",
+                "CARROT",
+                "CARROT",
+                IconMeaningStatus.EXPLICIT,
+                100,
+                88,
+                170);
+        IconOccurrence repeated = iconWithVerifiedLabel(
+                "carrot icon",
+                "胡萝卜图标",
+                "橙色胡萝卜剪影。",
+                "",
+                "",
+                "CARROT",
+                IconMeaningStatus.UNEXPLAINED,
+                300,
+                60,
+                60);
+        IconOccurrence mismatched = iconWithVerifiedLabel(
+                "point",
+                "点数图标",
+                "绿色三角形。",
+                "",
+                "",
+                "SALAD",
+                IconMeaningStatus.UNEXPLAINED,
+                500,
+                60,
+                60);
+
+        var projection = RulebookIconGlossaryPolicy.project(
+                UUID.randomUUID(),
+                List.of(page(2, explained), page(7, repeated, mismatched)));
+
+        assertThat(projection.groups()).hasSize(2);
+        assertThat(projection.groups().stream()
+                        .filter(group -> group.meaningStatus() == IconMeaningStatus.EXPLICIT)
+                        .findFirst())
+                .hasValueSatisfying(group -> {
+                    assertThat(group.occurrences()).singleElement()
+                            .extracting(RulebookIconGlossaryPolicy.OccurrenceView::pageNumber)
+                            .isEqualTo(7);
+                    assertThat(group.evidenceText()).isEqualTo("CARROT");
+                });
+        assertThat(projection.groups().stream()
+                        .filter(group -> group.meaningStatus() == IconMeaningStatus.UNEXPLAINED)
+                        .findFirst())
+                .hasValueSatisfying(group -> assertThat(group.name()).isEqualTo("点数图标"));
+    }
+
     private static PageFact page(int pageNumber, IconOccurrence... icons) {
         return new PageFact(
                 pageNumber,
@@ -118,5 +174,20 @@ class RulebookIconGlossaryPolicyTest {
             int x) {
         return new IconOccurrence(
                 groupKey, name, visible, explanation, evidence, status, x, 200, 60, 60);
+    }
+
+    private static IconOccurrence iconWithVerifiedLabel(
+            String groupKey,
+            String name,
+            String visible,
+            String explanation,
+            String evidence,
+            String verifiedLabel,
+            IconMeaningStatus status,
+            int x,
+            int width,
+            int height) {
+        return new IconOccurrence(
+                groupKey, name, visible, explanation, evidence, verifiedLabel, status, x, 200, width, height);
     }
 }

@@ -25,13 +25,22 @@ final class RulebookIconGlossaryPolicy {
                 .flatMap(page -> page.iconOccurrences().stream()
                         .map(icon -> new LocatedIcon(page.pageNumber(), icon)))
                 .collect(Collectors.groupingBy(
-                        located -> normalized(located.icon().groupKey()),
+                        located -> groupingIdentity(located.icon()),
                         LinkedHashMap::new,
                         Collectors.toList()));
 
         List<IconGroup> groups = new ArrayList<>();
         Set<String> conflictingKeys = new LinkedHashSet<>();
         byVisualIdentity.forEach((groupKey, occurrences) -> {
+            List<LocatedIcon> publishable = occurrences.stream()
+                    .filter(located -> VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                            located.icon(),
+                            located.icon().x(),
+                            located.icon().y(),
+                            located.icon().width(),
+                            located.icon().height()))
+                    .toList();
+            if (publishable.isEmpty()) return;
             Map<String, List<LocatedIcon>> explicitDefinitions = occurrences.stream()
                     .filter(located -> located.icon().meaningStatus() == IconMeaningStatus.EXPLICIT)
                     .collect(Collectors.groupingBy(
@@ -43,19 +52,41 @@ final class RulebookIconGlossaryPolicy {
                     .toList();
 
             if (explicitDefinitions.isEmpty()) {
-                groups.add(group(documentVersionId, groupKey, "", occurrences));
+                groups.add(group(documentVersionId, groupKey, "", publishable.getFirst(), publishable));
                 return;
             }
             if (explicitDefinitions.size() == 1) {
                 String definition = explicitDefinitions.keySet().iterator().next();
-                groups.add(group(documentVersionId, groupKey, definition, occurrences));
+                groups.add(group(
+                        documentVersionId,
+                        groupKey,
+                        definition,
+                        explicitDefinitions.values().iterator().next().getFirst(),
+                        publishable));
                 return;
             }
 
             conflictingKeys.add(groupKey);
-            explicitDefinitions.forEach((definition, matching) ->
-                    groups.add(group(documentVersionId, groupKey, definition, matching)));
-            if (!unexplained.isEmpty()) groups.add(group(documentVersionId, groupKey, "", unexplained));
+            explicitDefinitions.forEach((definition, matching) -> {
+                List<LocatedIcon> visibleMatching = matching.stream().filter(publishable::contains).toList();
+                if (!visibleMatching.isEmpty()) {
+                    groups.add(group(
+                            documentVersionId,
+                            groupKey,
+                            definition,
+                            matching.getFirst(),
+                            visibleMatching));
+                }
+            });
+            List<LocatedIcon> visibleUnexplained = unexplained.stream().filter(publishable::contains).toList();
+            if (!visibleUnexplained.isEmpty()) {
+                groups.add(group(
+                        documentVersionId,
+                        groupKey,
+                        "",
+                        visibleUnexplained.getFirst(),
+                        visibleUnexplained));
+            }
         });
 
         groups.sort(Comparator.comparing(IconGroup::name, String.CASE_INSENSITIVE_ORDER)
@@ -64,13 +95,17 @@ final class RulebookIconGlossaryPolicy {
     }
 
     private static IconGroup group(
-            UUID documentVersionId, String groupKey, String normalizedDefinition, List<LocatedIcon> occurrences) {
-        LocatedIcon representative = occurrences.stream()
+            UUID documentVersionId,
+            String groupKey,
+            String normalizedDefinition,
+            LocatedIcon definitionSource,
+            List<LocatedIcon> visibleOccurrences) {
+        LocatedIcon cropSource = visibleOccurrences.stream()
                 .filter(located -> located.icon().meaningStatus() == IconMeaningStatus.EXPLICIT)
                 .findFirst()
-                .orElse(occurrences.getFirst());
-        IconOccurrence icon = representative.icon();
-        List<OccurrenceView> occurrenceViews = occurrences.stream()
+                .orElse(visibleOccurrences.getFirst());
+        IconOccurrence definition = definitionSource.icon();
+        List<OccurrenceView> occurrenceViews = visibleOccurrences.stream()
                 .sorted(Comparator.comparingInt(LocatedIcon::pageNumber)
                         .thenComparingInt(value -> value.icon().y())
                         .thenComparingInt(value -> value.icon().x()))
@@ -80,11 +115,11 @@ final class RulebookIconGlossaryPolicy {
         UUID entryId = stableId(documentVersionId + "|entry|" + identity);
         return new IconGroup(
                 entryId,
-                icon.name(),
-                icon.visualDescription(),
-                icon.meaningStatus() == IconMeaningStatus.EXPLICIT ? icon.explanation() : null,
-                icon.meaningStatus() == IconMeaningStatus.EXPLICIT ? icon.evidenceText() : null,
-                icon.meaningStatus(),
+                definition.name(),
+                cropSource.icon().visualDescription(),
+                normalizedDefinition.isBlank() ? null : definition.explanation(),
+                normalizedDefinition.isBlank() ? null : definition.evidenceText(),
+                normalizedDefinition.isBlank() ? IconMeaningStatus.UNEXPLAINED : IconMeaningStatus.EXPLICIT,
                 occurrenceViews.getFirst().id(),
                 occurrenceViews);
     }
@@ -106,6 +141,25 @@ final class RulebookIconGlossaryPolicy {
         return value.strip()
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[\\p{Punct}\\p{Zs}]+", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
+    }
+
+    private static String groupingIdentity(IconOccurrence icon) {
+        String proposedIdentity = semanticIdentity(icon.groupKey());
+        String verifiedLabel = semanticIdentity(icon.verifiedVisualLabel());
+        return !verifiedLabel.isBlank() && verifiedLabel.equals(proposedIdentity)
+                ? verifiedLabel
+                : normalized(icon.groupKey());
+    }
+
+    private static String semanticIdentity(String value) {
+        return normalized(value == null ? "" : value)
+                .replaceAll("(?iu)\\b(?:icon|icons|symbol|symbols|mark|marker|pictogram|silhouette|shape)\\b", " ")
+                .replace("图标", "")
+                .replace("符号", "")
+                .replace("标记", "")
+                .replace("轮廓", "")
                 .replaceAll("\\s+", " ")
                 .strip();
     }

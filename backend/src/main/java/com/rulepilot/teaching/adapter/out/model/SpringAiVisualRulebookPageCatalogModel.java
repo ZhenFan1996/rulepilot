@@ -9,16 +9,25 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -40,20 +49,23 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String systemPrompt;
     private final String iconLocalizationPrompt;
+    private final String iconCropReviewPrompt;
     private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
-            @Value("classpath:prompts/visual-icon-localization-v1-system.txt") Resource iconLocalizationPrompt,
+            @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
+            @Value("classpath:prompts/visual-icon-crop-review-v1-system.txt") Resource iconCropReviewPrompt,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
         this.fake = fake;
         this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank()) {
+        this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
@@ -184,13 +196,67 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return parseIconLocalization(content, request.candidates().size());
     }
 
+    @Override
+    public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.reviewIconCrops(request);
+        }
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(OpenAiChatOptions.builder()
+                    .model(models.modelNameFor(Role.VISUAL, owner))
+                    .maxTokens(Math.min(1_000, maxCompletionTokens))
+                    .extraBody(Map.of("enable_thinking", false))
+                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
+        }
+        String attachmentOrder = java.util.stream.IntStream.range(0, request.candidates().size())
+                .mapToObj(index -> "image " + (index + 1) + " = candidateIndex "
+                        + request.locations().get(index).candidateIndex() + ", expected appearance="
+                        + appearanceWithoutProposedIdentity(request.candidates().get(index)))
+                .collect(Collectors.joining("\n"));
+        String content = prompt.system(iconCropReviewPrompt)
+                .user(user -> {
+                    user.text("""
+                                    PDF page number: {pageNumber}
+                                    Attachment mapping:
+                                    {attachmentOrder}
+                                    Return exactly one items entry for every listed candidateIndex.
+                                    """)
+                            .param("pageNumber", request.page().pageNumber())
+                            .param("attachmentOrder", attachmentOrder);
+                    java.util.stream.IntStream.range(0, request.locations().size())
+                            .mapToObj(index -> localizedCrop(request.page(), request.locations().get(index)))
+                            .forEach(crop -> user.media(
+                                    MimeTypeUtils.IMAGE_JPEG, new ByteArrayResource(crop)));
+                })
+                .call()
+                .content();
+        IconCropReviewDraft relativeReview = parseIconCropReview(
+                content,
+                request.locations().stream().map(IconLocation::candidateIndex).toList());
+        return projectIconCropReview(relativeReview, request.locations());
+    }
+
     static String iconLocalizationCandidates(List<IconOccurrence> candidates) {
         return java.util.stream.IntStream.range(0, candidates.size())
                 .mapToObj(index -> {
                     IconOccurrence icon = candidates.get(index);
-                    return index + ": visible appearance=" + icon.visualDescription();
+                    return index + ": visible appearance=" + appearanceWithoutProposedIdentity(icon);
                 })
                 .collect(Collectors.joining("\n"));
+    }
+
+    private static String appearanceWithoutProposedIdentity(IconOccurrence icon) {
+        String appearance = icon.visualDescription();
+        if (icon.meaningStatus() != IconMeaningStatus.EXPLICIT) return appearance;
+        for (String proposedIdentity : List.of(icon.groupKey(), icon.name(), icon.evidenceText())) {
+            if (proposedIdentity == null || proposedIdentity.strip().length() < 3) continue;
+            appearance = Pattern.compile(Pattern.quote(proposedIdentity.strip()), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(appearance)
+                    .replaceAll("redacted-label");
+        }
+        return appearance;
     }
 
     static IconLocalizationDraft parseIconLocalization(String content, int expectedCandidates) {
@@ -228,7 +294,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     item.path("x").asInt(Integer.MIN_VALUE),
                                     item.path("y").asInt(Integer.MIN_VALUE),
                                     item.path("width").asInt(Integer.MIN_VALUE),
-                                    item.path("height").asInt(Integer.MIN_VALUE))
+                                    item.path("height").asInt(Integer.MIN_VALUE),
+                                    bounded(joinedText(item.get("observedLabel"), " "), 80))
                             : IconLocation.absent(index);
                 } catch (IllegalArgumentException invalidRectangle) {
                     // A single malformed rectangle must not discard other independently verified candidates.
@@ -249,6 +316,119 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             throw new IllegalArgumentException("visual icon localization returned invalid JSON", invalidJson);
         }
     }
+
+    static IconCropReviewDraft parseIconCropReview(String content, List<Integer> expectedCandidates) {
+        if (content == null || content.isBlank() || expectedCandidates == null || expectedCandidates.isEmpty()) {
+            throw new IllegalArgumentException("visual icon crop review model returned no content");
+        }
+        try {
+            JsonNode root = JSON.readTree(content.strip());
+            JsonNode items = root.isArray() ? root : root.path("items");
+            if (!items.isArray() || items.size() != expectedCandidates.size()) {
+                throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
+            }
+            Map<Integer, IconCropDecision> byCandidate = new java.util.LinkedHashMap<>();
+            items.forEach(item -> {
+                int index = item.path("candidateIndex").asInt(Integer.MIN_VALUE);
+                if (!expectedCandidates.contains(index)
+                        || byCandidate.putIfAbsent(
+                                        index,
+                                        item.path("matchesAppearance").asBoolean(false)
+                                                ? new IconCropDecision(
+                                                        index,
+                                                        true,
+                                                        item.path("x").asInt(Integer.MIN_VALUE),
+                                                        item.path("y").asInt(Integer.MIN_VALUE),
+                                                        item.path("width").asInt(Integer.MIN_VALUE),
+                                                        item.path("height").asInt(Integer.MIN_VALUE))
+                                                : IconCropDecision.rejected(index))
+                                != null) {
+                    throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
+                }
+            });
+            if (!byCandidate.keySet().equals(new java.util.LinkedHashSet<>(expectedCandidates))) {
+                throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
+            }
+            return new IconCropReviewDraft(List.copyOf(byCandidate.values()));
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException("visual icon crop review returned invalid JSON", invalidJson);
+        }
+    }
+
+    private static byte[] localizedCrop(PageImageInput page, IconLocation location) {
+        try {
+            BufferedImage source = ImageIO.read(new ByteArrayInputStream(page.content()));
+            if (source == null) throw new IllegalArgumentException("visual icon crop source cannot be decoded");
+            CropBounds bounds = cropBounds(location);
+            int left = pixel(bounds.x(), source.getWidth());
+            int top = pixel(bounds.y(), source.getHeight());
+            int right = pixelCeiling(bounds.x() + bounds.width(), source.getWidth());
+            int bottom = pixelCeiling(bounds.y() + bounds.height(), source.getHeight());
+            BufferedImage crop = source.getSubimage(left, top, right - left, bottom - top);
+            BufferedImage rgb = new BufferedImage(crop.getWidth(), crop.getHeight(), BufferedImage.TYPE_INT_RGB);
+            Graphics2D graphics = rgb.createGraphics();
+            try {
+                graphics.drawImage(crop, 0, 0, null);
+            } finally {
+                graphics.dispose();
+            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            if (!ImageIO.write(rgb, "jpeg", output)) {
+                throw new IllegalStateException("JPEG image writer is unavailable");
+            }
+            return output.toByteArray();
+        } catch (IOException failure) {
+            throw new IllegalArgumentException("visual icon crop could not be prepared", failure);
+        }
+    }
+
+    private static IconCropReviewDraft projectIconCropReview(
+            IconCropReviewDraft relativeReview, List<IconLocation> sourceLocations) {
+        Map<Integer, IconLocation> sourceByIndex = sourceLocations.stream()
+                .collect(Collectors.toMap(IconLocation::candidateIndex, java.util.function.Function.identity()));
+        return new IconCropReviewDraft(relativeReview.decisions().stream()
+                .map(decision -> {
+                    if (!decision.matchesAppearance()) return decision;
+                    CropBounds source = cropBounds(sourceByIndex.get(decision.candidateIndex()));
+                    int x = source.x() + decision.x() * source.width() / 1_000;
+                    int y = source.y() + decision.y() * source.height() / 1_000;
+                    int right = source.x()
+                            + (decision.x() + decision.width()) * source.width() / 1_000;
+                    int bottom = source.y()
+                            + (decision.y() + decision.height()) * source.height() / 1_000;
+                    try {
+                        return new IconCropDecision(
+                                decision.candidateIndex(),
+                                true,
+                                x,
+                                y,
+                                Math.max(1, right - x),
+                                Math.max(1, bottom - y));
+                    } catch (IllegalArgumentException invalidProjection) {
+                        return IconCropDecision.rejected(decision.candidateIndex());
+                    }
+                })
+                .toList());
+    }
+
+    private static CropBounds cropBounds(IconLocation location) {
+        int padding = 8;
+        int x = Math.max(0, location.x() - padding);
+        int y = Math.max(0, location.y() - padding);
+        int right = Math.min(1_000, location.x() + location.width() + padding);
+        int bottom = Math.min(1_000, location.y() + location.height() + padding);
+        return new CropBounds(x, y, right - x, bottom - y);
+    }
+
+    private static int pixel(int normalized, int imageSize) {
+        return Math.min(imageSize - 1, normalized * imageSize / 1_000);
+    }
+
+    private static int pixelCeiling(int normalized, int imageSize) {
+        return Math.max(1, Math.min(imageSize, (normalized * imageSize + 999) / 1_000));
+    }
+
+    private record CropBounds(int x, int y, int width, int height) {}
 
     static CatalogDraft parseCatalog(String content) {
         if (content == null || content.isBlank()) {

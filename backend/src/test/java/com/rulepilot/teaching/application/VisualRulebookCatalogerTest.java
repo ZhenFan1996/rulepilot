@@ -9,6 +9,9 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
@@ -421,7 +424,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void verifiesIconRectanglesInADedicatedPassAndDropsAbsentCandidates() throws IOException {
+    void verifiesIconRectanglesInADedicatedPassAndRetainsLocalizedObservations() throws IOException {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger localizationCalls = new AtomicInteger();
@@ -448,9 +451,9 @@ class VisualRulebookCatalogerTest {
                                         30,
                                         30),
                                 new IconOccurrence(
-                                        "nearby prose",
-                                        "误识别文字",
-                                        "黑色文字。",
+                                        "point card",
+                                        "积分卡",
+                                        "Whole card with a scoring condition.",
                                         "",
                                         "",
                                         IconMeaningStatus.UNEXPLAINED,
@@ -466,7 +469,7 @@ class VisualRulebookCatalogerTest {
                 localizationCalls.incrementAndGet();
                 return new IconLocalizationDraft(List.of(
                         new IconLocation(0, true, 120, 240, 24, 28),
-                        IconLocation.absent(1)));
+                        new IconLocation(1, true, 700, 700, 120, 160)));
             }
         };
         VisualRulebookCataloger cataloger = cataloger(
@@ -481,14 +484,69 @@ class VisualRulebookCatalogerTest {
         assertThat(localizationCalls).hasValue(1);
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
-            assertThat(fact.iconOccurrences()).singleElement().satisfies(icon -> {
+            assertThat(fact.iconOccurrences()).hasSize(2);
+            assertThat(fact.iconOccurrences().getFirst()).satisfies(icon -> {
                 assertThat(icon.name()).isEqualTo("叶子");
                 assertThat(icon.x()).isEqualTo(120);
                 assertThat(icon.y()).isEqualTo(240);
                 assertThat(icon.width()).isEqualTo(24);
                 assertThat(icon.height()).isEqualTo(28);
             });
+            assertThat(fact.iconOccurrences().get(1).name()).isEqualTo("积分卡");
         });
+    }
+
+    @Test
+    void dropsAFullPageLocationWhenItsCloseUpDoesNotContainTheProposedIcon() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        byte[] pageContent = renderedPage();
+        AtomicInteger cropReviewCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                return new CatalogDraft(List.of(new PageSummary(
+                        1,
+                        "LEAF",
+                        "该页有一个候选图标。",
+                        List.of("leaf"),
+                        List.of(),
+                        List.of(new IconOccurrence(
+                                "leaf",
+                                "叶子",
+                                "绿色叶片。",
+                                "",
+                                "",
+                                IconMeaningStatus.UNEXPLAINED,
+                                600,
+                                600,
+                                30,
+                                30)),
+                        true)));
+            }
+
+            @Override
+            public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+                return new IconLocalizationDraft(List.of(
+                        new IconLocation(0, true, 120, 240, 24, 28)));
+            }
+
+            @Override
+            public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
+                cropReviewCalls.incrementAndGet();
+                return new IconCropReviewDraft(List.of(new IconCropDecision(0, false)));
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", pageContent, 100, 100)),
+                model,
+                new InMemoryFacts());
+
+        List<PageFact> result = cataloger.catalogAllIconPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(cropReviewCalls).hasValue(1);
+        assertThat(result).singleElement().satisfies(fact -> assertThat(fact.iconOccurrences()).isEmpty());
     }
 
     @Test

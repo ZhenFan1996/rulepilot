@@ -154,10 +154,7 @@ public class RulebookIconGlossaryService {
                 fact.factualSummary(),
                 fact.keywords(),
                 fact.visualAnchors(),
-                IconEvidencePolicy.sanitize(fact.iconOccurrences(), sourcePageText).stream()
-                        .filter(icon -> VisualRulebookCatalogPolicy.publishableLocalizedIcon(
-                                icon, icon.x(), icon.y(), icon.width(), icon.height()))
-                        .toList(),
+                IconEvidencePolicy.sanitize(fact.iconOccurrences(), sourcePageText),
                 fact.iconInventoryComplete(),
                 fact.schemaVersion());
     }

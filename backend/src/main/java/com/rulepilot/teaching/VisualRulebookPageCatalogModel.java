@@ -22,8 +22,24 @@ public interface VisualRulebookPageCatalogModel {
         return new IconLocalizationDraft(java.util.stream.IntStream.range(0, request.candidates().size())
                 .mapToObj(index -> {
                     IconOccurrence icon = request.candidates().get(index);
-                    return new IconLocation(index, true, icon.x(), icon.y(), icon.width(), icon.height());
+                    return new IconLocation(index, true, icon.x(), icon.y(), icon.width(), icon.height(), "");
                 })
+                .toList());
+    }
+
+    /**
+     * Rechecks already localized close-up crops. A full-page locator can still land on adjacent prose or a similar
+     * mark; implementations with a real vision model should inspect the proposed region at readable scale.
+     */
+    default IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
+        return new IconCropReviewDraft(request.locations().stream()
+                .map(location -> new IconCropDecision(
+                        location.candidateIndex(),
+                        true,
+                        location.x(),
+                        location.y(),
+                        location.width(),
+                        location.height()))
                 .toList());
     }
 
@@ -127,7 +143,78 @@ public interface VisualRulebookPageCatalogModel {
         }
     }
 
-    record IconLocation(int candidateIndex, boolean present, int x, int y, int width, int height) {
+    record IconCropReviewRequest(
+            PageImageInput page,
+            List<IconOccurrence> candidates,
+            List<IconLocation> locations,
+            String modelConfigurationOwner) {
+
+        public IconCropReviewRequest {
+            if (page == null || candidates == null || locations == null
+                    || candidates.isEmpty() || candidates.size() > 8 || candidates.size() != locations.size()
+                    || locations.stream().anyMatch(location -> !location.present())) {
+                throw new IllegalArgumentException("visual icon crop review request is invalid");
+            }
+            candidates = List.copyOf(candidates);
+            locations = List.copyOf(locations);
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null
+                    : modelConfigurationOwner.strip();
+        }
+    }
+
+    record IconCropReviewDraft(List<IconCropDecision> decisions) {
+        public IconCropReviewDraft {
+            if (decisions == null || decisions.isEmpty() || decisions.size() > 8) {
+                throw new IllegalArgumentException("visual icon crop review draft is invalid");
+            }
+            decisions = List.copyOf(decisions);
+        }
+    }
+
+    record IconCropDecision(
+            int candidateIndex,
+            boolean matchesAppearance,
+            int x,
+            int y,
+            int width,
+            int height) {
+
+        public IconCropDecision(int candidateIndex, boolean matchesAppearance) {
+            this(candidateIndex, matchesAppearance, 0, 0, 0, 0);
+        }
+
+        public IconCropDecision {
+            if (candidateIndex < 0 || candidateIndex > 31) {
+                throw new IllegalArgumentException("visual icon crop review candidate is invalid");
+            }
+            if (matchesAppearance && (x < 0 || x > 980 || y < 0 || y > 980
+                    || width < 12 || height < 12 || x + width > 1_000 || y + height > 1_000)) {
+                throw new IllegalArgumentException("visual icon crop review rectangle is invalid");
+            }
+            if (!matchesAppearance && (x != 0 || y != 0 || width != 0 || height != 0)) {
+                throw new IllegalArgumentException("rejected visual icon crop must not have a rectangle");
+            }
+        }
+
+        public static IconCropDecision rejected(int candidateIndex) {
+            return new IconCropDecision(candidateIndex, false);
+        }
+    }
+
+    record IconLocation(
+            int candidateIndex,
+            boolean present,
+            int x,
+            int y,
+            int width,
+            int height,
+            String observedLabel) {
+
+        public IconLocation(int candidateIndex, boolean present, int x, int y, int width, int height) {
+            this(candidateIndex, present, x, y, width, height, "");
+        }
+
         public IconLocation {
             if (candidateIndex < 0 || candidateIndex > 31) {
                 throw new IllegalArgumentException("visual icon localization candidate is invalid");
@@ -139,10 +226,14 @@ public interface VisualRulebookPageCatalogModel {
             if (!present && (x != 0 || y != 0 || width != 0 || height != 0)) {
                 throw new IllegalArgumentException("absent visual icon localization must not have a rectangle");
             }
+            if (observedLabel != null && observedLabel.length() > 80) {
+                throw new IllegalArgumentException("visual icon localization label is invalid");
+            }
+            observedLabel = present && observedLabel != null ? observedLabel.strip() : "";
         }
 
         public static IconLocation absent(int candidateIndex) {
-            return new IconLocation(candidateIndex, false, 0, 0, 0, 0);
+            return new IconLocation(candidateIndex, false, 0, 0, 0, 0, "");
         }
     }
 

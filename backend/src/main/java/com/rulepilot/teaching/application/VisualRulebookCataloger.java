@@ -589,26 +589,21 @@ class VisualRulebookCataloger {
                     .collect(Collectors.toMap(
                             VisualRulebookPageCatalogModel.IconLocation::candidateIndex,
                             java.util.function.Function.identity()));
+            Map<Integer, VisualRulebookPageCatalogModel.IconLocation> confirmedLocations =
+                    confirmLocalizedIconCrops(page.get(), summary, locations, owner, assistantRunId);
             List<com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence> icons =
                     java.util.stream.IntStream.range(0, summary.iconOccurrences().size())
                             .mapToObj(index -> {
-                                var location = locations.get(index);
-                                if (location == null || !location.present()) return null;
+                                var location = confirmedLocations.get(index);
+                                if (location == null) return null;
                                 var icon = summary.iconOccurrences().get(index);
-                                if (!VisualRulebookCatalogPolicy.publishableLocalizedIcon(
-                                        icon,
-                                        location.x(),
-                                        location.y(),
-                                        location.width(),
-                                        location.height())) {
-                                    return null;
-                                }
                                 return new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
                                         icon.groupKey(),
                                         icon.name(),
                                         icon.visualDescription(),
                                         icon.explanation(),
                                         icon.evidenceText(),
+                                        location.observedLabel(),
                                         icon.meaningStatus(),
                                         location.x(),
                                         location.y(),
@@ -633,6 +628,55 @@ class VisualRulebookCataloger {
                     localizationFailure);
             return withoutUnverifiedIcons(summary);
         }
+    }
+
+    private Map<Integer, VisualRulebookPageCatalogModel.IconLocation> confirmLocalizedIconCrops(
+            PageImage page,
+            VisualRulebookPageCatalogModel.PageSummary summary,
+            Map<Integer, VisualRulebookPageCatalogModel.IconLocation> locations,
+            String owner,
+            UUID assistantRunId) {
+        List<Integer> present = locations.values().stream()
+                .filter(VisualRulebookPageCatalogModel.IconLocation::present)
+                .map(VisualRulebookPageCatalogModel.IconLocation::candidateIndex)
+                .sorted()
+                .toList();
+        if (present.isEmpty()) return Map.of();
+        Map<Integer, VisualRulebookPageCatalogModel.IconLocation> confirmed = new LinkedHashMap<>();
+        for (int offset = 0, batch = 1; offset < present.size(); offset += 8, batch++) {
+            List<Integer> indexes = present.subList(offset, Math.min(present.size(), offset + 8));
+            var request = new VisualRulebookPageCatalogModel.IconCropReviewRequest(
+                    new PageImageInput(page.pageNumber(), page.mediaType(), page.content()),
+                    indexes.stream().map(summary.iconOccurrences()::get).toList(),
+                    indexes.stream().map(locations::get).toList(),
+                    owner);
+            var review = invokeModel(
+                    assistantRunId,
+                    "reviewRulebookIconCrops|" + summary.pageNumber() + "|" + batch,
+                    Math.max(240, indexes.size() * 40),
+                    "Localized rulebook icon crops reviewed",
+                    () -> visualCatalog.reviewIconCrops(request),
+                    result -> Math.max(1, result.decisions().size() * 4));
+            Set<Integer> returned = review.decisions().stream()
+                    .map(VisualRulebookPageCatalogModel.IconCropDecision::candidateIndex)
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (returned.size() != review.decisions().size() || !returned.equals(new LinkedHashSet<>(indexes))) {
+                throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
+            }
+            review.decisions().stream()
+                    .filter(VisualRulebookPageCatalogModel.IconCropDecision::matchesAppearance)
+                    .forEach(decision -> confirmed.put(
+                            decision.candidateIndex(),
+                            new VisualRulebookPageCatalogModel.IconLocation(
+                                    decision.candidateIndex(),
+                                    true,
+                                    decision.x(),
+                                    decision.y(),
+                                    decision.width(),
+                                    decision.height(),
+                                    locations.get(decision.candidateIndex()).observedLabel())));
+        }
+        return Map.copyOf(confirmed);
     }
 
     private static VisualRulebookPageCatalogModel.PageSummary withoutUnverifiedIcons(

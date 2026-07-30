@@ -25,13 +25,16 @@ final class VisualRulebookCatalogPolicy {
     private static final Pattern NON_ICON_SUBJECT = Pattern.compile(
             "(?iu)(?:\\b(?:example|illustration|photograph|whole\\s+(?:card|tile|token)|"
                     + "(?:card|tile|token))\\b$|示例|插图|照片|整张卡|整个(?:图块|瓦片|代币)|(?:图块|瓦片|代币)$)");
+    private static final Pattern NON_GAMEPLAY_IDENTITY = Pattern.compile(
+            "(?iu)(?:\\b(?:logo|publisher|compliance|certification|trademark|safety\\s+warning|"
+                    + "age\\s+restriction)\\b|徽标|商标|出版商|合规|认证标志|年龄限制|安全警告)");
     private static final Pattern NON_ICON_DESCRIPTION = Pattern.compile(
-            "(?iu)(?:\\b(?:uppercase|lowercase|letter|numeral|printed\\s+text|text\\s+(?:label|mention)|"
-                    + "whole\\s+(?:card|tile|token)|illustration|photograph|"
+            "(?iu)(?:\\b(?:uppercase|lowercase|letters?|numbers?|numeral|printed\\s+text|text\\s+(?:label|mention)|"
+                    + "whole\\s+(?:card|tile|token)|"
                     + "(?:hexagonal|connected|component)\\s+tiles?|empty\\s+circle|"
                     + "(?:beige|colored)\\s+background)\\b"
-                    + "|\\b(?:card|text\\s+(?:labels?|mention(?:s|ing)?))\\b"
-                    + "|字母|数字|文本|插图|照片|卡片|瓷砖|板块|图块|瓦片)");
+                    + "|\\btext\\s+(?:labels?|mention(?:s|ing)?)\\b"
+                    + "|字母|数字|文本|瓷砖|板块|图块|瓦片)");
 
     private VisualRulebookCatalogPolicy() {}
 
@@ -150,12 +153,17 @@ final class VisualRulebookCatalogPolicy {
         if (x < 0 || y < 0 || width < 12 || height < 12 || x + width > 1_000 || y + height > 1_000) return false;
         int longSide = Math.max(width, height);
         int shortSide = Math.min(width, height);
-        if (longSide > 180 || (long) width * height > 15_000L || longSide > shortSide * 4) return false;
+        long area = (long) width * height;
+        if (longSide > 180 || area > 15_000L || (longSide >= 150 && area >= 12_000L)
+                || longSide > shortSide * 4) {
+            return false;
+        }
         String identity = (icon.groupKey() + " " + icon.name()).strip();
         if (icon.name().matches("(?iu)[a-z0-9]") || NON_ICON_DESCRIPTION.matcher(icon.visualDescription()).find()) {
             return false;
         }
-        return !NON_ICON_SUBJECT.matcher(identity).find();
+        return !NON_ICON_SUBJECT.matcher(identity).find()
+                && !NON_GAMEPLAY_IDENTITY.matcher(identity).find();
     }
 
     private static PageInput pageInput(int pageNumber, PageFact fact) {

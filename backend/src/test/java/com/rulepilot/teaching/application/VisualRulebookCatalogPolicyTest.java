@@ -40,6 +40,19 @@ class VisualRulebookCatalogPolicyTest {
                         icon("leaf", "叶子图标"), 100, 100, 24, 28))
                 .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                        icon(
+                                "carrot",
+                                "胡萝卜图标",
+                                "卡片角落白色圆圈中的胡萝卜插图。"),
+                        100,
+                        100,
+                        24,
+                        28))
+                .isTrue();
+        assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                        icon("point card", "积分卡", "Whole card with a scoring condition."), 100, 100, 88, 170))
+                .isFalse();
+        assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("A", "A"), 100, 100, 24, 24))
                 .isFalse();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
@@ -57,6 +70,9 @@ class VisualRulebookCatalogPolicyTest {
                 .isFalse();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("cat illustration", "猫插图"), 100, 100, 64, 64))
+                .isFalse();
+        assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                        icon("publisher logo", "出版社徽标", "Red shield with white letters."), 100, 100, 64, 64))
                 .isFalse();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("adjacency example", "同色相邻示例"), 100, 100, 177, 35))

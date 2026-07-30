@@ -35,6 +35,7 @@ final class IconEvidencePolicy {
         return sanitize(icons).stream()
                 .map(icon -> icon.meaningStatus() == IconMeaningStatus.EXPLICIT
                                 && !normalizedSource.contains(normalizedSourceText(icon.evidenceText()))
+                                && !independentlyVerifiedVisualEvidence(icon)
                         ? unexplained(icon)
                         : icon)
                 .toList();
@@ -54,6 +55,7 @@ final class IconEvidencePolicy {
                     icon.visualDescription(),
                     icon.explanation(),
                     canonicalEvidence,
+                    icon.verifiedVisualLabel(),
                     icon.meaningStatus(),
                     icon.x(),
                     icon.y(),
@@ -70,6 +72,7 @@ final class IconEvidencePolicy {
                 icon.visualDescription(),
                 "",
                 "",
+                icon.verifiedVisualLabel(),
                 IconMeaningStatus.UNEXPLAINED,
                 icon.x(),
                 icon.y(),
@@ -81,6 +84,11 @@ final class IconEvidencePolicy {
         return value == null ? "" : value.toLowerCase(Locale.ROOT)
                 .replaceAll("\\s+", " ")
                 .strip();
+    }
+
+    private static boolean independentlyVerifiedVisualEvidence(IconOccurrence icon) {
+        String label = normalizedSourceText(icon.verifiedVisualLabel());
+        return !label.isBlank() && label.equals(normalizedSourceText(icon.evidenceText()));
     }
 
     static Optional<String> literalEvidence(String evidence, String groupKey) {

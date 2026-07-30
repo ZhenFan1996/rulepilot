@@ -49,7 +49,7 @@ public interface VisualRulebookPageFacts {
             boolean iconInventoryComplete,
             int schemaVersion) {
 
-        public static final int CURRENT_SCHEMA_VERSION = 10;
+        public static final int CURRENT_SCHEMA_VERSION = 14;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
@@ -222,11 +222,37 @@ public interface VisualRulebookPageFacts {
             String visualDescription,
             String explanation,
             String evidenceText,
+            String verifiedVisualLabel,
             IconMeaningStatus meaningStatus,
             int x,
             int y,
             int width,
             int height) {
+
+        public IconOccurrence(
+                String groupKey,
+                String name,
+                String visualDescription,
+                String explanation,
+                String evidenceText,
+                IconMeaningStatus meaningStatus,
+                int x,
+                int y,
+                int width,
+                int height) {
+            this(
+                    groupKey,
+                    name,
+                    visualDescription,
+                    explanation,
+                    evidenceText,
+                    "",
+                    meaningStatus,
+                    x,
+                    y,
+                    width,
+                    height);
+        }
 
         public IconOccurrence {
             if (groupKey == null || groupKey.isBlank() || groupKey.length() > 160
@@ -234,6 +260,7 @@ public interface VisualRulebookPageFacts {
                     || visualDescription == null || visualDescription.isBlank() || visualDescription.length() > 480
                     || explanation == null || explanation.length() > 600
                     || evidenceText == null || evidenceText.length() > 480
+                    || (verifiedVisualLabel != null && verifiedVisualLabel.length() > 80)
                     || meaningStatus == null
                     || x < 0 || y < 0 || width < 12 || height < 12
                     || x + width > 1_000 || y + height > 1_000) {
@@ -244,6 +271,7 @@ public interface VisualRulebookPageFacts {
             visualDescription = visualDescription.strip();
             explanation = explanation.strip();
             evidenceText = evidenceText.strip();
+            verifiedVisualLabel = verifiedVisualLabel == null ? "" : verifiedVisualLabel.strip();
             if (meaningStatus == IconMeaningStatus.EXPLICIT
                     && (explanation.isBlank() || evidenceText.isBlank())) {
                 throw new IllegalArgumentException("explained visual icon requires visible rulebook evidence");
