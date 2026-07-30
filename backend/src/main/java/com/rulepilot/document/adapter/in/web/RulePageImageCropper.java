@@ -50,8 +50,8 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
 
     private void validateFocus(int x, int y, int width, int height) {
         if (x < 0 || x > 980 || y < 0 || y > 980
-                || width < 20 || width > NORMALIZED_PAGE_SIZE - x
-                || height < 20 || height > NORMALIZED_PAGE_SIZE - y) {
+                || width < 12 || width > NORMALIZED_PAGE_SIZE - x
+                || height < 12 || height > NORMALIZED_PAGE_SIZE - y) {
             throw new IllegalArgumentException("document page crop focus is invalid");
         }
     }

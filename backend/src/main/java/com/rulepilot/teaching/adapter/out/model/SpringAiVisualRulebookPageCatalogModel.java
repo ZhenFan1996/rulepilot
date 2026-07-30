@@ -98,6 +98,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     Attached rulebook page numbers: {pageNumbers}
                                     Rulebook title: {rulebookTitle}
                                     Attachment order: {attachmentOrder}
+                                    {viewportTask}
                                     {crossPageTask}
                                     If an image is credits, storage or assembly instructions, or an advertisement for
                                     another named game, say explicitly in factualSummary that it is non-gameplay
@@ -115,6 +116,14 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     .mapToObj(index -> "image " + (index + 1) + " = PDF page "
                                             + request.pages().get(index).pageNumber())
                                     .collect(java.util.stream.Collectors.joining("; ")))
+                            .param("viewportTask", request.viewport() == null
+                                    ? "Each attachment is the complete rendered PDF page."
+                                    : "The attachment is only a bounded tile of PDF page "
+                                            + request.viewport().pageNumber()
+                                            + ". Inspect the complete attached tile, not unseen parts of the PDF page. "
+                                            + "All returned x, y, width, and height coordinates must use a top-left "
+                                            + "0-1000 grid relative to this attached tile. iconInventoryComplete means "
+                                            + "that every distinct gameplay icon in this tile was recorded.")
                             .param("crossPageTask", request.pages().size() > 1
                                     ? "These images are a deliberate labeled-reference and operational-rule pair. "
                                             + "Your primary task is to compare repeated icon artwork across both "
@@ -154,9 +163,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             for (JsonNode page : pages) {
                 summaries.add(new PageSummary(
                         page.path("pageNumber").asInt(),
-                        joinedText(page.get("printedTerms"), "; "),
-                        joinedText(page.get("factualSummary"), "\n"),
-                        stringValues(page.get("keywords")),
+                        bounded(joinedText(page.get("printedTerms"), "; "), 1_600),
+                        bounded(joinedText(page.get("factualSummary"), "\n"), 1_600),
+                        boundedStrings(page.get("keywords"), 16, 120),
                         visualAnchors(page.get("visualAnchors")),
                         iconOccurrences(page.get("iconOccurrences")),
                         page.path("iconInventoryComplete").asBoolean(false)));
@@ -191,6 +200,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         String text = joinedText(value, "; ");
         return text == null || text.isBlank() ? java.util.List.of() : java.util.List.of(text);
+    }
+
+    private static java.util.List<String> boundedStrings(JsonNode value, int maximumItems, int maximumLength) {
+        return stringValues(value).stream()
+                .filter(item -> item != null && !item.isBlank())
+                .map(item -> bounded(item, maximumLength))
+                .distinct()
+                .limit(maximumItems)
+                .toList();
+    }
+
+    private static String bounded(String value, int maximumLength) {
+        if (value == null || value.length() <= maximumLength) return value;
+        return value.substring(0, maximumLength).stripTrailing();
     }
 
     /** Optional anchors must never make a page's textual visual ledger unusable. */

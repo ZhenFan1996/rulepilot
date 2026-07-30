@@ -46,4 +46,20 @@ class RulePageImageCropperTest {
         assertThatIllegalArgumentException()
                 .isThrownBy(() -> cropper.crop(page, 990, 0, 20, 100));
     }
+
+    @Test
+    void acceptsTheMinimumModelValidatedIconRectangle() throws IOException {
+        BufferedImage source = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+
+        byte[] result = cropper.crop(
+                new PageImage(1, "image/jpeg", encoded.toByteArray(), 100, 100),
+                100,
+                100,
+                12,
+                12);
+
+        assertThat(ImageIO.read(new ByteArrayInputStream(result))).isNotNull();
+    }
 }

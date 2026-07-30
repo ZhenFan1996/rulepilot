@@ -13,7 +13,10 @@ import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.RulebookIconGlossaryService;
+import com.rulepilot.teaching.application.VisualLessonEnrichmentService.VisualEnrichmentLaunch;
+import com.rulepilot.teaching.domain.IllustratedLesson;
 import java.security.Principal;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,5 +55,25 @@ class IllustratedLessonControllerTest {
 
         verify(owners).requireOwned(planId, "alice");
         verify(launcher).launch(planId, "alice");
+    }
+
+    @Test
+    void startsIconInventoryWithoutRerunningLessonVisualLocalization() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID runId = UUID.randomUUID();
+        when(lessons.latest(planId)).thenReturn(Optional.of(mock(IllustratedLesson.class)));
+        when(launcher.prepareIconGlossary(planId, "alice"))
+                .thenReturn(new VisualEnrichmentLaunch(runId, AssistantRunState.RECEIVED, 1, false));
+
+        mockMvc.perform(post(
+                                "/api/v1/teaching-plans/{planId}/illustrated-lessons/latest/icon-glossary",
+                                planId)
+                        .principal(alice))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.assistantRunId").value(runId.toString()))
+                .andExpect(jsonPath("$.state").value("RECEIVED"));
+
+        verify(owners).requireOwned(planId, "alice");
+        verify(launcher).prepareIconGlossary(planId, "alice");
     }
 }

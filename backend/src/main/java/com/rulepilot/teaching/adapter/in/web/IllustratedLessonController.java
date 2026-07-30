@@ -69,7 +69,7 @@ public class IllustratedLessonController {
         owners.requireOwned(planId, principal.getName());
         lessons.latest(planId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "lesson does not exist"));
-        return launcher.enrichLatest(planId, principal.getName());
+        return launcher.prepareIconGlossary(planId, principal.getName());
     }
 
     @GetMapping("/latest/icon-glossary")

@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
@@ -25,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.IntFunction;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
@@ -111,7 +113,7 @@ class VisualRulebookCataloger {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (!pagesToInspect.isEmpty()) {
             List<PageFact> inspected =
-                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId);
+                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId, true);
             if (!inspected.isEmpty()) visualFacts.merge(documentVersionId, inspected);
         }
         return visualFacts.find(documentVersionId, requestedPages).stream()
@@ -145,7 +147,7 @@ class VisualRulebookCataloger {
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
-                : catalogPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId);
+                : catalogPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId, false);
         if (!cached.isEmpty() && !requiredFacts.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -201,7 +203,7 @@ class VisualRulebookCataloger {
         try {
             fresh = missing.isEmpty()
                     ? List.of()
-                    : catalogPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId);
+                    : catalogPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId, false);
         } catch (RuntimeException visualFailure) {
             log.warn(
                     "Sparse-page visual coverage probe skipped for document {} pages {}",
@@ -249,7 +251,8 @@ class VisualRulebookCataloger {
                     uncatalogedPages,
                     rulebookTitle,
                     owner,
-                    assistantRunId);
+                    assistantRunId,
+                    false);
             if (interpreted.isEmpty()) {
                 log.warn(
                         "Visual page interpretation produced no usable facts for document {} pages {}",
@@ -276,7 +279,8 @@ class VisualRulebookCataloger {
             Set<Integer> pageNumbers,
             String rulebookTitle,
             String owner,
-            UUID assistantRunId) {
+            UUID assistantRunId,
+            boolean allowTileFallback) {
         List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
         // A legend must not be bundled with a gameplay page. Vision providers occasionally return a valid summary
         // for only one of two supplied images; treating that partial response as an all-or-nothing pair discarded
@@ -285,72 +289,45 @@ class VisualRulebookCataloger {
         List<List<Integer>> batches = VisualRulebookCatalogPolicy.singlePageBatches(orderedPages);
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new ArrayList<>();
-        List<Integer> failedPages = new ArrayList<>();
-        int parallelism = Math.min(visualRequestParallelism, batches.size());
-        ExecutorService executor = Executors.newFixedThreadPool(parallelism);
-        try {
-            List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = java.util.stream.IntStream
-                    .range(0, batches.size())
-                    .mapToObj(batchIndex -> executor.submit(() -> catalogBatch(
-                            documentVersionId,
-                            batches.get(batchIndex),
-                            owner,
-                            rulebookTitle,
-                            assistantRunId,
-                            "inspectRulebookVisualBatch|" + (batchIndex + 1))))
-                    .toList();
-            for (int index = 0; index < futures.size(); index++) {
-                try {
-                    List<VisualRulebookPageCatalogModel.PageSummary> completed =
-                            awaitCatalog(futures.get(index), visualCatalogTimeout).pages();
-                    summaries.addAll(completed);
-                    persistCompletedFacts(documentVersionId, completed);
-                } catch (RuntimeException failedBatch) {
-                    String operation = "inspectRulebookVisualBatch|" + (index + 1);
-                    if (catalogTimedOut(failedBatch)) {
-                        invocations.stopRunning(
-                                assistantRunId,
-                                operation,
-                                ActivityOutcome.FAILED,
-                                "Visual page batch timed out; retaining completed page facts");
-                    }
-                    log.warn(
-                            "Visual page interpretation skipped failed batch {} for document {}",
-                            batches.get(index),
-                            documentVersionId,
-                            failedBatch);
-                    failedPages.addAll(batches.get(index));
-                }
-            }
-            retryFailedPages(
-                    documentVersionId,
-                    failedPages,
-                    owner,
-                    rulebookTitle,
-                    assistantRunId,
-                    executor,
-                    summaries);
-        } finally {
-            executor.shutdownNow();
+        Set<Integer> timedOutPages = new LinkedHashSet<>();
+        List<Integer> failedPages = inspectInBoundedWindows(
+                documentVersionId,
+                batches,
+                owner,
+                rulebookTitle,
+                assistantRunId,
+                index -> "inspectRulebookVisualBatch|" + (index + 1),
+                summaries,
+                "Visual page batch timed out; retaining completed page facts",
+                timedOutPages);
+        List<Integer> retryableFailures = failedPages.stream()
+                .filter(page -> !timedOutPages.contains(page))
+                .toList();
+        List<Integer> retryFailures =
+                retryFailedPages(documentVersionId, retryableFailures, owner, rulebookTitle, assistantRunId, summaries);
+        Set<Integer> tileFallbackPages = new LinkedHashSet<>(timedOutPages);
+        tileFallbackPages.addAll(retryFailures);
+        if (allowTileFallback) {
+            summaries.stream()
+                    .filter(summary -> summary.iconOccurrences().isEmpty())
+                    .filter(summary -> !summary.visualAnchors().isEmpty())
+                    .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
+                    .forEach(tileFallbackPages::add);
+        }
+        if (allowTileFallback && !tileFallbackPages.isEmpty()) {
+            summaries.addAll(catalogDensePagesWithTiles(
+                    documentVersionId, List.copyOf(tileFallbackPages), owner, rulebookTitle, assistantRunId));
         }
         return summaries.stream()
                 .sorted(java.util.Comparator.comparingInt(VisualRulebookPageCatalogModel.PageSummary::pageNumber))
                 .collect(Collectors.toMap(
                         VisualRulebookPageCatalogModel.PageSummary::pageNumber,
                         java.util.function.Function.identity(),
-                        (first, duplicate) -> first,
+                        (first, later) -> later,
                         LinkedHashMap::new))
                 .values().stream()
                 .filter(summary -> pageNumbers.contains(summary.pageNumber()))
-                .map(summary -> new PageFact(
-                        summary.pageNumber(),
-                        summary.printedTerms(),
-                        summary.factualSummary(),
-                        summary.keywords(),
-                        summary.visualAnchors(),
-                        summary.iconOccurrences(),
-                        summary.iconInventoryComplete(),
-                        PageFact.CURRENT_SCHEMA_VERSION))
+                .map(VisualRulebookCataloger::pageFact)
                 .toList();
     }
 
@@ -364,55 +341,193 @@ class VisualRulebookCataloger {
         visualFacts.merge(
                 documentVersionId,
                 completed.stream()
-                        .map(summary -> new PageFact(
-                                summary.pageNumber(),
-                                summary.printedTerms(),
-                                summary.factualSummary(),
-                                summary.keywords(),
-                                summary.visualAnchors(),
-                                summary.iconOccurrences(),
-                                summary.iconInventoryComplete(),
-                                PageFact.CURRENT_SCHEMA_VERSION))
+                        .map(VisualRulebookCataloger::pageFact)
                         .toList());
+    }
+
+    private static PageFact pageFact(VisualRulebookPageCatalogModel.PageSummary summary) {
+        return new PageFact(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                summary.visualAnchors(),
+                IconEvidencePolicy.sanitize(summary.iconOccurrences()),
+                summary.iconInventoryComplete(),
+                PageFact.CURRENT_SCHEMA_VERSION);
     }
 
     /**
      * Retry only failed pages so a temporary provider error cannot discard the rest of a visual rulebook's ledger.
      * Failed single-page retries remain absent and are still handled by the evidence policy.
      */
-    private void retryFailedPages(
+    private List<Integer> retryFailedPages(
             UUID documentVersionId,
             List<Integer> failedPages,
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            ExecutorService executor,
             List<VisualRulebookPageCatalogModel.PageSummary> summaries) {
-        if (failedPages.isEmpty()) return;
+        if (failedPages.isEmpty()) return List.of();
         List<Integer> retryPages = failedPages.stream().distinct().toList();
-        List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> retries = retryPages.stream()
-                .map(pageNumber -> executor.submit(() -> catalogBatch(
-                        documentVersionId,
-                        List.of(pageNumber),
-                        owner,
-                        rulebookTitle,
-                        assistantRunId,
-                        "inspectRulebookVisualRetry|" + pageNumber)))
-                .toList();
-        for (int index = 0; index < retries.size(); index++) {
-            try {
-                List<VisualRulebookPageCatalogModel.PageSummary> completed =
-                        awaitCatalog(retries.get(index), visualCatalogTimeout).pages();
-                summaries.addAll(completed);
-                persistCompletedFacts(documentVersionId, completed);
-            } catch (RuntimeException retryFailure) {
-                log.warn(
-                        "Visual page retry skipped page {} for document {}",
-                        retryPages.get(index),
-                        documentVersionId,
-                        retryFailure);
+        List<List<Integer>> retryBatches = retryPages.stream().map(List::of).toList();
+        Set<Integer> retryTimeouts = new LinkedHashSet<>();
+        return inspectInBoundedWindows(
+                documentVersionId,
+                retryBatches,
+                owner,
+                rulebookTitle,
+                assistantRunId,
+                index -> "inspectRulebookVisualRetry|" + retryPages.get(index),
+                summaries,
+                "Visual page retry timed out; the page remains incomplete",
+                retryTimeouts);
+    }
+
+    private List<VisualRulebookPageCatalogModel.PageSummary> catalogDensePagesWithTiles(
+            UUID documentVersionId,
+            List<Integer> pageNumbers,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId) {
+        List<VisualRulebookPageCatalogModel.PageSummary> mergedPages = new ArrayList<>();
+        for (int pageNumber : pageNumbers.stream().distinct().sorted().toList()) {
+            Optional<PageImage> source = pageImages.read(documentVersionId, Set.of(pageNumber)).stream()
+                    .filter(page -> page.pageNumber() == pageNumber)
+                    .findFirst();
+            if (source.isEmpty()) continue;
+            List<VisualPageTilePolicy.PageTile> tiles = VisualPageTilePolicy.tiles(source.get());
+            List<VisualPageTilePolicy.TileSummary> completed = new ArrayList<>();
+            int parallelism = Math.min(visualRequestParallelism, tiles.size());
+            for (int windowStart = 0; windowStart < tiles.size(); windowStart += parallelism) {
+                int windowEnd = Math.min(windowStart + parallelism, tiles.size());
+                ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+                try {
+                    List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
+                    for (int index = windowStart; index < windowEnd; index++) {
+                        int tileIndex = index;
+                        futures.add(executor.submit(() -> catalogTile(
+                                tiles.get(tileIndex),
+                                owner,
+                                rulebookTitle,
+                                assistantRunId,
+                                "inspectRulebookVisualTile|" + pageNumber + "|" + (tileIndex + 1))));
+                    }
+                    for (int offset = 0; offset < futures.size(); offset++) {
+                        int tileIndex = windowStart + offset;
+                        try {
+                            VisualRulebookPageCatalogModel.PageSummary summary =
+                                    awaitCatalog(futures.get(offset), visualCatalogTimeout).pages().getFirst();
+                            completed.add(new VisualPageTilePolicy.TileSummary(
+                                    tiles.get(tileIndex).viewport(), summary));
+                        } catch (RuntimeException failedTile) {
+                            if (catalogTimedOut(failedTile)) {
+                                invocations.stopRunning(
+                                        assistantRunId,
+                                        "inspectRulebookVisualTile|" + pageNumber + "|" + (tileIndex + 1),
+                                        ActivityOutcome.FAILED,
+                                        "Dense-page tile timed out; retaining other completed tiles");
+                            }
+                            log.warn(
+                                    "Visual tile {} skipped for dense rulebook page {} in document {}",
+                                    tileIndex + 1,
+                                    pageNumber,
+                                    documentVersionId,
+                                    failedTile);
+                        }
+                    }
+                } finally {
+                    executor.shutdownNow();
+                }
+            }
+            if (!completed.isEmpty()) {
+                VisualRulebookPageCatalogModel.PageSummary merged =
+                        VisualPageTilePolicy.merge(pageNumber, completed);
+                mergedPages.add(merged);
+                persistCompletedFacts(documentVersionId, List.of(merged));
             }
         }
+        return mergedPages;
+    }
+
+    private VisualRulebookPageCatalogModel.CatalogDraft catalogTile(
+            VisualPageTilePolicy.PageTile tile,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            String operation) {
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(
+                List.of(tile.image()), owner, rulebookTitle, tile.viewport());
+        return invokeModel(
+                assistantRunId,
+                operation,
+                800,
+                "Dense rulebook page tile interpreted",
+                () -> visualCatalog.summarize(request),
+                this::catalogOutputTokens);
+    }
+
+    /**
+     * Submit only work that can start immediately. A future timeout must measure a provider call, not time spent
+     * waiting behind an earlier page in the executor queue. Replacing the executor after each window also prevents
+     * a provider that ignores interruption from starving every later page after one timeout.
+     */
+    private List<Integer> inspectInBoundedWindows(
+            UUID documentVersionId,
+            List<List<Integer>> batches,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            IntFunction<String> operationForIndex,
+            List<VisualRulebookPageCatalogModel.PageSummary> summaries,
+            String timeoutSummary,
+            Set<Integer> timedOutPages) {
+        List<Integer> failedPages = new ArrayList<>();
+        int parallelism = Math.min(visualRequestParallelism, batches.size());
+        for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
+            int windowEnd = Math.min(windowStart + parallelism, batches.size());
+            ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+            try {
+                List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
+                for (int index = windowStart; index < windowEnd; index++) {
+                    int batchIndex = index;
+                    futures.add(executor.submit(() -> catalogBatch(
+                            documentVersionId,
+                            batches.get(batchIndex),
+                            owner,
+                            rulebookTitle,
+                            assistantRunId,
+                            operationForIndex.apply(batchIndex))));
+                }
+                for (int offset = 0; offset < futures.size(); offset++) {
+                    int batchIndex = windowStart + offset;
+                    try {
+                        List<VisualRulebookPageCatalogModel.PageSummary> completed =
+                                awaitCatalog(futures.get(offset), visualCatalogTimeout).pages();
+                        summaries.addAll(completed);
+                        persistCompletedFacts(documentVersionId, completed);
+                    } catch (RuntimeException failedBatch) {
+                        if (catalogTimedOut(failedBatch)) {
+                            timedOutPages.addAll(batches.get(batchIndex));
+                            invocations.stopRunning(
+                                    assistantRunId,
+                                    operationForIndex.apply(batchIndex),
+                                    ActivityOutcome.FAILED,
+                                    timeoutSummary);
+                        }
+                        log.warn(
+                                "Visual page interpretation skipped failed batch {} for document {}",
+                                batches.get(batchIndex),
+                                documentVersionId,
+                                failedBatch);
+                        failedPages.addAll(batches.get(batchIndex));
+                    }
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+        return failedPages;
     }
 
     private VisualRulebookPageCatalogModel.CatalogDraft catalogBatch(

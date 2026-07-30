@@ -93,7 +93,6 @@ public class VisualLessonEnrichmentService {
             var lesson = lessons.findLatestByPlan(teachingPlanId).orElse(null);
             if (lesson == null) return;
             publisher.publish(enrich(plan.documentVersionId(), lesson, plan.createdBy()));
-            extractIconGlossary(plan.id(), plan.createdBy(), null);
         } catch (RuntimeException failure) {
             log.warn(
                     "Visual lesson enrichment failed for plan {} ({}): {}",
@@ -133,7 +132,6 @@ public class VisualLessonEnrichmentService {
             UUID runId = current.id();
             VisualLessonEnricher.EnrichmentResult result = enrichWithReport(
                     plan.documentVersionId(), lesson, plan.createdBy(), visualProgress(runId, plan.createdBy()));
-            extractIconGlossary(plan.id(), plan.createdBy(), runId);
             if (!runIsActive(runId, plan.createdBy())) {
                 log.info("Stopped visual enrichment run {} after cancellation", runId);
                 return;
@@ -164,18 +162,51 @@ public class VisualLessonEnrichmentService {
         }
     }
 
-    private void extractIconGlossary(UUID teachingPlanId, String owner, UUID assistantRunId) {
-        if (iconGlossary == null) return;
+    /**
+     * Runs whole-rulebook icon inventory as its own visual job. It intentionally does not share a call stack with
+     * section crop localization: canceled provider tasks and their database activity must be fully quiescent before
+     * page facts are read and replaced.
+     */
+    public void extractIconGlossaryOnly(UUID teachingPlanId, RunSnapshot run) {
+        if (runs == null || iconGlossary == null) {
+            throw new IllegalStateException("rulebook icon glossary runs are unavailable");
+        }
+        RunSnapshot current = run;
         try {
-            iconGlossary.extract(teachingPlanId, owner, assistantRunId);
+            current = runs.advance(
+                    current.id(), current.revision(), AssistantRunState.DOCUMENT_READINESS,
+                    "Loading every rendered rulebook page for icon review");
+            current = runs.advance(
+                    current.id(), current.revision(), AssistantRunState.RETRIEVING,
+                    "Identifying rule icons and their directly printed explanations");
+            iconGlossary.extract(teachingPlanId, current.ownerUsername(), current.id());
+            current = runs.advance(
+                    current.id(), current.revision(), AssistantRunState.VERIFYING_EVIDENCE,
+                    "Checking icon meanings against visible rulebook labels");
+            current = runs.advance(
+                    current.id(), current.revision(), AssistantRunState.MEDIA_PACKAGING,
+                    "Preparing exact icon crops for the quick reference");
+            runs.advance(
+                    current.id(), current.revision(), AssistantRunState.COMPLETED,
+                    "Rulebook icon quick reference finished");
         } catch (RuntimeException failure) {
-            // Icon extraction is independently resumable from its completed page facts. Keep accepted lesson crops
-            // and expose a partial glossary instead of failing the whole optional visual-enrichment run.
             log.warn(
                     "Rulebook icon glossary remained partial for plan {} ({}): {}",
                     teachingPlanId,
                     failure.getClass().getSimpleName(),
-                    failure.getMessage());
+                    failure.getMessage(),
+                    failure);
+            if (current != null && !current.state().terminal()) {
+                try {
+                    runs.fail(
+                            current.id(),
+                            current.revision(),
+                            "ICON_GLOSSARY_FAILED",
+                            "Rulebook icon review stopped safely and can resume completed pages");
+                } catch (RuntimeException runFailure) {
+                    failure.addSuppressed(runFailure);
+                }
+            }
         }
     }
 

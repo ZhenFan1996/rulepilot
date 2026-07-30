@@ -104,6 +104,22 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void bounds_overlong_optional_text_instead_of_discarding_the_icon_page() {
+        String longSummary = "visible rule ".repeat(300);
+        String json = "{\"pages\":[{\"pageNumber\":6,\"printedTerms\":\"ICONS\","
+                + "\"factualSummary\":" + jsonString(longSummary) + ","
+                + "\"keywords\":[\""
+                + "x".repeat(180) + "\"],\"iconOccurrences\":[],\"iconInventoryComplete\":true}]}";
+
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog(json);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.factualSummary()).hasSize(1_600);
+            assertThat(page.keywords().getFirst()).hasSize(120);
+        });
+    }
+
+    @Test
     void repairsOneConcatenatedPageNumberWithoutChangingTheKnownPageBinding() {
         CatalogRequest request = new CatalogRequest(
                 List.of(
@@ -118,5 +134,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(normalized.pages()).extracting(PageSummary::pageNumber).containsExactly(7, 14);
         assertThat(normalized.pages().getLast().printedTerms()).isEqualTo("KODORA");
+    }
+
+    private static String jsonString(String value) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+            throw new AssertionError(exception);
+        }
     }
 }

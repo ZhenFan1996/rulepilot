@@ -1,0 +1,46 @@
+package com.rulepilot.teaching.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class IconEvidencePolicyTest {
+
+    @Test
+    void demotesBracketAndEmojiStandInsThatAreNotExactVisibleText() {
+        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
+                icon("Adjacent [house icon] scores 1 point."),
+                icon("Each building scores Victory Points 🟢.")));
+
+        assertThat(sanitized).allSatisfy(icon -> {
+            assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+            assertThat(icon.explanation()).isEmpty();
+            assertThat(icon.evidenceText()).isEmpty();
+        });
+    }
+
+    @Test
+    void retainsAPlainLiteralLegendLabel() {
+        IconOccurrence sanitized = IconEvidencePolicy.sanitize(List.of(icon("WHEAT"))).getFirst();
+
+        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.evidenceText()).isEqualTo("WHEAT");
+    }
+
+    private static IconOccurrence icon(String evidence) {
+        return new IconOccurrence(
+                "wheat",
+                "小麦",
+                "黄色资源符号。",
+                "代表小麦资源。",
+                evidence,
+                IconMeaningStatus.EXPLICIT,
+                100,
+                100,
+                20,
+                20);
+    }
+}

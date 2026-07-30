@@ -31,10 +31,18 @@ public interface VisualRulebookPageCatalogModel {
         };
     }
 
-    record CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
+    record CatalogRequest(
+            List<PageImageInput> pages,
+            String modelConfigurationOwner,
+            String rulebookTitle,
+            PageViewport viewport) {
 
         public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner) {
-            this(pages, modelConfigurationOwner, null);
+            this(pages, modelConfigurationOwner, null, null);
+        }
+
+        public CatalogRequest(List<PageImageInput> pages, String modelConfigurationOwner, String rulebookTitle) {
+            this(pages, modelConfigurationOwner, rulebookTitle, null);
         }
 
         public CatalogRequest {
@@ -49,6 +57,25 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual page catalog rulebook title is invalid");
             }
             rulebookTitle = rulebookTitle == null || rulebookTitle.isBlank() ? null : rulebookTitle.strip();
+            if (viewport != null
+                    && (pages.size() != 1 || pages.getFirst().pageNumber() != viewport.pageNumber())) {
+                throw new IllegalArgumentException("visual page viewport does not match its image");
+            }
+        }
+    }
+
+    /**
+     * Normalized bounds of a supplied page tile. Model coordinates stay tile-relative and are projected back to the
+     * immutable source page by the application layer.
+     */
+    record PageViewport(int pageNumber, int x, int y, int width, int height) {
+
+        public PageViewport {
+            if (pageNumber < 1
+                    || x < 0 || y < 0 || width < 200 || height < 200
+                    || x + width > 1_000 || y + height > 1_000) {
+                throw new IllegalArgumentException("visual page viewport is invalid");
+            }
         }
     }
 

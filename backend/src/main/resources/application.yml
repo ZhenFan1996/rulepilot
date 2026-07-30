@@ -158,7 +158,9 @@ rulepilot:
     # page still needs a concrete gameplay observation before it can create a teaching topic.
     coverage-probe-pages: ${VISUAL_COVERAGE_PROBE_PAGES:4}
     location-timeout: ${VISUAL_LOCATION_TIMEOUT:PT45S}
-    catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT45S}
+    # Full-page icon inventories are deliberately richer than crop localization responses and large VL models can
+    # need more than 45 seconds on dense reference sheets. This deadline applies per immediately-started request.
+    catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT120S}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:

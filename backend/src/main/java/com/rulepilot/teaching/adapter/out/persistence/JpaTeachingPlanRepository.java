@@ -46,7 +46,9 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                         TeachingPlanEntity.class)
                 .setParameter("planId", planId)
                 .setParameter("createdBy", createdBy)
-                .getResultStream()
+                .setMaxResults(1)
+                .getResultList()
+                .stream()
                 .findFirst()
                 .map(plan -> plan.toDomain(findSections(plan.id)));
     }
@@ -97,7 +99,8 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                 .setParameter("versionId", documentVersionId)
                 .setParameter("createdBy", createdBy)
                 .setMaxResults(1)
-                .getResultStream()
+                .getResultList()
+                .stream()
                 .findFirst()
                 .map(plan -> plan.toDomain(findSections(plan.id)));
     }

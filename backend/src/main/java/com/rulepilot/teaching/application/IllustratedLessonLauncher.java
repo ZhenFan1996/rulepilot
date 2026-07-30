@@ -80,7 +80,34 @@ public class IllustratedLessonLauncher {
         var launch = visuals.launch(teachingPlanId, ownerUsername);
         if (launch.reused()) return launch;
         try {
-            visualEnrichmentExecutor.execute(() -> visuals.enrichLatest(teachingPlanId, new RunSnapshot(
+            visualEnrichmentExecutor.execute(() -> {
+                visuals.enrichLatest(teachingPlanId, new RunSnapshot(
+                        launch.assistantRunId(),
+                        AssistantRunMode.VISUAL_ENRICHMENT,
+                        teachingPlanId,
+                        ownerUsername,
+                        launch.state(),
+                        launch.revision(),
+                        java.time.Instant.now(),
+                        java.time.Instant.now(),
+                        null,
+                        null));
+                prepareIconGlossary(teachingPlanId, ownerUsername);
+            });
+        } catch (RuntimeException schedulingFailure) {
+            visuals.failScheduling(launch);
+            throw schedulingFailure;
+        }
+        return launch;
+    }
+
+    public VisualLessonEnrichmentService.VisualEnrichmentLaunch prepareIconGlossary(
+            UUID teachingPlanId, String ownerUsername) {
+        if (visuals == null) throw new IllegalStateException("visual enrichment is unavailable");
+        var launch = visuals.launch(teachingPlanId, ownerUsername);
+        if (launch.reused()) return launch;
+        try {
+            visualEnrichmentExecutor.execute(() -> visuals.extractIconGlossaryOnly(teachingPlanId, new RunSnapshot(
                     launch.assistantRunId(),
                     AssistantRunMode.VISUAL_ENRICHMENT,
                     teachingPlanId,

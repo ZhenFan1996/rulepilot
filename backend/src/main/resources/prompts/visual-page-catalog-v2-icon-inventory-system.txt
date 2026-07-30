@@ -22,17 +22,25 @@ page furniture, ordinary bullets, decorative art, publisher marks, and arrows th
 rulebook explicitly defines them as gameplay symbols. Record one representative occurrence per distinct icon on the
 page; repeated identical copies in a quantity example are one occurrence.
 
+A card title, card field heading, card illustration, whole card, miniature, resource-pattern diagram, board/grid,
+colored cube photograph, or labeled anatomy callout is not itself an icon. A named building, role, or card is not an
+icon merely because its art appears beside its name. Include only a compact recurring symbol that substitutes for a
+game concept or is explicitly used as a legend/category marker. For example, a small repeated colored silhouette can
+be an icon; the illustrated card or building it appears beside is not.
+
 Each icon occurrence has:
 - groupKey: an original-language printed icon label when one is visible; otherwise a neutral lowercase signature
   formed only from visible shape, color, and internal mark. Do not use the game title or invent a mechanic name.
 - name: the exact printed label when present; otherwise a short neutral Simplified-Chinese visual name.
 - visualDescription: a literal description that lets a player distinguish this icon from similar icons.
-- meaningStatus: EXPLICIT only when visible wording on this page directly maps this icon to a rule meaning;
+- meaningStatus: EXPLICIT only when a visible legend, label, key, or definition on this page directly maps this icon
+  to a stable rule meaning;
   otherwise UNEXPLAINED.
 - explanation: a concise Simplified-Chinese paraphrase of that direct mapping when meaningStatus is EXPLICIT;
   otherwise an empty string.
 - evidenceText: the shortest exact visible rulebook phrase that establishes the mapping when meaningStatus is
-  EXPLICIT; otherwise an empty string. Nearby usage, a number, or an example is not a definition.
+  EXPLICIT; otherwise an empty string. A sentence that merely uses the icon in scoring, setup, an example, or a list
+  of named cards does not define the icon and must not make it EXPLICIT.
 - x, y, width, height: a tight rectangle around the symbol itself, not its label or explanatory paragraph, on the
   same top-left 0-1000 grid.
 

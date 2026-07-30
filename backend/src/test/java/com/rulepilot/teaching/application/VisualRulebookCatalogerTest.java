@@ -8,8 +8,13 @@ import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -19,6 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
 class VisualRulebookCatalogerTest {
@@ -239,6 +245,176 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void aTimedOutProviderCallDoesNotConsumeTheTimeoutOfQueuedPages() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        Map<Integer, AtomicInteger> callsByPage = new java.util.concurrent.ConcurrentHashMap<>();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                request -> {
+                    int pageNumber = request.pages().getFirst().pageNumber();
+                    int call = callsByPage
+                            .computeIfAbsent(pageNumber, ignored -> new AtomicInteger())
+                            .incrementAndGet();
+                    if (pageNumber == 1 && call == 1) {
+                        long deadline = System.nanoTime() + Duration.ofMillis(150).toNanos();
+                        while (System.nanoTime() < deadline) {
+                            try {
+                                Thread.sleep(5);
+                            } catch (InterruptedException ignored) {
+                                // Simulate an HTTP provider that does not terminate when Future.cancel interrupts it.
+                            }
+                        }
+                    }
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
+                            new VisualRulebookPageCatalogModel.PageSummary(
+                                    pageNumber,
+                                    "PAGE " + pageNumber,
+                                    "Visible rule " + pageNumber,
+                                    List.of("page " + pageNumber))));
+                },
+                facts,
+                1,
+                Duration.ofMillis(40));
+
+        cataloger.catalogVisualPages(
+                documentVersionId,
+                List.of(page(1), page(2), page(3)),
+                "Example game",
+                "owner",
+                null);
+
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+                .extracting(PageFact::pageNumber)
+                .containsExactly(2, 3);
+        assertThat(callsByPage.get(1)).hasValue(1);
+        assertThat(callsByPage.get(2)).hasValue(1);
+        assertThat(callsByPage.get(3)).hasValue(1);
+    }
+
+    @Test
+    void denseIconPageFallsBackToFourOverlappingTilesAfterWholePageRetryFails() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger fullPageCalls = new AtomicInteger();
+        List<VisualRulebookPageCatalogModel.PageViewport> inspectedViewports =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        byte[] pageContent = renderedPage();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", pageContent, 100, 100))
+                        .toList(),
+                request -> {
+                    if (request.viewport() == null) {
+                        fullPageCalls.incrementAndGet();
+                        throw new IllegalStateException("dense full page response was unavailable");
+                    }
+                    inspectedViewports.add(request.viewport());
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
+                            new VisualRulebookPageCatalogModel.PageSummary(
+                                    1,
+                                    "VISIBLE LEGEND",
+                                    "该分块中可见一个图标图例。",
+                                    List.of("legend"),
+                                    List.of(),
+                                    List.of(new IconOccurrence(
+                                            "victory point",
+                                            "胜利点",
+                                            "绿色圆形胜利点符号。",
+                                            "代表胜利点。",
+                                            "Victory Point",
+                                            IconMeaningStatus.EXPLICIT,
+                                            100,
+                                            100,
+                                            40,
+                                            40)),
+                                    true)));
+                },
+                facts);
+
+        List<PageFact> result = cataloger.catalogAllIconPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(fullPageCalls).hasValue(2);
+        assertThat(inspectedViewports)
+                .containsExactly(
+                        new VisualRulebookPageCatalogModel.PageViewport(1, 0, 0, 550, 550),
+                        new VisualRulebookPageCatalogModel.PageViewport(1, 450, 0, 550, 550),
+                        new VisualRulebookPageCatalogModel.PageViewport(1, 0, 450, 550, 550),
+                        new VisualRulebookPageCatalogModel.PageViewport(1, 450, 450, 550, 550));
+        assertThat(result).singleElement().satisfies(fact -> {
+            assertThat(fact.iconInventoryComplete()).isTrue();
+            assertThat(fact.iconOccurrences()).singleElement().satisfies(icon -> {
+                assertThat(icon.groupKey()).isEqualTo("victory point");
+                assertThat(icon.x()).isEqualTo(55);
+                assertThat(icon.y()).isEqualTo(55);
+                assertThat(icon.width()).isEqualTo(22);
+                assertThat(icon.height()).isEqualTo(22);
+            });
+        });
+    }
+
+    @Test
+    void visuallyRichPageWithAnEmptyFullPageInventoryIsCheckedInTiles() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger fullPageCalls = new AtomicInteger();
+        AtomicInteger tileCalls = new AtomicInteger();
+        byte[] pageContent = renderedPage();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", pageContent, 100, 100)),
+                request -> {
+                    if (request.viewport() == null) {
+                        fullPageCalls.incrementAndGet();
+                        return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
+                                new VisualRulebookPageCatalogModel.PageSummary(
+                                        1,
+                                        "SCORING REFERENCE",
+                                        "该页有多个计分示例。",
+                                        List.of("scoring"),
+                                        List.of(new VisualAnchor(
+                                                "table", "Scoring", "一张带图形的计分表。", 100, 100, 300, 300)),
+                                        List.of(),
+                                        true)));
+                    }
+                    tileCalls.incrementAndGet();
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
+                            new VisualRulebookPageCatalogModel.PageSummary(
+                                    1,
+                                    "VICTORY POINT",
+                                    "分块内可见胜利点图例。",
+                                    List.of("victory point"),
+                                    List.of(),
+                                    List.of(new IconOccurrence(
+                                            "victory point",
+                                            "胜利点",
+                                            "绿色圆形符号。",
+                                            "",
+                                            "",
+                                            IconMeaningStatus.UNEXPLAINED,
+                                            100,
+                                            100,
+                                            40,
+                                            40)),
+                                    true)));
+                },
+                facts);
+
+        List<PageFact> result = cataloger.catalogAllIconPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(fullPageCalls).hasValue(1);
+        assertThat(tileCalls).hasValue(4);
+        assertThat(result).singleElement().satisfies(fact -> {
+            assertThat(fact.iconInventoryComplete()).isTrue();
+            assertThat(fact.iconOccurrences()).singleElement();
+        });
+    }
+
+    @Test
     void catalogsEachPhotographedPageIndependently() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> batches = new java.util.ArrayList<>();
@@ -307,6 +483,15 @@ class VisualRulebookCatalogerTest {
             VisualRulebookPageCatalogModel model,
             VisualRulebookPageFacts facts,
             int visualRequestParallelism) {
+        return cataloger(pageImages, model, facts, visualRequestParallelism, Duration.ofSeconds(2));
+    }
+
+    private static VisualRulebookCataloger cataloger(
+            DocumentPageImages pageImages,
+            VisualRulebookPageCatalogModel model,
+            VisualRulebookPageFacts facts,
+            int visualRequestParallelism,
+            Duration timeout) {
         return new VisualRulebookCataloger(
                 pageImages,
                 model,
@@ -324,13 +509,20 @@ class VisualRulebookCatalogerTest {
                         return invocation.get();
                     }
                 },
-                Duration.ofSeconds(2),
+                timeout,
                 4,
                 visualRequestParallelism);
     }
 
     private static PageView page(int pageNumber) {
         return new PageView(pageNumber, "", 0);
+    }
+
+    private static byte[] renderedPage() throws IOException {
+        BufferedImage image = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", output);
+        return output.toByteArray();
     }
 
     private static PageFact fact(int pageNumber, String term) {
