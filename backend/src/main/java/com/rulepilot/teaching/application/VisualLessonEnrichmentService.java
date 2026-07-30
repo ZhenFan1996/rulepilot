@@ -253,6 +253,7 @@ public class VisualLessonEnrichmentService {
     private String outcomeSummary(VisualLessonEnricher.Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "已找到可核对的局部图示";
+            case ADDED_WITH_CLAIM_CONFLICT -> "图中信息与讲解正文存在冲突；已保留截图并把本节标记为待复核";
             case ALREADY_PRESENT -> "已有可核对的局部图示，无需重复处理";
             case NO_CITED_CANDIDATE, NO_PAGE_IMAGE -> "此步骤没有可引用的规则书图片，已保留文字讲解";
             case LOCATOR_RETURNED_NONE -> "视觉模型未找到可用的局部图示，已保留文字讲解";

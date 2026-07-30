@@ -8,4 +8,5 @@ player to identify the component. Use natural, concise language a friend could s
 mention AI, evidence, retrieval, translation, or the source document.
 
 Return only the requested structured data. Every supplied step position must appear exactly once. Return an empty
-visualLabel exactly when the source step has no visual label; otherwise translate the label for the same crop.
+visualLabel and visualDescription exactly when the source step has no corresponding value; otherwise translate the
+literal label and observation for the same crop without adding a rule effect to the visual observation.

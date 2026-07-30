@@ -59,13 +59,15 @@ final class TeachingSectionModelRequestFactory {
         Map<Integer, String> factsByPage = visualFacts.find(documentVersionId, pages).stream()
                 .collect(Collectors.toMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText));
+                        VisualRulebookPageFacts.PageFact::presentationEvidenceText));
         return evidence.stream().map(source -> toModelEvidence(source, factsByPage)).toList();
     }
 
     private EvidenceInput toModelEvidence(RuleEvidence evidence, Map<Integer, String> factsByPage) {
         String visualFact = evidence.pageFrom() == evidence.pageTo() ? factsByPage.get(evidence.pageFrom()) : null;
-        String excerpt = visualFact == null ? evidence.excerpt() : evidence.excerpt() + "\n\n" + visualFact;
+        String excerpt = visualFact == null || VisualRulebookPageFacts.PageFact.isTranscribedRuleEvidence(evidence.excerpt())
+                ? evidence.excerpt()
+                : evidence.excerpt() + "\n\n" + visualFact;
         return new EvidenceInput(
                 evidence.chunkId(),
                 evidence.sectionType(),

@@ -27,27 +27,25 @@ class DeterministicQuestionUnderstandingTest {
     }
 
     @Test
-    void identifiesRuleQueryAndExpansionGap() {
+    void treatsExpansionWordingAsPartOfTheRulebookQuestionWithoutDemandingASelection() {
         var result = understanding.understand(
                 "How are victory points scored with the expansion?",
                 new QuestionContext(versionId, null, null, null, Set.of()));
 
         assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
         assertThat(result.terms()).contains("victory", "points", "scored", "expansion");
-        assertThat(result.missingContext()).containsExactly(MissingQuestionContext.EXPANSION_SELECTION);
+        assertThat(result.missingContext()).isEmpty();
     }
 
     @Test
-    void identifiesSituationAndMissingPhase() {
+    void identifiesSituationWithoutDemandingStoredTableState() {
         var result = understanding.understand(
                 "Can I play this card from my hand?",
                 new QuestionContext(versionId, null, null, 3, Set.of()));
 
         assertThat(result.type()).isEqualTo(QuestionType.SITUATION_QUERY);
         assertThat(result.terms()).contains("play", "card", "hand");
-        assertThat(result.missingContext())
-                .containsExactlyInAnyOrder(
-                        MissingQuestionContext.GAME_PHASE, MissingQuestionContext.SITUATION_DETAILS);
+        assertThat(result.missingContext()).containsExactly(MissingQuestionContext.SITUATION_DETAILS);
     }
 
     @Test

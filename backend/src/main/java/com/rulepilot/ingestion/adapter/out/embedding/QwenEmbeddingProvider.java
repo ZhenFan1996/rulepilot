@@ -1,5 +1,6 @@
 package com.rulepilot.ingestion.adapter.out.embedding;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.ingestion.EmbeddingProvider;
@@ -117,7 +118,9 @@ public final class QwenEmbeddingProvider implements EmbeddingProvider {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private record EmbeddingResponse(List<EmbeddingData> data) {}
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private record EmbeddingData(int index, List<Float> embedding) {}
 }

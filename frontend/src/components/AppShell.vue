@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
 import {
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
@@ -19,7 +20,6 @@ interface TeachingPlanSummary { id: string; gameTitle: string }
 interface ActiveTeachingRun { id: string; subjectId: string }
 
 const route = useRoute()
-const router = useRouter()
 const { t } = useLocale()
 type Appearance = 'light' | 'dark'
 
@@ -36,6 +36,7 @@ function preferredAppearance(): Appearance {
 const appearance = ref<Appearance>(preferredAppearance())
 const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
+const loginReminderVisible = ref(false)
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
 const teachingStatusUnavailable = ref(false)
@@ -60,10 +61,10 @@ const currentNavigationName = computed(() => {
   if (route.name === 'public-lesson') return 'public-library'
   return route.name
 })
-const currentTitle = computed(() => {
-  const item = navigation.find((candidate) => candidate.name === currentNavigationName.value)
-  return item ? t(item.labelKey) : 'RulePilot'
-})
+const loginTarget = computed(() => ({
+  name: 'login',
+  query: route.name === 'login' ? undefined : { redirect: route.fullPath },
+}))
 const detailedTeachingRoute = computed(() => route.name === 'lessons' || route.name === 'lesson')
 const backgroundStatusVisible = computed(() => !props.immersive && !detailedTeachingRoute.value)
 const activeTeachingText = computed(() => {
@@ -162,33 +163,39 @@ function handleVisibilityChange() {
   }
 }
 
+function showLoginReminder() {
+  username.value = ''
+  loginReminderVisible.value = true
+}
+
 async function logout() {
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
   const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
   await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token } })
   username.value = ''
-  await router.push({ name: 'login' })
 }
 
 onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
 onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
+onMounted(() => window.addEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder))
 onBeforeUnmount(() => {
   disposed = true
   clearTeachingTimer()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder)
 })
 </script>
 
 <template>
   <div class="min-h-screen bg-canvas text-ink lg:pl-60">
     <aside class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-ink/10 bg-paper px-5 py-6 lg:flex">
-      <RouterLink :to="{ name: 'home' }" aria-label="RulePilot 首页">
+      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')">
         <ProductMark />
       </RouterLink>
 
-      <nav class="mt-10 space-y-1" aria-label="主要导航">
+      <nav class="mt-10 space-y-1" :aria-label="t('shell.primaryNav')">
         <RouterLink
           v-for="item in navigation"
           :key="item.name"
@@ -213,15 +220,15 @@ onBeforeUnmount(() => {
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
         <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
-        <RouterLink v-else :to="{ name: 'login' }" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
+        <RouterLink v-else :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
     <header class="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-ink/10 bg-canvas/95 px-4 backdrop-blur lg:hidden">
-      <RouterLink :to="{ name: 'home' }" aria-label="RulePilot 首页"><ProductMark /></RouterLink>
+      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[360px]:hidden">{{ username }}</RouterLink>
-        <span v-else class="max-w-16 truncate text-sm font-medium text-ink/50 max-[360px]:hidden">{{ currentTitle }}</span>
+        <RouterLink v-else :to="loginTarget" class="inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-indigo">{{ t('shell.signIn') }}</RouterLink>
         <LanguageSwitcher />
         <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-lg text-ink/60 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
@@ -230,6 +237,16 @@ onBeforeUnmount(() => {
     </header>
 
     <main class="min-h-screen pb-20 lg:pb-0">
+      <aside v-if="loginReminderVisible" class="border-b border-copper/25 bg-copper/10 px-4 py-3 sm:px-8" role="status">
+        <div class="mx-auto flex max-w-7xl items-start gap-3">
+          <div class="min-w-0 flex-1">
+            <p class="font-semibold">{{ t('shell.loginReminder.title') }}</p>
+            <p class="mt-1 text-sm leading-6 text-ink/60">{{ t('shell.loginReminder.description') }}</p>
+            <RouterLink :to="loginTarget" class="mt-2 inline-flex min-h-11 items-center font-semibold text-indigo">{{ t('shell.loginReminder.action') }} →</RouterLink>
+          </div>
+          <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.loginReminder.dismiss')" @click="loginReminderVisible = false">×</button>
+        </div>
+      </aside>
       <slot />
     </main>
 
@@ -251,7 +268,7 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" aria-label="主要导航">
+    <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
         v-for="item in mobileNavigation"
         :key="item.name"

@@ -13,7 +13,6 @@ import com.rulepilot.assistant.PlayerLocale;
 import java.security.Principal;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,9 +57,6 @@ public class StructuredRuleAnswerController {
                 new QuestionContext(
                         versionId,
                         request.currentLessonSection(),
-                        session == null ? request.gamePhase() : liveTableContext(session),
-                        session == null ? request.playerCount() : session.playerCount(),
-                        session == null ? request.activeExpansions() : session.expansionIds(),
                         previousQuestion,
                         request.learningIntent(),
                         PlayerLocale.fromRequest(request.language())),
@@ -100,19 +96,9 @@ public class StructuredRuleAnswerController {
         return session;
     }
 
-    private String liveTableContext(GameSessionContextLookup.SessionContext session) {
-        String activePlayer = session.activePlayer() == null
-                ? "当前玩家未指定"
-                : "当前为" + session.activePlayer() + "号玩家";
-        return "第" + session.roundNumber() + "轮，" + session.phase() + "，" + activePlayer;
-    }
-
     record AnswerRequest(
             String question,
             String currentLessonSection,
-            String gamePhase,
-            Integer playerCount,
-            Set<UUID> activeExpansions,
             UUID gameSessionId,
             String previousQuestion,
             com.rulepilot.assistant.domain.LearningIntent learningIntent,

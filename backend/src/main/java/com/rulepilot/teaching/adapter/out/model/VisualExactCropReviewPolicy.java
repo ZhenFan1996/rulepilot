@@ -28,6 +28,7 @@ final class VisualExactCropReviewPolicy {
                 || text.contains("使用")
                 || text.contains("阵营")
                 || text.contains("计分")
+                || text.contains("得分")
                 || text.contains("分数")
                 || text.contains("胜利")
                 || text.contains("结束")
@@ -41,6 +42,7 @@ final class VisualExactCropReviewPolicy {
                 || text.contains("activate")
                 || text.contains("faction")
                 || text.contains("score")
+                || text.contains("point")
                 || text.contains("win")
                 || text.contains("end")
                 || text.contains("tie");

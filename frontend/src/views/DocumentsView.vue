@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
 import {
   forgetPendingRulebookLesson,
   readPendingRulebookLessons,
@@ -112,7 +113,7 @@ function progressMessage(snapshot: ProcessingSnapshot) {
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
   if (response.status === 401) {
-    await router.push({ name: 'login' })
+    notifyLoginRequired()
     throw new Error(t('documents.login'))
   }
   return response
@@ -632,12 +633,12 @@ onBeforeUnmount(() => {
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
             </label>
-            <label for="rulebook-camera" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-[#fffaf2] p-4 transition hover:border-copper/60 hover:bg-[#fff4e4]">
+            <label for="rulebook-camera" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-copper/60 hover:bg-copper/[0.1]">
               <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
             </label>
-            <label for="rulebook-gallery" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-[#f5f8f4] p-4 transition hover:border-indigo/50 hover:bg-[#edf4ec]">
+            <label for="rulebook-gallery" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-indigo/50 hover:bg-indigo/[0.1]">
               <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>

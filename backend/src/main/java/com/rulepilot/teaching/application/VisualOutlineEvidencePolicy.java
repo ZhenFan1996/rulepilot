@@ -41,6 +41,9 @@ final class VisualOutlineEvidencePolicy {
     private static final Pattern COMPONENT_ALLOCATION_CUE = Pattern.compile(
             "(?iu)\\b(?:each player|give|receive|take|place|front|behind|starting supply)\\b|"
                     + "每位玩家|发给|获得|拿取|放置|面前|屏风后|初始资源");
+    private static final Pattern EXPLICIT_CONDITIONAL_ENDING = Pattern.compile(
+            "(?isu)\\b(?:the\\s+)?game\\s+ends?\\s+(?:when|once|after|if)\\b|"
+                    + "(?:时|则|后)(?:游戏)?结束");
 
     private VisualOutlineEvidencePolicy() {}
 
@@ -286,12 +289,13 @@ final class VisualOutlineEvidencePolicy {
      * to an unrelated card that happened to say "win" and skipped the actual trigger.
      */
     private static boolean hasEndConditionEvidence(String facts) {
+        boolean explicitConditionalEnding = EXPLICIT_CONDITIONAL_ENDING.matcher(facts).find();
         boolean endingTrigger = containsAny(facts,
                 "end of game", "game end", "game over", "finish space", "游戏结束", "终局", "到达终点", "终点空间");
         boolean triggerCondition = containsAny(facts,
                 "when ", "once ", "reaches", "reach ", "taken", "at least",
                 "当", "一旦", "达到");
-        return endingTrigger && triggerCondition;
+        return explicitConditionalEnding || endingTrigger && triggerCondition;
     }
 
     private static boolean containsAny(String value, String... needles) {

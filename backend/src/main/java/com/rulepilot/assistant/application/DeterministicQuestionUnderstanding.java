@@ -82,17 +82,11 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
             missing.add(MissingQuestionContext.CURRENT_LESSON_SECTION);
         }
         if (type == QuestionType.SITUATION_QUERY) {
-            if (context.gamePhase() == null) {
-                missing.add(MissingQuestionContext.GAME_PHASE);
-            }
             if (VAGUE_REFERENCE.matcher(question).find()
                     && context.currentLessonSection() == null
                     && context.previousQuestion() == null) {
                 missing.add(MissingQuestionContext.SITUATION_DETAILS);
             }
-        }
-        if ((question.contains("expansion") || question.contains("扩展")) && context.activeExpansions().isEmpty()) {
-            missing.add(MissingQuestionContext.EXPANSION_SELECTION);
         }
         return Set.copyOf(missing);
     }

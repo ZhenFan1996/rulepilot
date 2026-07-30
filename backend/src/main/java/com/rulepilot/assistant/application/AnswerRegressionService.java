@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -62,9 +61,6 @@ public class AnswerRegressionService {
                         new QuestionContext(
                                 documentVersionId,
                                 null,
-                                testCase.gamePhase(),
-                                testCase.playerCount(),
-                                Set.of(),
                                 testCase.previousQuestion(),
                                 null),
                         username,

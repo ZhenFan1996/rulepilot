@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 class SpringAiTeachingLessonModelTest {
 
     @Test
-    void delegatesOnlyImageBearingSectionsToTheVisualProvider() {
+    void keepsLongFormCompositionOnTheTeachingProviderAfterTheVisualFactsPass() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.providerFor(Role.TEACHING)).thenReturn("deepseek");
         when(configuration.providerFor(Role.VISUAL)).thenReturn("gemini");
@@ -29,7 +29,7 @@ class SpringAiTeachingLessonModelTest {
         assertThat(model.providerId()).isEqualTo("deepseek+gemini");
         assertThat(model.roleFor(request(List.of()))).isEqualTo(Role.TEACHING);
         assertThat(model.roleFor(request(List.of(new PageImageInput(4, "image/png", new byte[] {1}, 100, 100)))))
-                .isEqualTo(Role.VISUAL);
+                .isEqualTo(Role.TEACHING);
     }
 
     @Test
@@ -62,6 +62,17 @@ class SpringAiTeachingLessonModelTest {
                 configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
 
         assertThat(model.usesFake(Role.VISUAL, "player")).isFalse();
+    }
+
+    @Test
+    void serializesSectionRequestsWhenEitherAssignedRoleUsesQwen() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.providerFor(Role.TEACHING, "player")).thenReturn("deepseek");
+        when(configuration.providerFor(Role.VISUAL, "player")).thenReturn("qwen");
+        SpringAiTeachingLessonModel model = new SpringAiTeachingLessonModel(
+                configuration, new FakeTeachingLessonModel(), mock(VersionedAgentPrompts.class));
+
+        assertThat(model.maxConcurrentSectionRequests("player")).isEqualTo(1);
     }
 
     private SectionRequest request(List<PageImageInput> pageImages) {

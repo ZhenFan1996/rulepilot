@@ -279,6 +279,7 @@ class IllustratedLessonStepEntity {
     @Column(name = "source_chunk_ids", nullable = false) String sourceChunkIds;
     @Column(name = "visual_page") Integer visualPage;
     @Column(name = "visual_label") String visualLabel;
+    @Column(name = "visual_description", nullable = false) String visualDescription = "";
     @Column(name = "visual_x") Integer visualX;
     @Column(name = "visual_y") Integer visualY;
     @Column(name = "visual_width") Integer visualWidth;
@@ -298,6 +299,7 @@ class IllustratedLessonStepEntity {
         if (step.visualFocus() != null) {
             visualPage = step.visualFocus().pageNumber();
             visualLabel = step.visualFocus().label();
+            visualDescription = step.visualFocus().visibleDescription();
             visualX = step.visualFocus().x();
             visualY = step.visualFocus().y();
             visualWidth = step.visualFocus().width();
@@ -322,6 +324,12 @@ class IllustratedLessonStepEntity {
                 visualPage == null
                         ? null
                         : new VisualFocus(
-                                visualPage, visualLabel, visualX, visualY, visualWidth, visualHeight));
+                                visualPage,
+                                visualLabel,
+                                visualDescription,
+                                visualX,
+                                visualY,
+                                visualWidth,
+                                visualHeight));
     }
 }

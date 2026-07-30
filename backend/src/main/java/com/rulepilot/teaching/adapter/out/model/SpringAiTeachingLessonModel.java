@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -23,6 +25,8 @@ import org.springframework.util.MimeTypeUtils;
 @Component
 @Primary
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
+
+    private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingLessonModel.class);
 
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
@@ -57,6 +61,13 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         }
         return !models.usesFake(Role.VISUAL, modelConfigurationOwner)
                 && models.supportsVision(Role.VISUAL, modelConfigurationOwner);
+    }
+
+    @Override
+    public int maxConcurrentSectionRequests(String modelConfigurationOwner) {
+        String teaching = models.providerFor(Role.TEACHING, modelConfigurationOwner);
+        String visual = models.providerFor(Role.VISUAL, modelConfigurationOwner);
+        return "qwen".equals(teaching) || "qwen".equals(visual) ? 1 : Integer.MAX_VALUE;
     }
 
     @Override
@@ -144,7 +155,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .param("continuity", request.priorSections())
                             .param("chapterScope", request.chapterScope())
                             .param("evidence", modelEvidence(request))
-                            .param("visualEvidenceAvailable", role == Role.VISUAL)
+                            .param("visualEvidenceAvailable", !request.pageImages().isEmpty())
                             .param("visualPages", request.pageImages().stream()
                                     .map(TeachingLessonModel.PageImageInput::pageNumber)
                                     .toList())
@@ -157,6 +168,27 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 })
                 .call()
                 .entity(ModelSectionDraft.class);
+        if (role == Role.VISUAL) {
+            log.info(
+                    "Visual teaching structure: title={}, kind={}, caption={}, citations={}, steps={}, visualSteps={}, describedFocus={}",
+                    draft != null && draft.title() != null && !draft.title().isBlank(),
+                    draft == null ? null : draft.visualKind(),
+                    draft != null && draft.visualCaption() != null && !draft.visualCaption().isBlank(),
+                    draft == null ? 0 : draft.visualCitationIds().size(),
+                    draft == null ? 0 : draft.steps().size(),
+                    draft == null
+                            ? 0
+                            : draft.steps().stream()
+                                    .filter(java.util.Objects::nonNull)
+                                    .filter(step -> step.kind() == TeachingMove.VISUAL)
+                                    .count(),
+                    draft != null
+                            && draft.steps().stream()
+                                    .filter(java.util.Objects::nonNull)
+                                    .map(ModelStepDraft::visualFocus)
+                                    .filter(java.util.Objects::nonNull)
+                                    .anyMatch(focus -> !focus.visibleDescription().isBlank()));
+        }
         return toSectionDraft(draft, evidenceIds);
     }
 
@@ -189,9 +221,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     }
 
     Role roleFor(SectionRequest request) {
-        return !request.pageImages().isEmpty() && supportsVisualEvidence(request.modelConfigurationOwner())
-                ? Role.VISUAL
-                : Role.TEACHING;
+        // A bounded visual pass has already converted rendered pages into reusable page facts and anchors. Real
+        // provider replays showed that making the visual provider inspect pages, write prose, and satisfy the complete
+        // section schema in one call was slower and materially less reliable than composing from that compact ledger.
+        return Role.TEACHING;
     }
 
     private List<ModelEvidence> modelEvidence(SectionRequest request) {

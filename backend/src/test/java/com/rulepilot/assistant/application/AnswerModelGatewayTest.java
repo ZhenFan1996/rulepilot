@@ -129,7 +129,7 @@ class AnswerModelGatewayTest {
         return new ModelRequest(
                 "如何执行行动？",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, 0, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(UUID.randomUUID(), "RULES", "行动", "执行该行动。", 2, 2)));
     }
 

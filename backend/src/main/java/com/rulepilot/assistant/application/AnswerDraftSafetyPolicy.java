@@ -44,24 +44,13 @@ final class AnswerDraftSafetyPolicy {
                     + "|(?:does not|doesn't|do not|don't|need not|no need to|not required|without)"
                     + ".{0,40}(?:cards?|hand)");
     private static final Pattern VISUAL_GLYPH = Pattern.compile("\\p{So}");
-    private static final Pattern PLAYER_LEFT_ACTIVE_PLAY = Pattern.compile(
-            "(?iu)(?:out of cards|empty hand|no cards left|finished (?:their|your) hand|"
-                    + "出完[^。；;\\n]{0,16}手牌|手牌[^。；;\\n]{0,8}(?:为空|为零|没了)|无牌|退出[^。；;\\n]{0,12}(?:本轮|游戏))");
-    private static final Pattern SAME_INACTIVE_ACTOR_CONTINUES = Pattern.compile(
-            "(?iu)(?:you|same player)\\s+(?:(?:still|then|will)\\s+)?(?:lead|start)[^。；;\\n]{0,20}next trick"
-                    + "|(?:下一墩|下一轮)[^。；;\\n]{0,20}(?:由你(?!左手边|右手边)|由该玩家)[^。；;\\n]{0,12}(?:领出|开始)"
-                    + "|(?:你(?!左手边|右手边)|该玩家)(?:仍然?|继续|将|会|来)?(?:负责)?(?:领出|开始)"
-                    + "[^。；;\\n]{0,8}(?:下一墩|下一轮)");
-    private static final Pattern NEGATED_INACTIVE_ACTOR_CONTINUATION = Pattern.compile(
-            "(?iu)(?:not|never|no longer|instead|不由|不会由|不该由|不再|不是|并非|不能|不应|改由)");
-    private static final Pattern EVIDENCED_SUCCESSOR_RULE = Pattern.compile(
-            "(?iu)(?:if|when|若|如果)[\\s\\S]{0,180}(?:out of cards|empty hand|no cards|无牌|手牌已空)"
-                    + "[\\s\\S]{0,220}(?:next|another|remaining|active|player to the (?:left|right)|"
-                    + "clockwise|counterclockwise|dealer|first player|previous player|下一位|其他|仍在游戏|"
-                    + "左手边|右手边|顺时针|逆时针|庄家|起始玩家|上一位)"
-                    + "[\\s\\S]{0,100}(?:starts|leads|开始|领出)");
     private static final Pattern TITLE_CASED_ENGLISH_LABEL = Pattern.compile(
             "\\b[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){1,3}\\b");
+    private static final Pattern SPECULATIVE_UNDEFINED_TERM_DEFINITION = Pattern.compile(
+            "(?isu)(?:未(?:明确)?(?:定义|说明)|没有(?:明确)?(?:定义|说明)|"
+                    + "does\\s+not\\s+define|doesn't\\s+define|not\\s+defined|doesn't\\s+specify)"
+                    + ".{0,220}(?:可能|例如|比如|通常|一般|自行|推测|猜测|相邻|邻接|包裹|"
+                    + "maybe|perhaps|such\\s+as|for\\s+example|infer|assume)");
 
     private AnswerDraftSafetyPolicy() {}
 
@@ -114,26 +103,8 @@ final class AnswerDraftSafetyPolicy {
         return AnswerEvidencePolicy.hasUnresolvedVisualSymbol(playerFacingText(draft));
     }
 
-    static boolean containsInactiveActorContinuation(ModelDraft draft) {
-        String text = playerFacingText(draft);
-        if (!PLAYER_LEFT_ACTIVE_PLAY.matcher(text).find()) return false;
-        var matcher = SAME_INACTIVE_ACTOR_CONTINUES.matcher(text);
-        while (matcher.find()) {
-            int contextStart = Math.max(0, matcher.start() - 16);
-            int contextEnd = Math.min(text.length(), matcher.end() + 16);
-            if (!NEGATED_INACTIVE_ACTOR_CONTINUATION.matcher(text.substring(contextStart, contextEnd)).find()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static boolean hasEvidencedSuccessorRule(ModelRequest request) {
-        String combinedEvidence = request.evidence().stream()
-                .map(EvidenceInput::excerpt)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.joining("\n"));
-        return EVIDENCED_SUCCESSOR_RULE.matcher(combinedEvidence).find();
+    static boolean containsSpeculativeUndefinedTermDefinition(ModelDraft draft) {
+        return SPECULATIVE_UNDEFINED_TERM_DEFINITION.matcher(playerFacingText(draft)).find();
     }
 
     static ModelDraft normalizeSingleMappedVisualGlyph(ModelDraft draft, List<String> components) {

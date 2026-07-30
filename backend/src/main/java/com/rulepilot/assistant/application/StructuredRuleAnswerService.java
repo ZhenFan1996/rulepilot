@@ -17,6 +17,9 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerConfidence;
+import com.rulepilot.assistant.domain.AnswerWarning;
+import com.rulepilot.assistant.domain.AnswerWarning.Type;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
@@ -46,7 +49,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     // Counterfactual follow-ups now require their stated consequence, so prior partial cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v72-counterfactual-follow-up-coverage";
+    private static final String ANSWER_POLICY_VERSION = "answer-v75-undefined-term-speculation-repair";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
@@ -169,9 +172,6 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 new QuestionContext(
                         documentVersionId,
                         currentLessonSection,
-                        null,
-                        null,
-                        Set.of(),
                         previousQuestion,
                         null,
                         outputLanguage),
@@ -258,14 +258,14 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 estimateTokens(understood.normalizedQuestion()),
                 "Confirmed ruling lookup completed",
                 () -> confirmedRulings.find(
-                        context.documentVersionId(), context.activeExpansions(), understood.normalizedQuestion(), username),
+                        context.documentVersionId(), Set.of(), understood.normalizedQuestion(), username),
                 result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
             return AnswerOutcomePolicy.confirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
-        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(understood, context, gameSessionId) : Optional.empty();
+        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(understood, context) : Optional.empty();
         if (cacheKey.isPresent()) {
             var cached = findCached(cacheKey.get());
             if (cached.isPresent()) {
@@ -292,6 +292,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         AnswerDraftComposer.Result draftResult = draftComposer.compose(
                 assistantRunId, username, gameSessionId, modelRequest);
         if (!draftResult.ready()) {
+            if (draftResult.failureStatus() == AnswerStatus.INSUFFICIENT_EVIDENCE) {
+                return AnswerOutcomePolicy.insufficientWithSources(
+                        context.documentVersionId(), draftResult.failureMessage(), evidence);
+            }
             return safe(
                     context.documentVersionId(),
                     draftResult.failureStatus(),
@@ -304,6 +308,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         } catch (RuntimeException exception) {
             return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
         }
+        List<AnswerWarning> publicationWarnings = new java.util.ArrayList<>(draftResult.warnings());
+        if (answer.confidence() == AnswerConfidence.LOW) {
+            publicationWarnings.add(new AnswerWarning(Type.LOW_CONFIDENCE));
+        }
+        answer = AnswerOutcomePolicy.withWarnings(answer, publicationWarnings);
         AnswerPostPublicationReviewer.Result reviewResult;
         try {
             reviewResult = postPublicationReviewer.review(
@@ -355,14 +364,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private Optional<AnswerCacheKey> cacheKey(
-            UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
+            UnderstoodQuestion question, QuestionContext context) {
         try {
             return Optional.of(AnswerCacheScopePolicy.key(
                     ANSWER_POLICY_VERSION,
                     ruleDataVersion.current(context.documentVersionId()),
                     question,
-                    context,
-                    gameSessionId));
+                    context));
         } catch (IllegalArgumentException unavailableRuleDataVersion) {
             LOGGER.warn(
                     "Rule data version is unavailable for document version {}; bypassing answer cache",

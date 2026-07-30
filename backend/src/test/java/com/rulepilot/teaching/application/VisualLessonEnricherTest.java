@@ -172,8 +172,10 @@ class VisualLessonEnricherTest {
                                 List.of(chunk))))
                 .enrich(version, lesson(chunk));
 
-        assertThat(enriched.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("图中可见圆形标记位于一条弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。");
+        var step = enriched.sections().getFirst().steps().getFirst();
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.visualFocus().visibleDescription())
+                .isEqualTo("圆形标记位于一条弧形刻度旁，箭头指向前进方向");
     }
 
     @Test
@@ -195,9 +197,9 @@ class VisualLessonEnricherTest {
                                 List.of(chunk))))
                 .enrich(UUID.randomUUID(), lesson(chunk));
 
-        assertThat(enriched.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("图中展示一枚探测器标记位于弧形轨道旁。结合图片完成这一步：把探测器放到轨道上。")
-                .doesNotContain("图中可见图中");
+        var step = enriched.sections().getFirst().steps().getFirst();
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.visualFocus().visibleDescription()).isEqualTo("图中展示一枚探测器标记位于弧形轨道旁");
     }
 
     @Test
@@ -381,9 +383,9 @@ class VisualLessonEnricherTest {
 
         var step = enriched.sections().getFirst().steps().getFirst();
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(step.text()).isEqualTo(
-                "图中图标提示：一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头。先认出这组图标，再按规则处理：把探测器放到轨道上。");
-        assertThat(step.visualFocus()).isNotNull();
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
+        assertThat(step.visualFocus().visibleDescription())
+                .isEqualTo("一个六点骰子图标紧挨着颜料筒图标，旁边有向右箭头");
     }
 
     @Test
@@ -406,7 +408,8 @@ class VisualLessonEnricherTest {
                 .enrich(UUID.randomUUID(), lesson(chunk));
 
         assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new IllustratedLesson.VisualFocus(2, "卡牌行动图标", 227, 357, 180, 120));
+                .isEqualTo(new IllustratedLesson.VisualFocus(
+                        2, "卡牌行动图标", "卡牌中央的金色圆形图标紧挨着向右箭头", 227, 357, 180, 120));
     }
 
     @Test
@@ -441,8 +444,10 @@ class VisualLessonEnricherTest {
         var steps = result.lesson().sections().getFirst().steps();
         assertThat(steps).extracting(IllustratedLesson.LessonStep::kind)
                 .containsExactly(IllustratedLesson.TeachingMove.VISUAL, IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(steps.get(0).text()).contains("图中图标提示", "掷骰后执行行动。");
-        assertThat(steps.get(1).text()).contains("图中可见", "把探测器移到轨道上。");
+        assertThat(steps.get(0).text()).isEqualTo("掷骰后执行行动。");
+        assertThat(steps.get(0).visualFocus().visibleDescription()).contains("六点骰子图标", "向右箭头");
+        assertThat(steps.get(1).text()).isEqualTo("把探测器移到轨道上。");
+        assertThat(steps.get(1).visualFocus().visibleDescription()).contains("探测器标记", "第三格");
         assertThat(steps).extracting(step -> step.visualFocus().label()).containsExactly("行动图标", "棋子状态");
         assertThat(result.outcomes()).singleElement().satisfies(outcome -> {
             assertThat(outcome.outcome()).isEqualTo(VisualLessonEnricher.Outcome.ADDED);
@@ -716,7 +721,8 @@ class VisualLessonEnricherTest {
 
         assertThat(enriched.sections().getFirst().steps())
                 .anySatisfy(step -> assertThat(step.visualFocus())
-                        .isEqualTo(new IllustratedLesson.VisualFocus(2, "放置探测器", 640, 700, 180, 120)));
+                        .isEqualTo(new IllustratedLesson.VisualFocus(
+                                2, "放置探测器", "一枚探测器标记位于弧形轨道上", 640, 700, 180, 120)));
     }
 
     @Test
@@ -769,9 +775,9 @@ class VisualLessonEnricherTest {
 
         var step = result.lesson().sections().getFirst().steps().getFirst();
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
-        assertThat(step.visualFocus()).isEqualTo(new IllustratedLesson.VisualFocus(2, "轨道与探测器", 320, 420, 260, 180));
-        assertThat(step.text()).contains("把探测器放到轨道上。")
-                .doesNotContain("结合图片完成这一步：图中可见");
+        assertThat(step.visualFocus()).isEqualTo(new IllustratedLesson.VisualFocus(
+                2, "轨道与探测器", "一枚圆形探测器标记位于弧形轨道旁", 320, 420, 260, 180));
+        assertThat(step.text()).isEqualTo("把探测器放到轨道上。");
     }
 
     @Test
@@ -814,8 +820,9 @@ class VisualLessonEnricherTest {
         var step = result.lesson().sections().getFirst().steps().getFirst();
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(step.visualFocus())
-                .isEqualTo(new IllustratedLesson.VisualFocus(2, "鲑鱼计分卡", 45, 510, 300, 180));
-        assertThat(step.text()).contains("鲑鱼按相邻游群计分。");
+                .isEqualTo(new IllustratedLesson.VisualFocus(
+                        2, "鲑鱼计分卡", "四张鲑鱼计分卡的粉色鲑鱼图标与相邻分数格", 45, 510, 300, 180));
+        assertThat(step.text()).isEqualTo("鲑鱼按相邻游群计分。");
     }
 
     @Test
@@ -885,7 +892,14 @@ class VisualLessonEnricherTest {
                 .enrich(version, threePageTranslatedLesson(chunk));
 
         assertThat(enriched.sections().getFirst().steps().getFirst().visualFocus())
-                .isEqualTo(new IllustratedLesson.VisualFocus(3, "动物标记与六边形地块", 200, 280, 280, 180));
+                .isEqualTo(new IllustratedLesson.VisualFocus(
+                        3,
+                        "动物标记与六边形地块",
+                        "一枚动物标记放在六边形地块旁的图标区域",
+                        200,
+                        280,
+                        280,
+                        180));
     }
 
     private RulebookUnderstanding understanding() {

@@ -17,9 +17,6 @@ final class AnswerModelRequestFactory {
                 question.type(),
                 new AnswerContext(
                         context.currentLessonSection(),
-                        context.gamePhase(),
-                        context.playerCount(),
-                        context.activeExpansions().size(),
                         context.previousQuestion(),
                         context.learningIntent(),
                         context.outputLanguage()),

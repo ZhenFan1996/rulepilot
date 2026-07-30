@@ -35,11 +35,16 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             object with exactly one pages item for every requested PDF page; do not write a lesson or infer a rule.
 
             Each item has pageNumber, printedTerms, factualSummary, keywords, and visualAnchors. printedTerms has at
-            most eight visible headings, labels, action names, component names, icon labels, or numbers. factualSummary
-            has at most 180 Simplified-Chinese characters and records only what this page visibly prints or depicts:
-            exact conditions, quantities, timing, order, and whether an action is optional or mandatory. If a page is a
-            cover, index, illustration, or unreadable, say so rather than guessing. Use an icon's printed label only
-            when that label is visible on this page or can be exactly matched to a labeled icon in another supplied page.
+            most sixteen visible headings, labels, action names, component names, icon labels, or numbers.
+            factualSummary is an array of at most twelve atomic Simplified-Chinese statements, each supported by a
+            complete visible sentence, list item, or table row. Preserve the exact subject, action, condition, quantity,
+            timing, order, optional/mandatory wording, and exception together. Record all named alternatives in a list;
+            never shorten a five-item list to examples. Keep a worked example as its printed input and total; do not
+            derive an unstated per-item value. Do not merge separate headings, labels, or nearby numbers into a rule.
+            If a rule's subject or relation is unreadable, omit that fact instead of completing it from the game title
+            or general knowledge. If a page is a cover, index, illustration, or unreadable, say so rather than guessing.
+            Use an icon's printed label only when that label is visible on this page or can be exactly matched to a
+            labeled icon in another supplied page.
 
             keywords contains 2-8 visible original-language terms. visualAnchors contains at most six compact, useful
             landmarks: a labeled icon group, legend, setup cluster, diagram state, worked example, or one score row.

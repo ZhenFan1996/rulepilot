@@ -83,11 +83,13 @@ final class VisualLessonSectionEnricher {
         }
         VisualLessonMergePolicy.DistinctVisualSection distinct =
                 mergePolicy.keepDistinctVisuals(section, merged.section(), acceptedVisuals);
-        if (!distinct.hadDuplicate()) return Result.added(merged.section(), merged.addedCount());
+        if (!distinct.hadDuplicate()) {
+            return Result.added(merged.section(), merged.addedCount(), merged.claimConflictCount());
+        }
         if (distinct.addedCount() == 0) {
             return Result.rejected(section, VisualLessonEnricher.Outcome.REJECTED_DUPLICATE);
         }
-        return Result.added(distinct.section(), distinct.addedCount());
+        return Result.added(distinct.section(), distinct.addedCount(), merged.claimConflictCount());
     }
 
     private VisualLessonStepLocator.Result locateWithProgress(
@@ -147,8 +149,13 @@ final class VisualLessonSectionEnricher {
 
     record Result(LessonSection section, VisualLessonEnricher.Outcome outcome, int addedCount) {
 
-        static Result added(LessonSection section, int addedCount) {
-            return new Result(section, VisualLessonEnricher.Outcome.ADDED, addedCount);
+        static Result added(LessonSection section, int addedCount, int claimConflictCount) {
+            return new Result(
+                    section,
+                    claimConflictCount > 0
+                            ? VisualLessonEnricher.Outcome.ADDED_WITH_CLAIM_CONFLICT
+                            : VisualLessonEnricher.Outcome.ADDED,
+                    addedCount);
         }
 
         static Result rejected(LessonSection section, VisualLessonEnricher.Outcome outcome) {

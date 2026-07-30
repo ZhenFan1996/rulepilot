@@ -243,6 +243,9 @@ class VisualRulebookPageFactEntity {
     @Column(name = "visual_anchors", nullable = false, columnDefinition = "text")
     String visualAnchors;
 
+    @Column(name = "schema_version", nullable = false)
+    int schemaVersion;
+
     protected VisualRulebookPageFactEntity() {}
 
     VisualRulebookPageFactEntity(UUID documentVersionId, PageFact page) {
@@ -253,6 +256,7 @@ class VisualRulebookPageFactEntity {
         this.factualSummary = page.factualSummary();
         this.keywords = String.join("\n", page.keywords());
         this.visualAnchors = serialize(page.visualAnchors());
+        this.schemaVersion = page.schemaVersion();
     }
 
     PageFact toDomain() {
@@ -261,7 +265,8 @@ class VisualRulebookPageFactEntity {
                 printedTerms,
                 factualSummary,
                 keywords.lines().filter(value -> !value.isBlank()).toList(),
-                deserialize(visualAnchors));
+                deserialize(visualAnchors),
+                schemaVersion);
     }
 
     private static String serialize(List<VisualAnchor> anchors) {

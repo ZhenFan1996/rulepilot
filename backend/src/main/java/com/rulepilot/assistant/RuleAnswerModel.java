@@ -52,56 +52,18 @@ public interface RuleAnswerModel {
 
     record AnswerContext(
             String currentLessonSection,
-            String gamePhase,
-            Integer playerCount,
-            int activeExpansionCount,
             String previousQuestion,
             LearningIntent learningIntent,
             PlayerLocale outputLanguage) {
 
-        public AnswerContext(
-                String currentLessonSection,
-                String gamePhase,
-                Integer playerCount,
-                int activeExpansionCount) {
-            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, null, null, PlayerLocale.ZH_CN);
-        }
-
-        public AnswerContext(
-                String currentLessonSection,
-                String gamePhase,
-                Integer playerCount,
-                int activeExpansionCount,
-                String previousQuestion) {
-            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, previousQuestion, null, PlayerLocale.ZH_CN);
-        }
-
-        public AnswerContext(
-                String currentLessonSection,
-                String gamePhase,
-                Integer playerCount,
-                int activeExpansionCount,
-                String previousQuestion,
-                LearningIntent learningIntent) {
-            this(currentLessonSection, gamePhase, playerCount, activeExpansionCount, previousQuestion, learningIntent, PlayerLocale.ZH_CN);
-        }
-
         public AnswerContext {
-            if (playerCount != null && playerCount < 1 || activeExpansionCount < 0) {
-                throw new IllegalArgumentException("answer context is invalid");
-            }
             currentLessonSection = optional(currentLessonSection);
-            gamePhase = optional(gamePhase);
             previousQuestion = optional(previousQuestion);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         }
 
         private static String optional(String value) {
             return value == null || value.isBlank() ? "not provided" : value.strip();
-        }
-
-        public String playerCountForPrompt() {
-            return playerCount == null ? "not provided" : playerCount.toString();
         }
 
         public String learningIntentForPrompt() {

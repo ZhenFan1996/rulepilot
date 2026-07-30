@@ -39,7 +39,7 @@ class AnswerRegressionServiceTest {
             @Override
             public List<AnswerRegressionCase> cases() {
                 return List.of(new AnswerRegressionCase(
-                        "moon", "费用？", null, "主要行动", 4, AnswerStatus.ANSWERED,
+                        "moon", "费用？", null, AnswerStatus.ANSWERED,
                         List.of(17), List.of(List.of("相同", "一样")), List.of("减免"), 10_000));
             }
         };
@@ -65,7 +65,7 @@ class AnswerRegressionServiceTest {
             @Override
             public List<AnswerRegressionCase> cases() {
                 return List.of(new AnswerRegressionCase(
-                        "moon", "费用？", null, "主要行动", 4, AnswerStatus.ANSWERED,
+                        "moon", "费用？", null, AnswerStatus.ANSWERED,
                         List.of(17), List.of(List.of("相同", "一样")), List.of(), 10_000));
             }
         };

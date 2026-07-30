@@ -331,6 +331,21 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
+    void separates_a_crop_that_visibly_contradicts_the_exact_claim() {
+        var review = VisualLocatorResponsePolicy.cropReview(
+                        "{\"acceptedCropRefs\":[],\"contradictedCropRefs\":[\"R1\"]}",
+                        Set.of("R1"))
+                .orElseThrow();
+
+        assertThat(review.acceptedReferences()).isEmpty();
+        assertThat(review.contradictedReferences()).containsExactly("R1");
+        assertThat(VisualLocatorResponsePolicy.cropReview(
+                        "{\"acceptedCropRefs\":[\"R1\"],\"contradictedCropRefs\":[\"R1\"]}",
+                        Set.of("R1")))
+                .isEmpty();
+    }
+
+    @Test
     void offers_the_crop_verifier_only_the_exact_step_that_the_crop_claims_to_support() {
         Claim namedCard = new Claim(UUID.randomUUID(), "步骤 1（打出统治卡）：打出统治卡。", List.of(21), 1);
         Claim alliance = new Claim(UUID.randomUUID(), "步骤 2（结盟）：与其他玩家结盟。", List.of(21), 2);

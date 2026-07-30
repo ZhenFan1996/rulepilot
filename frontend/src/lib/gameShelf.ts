@@ -32,9 +32,9 @@ export interface ShelfItem {
   coverUrl: string | null
   coverAttributionUrl: string | null
   editionLabel: string | null
-  players: string | null
-  playtime: string | null
-  age: string | null
+  players: { min: number; max: number } | null
+  playtimeMinutes: number | null
+  minimumAge: number | null
   documentCount: number
   lessonCount: number
   latestPlanId: string | null
@@ -72,8 +72,8 @@ export function buildPersonalShelf(
       coverAttributionUrl: metadata?.bggUrl ?? null,
       editionLabel: assignment ? editionLabel(assignment.edition) : null,
       players: playerLabel(metadata),
-      playtime: metadata?.playingTimeMinutes ? `${metadata.playingTimeMinutes} 分钟` : null,
-      age: metadata?.minimumAge ? `${metadata.minimumAge}+` : null,
+      playtimeMinutes: metadata?.playingTimeMinutes ?? null,
+      minimumAge: metadata?.minimumAge ?? null,
       documentCount: 0,
       lessonCount: 0,
       latestPlanId: null,
@@ -97,8 +97,8 @@ export function buildPersonalShelf(
       coverAttributionUrl: null,
       editionLabel: null,
       players: null,
-      playtime: null,
-      age: null,
+      playtimeMinutes: null,
+      minimumAge: null,
       documentCount: 0,
       lessonCount: 1,
       latestPlanId: plan.id,
@@ -120,7 +120,7 @@ function editionLabel(edition: ShelfCatalogEntry['editions'][number]) {
 
 function playerLabel(metadata: ShelfCatalogEntry['bggMetadata']) {
   if (!metadata?.minPlayers || !metadata.maxPlayers) return null
-  return metadata.minPlayers === metadata.maxPlayers ? `${metadata.minPlayers} 人` : `${metadata.minPlayers}–${metadata.maxPlayers} 人`
+  return { min: metadata.minPlayers, max: metadata.maxPlayers }
 }
 
 function statusFor(status: string): ShelfItem['documentStatus'] {

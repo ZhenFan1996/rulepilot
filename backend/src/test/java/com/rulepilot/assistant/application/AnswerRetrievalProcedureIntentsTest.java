@@ -8,18 +8,13 @@ import org.junit.jupiter.api.Test;
 class AnswerRetrievalProcedureIntentsTest {
 
     @Test
-    void keepsFocusedProcedureQueriesInTheEstablishedPriorityOrder() {
+    void keepsEndgameAsTheProductLevelIntentInsteadOfAddingCorpusLocalProcedureBranches() {
         var intents = AnswerRetrievalProcedureIntents.plan(
                 "At game end, how is the winner scored if the draw deck is empty after I end turn and draw an event card?");
 
         assertThat(intents).extracting(intent -> intent.purpose())
-                .containsExactly(
-                        RetrievalPurpose.ENDGAME_RESOLUTION,
-                        RetrievalPurpose.EXHAUSTED_SOURCE,
-                        RetrievalPurpose.END_TURN_PROCEDURE);
+                .containsExactly(RetrievalPurpose.ENDGAME_RESOLUTION);
         assertThat(intents.getFirst().query()).contains("end condition", "final scoring");
-        assertThat(intents.get(1).query()).contains("depleted", "reshuffle");
-        assertThat(intents.get(2).query()).contains("completed turn", "resolve");
     }
 
     @Test
@@ -28,14 +23,16 @@ class AnswerRetrievalProcedureIntentsTest {
     }
 
     @Test
-    void expandsAPlayersPlainLanguageSameNumberQuestionIntoAResolutionLookup() {
-        var intents = AnswerRetrievalProcedureIntents.plan(
-                "What happens when two players play the same number?");
-
-        assertThat(intents).singleElement().satisfies(intent -> {
-            assertThat(intent.purpose()).isEqualTo(RetrievalPurpose.MATCHING_VALUE_RESOLUTION);
-            assertThat(intent.query()).contains("same number", "collision", "bump", "priority", "resolution");
-        });
+    void expandsAnUnclassifiedConditionOnlyWithNeutralProcedureFacets() {
+        assertThat(AnswerRetrievalProcedureIntents.plan(
+                        "What happens when two players choose equal values?"))
+                .singleElement()
+                .satisfies(intent -> {
+                    assertThat(intent.purpose()).isEqualTo(RetrievalPurpose.CONDITION_PROCEDURE);
+                    assertThat(intent.query())
+                            .contains("equal values", "condition", "procedure", "consequence")
+                            .doesNotContain("collision", "bump", "priority");
+                });
     }
 
     @Test

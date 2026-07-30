@@ -61,7 +61,7 @@ class AnswerDraftSafetyPolicyTest {
     }
 
     @Test
-    void keepsTitleLabelsAndActorSafetyTiedToEvidenceAndText() {
+    void keepsTitleLabelsTiedToCitedEvidence() {
         UUID chunkId = UUID.randomUUID();
         ModelRequest uncitedTitle = request(
                 "What happens at the end?", new EvidenceInput(chunkId, "RULES", "Ending", "Finish the round.", 8, 8));
@@ -70,22 +70,9 @@ class AnswerDraftSafetyPolicyTest {
                 new EvidenceInput(chunkId, "RULES", "Ending", "Follow the Final Cleanup sequence.", 8, 8));
         ModelDraft titleDraft = new ModelDraft(
                 "Final Cleanup", "then finish the round.", List.of(chunkId), List.of(), "HIGH");
-        ModelDraft inactiveActor = new ModelDraft(
-                "继续本轮。", "手牌为空后，你领出下一墩。", List.of(chunkId), List.of(), "HIGH");
 
         assertThat(AnswerDraftSafetyPolicy.containsUncitedEnglishTitleLabel(uncitedTitle, titleDraft)).isTrue();
         assertThat(AnswerDraftSafetyPolicy.containsUncitedEnglishTitleLabel(citedTitle, titleDraft)).isFalse();
-        assertThat(AnswerDraftSafetyPolicy.containsInactiveActorContinuation(inactiveActor)).isTrue();
-        assertThat(AnswerDraftSafetyPolicy.hasEvidencedSuccessorRule(request(
-                        "Who leads next?",
-                        new EvidenceInput(
-                                chunkId,
-                                "RULES",
-                                "Next trick",
-                                "If a player is out of cards, the next player to the left starts the next trick.",
-                                9,
-                                9))))
-                .isTrue();
     }
 
     @Test
@@ -99,11 +86,32 @@ class AnswerDraftSafetyPolicyTest {
         assertThat(AnswerDraftSafetyPolicy.containsResourceCardConflation(negated)).isFalse();
     }
 
+    @Test
+    void detectsAProposedDefinitionAfterTheDraftAdmitsThatDefinitionIsMissing() {
+        ModelDraft speculative = new ModelDraft(
+                "现有规则没有定义该状态。",
+                "规则未明确说明达成条件；玩家可自行确认是否需要相邻。",
+                List.of(UUID.randomUUID()),
+                List.of(),
+                "HIGH");
+        ModelDraft bounded = new ModelDraft(
+                "现有规则没有定义该状态。",
+                "可以确认该状态下得3分，但当前证据未说明如何达成。",
+                List.of(UUID.randomUUID()),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerDraftSafetyPolicy.containsSpeculativeUndefinedTermDefinition(speculative))
+                .isTrue();
+        assertThat(AnswerDraftSafetyPolicy.containsSpeculativeUndefinedTermDefinition(bounded))
+                .isFalse();
+    }
+
     private ModelRequest request(String question, EvidenceInput evidence) {
         return new ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, 0, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
                 List.of(evidence));
     }
 }

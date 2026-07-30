@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
 import CardOcrCapture from '@/components/CardOcrCapture.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
@@ -79,6 +80,7 @@ interface LessonSection {
     visualFocus: {
       pageNumber: number
       label: string
+      visibleDescription?: string
       x: number
       y: number
       width: number
@@ -183,7 +185,7 @@ const {
   },
   currentLessonRequest: () => latestLessonLoad,
   isCurrentLessonLoad,
-  requestLogin: () => router.push({ name: 'login' }),
+  requestLogin: async () => notifyLoginRequired(),
   onReceived: (context, text, received) => {
     if (received.status === 'ANSWERED') {
       cacheOfflineAnswer(context.planId, text, context.section?.title ?? t('lesson.answer.sectionFallback'), received)
@@ -396,7 +398,7 @@ const {
   displayedLesson: lesson,
   currentRequest: () => latestLessonLoad,
   isCurrent: (request, targetPlanId) => isCurrentLessonLoad(request, targetPlanId),
-  requestLogin: () => router.push({ name: 'login' }),
+  requestLogin: async () => notifyLoginRequired(),
   csrfToken,
 })
 
@@ -430,7 +432,7 @@ async function loadSupportingContent(targetPlanId: string, request = latestLesso
     planId: targetPlanId,
     isCurrent: () => isCurrentLessonLoad(request, targetPlanId),
     narrationPositionKey,
-    requestLogin: () => router.push({ name: 'login' }),
+    requestLogin: async () => notifyLoginRequired(),
   })
 }
 
@@ -463,7 +465,8 @@ async function loadLesson() {
     ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      errorMessage.value = t('lesson.reader.error.loginRequired')
       return
     }
     if (!planResponse.ok || !lessonResponse.ok) {
@@ -508,7 +511,7 @@ async function refreshVisualEnrichment() {
     const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`)
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (response?.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
       return
     }
     if (response?.ok) {
@@ -545,7 +548,8 @@ async function refreshGeneration() {
     ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (runResponse.status === 401 || lessonResponse.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      generationRefreshError.value = t('lesson.reader.error.loginRequired')
       return
     }
     if ((!runResponse.ok && runResponse.status !== 404) || !lessonResponse.ok) {
@@ -601,7 +605,7 @@ function focusQuestionPanel() {
 async function csrfToken() {
   const response = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (response.status === 401) {
-    await router.push({ name: 'login' })
+    notifyLoginRequired()
     throw new Error(t('lesson.reader.error.loginRequired'))
   }
   if (!response.ok) throw new Error(t('lesson.reader.error.secureSession'))
@@ -833,10 +837,16 @@ onUnmounted(() => {
                 <div class="min-w-0 flex-1">
                   <h3 class="font-display text-xl font-semibold">{{ step.heading }}</h3>
                   <p class="mt-2 leading-7 text-ink/75">{{ step.text }}</p>
-                  <a v-if="step.visualFocus" :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-5 block overflow-hidden rounded-lg border border-ink/10 bg-canvas">
-                    <img :src="focusedPageImageUrl(step.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: step.visualFocus.label, page: step.visualFocus.pageNumber })" class="max-h-96 w-full object-contain" loading="lazy">
-                    <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
-                  </a>
+                  <figure v-if="step.visualFocus" class="mt-5 overflow-hidden rounded-2xl border border-indigo/15 bg-canvas">
+                    <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-4 py-3">
+                      <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+                      <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
+                    </figcaption>
+                    <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="block">
+                      <img :src="focusedPageImageUrl(step.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: step.visualFocus.label, page: step.visualFocus.pageNumber })" class="max-h-96 w-full object-contain" loading="lazy">
+                      <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
+                    </a>
+                  </figure>
                   <a v-if="step.sourcePages.length" :href="pageImageUrl(step.sourcePages[0])" target="_blank" rel="noopener" class="mt-4 inline-flex text-sm text-ink/45 transition hover:text-indigo">{{ t('lesson.chapter.source', { pages: step.sourcePages.join(locale === 'en' ? ', ' : '、') }) }}</a>
                 </div>
               </div>

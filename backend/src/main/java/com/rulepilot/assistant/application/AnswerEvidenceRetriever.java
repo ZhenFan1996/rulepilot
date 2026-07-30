@@ -73,31 +73,6 @@ final class AnswerEvidenceRetriever {
         int failedCoreRetrievals = 0;
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
-        if (intents.stream().anyMatch(intent -> intent.purpose() == RetrievalPurpose.EXHAUSTED_SOURCE)) {
-            try {
-                List<PageFactMatch> replenishmentMatches = invocations.invoke(
-                        assistantRunId,
-                        ActivityType.TOOL,
-                        "searchExplicitReplenishmentProcedure",
-                        18,
-                        "Direct replenishment procedure evidence retrieved",
-                        () -> visualFacts.search(
-                                context.documentVersionId(),
-                                AnswerReplenishmentPolicy.retrievalQuery(question.normalizedQuestion()),
-                                3),
-                        matches -> matches.size() * 80);
-                replenishmentMatches.forEach(match -> visualFactsByPage.merge(
-                        match.pageNumber(), match, (first, candidate) -> candidate.score() > first.score() ? candidate : first));
-                replenishmentMatches.forEach(match -> requiredVisualFactPages.add(match.pageNumber()));
-            } catch (AgentExecutionStoppedException stopped) {
-                throw stopped;
-            } catch (RuntimeException lookupFailure) {
-                LOGGER.warn(
-                        "Optional replenishment fact lookup failed for document version {}: {}",
-                        context.documentVersionId(),
-                        lookupFailure.getClass().getSimpleName());
-            }
-        }
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
             RetrievalIntent intent = intents.get(intentIndex);
             List<HybridEvidenceHit> retrieved;
@@ -241,19 +216,11 @@ final class AnswerEvidenceRetriever {
             boolean supplementaryIntent,
             Map<UUID, HybridEvidenceHit> intentAnchors) {
         if (retrieved.isEmpty() || supplementaryIntent) return;
-        if (intent.purpose() == RetrievalPurpose.STATE_TRANSITION) {
-            rankedForIntent(intent.query(), retrieved).stream()
-                    .limit(2)
-                    .forEach(hit -> intentAnchors.putIfAbsent(hit.evidence().chunkId(), hit));
-            return;
-        }
         HybridEvidenceHit anchor;
         if (intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION) {
             anchor = retrieved.stream()
                     .max(Comparator.comparingInt(AnswerEvidencePolicy::endgameResolutionDetailScore))
                     .orElse(retrieved.getFirst());
-        } else if (intent.purpose() == RetrievalPurpose.END_TURN_PROCEDURE) {
-            anchor = retrieved.stream().filter(AnswerEvidencePolicy::hasEndTurnProcedure).findFirst().orElse(retrieved.getFirst());
         } else {
             anchor = rankedForIntent(intent.query(), retrieved).stream()
                     .filter(hit -> !intentAnchors.containsKey(hit.evidence().chunkId()))

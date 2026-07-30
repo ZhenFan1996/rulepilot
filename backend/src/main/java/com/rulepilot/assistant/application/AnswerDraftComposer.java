@@ -4,6 +4,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerWarning;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,30 +49,16 @@ final class AnswerDraftComposer {
                     assistantRunId, username, gameSessionId, modelRequest, draft);
         }
         if (!draft.answerable()) {
-            draft = AnswerReplenishmentPolicy.directFallback(modelRequest).orElse(null);
-            if (draft == null) {
-                return Result.failure(
-                        AnswerStatus.INSUFFICIENT_EVIDENCE,
-                        "现有证据未能直接回答这个问题。");
-            }
+            return Result.failure(
+                    AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    "现有证据未能直接回答这个问题。");
         }
-        draft = AnswerReplenishmentPolicy.replaceMisdirectedDraft(modelRequest, draft);
         draft = AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(modelRequest, draft);
         List<String> playerFacingRepair = AnswerPlayerFacingRepairPolicy.feedbackFor(modelRequest, draft);
         if (!playerFacingRepair.isEmpty()) {
             try {
                 draft = revisePlayerFacingDraft(
                         assistantRunId, username, gameSessionId, modelRequest, draft, playerFacingRepair);
-                if (AnswerRepairOutcomePolicy.shouldRetryWithEvidencedSuccessor(
-                        modelRequest, draft, playerFacingRepair)) {
-                    draft = revisePlayerFacingDraft(
-                            assistantRunId,
-                            username,
-                            gameSessionId,
-                            modelRequest,
-                            AnswerRepairOutcomePolicy.retryDraft(draft),
-                            AnswerRepairOutcomePolicy.successorRetryFeedback(playerFacingRepair));
-                }
             } catch (RuleAnswerModelTimeoutException exception) {
                 return Result.failure(
                         AnswerStatus.MODEL_TIMEOUT,
@@ -100,7 +87,7 @@ final class AnswerDraftComposer {
         if (!preparation.ready()) {
             return Result.failure(preparation.failureStatus(), preparation.failureMessage());
         }
-        return Result.ready(preparation.draft());
+        return Result.ready(preparation.draft(), preparation.warnings());
     }
 
     private ModelDraft reconsiderEvidenceBackedAbstention(
@@ -138,14 +125,15 @@ final class AnswerDraftComposer {
                 "Ambiguous visual identity or internal evidence language repaired");
     }
 
-    record Result(ModelDraft draft, AnswerStatus failureStatus, String failureMessage) {
+    record Result(
+            ModelDraft draft, List<AnswerWarning> warnings, AnswerStatus failureStatus, String failureMessage) {
 
-        static Result ready(ModelDraft draft) {
-            return new Result(draft, null, null);
+        static Result ready(ModelDraft draft, List<AnswerWarning> warnings) {
+            return new Result(draft, List.copyOf(warnings), null, null);
         }
 
         static Result failure(AnswerStatus status, String message) {
-            return new Result(null, status, message);
+            return new Result(null, List.of(), status, message);
         }
 
         boolean ready() {

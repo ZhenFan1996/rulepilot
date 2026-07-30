@@ -133,6 +133,44 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void recatalogsFactsWrittenByAnOlderVisualTranscriptionContract() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        facts.merge(documentVersionId, List.of(new PageFact(
+                1,
+                "OLD",
+                "旧摘要遗漏了规则条件。",
+                List.of("old"),
+                List.of(),
+                1)));
+        AtomicInteger modelCalls = new AtomicInteger();
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
+                            new VisualRulebookPageCatalogModel.PageSummary(
+                                    1,
+                                    "CURRENT",
+                                    "新转录保留完整的条件、动作和结果。",
+                                    List.of("current"))));
+                },
+                facts);
+
+        List<PageInput> inputs = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(modelCalls).hasValue(1);
+        assertThat(inputs).singleElement().extracting(PageInput::text).asString()
+                .contains("新转录保留完整的条件、动作和结果。")
+                .doesNotContain("旧摘要遗漏");
+        assertThat(facts.find(documentVersionId, Set.of(1))).singleElement()
+                .extracting(PageFact::schemaVersion)
+                .isEqualTo(PageFact.CURRENT_SCHEMA_VERSION);
+    }
+
+    @Test
     void completesMissingPagesWhenAVisualOnlyRulebookHasPartialCachedFacts() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();

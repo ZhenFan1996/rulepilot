@@ -30,19 +30,13 @@ public class QuestionUnderstandingController {
                 request.question(),
                 new QuestionContext(
                         versionId,
-                        request.currentLessonSection(),
-                        request.gamePhase(),
-                        request.playerCount(),
-                        request.activeExpansions()));
+                        request.currentLessonSection()));
         return QuestionResponse.from(result);
     }
 
     record QuestionRequest(
             String question,
-            String currentLessonSection,
-            String gamePhase,
-            Integer playerCount,
-            Set<UUID> activeExpansions) {}
+            String currentLessonSection) {}
 
     record QuestionResponse(
             UUID documentVersionId,

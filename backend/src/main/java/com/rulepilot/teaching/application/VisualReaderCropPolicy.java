@@ -56,7 +56,8 @@ final class VisualReaderCropPolicy {
                 width,
                 height,
                 region.supportedEvidenceIds(),
-                region.supportedStepPositions());
+                region.supportedStepPositions(),
+                region.claimContradicted());
     }
 
     boolean isUsefulPlayerVisual(LocatedRegion region) {
@@ -92,14 +93,6 @@ final class VisualReaderCropPolicy {
         long overlapArea = (long) overlapWidth * overlapHeight;
         long smallerArea = Math.min((long) first.width() * first.height(), (long) second.width() * second.height());
         return smallerArea > 0 && overlapArea * 100 >= smallerArea * 75;
-    }
-
-    boolean isIconFocused(LocatedRegion region) {
-        String observation = observation(region);
-        return observation.contains("图标")
-                || observation.contains("符号")
-                || observation.contains("图例")
-                || observation.matches(".*\\b(icon|symbol|legend)\\b.*");
     }
 
     private boolean isNarrowScoreExampleViewport(VisualFocus focus) {

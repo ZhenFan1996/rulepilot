@@ -16,6 +16,7 @@ const answered = {
   confirmedRulingId: null,
   confirmedRulingVersion: null,
   clarification: null,
+  warnings: [],
 }
 
 const baseProps = {
@@ -82,7 +83,7 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('先完成结算，再记录本轮结果。')
     expect(wrapper.text()).toContain('回合结束')
     expect(wrapper.text()).toContain('第 4 页')
-    expect(wrapper.text()).toContain('规则套用')
+    expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('这不是额外规则')
 
@@ -117,7 +118,29 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Ask a question')
     expect(wrapper.text()).toContain('How this answer was reached')
-    expect(wrapper.text()).toContain('Applied to your stated situation')
+    expect(wrapper.text()).toContain('Applied to your question')
     expect(wrapper.text()).toContain('Page 4')
+  })
+
+  it('shows a specific qualification while keeping an evidence-scoped answer readable', () => {
+    const warned = {
+      ...answered,
+      status: 'ANSWERED_WITH_WARNING' as const,
+      confidence: 'LOW' as const,
+      warnings: [{ type: 'LOW_CONFIDENCE' as const }],
+    }
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: warned,
+        answeredQuestion: '什么时候结算？',
+        answerTurns: [{ question: '什么时候结算？', answer: warned, learningIntent: null }],
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.text()).toContain('先完成结算')
+    expect(wrapper.text()).toContain('模型对这条结论的把握较低')
+    expect(wrapper.text()).toContain('回合结束')
   })
 })

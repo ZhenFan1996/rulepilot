@@ -12,7 +12,6 @@ import java.time.Duration;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -49,7 +48,8 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
         }
         try {
             StructuredRuleAnswer answer = json.readValue(value, StructuredRuleAnswer.class);
-            if (!answer.documentVersionId().equals(key.documentVersionId()) || answer.status() != AnswerStatus.ANSWERED) {
+            if (!answer.documentVersionId().equals(key.documentVersionId())
+                    || !answer.status().publishesConclusion()) {
                 throw new IllegalStateException("cached answer scope is invalid");
             }
             return Optional.of(answer);
@@ -60,7 +60,7 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
 
     @Override
     public void save(AnswerCacheKey key, StructuredRuleAnswer answer) {
-        if (answer.status() != AnswerStatus.ANSWERED || !answer.documentVersionId().equals(key.documentVersionId())) {
+        if (!answer.status().publishesConclusion() || !answer.documentVersionId().equals(key.documentVersionId())) {
             throw new IllegalArgumentException("only a validated version-matched answer can be cached");
         }
         try {
@@ -82,9 +82,6 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
         String canonical = String.join("\u001f",
                 key.normalizedQuestion(),
                 value(key.currentLessonSection()),
-                value(key.gamePhase()),
-                key.playerCount() == null ? "" : key.playerCount().toString(),
-                key.activeExpansions().stream().map(java.util.UUID::toString).sorted().collect(Collectors.joining(",")),
                 key.outputLanguage().name());
         return KEY_PREFIX + key.ruleDataVersion() + ":" + key.documentVersionId() + ":" + sha256(canonical);
     }

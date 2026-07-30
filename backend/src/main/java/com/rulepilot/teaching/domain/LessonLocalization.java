@@ -109,6 +109,9 @@ public record LessonLocalization(
                 : new VisualFocus(
                         source.visualFocus().pageNumber(),
                         translated.visualLabel().isBlank() ? source.visualFocus().label() : translated.visualLabel(),
+                        translated.visualDescription().isBlank()
+                                ? source.visualFocus().visibleDescription()
+                                : translated.visualDescription(),
                         source.visualFocus().x(),
                         source.visualFocus().y(),
                         source.visualFocus().width(),
@@ -141,14 +144,25 @@ public record LessonLocalization(
         }
     }
 
-    public record StepTranslation(int position, String heading, String text, String visualLabel) {
+    public record StepTranslation(
+            int position,
+            String heading,
+            String text,
+            String visualLabel,
+            String visualDescription) {
+        public StepTranslation(int position, String heading, String text, String visualLabel) {
+            this(position, heading, text, visualLabel, "");
+        }
+
         public StepTranslation {
-            if (position < 1 || blank(heading) || blank(text) || visualLabel == null) {
+            if (position < 1 || blank(heading) || blank(text) || visualLabel == null || visualDescription == null
+                    || visualDescription.length() > 240) {
                 throw new IllegalArgumentException("localized lesson step is invalid");
             }
             heading = heading.strip();
             text = text.strip();
             visualLabel = visualLabel.strip();
+            visualDescription = visualDescription.strip();
         }
     }
 

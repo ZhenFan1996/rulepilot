@@ -2,7 +2,6 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import com.rulepilot.assistant.PlayerLocale;
 
@@ -17,9 +16,6 @@ public interface RuleAnswerCache {
             long ruleDataVersion,
             String normalizedQuestion,
             String currentLessonSection,
-            String gamePhase,
-            Integer playerCount,
-            Set<UUID> activeExpansions,
             PlayerLocale outputLanguage) {
 
         public AnswerCacheKey {
@@ -27,7 +23,6 @@ public interface RuleAnswerCache {
                     || normalizedQuestion == null || normalizedQuestion.isBlank()) {
                 throw new IllegalArgumentException("answer cache key is invalid");
             }
-            activeExpansions = activeExpansions == null ? Set.of() : Set.copyOf(activeExpansions);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         }
     }

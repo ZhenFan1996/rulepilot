@@ -156,7 +156,8 @@ public class VisualLessonEnricher {
             if (sectionResult.outcome() != null) {
                 SectionProgress update = new SectionProgress(section.position(), section.title(), sectionResult.outcome());
                 progress.sectionFinished(update);
-                if (sectionResult.outcome().outcome() == Outcome.ADDED) {
+                if (sectionResult.outcome().outcome() == Outcome.ADDED
+                        || sectionResult.outcome().outcome() == Outcome.ADDED_WITH_CLAIM_CONFLICT) {
                     progress.sectionUpdated(update, lessonWithSections(readerReadyLesson, currentSections));
                 }
             }
@@ -191,6 +192,7 @@ public class VisualLessonEnricher {
     private String outcomeSummary(int sectionPosition, Outcome outcome) {
         return switch (outcome) {
             case ADDED -> "第 " + sectionPosition + " 节已加入可核对的局部规则书截图";
+            case ADDED_WITH_CLAIM_CONFLICT -> "第 " + sectionPosition + " 节的图中信息与讲解正文存在冲突，已保留内容并标记为待复核";
             case ALREADY_PRESENT -> "第 " + sectionPosition + " 节已有局部规则书截图，无需重复处理";
             case NO_CITED_CANDIDATE -> "第 " + sectionPosition + " 节没有可引用的图片候选区域";
             case NO_PAGE_IMAGE -> "第 " + sectionPosition + " 节的候选页没有可用图片";
@@ -267,6 +269,7 @@ public class VisualLessonEnricher {
 
     public enum Outcome {
         ADDED,
+        ADDED_WITH_CLAIM_CONFLICT,
         ALREADY_PRESENT,
         NO_CITED_CANDIDATE,
         NO_PAGE_IMAGE,

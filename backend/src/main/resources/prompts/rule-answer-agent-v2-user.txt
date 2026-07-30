@@ -1,9 +1,6 @@
 <question_context>
   <question_type>{questionType}</question_type>
   <current_lesson_section>{lessonSection}</current_lesson_section>
-  <game_phase>{gamePhase}</game_phase>
-  <player_count>{playerCount}</player_count>
-  <active_expansion_count>{activeExpansionCount}</active_expansion_count>
 </question_context>
 
 <untrusted_question>{question}</untrusted_question>

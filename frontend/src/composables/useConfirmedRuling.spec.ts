@@ -15,6 +15,7 @@ const answer: StructuredRuleAnswer = {
   confirmedRulingId: null,
   confirmedRulingVersion: null,
   clarification: null,
+  warnings: [],
 }
 
 function confirmedRuling(overrides = {}) {

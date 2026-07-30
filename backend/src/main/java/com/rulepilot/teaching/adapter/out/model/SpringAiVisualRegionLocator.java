@@ -120,8 +120,10 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             particular, if a claim tells a player to play or activate a named card, the crop must show that card or its
             literal face, rather than another character or card on the page. A word-only title, printed label, prose
             box, dotted boundary, or empty background is never enough. Do not infer missing cards, icons, or claim
-            relevance from a crop label. Return one JSON object with acceptedCropRefs as an array containing only the
-            accepted R references.
+            relevance from a crop label. If the crop unambiguously depicts the same subject and inputs as the claim
+            but shows a different concrete printed value, quantity, identity, arrangement, or worked result, put its R
+            reference in contradictedCropRefs instead of acceptedCropRefs. Missing detail is rejection, not
+            contradiction. Return one JSON object containing both arrays.
             """;
 
     /** Qwen should judge a crop as a recognition aid, not demand an independent proof of each rule sentence. */
@@ -132,8 +134,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
             or worked state needed to recognise that claim. The crop need not independently show every procedural word
             in the claim. Reject only when it is word-only/prose-only/decorative, or visibly belongs to a different
             named card, faction, component, score example, or rule on the same page. If the claim names a particular
-            card, accept only that card; if it names a component group, accept the literal group. Return JSON only:
-            {"acceptedCropRefs":["R1"]} or {"acceptedCropRefs":[]}.
+            card, accept only that card; if it names a component group, accept the literal group. Use
+            contradictedCropRefs only when the crop unambiguously shows the same subject and inputs but a different
+            printed value, quantity, identity, arrangement, or worked result. Missing detail is rejection, not
+            contradiction. Return JSON only:
+            {"acceptedCropRefs":["R1"],"contradictedCropRefs":[]} or
+            {"acceptedCropRefs":[],"contradictedCropRefs":["R1"]}.
             """;
 
     private final RuntimeModelConfiguration models;
@@ -214,14 +220,21 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     .orElse(null);
             byte[] crop = VisualCropAcceptancePolicy.croppedPng(page, region);
             if (crop == null) continue;
-            Optional<Boolean> verified = confirmExactCrop(
+            Optional<CropVerdict> verified = confirmExactCrop(
                     request, region, "R1", new CropImage(region.pageNumber(), region.label(), crop), owner);
-            if (verified.orElse(false)) {
+            if (verified.orElse(CropVerdict.REJECTED) == CropVerdict.ACCEPTED) {
                 log.info(
                         "Recovered a verified cataloged visual anchor for section {} on page {}",
                         request.sectionTitle(),
                         region.pageNumber());
                 return LocateGuideResult.found(List.of(region));
+            }
+            if (verified.orElse(CropVerdict.REJECTED) == CropVerdict.CONTRADICTED) {
+                log.info(
+                        "Recovered a cataloged visual anchor that contradicts a lesson claim for section {} on page {}",
+                        request.sectionTitle(),
+                        region.pageNumber());
+                return LocateGuideResult.found(List.of(region.withClaimContradiction()));
             }
         }
         return original;
@@ -246,10 +259,15 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         if (crops.size() == regions.size()) {
             for (int index = 0; index < regions.size(); index++) {
                 String reference = "R" + (index + 1);
-                Optional<Boolean> confirmed = confirmExactCrop(
+                Optional<CropVerdict> confirmed = confirmExactCrop(
                         request, regions.get(index), reference, crops.get(reference), owner);
                 if (confirmed.isEmpty()) return retainFirstGroundedCrops(request, regions);
-                if (confirmed.get()) return LocateGuideResult.found(List.of(regions.get(index)));
+                if (confirmed.get() == CropVerdict.ACCEPTED) {
+                    return LocateGuideResult.found(List.of(regions.get(index)));
+                }
+                if (confirmed.get() == CropVerdict.CONTRADICTED) {
+                    return LocateGuideResult.found(List.of(regions.get(index).withClaimContradiction()));
+                }
             }
             return LocateGuideResult.unavailable(Diagnostic.SEMANTIC_REJECTED);
         }
@@ -266,7 +284,7 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
     }
 
     /** One crop and one exact claim per call prevents a vision model from confusing R references across images. */
-    private Optional<Boolean> confirmExactCrop(
+    private Optional<CropVerdict> confirmExactCrop(
             VisualLocationRequest request,
             LocatedRegion region,
             String reference,
@@ -295,8 +313,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
                     })
                     .call()
                     .content();
-            Optional<Boolean> verified = VisualLocatorResponsePolicy.acceptedCropReferences(content, Set.of(reference))
-                    .map(accepted -> accepted.contains(reference));
+            Optional<CropVerdict> verified = VisualLocatorResponsePolicy.cropReview(content, Set.of(reference))
+                    .map(review -> {
+                        if (review.contradictedReferences().contains(reference)) return CropVerdict.CONTRADICTED;
+                        if (review.acceptedReferences().contains(reference)) return CropVerdict.ACCEPTED;
+                        return CropVerdict.REJECTED;
+                    });
             if (qwen) {
                 log.info(
                         "Qwen exact-crop verdict for section {} at page {} ({}, {}, {}, {}): {}",
@@ -339,6 +361,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
         public byte[] content() {
             return content.clone();
         }
+    }
+
+    private enum CropVerdict {
+        ACCEPTED,
+        CONTRADICTED,
+        REJECTED
     }
 
     private GuideAttempt locateGuideOnce(VisualLocationRequest request, String owner, String correction) {

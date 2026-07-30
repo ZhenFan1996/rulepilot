@@ -59,9 +59,6 @@ class AnswerModelRequestFactoryTest {
         assertThat(request.questionType()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(request.context()).satisfies(context -> {
             assertThat(context.currentLessonSection()).isEqualTo("回合流程");
-            assertThat(context.gamePhase()).isEqualTo("行动阶段");
-            assertThat(context.playerCount()).isEqualTo(3);
-            assertThat(context.activeExpansionCount()).isEqualTo(2);
             assertThat(context.previousQuestion()).isEqualTo("前一个问题");
             assertThat(context.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
             assertThat(context.outputLanguage()).isEqualTo(PlayerLocale.EN);

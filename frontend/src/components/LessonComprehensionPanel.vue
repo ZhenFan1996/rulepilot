@@ -71,6 +71,7 @@ function pageList(pages: number[]) {
           <figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold text-indigo">
             <span>{{ t('lesson.comprehension.visual.focus', { label: task.visualFocus.label }) }}</span><span>{{ t('lesson.comprehension.page', { page: task.visualFocus.pageNumber }) }}</span>
           </figcaption>
+          <p v-if="task.visualFocus.visibleDescription" class="border-t border-indigo/10 px-3 py-2 text-xs leading-5 text-ink/60">{{ task.visualFocus.visibleDescription }}</p>
         </figure>
         <p v-else-if="task.visualFocus" class="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{{ t('lesson.comprehension.imageUnavailable.before') }} <a :href="pageImageUrl(task.visualFocus.pageNumber)" target="_blank" rel="noopener" class="font-semibold underline">{{ t('lesson.comprehension.imageUnavailable.link') }}</a>{{ t('lesson.comprehension.imageUnavailable.after') }}</p>
         <p class="mt-2 text-sm leading-6 text-ink/65">{{ task.prompt }}</p>
@@ -91,6 +92,7 @@ function pageList(pages: number[]) {
             <a :href="pageImageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.comprehension.openOriginalPage')" class="block">
               <img :src="focusedPageImageUrl(aid.visualFocus)" :alt="t('lesson.comprehension.visualAid.alt', { page: aid.visualFocus.pageNumber, label: aid.label })" class="block h-auto w-full" loading="lazy" @error="imageFailed(aid.visualFocus.pageNumber)">
             </a>
+            <figcaption v-if="aid.visualFocus.visibleDescription" class="border-t border-indigo/10 px-3 py-2 text-xs leading-5 text-ink/60">{{ aid.visualFocus.visibleDescription }}</figcaption>
           </figure>
           <p class="mt-3 text-sm font-semibold">{{ aid.label }}</p>
           <p class="mt-1 text-xs font-semibold text-indigo">{{ t('lesson.comprehension.visualAid.meta', { page: aid.visualFocus.pageNumber, chapter: aid.chapterPosition }) }}</p>

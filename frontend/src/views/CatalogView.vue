@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
+import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse {
   headerName: string
@@ -68,7 +70,7 @@ interface BggImportResponse {
   alreadyImported: boolean
 }
 
-const router = useRouter()
+const { t } = useLocale()
 const games = ref<GameResponse[]>([])
 const selectedGameId = ref('')
 const csrf = ref<CsrfResponse | null>(null)
@@ -99,14 +101,15 @@ async function loadCatalog() {
   try {
     const response = await fetch('/api/v1/games', { credentials: 'include' })
     if (response.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      errorMessage.value = t('catalog.error.loginExpired')
       return
     }
-    if (!response.ok) throw new Error('无法读取游戏目录。')
+    if (!response.ok) throw new Error(t('catalog.error.load'))
     games.value = (await response.json()) as GameResponse[]
     if (!selectedGameId.value && games.value.length > 0) selectedGameId.value = games.value[0]!.game.id
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '无法读取游戏目录。'
+    errorMessage.value = error instanceof Error ? error.message : t('catalog.error.load')
   } finally {
     loading.value = false
   }
@@ -131,14 +134,15 @@ async function searchBgg() {
   try {
     const response = await fetch(`/api/v1/bgg/search?q=${encodeURIComponent(bggQuery.value.trim())}`, { credentials: 'include' })
     if (response.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      bggError.value = t('catalog.error.loginExpired')
       return
     }
-    if (response.status === 503) throw new Error('后端尚未配置 BGG Application Token。')
-    if (!response.ok) throw new Error('BGG 暂时无法完成搜索，请稍后重试。')
+    if (response.status === 503) throw new Error(t('catalog.error.bggNotConfigured'))
+    if (!response.ok) throw new Error(t('catalog.error.bggSearch'))
     bggResults.value = (await response.json()) as BggSearchResult[]
   } catch (error) {
-    bggError.value = error instanceof Error ? error.message : 'BGG 搜索失败。'
+    bggError.value = error instanceof Error ? error.message : t('catalog.error.bggSearchShort')
   } finally {
     bggSearching.value = false
   }
@@ -151,10 +155,12 @@ async function importBggGame(result: BggSearchResult) {
     const imported = await post<BggImportResponse>(`/api/v1/bgg/games/${result.bggId}/import`, {})
     importedBgg.value = imported
     selectedGameId.value = imported.game.id
-    message.value = imported.alreadyImported ? `${imported.game.name} 已在目录中` : `已从 BGG 导入 ${imported.game.name}`
+    message.value = imported.alreadyImported
+      ? t('catalog.bgg.alreadyImported', { game: imported.game.name })
+      : t('catalog.bgg.imported', { game: imported.game.name })
     await loadCatalog()
   } catch (error) {
-    bggError.value = error instanceof Error ? error.message : 'BGG 导入失败。'
+    bggError.value = error instanceof Error ? error.message : t('catalog.error.bggImport')
   } finally {
     bggImportingId.value = null
   }
@@ -163,7 +169,7 @@ async function importBggGame(result: BggSearchResult) {
 async function csrfToken() {
   if (csrf.value) return csrf.value
   const response = await fetch('/api/auth/csrf', { credentials: 'include' })
-  if (!response.ok) throw new Error('无法建立安全会话。')
+  if (!response.ok) throw new Error(t('catalog.error.secureSession'))
   csrf.value = (await response.json()) as CsrfResponse
   return csrf.value
 }
@@ -177,11 +183,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (response.status === 401) {
-    await router.push({ name: 'login' })
-    throw new Error('登录已失效。')
+    notifyLoginRequired()
+    throw new Error(t('catalog.error.loginExpired'))
   }
-  if (response.status === 403) throw new Error('当前账户不能修改游戏库。')
-  if (!response.ok) throw new Error('提交内容无效或名称已经存在。')
+  if (response.status === 403) throw new Error(t('catalog.error.forbidden'))
+  if (!response.ok) throw new Error(t('catalog.error.invalid'))
   return (await response.json()) as T
 }
 
@@ -192,7 +198,7 @@ async function runSave(action: () => Promise<void>) {
   try {
     await action()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '保存失败。'
+    errorMessage.value = error instanceof Error ? error.message : t('catalog.error.save')
   } finally {
     saving.value = false
   }
@@ -203,7 +209,7 @@ async function createGame() {
     const created = await post<GameDetails>('/api/v1/games', { name: gameName.value })
     gameName.value = ''
     selectedGameId.value = created.id
-    message.value = `已创建 ${created.name}`
+    message.value = t('catalog.created', { game: created.name })
     await loadCatalog()
   })
 }
@@ -218,7 +224,7 @@ async function createEdition() {
     })
     editionName.value = ''
     editionYear.value = null
-    message.value = '版本已添加'
+    message.value = t('catalog.editionAdded')
     await loadCatalog()
   })
 }
@@ -232,7 +238,7 @@ async function createExpansion() {
     })
     expansionName.value = ''
     compatibleEditionIds.value = []
-    message.value = '扩展已添加'
+    message.value = t('catalog.expansionAdded')
     await loadCatalog()
   })
 }
@@ -249,16 +255,16 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
   <AppShell>
     <div class="mx-auto grid max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:grid-cols-[0.82fr_1.18fr] lg:px-12 lg:py-14">
       <section>
-        <RouterLink :to="{ name: 'catalog' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← 回到我的游戏</RouterLink>
-        <p class="mt-5 text-sm font-medium text-copper">资料维护</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">游戏资料工作台</h1>
-        <p class="mt-4 max-w-xl leading-7 text-ink/55">从 BGG 导入游戏，或补充版本与扩展。这里只在需要整理资料时使用，不影响直接上传规则书。</p>
+        <RouterLink :to="{ name: 'catalog' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ t('catalog.back') }}</RouterLink>
+        <p class="mt-5 text-sm font-medium text-copper">{{ t('catalog.eyebrow') }}</p>
+        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ t('catalog.title') }}</h1>
+        <p class="mt-4 max-w-xl leading-7 text-ink/55">{{ t('catalog.description') }}</p>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createGame">
-          <h2 class="font-display text-xl font-semibold">手动记一个游戏</h2>
+          <h2 class="font-display text-xl font-semibold">{{ t('catalog.manual.title') }}</h2>
           <div class="mt-4 flex gap-3">
-            <input v-model="gameName" required maxlength="120" placeholder="例如：Wingspan" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo">
-            <button :disabled="saving" class="rounded-lg bg-indigo px-5 font-semibold text-white disabled:opacity-50">保存</button>
+            <input v-model="gameName" required maxlength="120" :placeholder="t('catalog.manual.placeholder')" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-indigo">
+            <button :disabled="saving" class="rounded-lg bg-indigo px-5 font-semibold text-white disabled:opacity-50">{{ t('catalog.save') }}</button>
           </div>
         </form>
 
@@ -266,7 +272,7 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
           <div class="flex items-start justify-between gap-4">
             <div>
               <p class="text-xs font-semibold text-copper">BoardGameGeek</p>
-              <h2 class="mt-1 font-display text-xl font-semibold">从 BGG 查找</h2>
+              <h2 class="mt-1 font-display text-xl font-semibold">{{ t('catalog.bgg.title') }}</h2>
             </div>
             <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 text-xs font-medium text-ink/45" aria-label="Powered by BoardGameGeek">
               <img src="https://cf.geekdo-images.com/HZy35cmzmmyV9BarSuk6ug__small/img/gbE7sulIurZE_Tx8EQJXnZSKI6w%3D/fit-in/200x150/filters%3Astrip_icc%28%29/pic7779581.png" alt="" class="h-8 w-auto" referrerpolicy="no-referrer" @error="hideBrokenImage">
@@ -275,45 +281,43 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
           </div>
 
           <div v-if="bggConfigured === false" class="mt-4 rounded-lg bg-copper/8 p-4 text-sm leading-6 text-ink/65">
-            暂时无法连接 BGG。你仍然可以手动记下游戏，或直接上传规则书开始讲解。
+            {{ t('catalog.bgg.unavailable') }}
           </div>
 
           <form v-else class="mt-4 flex gap-3" @submit.prevent="searchBgg">
-            <input v-model="bggQuery" required minlength="2" maxlength="120" placeholder="输入英文或原版游戏名" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
-            <button :disabled="bggSearching" class="rounded-lg bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? '搜索中…' : '搜索' }}</button>
+            <input v-model="bggQuery" required minlength="2" maxlength="120" :placeholder="t('catalog.bgg.placeholder')" class="min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none focus:border-copper">
+            <button :disabled="bggSearching" class="rounded-lg bg-copper px-5 font-semibold text-white disabled:opacity-50">{{ bggSearching ? t('catalog.bgg.searching') : t('catalog.bgg.search') }}</button>
           </form>
 
           <p v-if="bggError" class="mt-4 text-sm text-red-700" role="alert">{{ bggError }}</p>
-          <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-ink/45">没有匹配结果，请尝试原版名称或减少关键词。</p>
+          <p v-if="!bggSearching && bggQuery && bggResults.length === 0 && !bggError" class="mt-4 text-sm text-ink/45">{{ t('catalog.bgg.noResults') }}</p>
 
           <ul v-if="bggResults.length" class="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
             <li v-for="result in bggResults" :key="result.bggId" class="flex items-center justify-between gap-3 rounded-lg border border-ink/8 bg-canvas p-3">
               <div class="min-w-0">
                 <a :href="result.bggUrl" target="_blank" rel="noopener noreferrer" class="block truncate font-semibold hover:text-indigo">{{ result.name }}</a>
-                <p class="mt-1 text-xs text-ink/45">{{ result.publicationYear ?? '年份未知' }} · BGG #{{ result.bggId }}</p>
+                <p class="mt-1 text-xs text-ink/45">{{ result.publicationYear ?? t('catalog.unknownYear') }} · BGG #{{ result.bggId }}</p>
               </div>
               <button type="button" :disabled="bggImportingId !== null" class="shrink-0 rounded-xl border border-indigo/20 px-3 py-2 text-sm font-semibold text-indigo disabled:opacity-40" @click="importBggGame(result)">
-                {{ bggImportingId === result.bggId ? '读取中…' : '读取并导入' }}
+                {{ bggImportingId === result.bggId ? t('catalog.bgg.importing') : t('catalog.bgg.import') }}
               </button>
             </li>
           </ul>
 
           <article v-if="importedBgg" class="mt-5 rounded-xl border border-ink/10 bg-canvas p-4 text-ink">
             <div class="flex gap-4">
-              <img v-if="importedBgg.thumbnailUrl" :src="importedBgg.thumbnailUrl" :alt="`${importedBgg.game.name} 的 BGG 缩略图`" class="h-24 w-24 rounded-xl object-cover" referrerpolicy="no-referrer">
+              <img v-if="importedBgg.thumbnailUrl" :src="importedBgg.thumbnailUrl" :alt="t('catalog.bgg.thumbnailAlt', { game: importedBgg.game.name })" class="h-24 w-24 rounded-xl object-cover" referrerpolicy="no-referrer">
               <div>
                 <h3 class="font-display text-lg font-semibold">{{ importedBgg.game.name }}</h3>
                 <p class="mt-2 text-xs text-ink/50">
-                  {{ importedBgg.minPlayers ?? '?' }}–{{ importedBgg.maxPlayers ?? '?' }} 人 ·
-                  {{ importedBgg.playingTimeMinutes ?? '?' }} 分钟 ·
-                  {{ importedBgg.minimumAge ?? '?' }} 岁以上
+                  {{ t('catalog.bgg.stats', { min: importedBgg.minPlayers ?? '?', max: importedBgg.maxPlayers ?? '?', minutes: importedBgg.playingTimeMinutes ?? '?', age: importedBgg.minimumAge ?? '?' }) }}
                 </p>
-                <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">查看 BGG 页面 ↗</a>
+                <a :href="importedBgg.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">{{ t('catalog.bgg.view') }} ↗</a>
               </div>
             </div>
             <p v-if="importedBgg.description" class="mt-4 max-h-28 overflow-y-auto text-sm leading-6 text-ink/60">{{ importedBgg.description }}</p>
-            <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
-            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">上传规则书</RouterLink>
+            <p class="mt-3 text-xs text-ink/40">{{ t('catalog.bgg.attribution') }}</p>
+            <RouterLink :to="{ name: 'teach', query: { editionId: importedBgg.edition.id } }" class="mt-4 inline-flex rounded-lg bg-copper px-4 py-2.5 text-sm font-semibold text-white">{{ t('catalog.upload') }}</RouterLink>
           </article>
         </section>
 
@@ -322,11 +326,11 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
       </section>
 
       <section class="space-y-6">
-        <div v-if="loading" class="rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">正在读取游戏库…</div>
-        <div v-else-if="games.length === 0" class="rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">还没有游戏。可以从 BGG 查找，也可以自己添加。</div>
+        <div v-if="loading" class="rounded-xl border border-ink/10 bg-paper p-8 text-ink/50">{{ t('catalog.loading') }}</div>
+        <div v-else-if="games.length === 0" class="rounded-xl border border-dashed border-ink/20 p-8 text-center text-ink/55">{{ t('catalog.empty') }}</div>
         <template v-else>
           <label class="block text-sm font-semibold">
-            当前游戏
+            {{ t('catalog.currentGame') }}
             <select v-model="selectedGameId" class="mt-2 w-full rounded-lg border border-ink/15 bg-paper px-4 py-3">
               <option v-for="entry in games" :key="entry.game.id" :value="entry.game.id">{{ entry.game.name }}</option>
             </select>
@@ -335,54 +339,52 @@ onMounted(() => Promise.all([loadCatalog(), loadBggStatus()]))
           <div v-if="selectedGame" class="grid gap-6 xl:grid-cols-2">
             <article v-if="selectedGame.bggMetadata" class="rounded-xl border border-ink/10 bg-paper p-5 xl:col-span-2">
               <div class="flex gap-4">
-                <img v-if="selectedGame.bggMetadata.thumbnailUrl" :src="selectedGame.bggMetadata.thumbnailUrl" :alt="`${selectedGame.game.name} 的 BGG 缩略图`" class="h-28 w-28 rounded-lg object-cover" referrerpolicy="no-referrer">
+                <img v-if="selectedGame.bggMetadata.thumbnailUrl" :src="selectedGame.bggMetadata.thumbnailUrl" :alt="t('catalog.bgg.thumbnailAlt', { game: selectedGame.game.name })" class="h-28 w-28 rounded-lg object-cover" referrerpolicy="no-referrer">
                 <div>
                   <p class="text-xs font-semibold text-copper">BoardGameGeek</p>
                   <h2 class="mt-2 font-display text-2xl font-semibold">{{ selectedGame.game.name }}</h2>
                   <p class="mt-2 text-sm text-ink/55">
-                    {{ selectedGame.bggMetadata.minPlayers ?? '?' }}–{{ selectedGame.bggMetadata.maxPlayers ?? '?' }} 人 ·
-                    {{ selectedGame.bggMetadata.playingTimeMinutes ?? '?' }} 分钟 ·
-                    {{ selectedGame.bggMetadata.minimumAge ?? '?' }} 岁以上
+                    {{ t('catalog.bgg.stats', { min: selectedGame.bggMetadata.minPlayers ?? '?', max: selectedGame.bggMetadata.maxPlayers ?? '?', minutes: selectedGame.bggMetadata.playingTimeMinutes ?? '?', age: selectedGame.bggMetadata.minimumAge ?? '?' }) }}
                   </p>
-                  <a :href="selectedGame.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-copper">查看 BGG 原始页面 ↗</a>
+                  <a :href="selectedGame.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block text-sm font-semibold text-copper">{{ t('catalog.bgg.viewOriginal') }} ↗</a>
                 </div>
               </div>
               <p v-if="selectedGame.bggMetadata.description" class="mt-4 max-h-36 overflow-y-auto text-sm leading-6 text-ink/60">{{ selectedGame.bggMetadata.description }}</p>
-              <p class="mt-3 text-xs text-ink/40">资料来自 BGG，仅用于识别游戏。</p>
+              <p class="mt-3 text-xs text-ink/40">{{ t('catalog.bgg.attribution') }}</p>
             </article>
 
             <form class="rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createEdition">
-              <h2 class="font-display text-xl font-semibold">添加版本</h2>
+              <h2 class="font-display text-xl font-semibold">{{ t('catalog.edition.title') }}</h2>
               <div class="mt-5 space-y-3">
-                <input v-model="editionName" required maxlength="120" placeholder="版本名称" class="w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+                <input v-model="editionName" required maxlength="120" :placeholder="t('catalog.edition.name')" class="w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
                 <div class="grid grid-cols-2 gap-3">
-                  <input v-model="editionLanguage" required placeholder="语言，如 zh-CN" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
-                  <input v-model="editionYear" type="number" min="1900" max="2200" placeholder="发行年份" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+                  <input v-model="editionLanguage" required :placeholder="t('catalog.edition.language')" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+                  <input v-model="editionYear" type="number" min="1900" max="2200" :placeholder="t('catalog.edition.year')" class="rounded-lg border border-ink/15 bg-canvas px-4 py-3">
                 </div>
-                <button :disabled="saving" class="w-full rounded-lg bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">保存版本</button>
+                <button :disabled="saving" class="w-full rounded-lg bg-ink px-5 py-3 font-semibold text-canvas disabled:opacity-50">{{ t('catalog.edition.save') }}</button>
               </div>
               <ul class="mt-5 divide-y divide-ink/10 text-sm text-ink/60">
                 <li v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center justify-between gap-3 py-2">
                   <span>{{ edition.name }} · {{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></span>
-                  <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">上传规则书</RouterLink>
+                  <RouterLink :to="{ name: 'teach', query: { editionId: edition.id } }" class="shrink-0 font-semibold text-indigo">{{ t('catalog.upload') }}</RouterLink>
                 </li>
               </ul>
             </form>
 
             <form class="rounded-xl border border-ink/10 bg-paper p-5" @submit.prevent="createExpansion">
-              <h2 class="font-display text-xl font-semibold">添加扩展</h2>
-              <input v-model="expansionName" required maxlength="120" placeholder="扩展名称" class="mt-5 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
+              <h2 class="font-display text-xl font-semibold">{{ t('catalog.expansion.title') }}</h2>
+              <input v-model="expansionName" required maxlength="120" :placeholder="t('catalog.expansion.name')" class="mt-5 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3">
               <fieldset class="mt-4 space-y-2">
-                <legend class="text-sm font-semibold">兼容版本</legend>
+                <legend class="text-sm font-semibold">{{ t('catalog.expansion.compatible') }}</legend>
                 <label v-for="edition in selectedGame.editions" :key="edition.id" class="flex items-center gap-2 text-sm text-ink/65">
                   <input v-model="compatibleEditionIds" type="checkbox" :value="edition.id">
                   {{ edition.name }} · {{ edition.language }}
                 </label>
-                <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">请先添加至少一个版本。</p>
+                <p v-if="selectedGame.editions.length === 0" class="text-sm text-ink/45">{{ t('catalog.expansion.needEdition') }}</p>
               </fieldset>
-              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">保存扩展</button>
+              <button :disabled="saving || compatibleEditionIds.length === 0" class="mt-5 w-full rounded-lg bg-copper px-5 py-3 font-semibold text-white disabled:opacity-40">{{ t('catalog.expansion.save') }}</button>
               <ul class="mt-5 space-y-2 text-sm text-ink/60">
-                <li v-for="expansion in selectedGame.expansions" :key="expansion.id">{{ expansion.name }} · {{ expansion.compatibleEditionIds.length }} 个兼容版本</li>
+                <li v-for="expansion in selectedGame.expansions" :key="expansion.id">{{ expansion.name }} · {{ t('catalog.expansion.compatibleCount', { count: expansion.compatibleEditionIds.length }) }}</li>
               </ul>
             </form>
           </div>

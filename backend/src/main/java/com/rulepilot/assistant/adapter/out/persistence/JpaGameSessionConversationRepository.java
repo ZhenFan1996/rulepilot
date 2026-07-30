@@ -4,6 +4,7 @@ import com.rulepilot.assistant.application.GameSessionConversationRepository;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerBasis;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerWarning;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
@@ -115,6 +116,12 @@ class GameSessionConversationTurnEntity {
     @Column(name = "answer_basis", length = 40)
     String answerBasis;
 
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_warning", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    @Column(name = "warning_type", nullable = false, length = 60)
+    List<String> warnings = new ArrayList<>();
+
     @Column(nullable = false)
     boolean official;
 
@@ -150,6 +157,9 @@ class GameSessionConversationTurnEntity {
         exceptions = new ArrayList<>(answer.exceptions());
         confidence = answer.confidence().name();
         answerBasis = answer.answerBasis() == null ? null : answer.answerBasis().name();
+        warnings = answer.warnings().stream()
+                .map(warning -> warning.type().name())
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         official = answer.official();
         confirmedRulingId = answer.confirmedRulingId();
         confirmedRulingVersion = answer.confirmedRulingVersion();
@@ -171,7 +181,11 @@ class GameSessionConversationTurnEntity {
                 official,
                 confirmedRulingId,
                 confirmedRulingVersion,
-                clarification);
+                clarification,
+                warnings.stream()
+                        .map(AnswerWarning.Type::valueOf)
+                        .map(AnswerWarning::new)
+                        .toList());
         return new GameSessionConversationTurn(id, sessionId, question, answer, createdBy, createdAt);
     }
 }

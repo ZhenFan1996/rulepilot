@@ -3,15 +3,15 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerWarning;
+import com.rulepilot.assistant.domain.AnswerWarning.Type;
 import java.util.List;
 import java.util.UUID;
 
 /** Pure final-draft preparation before a validated answer can be published to a player. */
 final class AnswerDraftPublicationPolicy {
 
-    private static final String MISSING_END_TURN_PROCEDURE = "回答没有引用回合结束处理的直接规则依据。";
     private static final String MISSING_ENDGAME_RESOLUTION = "回答没有引用游戏结束结算的直接规则依据。";
-    private static final String MISSING_MATCHING_VALUE_RESOLUTION = "回答没有引用相同数值条件的直接处理规则。";
 
     private AnswerDraftPublicationPolicy() {}
 
@@ -36,30 +36,32 @@ final class AnswerDraftPublicationPolicy {
         ModelDraft prepared = removePeripheralEndgameCitations(request, draft);
         prepared = AnswerSpatialScopePolicy.boundRepeatedInference(request, prepared);
         prepared = AnswerBasisPolicy.classify(request, prepared);
-        if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(request.question(), request.evidence())
-                && !AnswerEvidencePolicy.citesEndTurnProcedure(request.evidence(), prepared.citationIds())) {
-            return Preparation.rejected(MISSING_END_TURN_PROCEDURE);
-        }
         if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(request.question(), request.evidence())
                 && !AnswerEvidencePolicy.citesEndgameResolution(
                         request.question(), request.evidence(), prepared.citationIds())) {
             return Preparation.rejected(MISSING_ENDGAME_RESOLUTION);
         }
-        if (AnswerEvidencePolicy.requiresMatchingValueResolutionCitation(request.question(), request.evidence())
-                && !AnswerEvidencePolicy.citesMatchingValueResolution(request.evidence(), prepared.citationIds())) {
-            return Preparation.rejected(MISSING_MATCHING_VALUE_RESOLUTION);
+        if (AnswerConditionEvidencePolicy.needsDirectCitation(request, prepared.citationIds())) {
+            return Preparation.readyWithWarning(
+                    AnswerVisualEvidencePolicy.includeReferenceCitations(request, prepared),
+                    new AnswerWarning(Type.INDIRECT_CITATION));
         }
         return Preparation.ready(AnswerVisualEvidencePolicy.includeReferenceCitations(request, prepared));
     }
 
-    record Preparation(ModelDraft draft, AnswerStatus failureStatus, String failureMessage) {
+    record Preparation(
+            ModelDraft draft, List<AnswerWarning> warnings, AnswerStatus failureStatus, String failureMessage) {
 
         static Preparation ready(ModelDraft draft) {
-            return new Preparation(draft, null, null);
+            return new Preparation(draft, List.of(), null, null);
+        }
+
+        static Preparation readyWithWarning(ModelDraft draft, AnswerWarning warning) {
+            return new Preparation(draft, List.of(warning), null, null);
         }
 
         static Preparation rejected(String failureMessage) {
-            return new Preparation(null, AnswerStatus.INVALID_MODEL_OUTPUT, failureMessage);
+            return new Preparation(null, List.of(), AnswerStatus.INVALID_MODEL_OUTPUT, failureMessage);
         }
 
         boolean ready() {

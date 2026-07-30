@@ -15,10 +15,21 @@ final class VisualStepRelevancePolicy {
             return false;
         }
         if (mentionsPlayerBoard(heading)) {
-            return containsAny(observation, "玩家板", "个人板", "棋盘", "网格", "board", "grid", "town");
+            return containsAny(observation, "玩家板", "个人板", "棋盘", "网格", "board", "grid", "player mat");
         }
         if (mentionsStartingActor(heading)) {
-            return containsAny(observation, "主建筑师", "起始玩家", "锤", "标记", "master builder", "first player", "hammer", "marker");
+            return containsAny(
+                    observation,
+                    "起始玩家",
+                    "先手",
+                    "首位玩家",
+                    "标记",
+                    "指示物",
+                    "starting player",
+                    "first player",
+                    "start player",
+                    "marker",
+                    "token");
         }
         if (mentionsTieResolution(heading)) {
             return containsAny(
@@ -31,10 +42,9 @@ final class VisualStepRelevancePolicy {
                     "tie",
                     "winner",
                     "winning",
-                    "hand",
-                    "手牌",
-                    "情绪卡",
-                    "emotion card");
+                    "tie-break",
+                    "tiebreak",
+                    "决胜");
         }
         if (mentionsEndGame(heading)) {
             return containsAny(observation, "结束", "终局", "最后", "game over", "end of game", "final");
@@ -59,7 +69,7 @@ final class VisualStepRelevancePolicy {
     }
 
     private boolean mentionsStartingActor(String heading) {
-        return containsAny(heading, "主建筑师", "起始玩家", "master builder", "first player");
+        return containsAny(heading, "起始玩家", "先手", "首位玩家", "starting player", "first player", "start player");
     }
 
     private boolean mentionsTieResolution(String heading) {

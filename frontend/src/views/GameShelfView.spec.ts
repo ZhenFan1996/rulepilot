@@ -2,10 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import GameShelfView from './GameShelfView.vue'
 
 describe('GameShelfView', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    setLocale('zh-CN')
+    vi.unstubAllGlobals()
+  })
 
   it('makes the signed-in players own rulebook and lesson the shelf, not the global catalog', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
@@ -52,6 +56,28 @@ describe('GameShelfView', () => {
     expect(wrapper.text()).not.toContain('不属于我的测试游戏')
     expect(wrapper.get('img[alt="Root 的游戏封面"]').attributes('src')).toBe('https://images.example/root.jpg')
     expect(wrapper.get('a[href="/lesson/plan-root"]')).toBeTruthy()
+
+    setLocale('en')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('What are we playing tonight?')
+    expect(wrapper.text()).toContain('2–4 players')
+    expect(wrapper.text()).toContain('Continue guide')
+    expect(wrapper.text()).not.toContain('今晚想开哪一局？')
+  })
+
+  it('retains the shelf route and shows a sign-in action when the session is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
+    const router = appRouter()
+    await router.push('/catalog')
+    await router.isReady()
+
+    const wrapper = mount(GameShelfView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(router.currentRoute.value.fullPath).toBe('/catalog')
+    expect(wrapper.text()).toContain('请先登录后查看你的桌游书架')
+    expect(wrapper.text()).toContain('当前页面已保留')
+    expect(wrapper.get('a[href="/login?redirect=/catalog"]').text()).toContain('登录')
   })
 })
 

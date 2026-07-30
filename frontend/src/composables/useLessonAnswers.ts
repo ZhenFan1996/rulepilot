@@ -12,7 +12,7 @@ export interface RuleCitation {
 }
 
 export interface StructuredRuleAnswer {
-  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
+  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
   shortVerdict: string
   explanation: string
   citations: RuleCitation[]
@@ -23,6 +23,9 @@ export interface StructuredRuleAnswer {
   confirmedRulingId: string | null
   confirmedRulingVersion: number | null
   clarification: string | null
+  warnings: Array<{
+    type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE'
+  }>
 }
 
 export interface AnswerCreation {

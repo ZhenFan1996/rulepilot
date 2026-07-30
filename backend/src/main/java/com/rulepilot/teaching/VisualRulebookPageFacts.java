@@ -44,10 +44,22 @@ public interface VisualRulebookPageFacts {
             String printedTerms,
             String factualSummary,
             List<String> keywords,
-            List<VisualAnchor> visualAnchors) {
+            List<VisualAnchor> visualAnchors,
+            int schemaVersion) {
+
+        public static final int CURRENT_SCHEMA_VERSION = 2;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-            this(pageNumber, printedTerms, factualSummary, keywords, List.of());
+            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), CURRENT_SCHEMA_VERSION);
+        }
+
+        public PageFact(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors) {
+            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, CURRENT_SCHEMA_VERSION);
         }
 
         public PageFact {
@@ -60,6 +72,9 @@ public interface VisualRulebookPageFacts {
                     || visualAnchors.size() > 8) {
                 throw new IllegalArgumentException("visual page fact is too large");
             }
+            if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
+                throw new IllegalArgumentException("visual page fact schema version is invalid");
+            }
             printedTerms = printedTerms.strip();
             factualSummary = factualSummary.strip();
             keywords = keywords.stream().map(String::strip).distinct().toList();
@@ -67,8 +82,73 @@ public interface VisualRulebookPageFacts {
         }
 
         public String evidenceText() {
-            return "Visual page facts (verify against the attached page image).\nPrinted terms: " + printedTerms
-                    + "\nVisible facts: " + factualSummary + "\nKeywords: " + String.join(", ", keywords);
+            String anchors = visualAnchors.stream()
+                    .limit(4)
+                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
+                            + " | " + bounded(anchor.visibleDescription(), 240)
+                            + " | rect=" + anchor.x() + "," + anchor.y() + ","
+                            + anchor.width() + "," + anchor.height())
+                    .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
+            return "Visual page facts (interpreted from the rendered page; cited text still controls rule effects)."
+                    + "\nPrinted terms: " + printedTerms
+                    + "\nVisible facts: " + factualSummary
+                    + "\nKeywords: " + String.join(", ", keywords)
+                    + (visualAnchors.isEmpty()
+                            ? "\nCataloged visual anchors: none"
+                            : "\nCataloged visual anchors (0-1000 page coordinates):" + anchors);
+        }
+
+        /**
+         * Lesson prose may use the visual pass for presentation, never as a second source of rule effects.
+         * Keeping the factual summary out of this projection prevents an image interpretation from silently
+         * overriding or supplementing the cited PDF text.
+         */
+        public String presentationEvidenceText() {
+            String anchors = visualAnchors.stream()
+                    .limit(4)
+                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
+                            + " | " + bounded(anchor.visibleDescription(), 240)
+                            + " | rect=" + anchor.x() + "," + anchor.y() + ","
+                            + anchor.width() + "," + anchor.height())
+                    .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
+            return "Visual presentation data only. Do not use it to state a rule effect, condition, quantity, score, "
+                    + "timing, or exception. It may populate only visualFocus, its literal visibleDescription, and "
+                    + "player-facing directions about where to look."
+                    + "\nPrinted terms: " + printedTerms
+                    + (visualAnchors.isEmpty()
+                            ? "\nCataloged visual anchors: none"
+                            : "\nCataloged visual anchors (0-1000 page coordinates):" + anchors);
+        }
+
+        /**
+         * Image-only PDFs have no ordinary extracted prose to ground a lesson. In that case the bounded page-level
+         * vision pass becomes a transcription adapter: its factual ledger is usable, but only at the granularity it
+         * actually recorded. Printed-term bags are intentionally excluded because detached numbers and labels can be
+         * associated with the wrong subject.
+         */
+        public String transcribedRuleEvidenceText() {
+            String anchors = visualAnchors.stream()
+                    .limit(4)
+                    .map(anchor -> anchor.kind() + " | " + bounded(anchor.label(), 120)
+                            + " | " + bounded(anchor.visibleDescription(), 240)
+                            + " | rect=" + anchor.x() + "," + anchor.y() + ","
+                            + anchor.width() + "," + anchor.height())
+                    .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
+            return "Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. "
+                    + "Do not derive a per-item value from a worked total, attach a detached number to a nearby label, "
+                    + "or fill a missing prerequisite, action, timing, score, or exception."
+                    + "\nVisible rule facts: " + factualSummary
+                    + (visualAnchors.isEmpty()
+                            ? "\nCataloged visual anchors: none"
+                            : "\nCataloged visual anchors (presentation only; 0-1000 page coordinates):" + anchors);
+        }
+
+        public static boolean isTranscribedRuleEvidence(String value) {
+            return value != null && value.startsWith("Visual-transcribed rule evidence.");
+        }
+
+        private static String bounded(String value, int maximum) {
+            return value.length() <= maximum ? value : value.substring(0, maximum - 1).stripTrailing() + "…";
         }
     }
 

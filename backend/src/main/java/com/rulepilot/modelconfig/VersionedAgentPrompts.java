@@ -38,6 +38,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v24-actor-and-example-fidelity-system.txt") Resource teachingActorAndExampleFidelity,
             @Value("classpath:prompts/teaching-agent-v25-conditional-values-fidelity-system.txt") Resource teachingConditionalValues,
             @Value("classpath:prompts/teaching-agent-v26-conditional-scope-and-tie-fidelity-system.txt") Resource teachingConditionalScopeAndTie,
+            @Value("classpath:prompts/teaching-agent-v27-visible-observation-system.txt") Resource teachingVisibleObservation,
             @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
@@ -55,7 +56,6 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v12-direct-clause-citations-system.txt") Resource answerDirectClauseCitations,
             @Value("classpath:prompts/rule-answer-agent-v13-grounded-application-system.txt") Resource answerGroundedApplication,
             @Value("classpath:prompts/rule-answer-agent-v14-natural-language-condition-system.txt") Resource answerNaturalLanguageCondition,
-            @Value("classpath:prompts/rule-answer-agent-v15-matching-value-resolution-system.txt") Resource answerMatchingValueResolution,
             @Value("classpath:prompts/rule-answer-agent-v16-fallback-branch-fidelity-system.txt") Resource answerFallbackBranchFidelity,
             @Value("classpath:prompts/rule-answer-agent-v17-correctable-revision-system.txt") Resource answerCorrectableRevision,
             @Value("classpath:prompts/rule-answer-agent-v18-counterfactual-follow-up-system.txt") Resource answerCounterfactualFollowUp,
@@ -85,7 +85,8 @@ public class VersionedAgentPrompts {
                 teachingChapterScope,
                 teachingActorAndExampleFidelity,
                 teachingConditionalValues,
-                teachingConditionalScopeAndTie);
+                teachingConditionalScopeAndTie,
+                teachingVisibleObservation);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
                 teachingOutlineSystem,
@@ -105,7 +106,6 @@ public class VersionedAgentPrompts {
                 answerDirectClauseCitations,
                 answerGroundedApplication,
                 answerNaturalLanguageCondition,
-                answerMatchingValueResolution,
                 answerFallbackBranchFidelity,
                 answerCorrectableRevision,
                 answerCounterfactualFollowUp);

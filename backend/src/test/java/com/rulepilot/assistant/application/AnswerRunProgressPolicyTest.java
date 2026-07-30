@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerWarning;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import java.util.List;
@@ -61,12 +62,20 @@ class AnswerRunProgressPolicyTest {
                 .doesNotContain(AssistantRunState.CRITIQUING);
     }
 
+    @Test
+    void records_a_warned_answer_as_a_completed_degraded_result() {
+        assertThat(states(AnswerRunProgressPolicy.updatesFor(answer(
+                        AnswerStatus.ANSWERED_WITH_WARNING, AnswerConfidence.HIGH))))
+                .endsWith(AssistantRunState.DEGRADED)
+                .doesNotContain(AssistantRunState.INSUFFICIENT_EVIDENCE);
+    }
+
     private List<AssistantRunState> states(List<AnswerRunProgressPolicy.ProgressUpdate> updates) {
         return updates.stream().map(AnswerRunProgressPolicy.ProgressUpdate::state).toList();
     }
 
     private StructuredRuleAnswer answer(AnswerStatus status, AnswerConfidence confidence) {
-        List<RuleCitation> citations = status == AnswerStatus.ANSWERED
+        List<RuleCitation> citations = status.publishesConclusion()
                 ? List.of(new RuleCitation(
                         UUID.randomUUID(), versionId, "RULES", "Rule", "Follow the rule.", 1, 1))
                 : List.of();
@@ -78,9 +87,13 @@ class AnswerRunProgressPolicyTest {
                 citations,
                 List.of(),
                 confidence,
+                null,
                 false,
                 null,
                 null,
-                status == AnswerStatus.CLARIFICATION_REQUIRED ? "请补充信息。" : null);
+                status == AnswerStatus.CLARIFICATION_REQUIRED ? "请补充信息。" : null,
+                status == AnswerStatus.ANSWERED_WITH_WARNING
+                        ? List.of(new AnswerWarning(AnswerWarning.Type.REVIEW_UNAVAILABLE))
+                        : List.of());
     }
 }

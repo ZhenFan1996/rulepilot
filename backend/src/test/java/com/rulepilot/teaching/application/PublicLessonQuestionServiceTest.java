@@ -25,7 +25,7 @@ class PublicLessonQuestionServiceTest {
     private final PublicLessonQuestionService service = new PublicLessonQuestionService(lessons, answers);
 
     @Test
-    void returnsOnlyVisualAidsAndExamplesThatShareTheAnswerEvidence() {
+    void returnsVerifiedVisualAidsWithoutAppendingLowerTrustLessonExamples() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID citedChunk = UUID.randomUUID();
@@ -42,9 +42,10 @@ class PublicLessonQuestionServiceTest {
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.visualAids()).hasSize(1);
             assertThat(value.visualAids().getFirst().visualFocus().pageNumber()).isEqualTo(2);
+            assertThat(value.visualAids().getFirst().visualFocus().visibleDescription())
+                    .isEqualTo("圆形标记位于带箭头的起始格旁");
             assertThat(value.visualAids().getFirst().relatedStep()).isEqualTo("识别标记");
-            assertThat(value.examples()).singleElement().satisfies(example ->
-                    assertThat(example.heading()).isEqualTo("放置示例"));
+            assertThat(value.examples()).isEmpty();
         });
     }
 
@@ -192,7 +193,8 @@ class PublicLessonQuestionServiceTest {
         UUID unrelatedChunk = UUID.randomUUID();
         IllustratedLesson.LessonStep visual = new IllustratedLesson.LessonStep(
                 2, "识别标记", IllustratedLesson.TeachingMove.VISUAL, "看清标记。", List.of(2), List.of(chunk),
-                new IllustratedLesson.VisualFocus(2, "标记图例", 100, 100, 200, 200));
+                new IllustratedLesson.VisualFocus(
+                        2, "标记图例", "圆形标记位于带箭头的起始格旁", 100, 100, 200, 200));
         IllustratedLesson.LessonStep sameEvidenceButUnrelatedVisual = new IllustratedLesson.LessonStep(
                 1, "传递先手卡", IllustratedLesson.TeachingMove.VISUAL, "将先手卡传给下一位玩家。", List.of(2), List.of(chunk),
                 new IllustratedLesson.VisualFocus(2, "先手卡", 400, 100, 200, 200));

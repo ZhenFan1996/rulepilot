@@ -15,7 +15,8 @@ public record StructuredRuleAnswer(
         boolean official,
         UUID confirmedRulingId,
         Long confirmedRulingVersion,
-        String clarification) {
+        String clarification,
+        List<AnswerWarning> warnings) {
 
     public StructuredRuleAnswer {
         if (documentVersionId == null || status == null || shortVerdict == null || citations == null
@@ -24,20 +25,53 @@ public record StructuredRuleAnswer(
         }
         citations = List.copyOf(citations);
         exceptions = List.copyOf(exceptions);
-        if (status == AnswerStatus.ANSWERED && citations.isEmpty()) {
+        warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        if (status.publishesConclusion() && citations.isEmpty()) {
             throw new IllegalArgumentException("answered rule response requires citations");
         }
-        answerBasis = status == AnswerStatus.ANSWERED
+        answerBasis = status.publishesConclusion()
                 ? answerBasis == null ? AnswerBasis.DIRECT_RULE : answerBasis
                 : null;
-        if (status != AnswerStatus.ANSWERED && !citations.isEmpty()) {
-            throw new IllegalArgumentException("non-answered rule response cannot contain citations");
+        if (!status.publishesConclusion() && status != AnswerStatus.INSUFFICIENT_EVIDENCE && !citations.isEmpty()) {
+            throw new IllegalArgumentException("only an evidence-insufficient response may expose sources");
+        }
+        if ((status == AnswerStatus.ANSWERED_WITH_WARNING) != !warnings.isEmpty()) {
+            throw new IllegalArgumentException("answer warning status and warnings must agree");
         }
         if ((confirmedRulingId == null) != (confirmedRulingVersion == null)
                 || confirmedRulingVersion != null && confirmedRulingVersion < 0
-                || status != AnswerStatus.ANSWERED && confirmedRulingId != null) {
+                || !status.publishesConclusion() && confirmedRulingId != null) {
             throw new IllegalArgumentException("confirmed ruling answer identity is invalid");
         }
+    }
+
+    public StructuredRuleAnswer(
+            UUID documentVersionId,
+            AnswerStatus status,
+            String shortVerdict,
+            String explanation,
+            List<RuleCitation> citations,
+            List<String> exceptions,
+            AnswerConfidence confidence,
+            AnswerBasis answerBasis,
+            boolean official,
+            UUID confirmedRulingId,
+            Long confirmedRulingVersion,
+            String clarification) {
+        this(
+                documentVersionId,
+                status,
+                shortVerdict,
+                explanation,
+                citations,
+                exceptions,
+                confidence,
+                answerBasis,
+                official,
+                confirmedRulingId,
+                confirmedRulingVersion,
+                clarification,
+                List.of());
     }
 
     public StructuredRuleAnswer(
@@ -64,6 +98,7 @@ public record StructuredRuleAnswer(
                 official,
                 confirmedRulingId,
                 confirmedRulingVersion,
-                clarification);
+                clarification,
+                List.of());
     }
 }

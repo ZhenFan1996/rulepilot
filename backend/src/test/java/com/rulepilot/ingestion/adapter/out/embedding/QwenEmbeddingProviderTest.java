@@ -107,12 +107,16 @@ class QwenEmbeddingProviderTest {
     private Map<String, Object> item(int index, int firstValue) {
         List<Float> values = new ArrayList<>(Collections.nCopies(64, 0.0f));
         values.set(0, (float) firstValue);
-        return Map.of("index", index, "embedding", values);
+        return Map.of("object", "embedding", "index", index, "embedding", values);
     }
 
     private String response(List<Map<String, Object>> items) {
         try {
-            return json.writeValueAsString(Map.of("data", items));
+            return json.writeValueAsString(Map.of(
+                    "object", "list",
+                    "model", "text-embedding-v4",
+                    "data", items,
+                    "usage", Map.of("prompt_tokens", 7, "total_tokens", 7)));
         } catch (Exception exception) {
             throw new AssertionError(exception);
         }

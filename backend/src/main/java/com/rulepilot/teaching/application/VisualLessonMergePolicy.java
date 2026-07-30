@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.VisualRegionLocator;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
@@ -119,7 +120,7 @@ final class VisualLessonMergePolicy {
                 original.coverageTags(),
                 original.title(),
                 original.required(),
-                original.evidenceStatus(),
+                candidate.evidenceStatus(),
                 original.visualKind(),
                 original.visualCaption(),
                 visualPages,
@@ -139,6 +140,7 @@ final class VisualLessonMergePolicy {
         List<Integer> sourcePages = section.visualSourcePages();
         List<UUID> sourceChunkIds = section.visualSourceChunkIds();
         int added = 0;
+        int claimConflicts = 0;
         for (VisualRegionLocator.LocatedRegion region : regions) {
             if (availableIndexes.isEmpty()) break;
             Set<UUID> supportedEvidence = Set.copyOf(region.supportedEvidenceIds());
@@ -151,20 +153,27 @@ final class VisualLessonMergePolicy {
             if (supportedStepIndex.isEmpty()) continue;
             LessonStep supportedStep = steps.get(supportedStepIndex.get());
             String observation = stripTrailingPunctuation(region.visibleDescription());
-            String visualText = visualText(observation, originalRuleText(supportedStep), cropPolicy.isIconFocused(region));
             String label = containsHan(region.label()) ? region.label().strip() : supportedStep.heading();
             steps.set(supportedStepIndex.get(), new LessonStep(
                     supportedStep.position(),
                     supportedStep.heading(),
                     TeachingMove.VISUAL,
-                    visualText,
+                    originalRuleText(supportedStep),
                     distinct(supportedStep.sourcePages(), region.pageNumber()),
                     distinct(supportedStep.sourceChunkIds(), region.supportedEvidenceIds()),
-                    new VisualFocus(region.pageNumber(), label, region.x(), region.y(), region.width(), region.height())));
+                    new VisualFocus(
+                            region.pageNumber(),
+                            label,
+                            observation,
+                            region.x(),
+                            region.y(),
+                            region.width(),
+                            region.height())));
             sourcePages = distinct(sourcePages, region.pageNumber());
             sourceChunkIds = distinct(sourceChunkIds, region.supportedEvidenceIds());
             availableIndexes.remove(supportedStepIndex.get());
             added++;
+            if (region.claimContradicted()) claimConflicts++;
         }
         LessonSection enriched = new LessonSection(
                 section.position(),
@@ -172,26 +181,15 @@ final class VisualLessonMergePolicy {
                 section.coverageTags(),
                 section.title(),
                 section.required(),
-                section.evidenceStatus(),
+                claimConflicts > 0 && section.evidenceStatus() == EvidenceStatus.SUPPORTED
+                        ? EvidenceStatus.CITED_DRAFT
+                        : section.evidenceStatus(),
                 section.visualKind(),
                 section.visualCaption(),
                 sourcePages,
                 sourceChunkIds,
                 steps);
-        return new MergedVisualSection(enriched, added);
-    }
-
-    private String visualText(String observation, String ruleText, boolean iconCluster) {
-        String prefix = iconCluster
-                ? "图中图标提示：" + observation + "。先认出这组图标，再按规则处理："
-                : (startsWithImageIntroducer(observation) ? observation : "图中可见" + observation) + "。结合图片完成这一步：";
-        String combined = prefix + ruleText;
-        return combined.length() <= 600 ? combined : ruleText;
-    }
-
-    private boolean startsWithImageIntroducer(String observation) {
-        String normalized = observation == null ? "" : observation.strip();
-        return normalized.startsWith("图中") || normalized.startsWith("这张图") || normalized.startsWith("此图");
+        return new MergedVisualSection(enriched, added, claimConflicts);
     }
 
     private String originalRuleText(LessonStep step) {
@@ -227,7 +225,7 @@ final class VisualLessonMergePolicy {
         return text == null ? "" : text.strip().replaceFirst("[。.!！?？]+$", "");
     }
 
-    record MergedVisualSection(LessonSection section, int addedCount) {}
+    record MergedVisualSection(LessonSection section, int addedCount, int claimConflictCount) {}
 
     record DistinctVisualSection(LessonSection section, int addedCount, boolean hadDuplicate) {}
 }

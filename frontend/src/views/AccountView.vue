@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
 interface Session { username: string; roles: string[] }
@@ -12,7 +13,6 @@ interface ModelSnapshot {
   assignments: { teaching: string; visual: string; answer: string; critic: string }
 }
 
-const router = useRouter()
 const { t } = useLocale()
 const session = ref<Session | null>(null)
 const plans = ref<TeachingPlan[]>([])
@@ -33,7 +33,8 @@ async function load() {
       fetch('/api/v1/model-configuration', { credentials: 'include' }),
     ])
     if (responses.some((response) => response.status === 401)) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      errorMessage.value = t('account.loginRequired')
       return
     }
     if (responses.some((response) => !response.ok)) throw new Error(t('account.error'))

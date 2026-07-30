@@ -263,7 +263,14 @@ final class LessonDraftPresentationNormalizer {
                     step.kind(),
                     step.text(),
                     step.citationIds(),
-                    new VisualFocusDraft(focus.pageNumber(), label, focus.x(), focus.y(), focus.width(), focus.height())));
+                    new VisualFocusDraft(
+                            focus.pageNumber(),
+                            label,
+                            focus.visibleDescription(),
+                            focus.x(),
+                            focus.y(),
+                            focus.width(),
+                            focus.height())));
             changed = true;
         }
         return changed

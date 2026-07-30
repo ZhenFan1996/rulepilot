@@ -40,7 +40,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v35-endgame-check-fidelity";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v38-versioned-visual-transcription";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
@@ -230,7 +230,11 @@ public class GroundedTeachingAgent {
         if (!remaining.isEmpty()) {
             List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
-            try (var executor = Executors.newFixedThreadPool(Math.min(baseSectionParallelism, remaining.size()))) {
+            int providerParallelism = Math.max(1, model.maxConcurrentSectionRequests(plan.createdBy()));
+            int effectiveParallelism = Math.min(
+                    remaining.size(),
+                    Math.min(baseSectionParallelism, providerParallelism));
+            try (var executor = Executors.newFixedThreadPool(effectiveParallelism)) {
                 List<Future<SectionOutcome>> futures = remaining.stream()
                         .map(planned -> executor.submit(() -> baseSection(
                                 plan,
@@ -328,7 +332,7 @@ public class GroundedTeachingAgent {
                     resolution.evidence(),
                     assistantRunId,
                     sectionIndex,
-                    mode.includeVisualEvidence());
+                    mode.includeVisualEvidence() && planned.visualEvidenceRecommended());
             recordPublication(assistantRunId, planned, ActivityOutcome.SUCCEEDED, mode.publishedCategory());
             return new SectionOutcome(planned.position(), composed.section(), composed, resolution.toolCalls());
         } catch (AgentExecutionStoppedException stopped) {
@@ -457,7 +461,7 @@ public class GroundedTeachingAgent {
             String withheldCategory) {
         private static final GenerationMode PROGRESSIVE_BASE = new GenerationMode(
                 true,
-                false,
+                true,
                 "NO_VALID_BASE_EVIDENCE",
                 "NO_VALID_BASE_EVIDENCE",
                 "CITED_BASE_SECTION_PUBLISHED",

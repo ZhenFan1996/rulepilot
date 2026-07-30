@@ -6,6 +6,7 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.EvidenceVerifier;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
@@ -158,6 +159,90 @@ class AnswerPostPublicationReviewerTest {
         assertThat(modelCalls).hasValue(0);
     }
 
+    @Test
+    void returnsAQualifiedAnswerForANonMaterialReviewConcern() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = answer(versionId, source);
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (request, risk) -> new GeneratedContentCritic.Review(
+                        true,
+                        List.of(new GeneratedContentCritic.Issue(
+                                GeneratedContentCritic.IssueType.MISSING_EXCEPTION,
+                                1,
+                                List.of(source.chunkId()),
+                                "A minor exception may be worth mentioning."))),
+                new AnswerModelGateway(
+                        request -> {
+                            throw new AssertionError("ordinary low-impact questions do not spend a correction call");
+                        },
+                        unlimitedRateLimiter(),
+                        immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId, null, null, null, Set.of()),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(result.answer().warnings())
+                .extracting(warning -> warning.type())
+                .containsExactly(com.rulepilot.assistant.domain.AnswerWarning.Type.REVIEW_UNRESOLVED);
+    }
+
+    @Test
+    void returnsAQualifiedAnswerWhenTheCriticIsUnavailable() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = answer(versionId, source);
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (request, risk) -> {
+                    throw new IllegalStateException("critic unavailable");
+                },
+                new AnswerModelGateway(request -> {
+                    throw new AssertionError("critic failure must not start a correction");
+                }, unlimitedRateLimiter(), immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                understood(versionId),
+                new QuestionContext(versionId, null, null, null, Set.of()),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().warnings())
+                .extracting(warning -> warning.type())
+                .containsExactly(com.rulepilot.assistant.domain.AnswerWarning.Type.REVIEW_UNAVAILABLE);
+    }
+
     private static StructuredRuleAnswer answer(UUID versionId, RuleEvidenceHit source) {
         return new StructuredRuleAnswer(
                 versionId,
@@ -196,7 +281,7 @@ class AnswerPostPublicationReviewerTest {
         return new ModelRequest(
                 "How often can I take the main action?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, 0),
+                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(
                         source.chunkId(),
                         source.sectionType(),

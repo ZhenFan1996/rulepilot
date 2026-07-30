@@ -284,7 +284,7 @@ final class TeachingOutlineRevisionPolicy {
 
     private static boolean isScoringDetailTopic(TeachingOutlineModel.TopicDraft topic) {
         return containsAny(topic.key() + " " + topic.title() + " " + topic.objective(), List.of(
-                "score", "points", "victory point", "scoring table", "得分", "计分", "点数", "分数", "品质瓷砖", "品质板"));
+                "score", "points", "victory point", "scoring table", "得分", "计分", "点数", "分数"));
     }
 
     private static String topicObjective(TeachingOutlineModel.TopicDraft topic) {

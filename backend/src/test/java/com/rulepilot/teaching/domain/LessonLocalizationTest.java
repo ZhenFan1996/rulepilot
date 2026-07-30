@@ -43,7 +43,7 @@ class LessonLocalizationTest {
                                 "把玩家板放在自己面前。",
                                 List.of(2),
                                 List.of(chunkId),
-                                new VisualFocus(2, "玩家板", 100, 200, 300, 400))))),
+                                new VisualFocus(2, "玩家板", "蓝色玩家板旁放着三个木制标记", 100, 200, 300, 400))))),
                 "test",
                 Instant.parse("2026-07-23T00:00:00Z"));
         LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
@@ -56,7 +56,8 @@ class LessonLocalizationTest {
                                         1,
                                         "Place your player mat",
                                         "Put your player mat in front of you.",
-                                        "Player mat")))),
+                                        "Player mat",
+                                        "Three wooden markers sit beside a blue player mat.")))),
                         Instant.now());
 
         IllustratedLesson localized = localization.applyTo(source);
@@ -66,7 +67,14 @@ class LessonLocalizationTest {
         assertThat(step.heading()).isEqualTo("Place your player mat");
         assertThat(step.sourceChunkIds()).containsExactly(chunkId);
         assertThat(step.sourcePages()).containsExactly(2);
-        assertThat(step.visualFocus()).isEqualTo(new VisualFocus(2, "Player mat", 100, 200, 300, 400));
+        assertThat(step.visualFocus()).isEqualTo(new VisualFocus(
+                2,
+                "Player mat",
+                "Three wooden markers sit beside a blue player mat.",
+                100,
+                200,
+                300,
+                400));
     }
 
     @Test
@@ -109,7 +117,7 @@ class LessonLocalizationTest {
                                 "查看组件。",
                                 List.of(3),
                                 List.of(UUID.randomUUID()),
-                                new VisualFocus(3, "计分标记", 10, 20, 30, 40))))),
+                                new VisualFocus(3, "计分标记", "圆形计分标记位于分数轨道旁", 10, 20, 30, 40))))),
                 "test",
                 Instant.now());
         LessonLocalization localization = LessonLocalization.pending(lessonId, PlayerLocale.EN, Instant.now())
@@ -120,6 +128,8 @@ class LessonLocalizationTest {
 
         assertThat(localization.applyTo(source).sections().getFirst().steps().getFirst().visualFocus().label())
                 .isEqualTo("计分标记");
+        assertThat(localization.applyTo(source).sections().getFirst().steps().getFirst().visualFocus().visibleDescription())
+                .isEqualTo("圆形计分标记位于分数轨道旁");
     }
 
     private IllustratedLesson lessonWithTwoSteps(UUID lessonId) {

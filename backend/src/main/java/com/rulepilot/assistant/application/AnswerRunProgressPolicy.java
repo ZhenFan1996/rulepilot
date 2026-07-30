@@ -27,14 +27,20 @@ final class AnswerRunProgressPolicy {
             return List.copyOf(updates);
         }
         updates.add(new ProgressUpdate(AssistantRunState.ANSWER_COMPOSITION, "Structured cited answer is composed"));
-        if (answer.status() != AnswerStatus.ANSWERED) {
+        if (!answer.status().publishesConclusion()) {
             updates.add(new ProgressUpdate(AssistantRunState.DEGRADED, "Answer generation degraded safely"));
             return List.copyOf(updates);
         }
         if (answer.confidence() == AnswerConfidence.LOW) {
             updates.add(new ProgressUpdate(AssistantRunState.CRITIQUING, "Low-confidence answer critique completed"));
         }
-        updates.add(new ProgressUpdate(AssistantRunState.COMPLETED, "Question workflow completed"));
+        updates.add(new ProgressUpdate(
+                answer.status() == AnswerStatus.ANSWERED_WITH_WARNING
+                        ? AssistantRunState.DEGRADED
+                        : AssistantRunState.COMPLETED,
+                answer.status() == AnswerStatus.ANSWERED_WITH_WARNING
+                        ? "Evidence-scoped answer completed with player-visible warnings"
+                        : "Question workflow completed"));
         return List.copyOf(updates);
     }
 

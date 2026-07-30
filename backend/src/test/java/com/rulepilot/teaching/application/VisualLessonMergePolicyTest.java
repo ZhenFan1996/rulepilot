@@ -62,8 +62,54 @@ class VisualLessonMergePolicyTest {
                 .containsExactly(
                         TeachingMove.VISUAL,
                         "放置探测器",
-                        "图中可见圆形探测器标记位于弧形刻度旁，箭头指向前进方向。结合图片完成这一步：把探测器放到轨道上。",
-                        new VisualFocus(2, "放置探测器", 120, 220, 180, 120));
+                        "把探测器放到轨道上。",
+                        new VisualFocus(
+                                2,
+                                "放置探测器",
+                                "圆形探测器标记位于弧形刻度旁，箭头指向前进方向",
+                                120,
+                                220,
+                        180,
+                        120));
+    }
+
+    @Test
+    void keeps_a_contradicting_crop_but_downgrades_a_supported_section_for_review() {
+        UUID evidence = UUID.randomUUID();
+        LessonSection supported = new LessonSection(
+                1,
+                "scoring",
+                List.of("scoring"),
+                "计分",
+                true,
+                IllustratedLesson.EvidenceStatus.SUPPORTED,
+                IllustratedLesson.VisualKind.SCOREBOARD,
+                "核对计分示例。",
+                List.of(),
+                List.of(),
+                List.of(new LessonStep(
+                        1, "计算总分", TeachingMove.DO, "4 个对象每个 3 分，共 8 分。", List.of(5), List.of(evidence))));
+        LocatedRegion contradiction = new LocatedRegion(
+                        5,
+                        "计分示例",
+                        "图中列出 4 个对象，每个 3 分，右侧总计 12 分。",
+                        120,
+                        220,
+                        420,
+                        280,
+                        List.of(evidence),
+                        List.of(1))
+                .withClaimContradiction();
+
+        VisualLessonMergePolicy.MergedVisualSection merged =
+                policy.mergeVisualIntoSupportedSteps(supported, List.of(contradiction));
+
+        assertThat(merged.addedCount()).isEqualTo(1);
+        assertThat(merged.claimConflictCount()).isEqualTo(1);
+        assertThat(merged.section().evidenceStatus())
+                .isEqualTo(IllustratedLesson.EvidenceStatus.CITED_DRAFT);
+        assertThat(merged.section().steps().getFirst().visualFocus().visibleDescription())
+                .contains("总计 12 分");
     }
 
     @Test

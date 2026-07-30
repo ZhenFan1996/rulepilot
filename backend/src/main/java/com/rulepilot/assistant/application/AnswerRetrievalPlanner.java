@@ -43,14 +43,21 @@ public final class AnswerRetrievalPlanner {
         }
         String currentSection = knownSection(context.currentLessonSection());
         Set<String> directQuestionScope = directQuestionScope(question, currentSection);
-        List<RetrievalIntent> intents = new ArrayList<>(
-                AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion()));
+        List<RetrievalIntent> procedureIntents =
+                AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion());
+        List<RetrievalIntent> intents = new ArrayList<>(procedureIntents.stream()
+                .filter(intent -> intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION)
+                .toList());
+        List<RetrievalIntent> deferredConditionIntents = procedureIntents.stream()
+                .filter(intent -> intent.purpose() == RetrievalPurpose.CONDITION_PROCEDURE)
+                .toList();
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         List<String> parts = questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
                 : directQuestionScope;
-        int availableBeforeSupplementary = Math.max(1, MAX_INTENTS - intents.size() - 1);
+        int availableBeforeSupplementary =
+                Math.max(1, MAX_INTENTS - intents.size() - deferredConditionIntents.size() - 1);
         if (parts.size() == 1) {
             int rewriteBudget = Math.max(0, availableBeforeSupplementary - 1);
             addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
@@ -62,6 +69,7 @@ public final class AnswerRetrievalPlanner {
             int rewriteBudget = Math.max(0, MAX_INTENTS - intents.size() - 1);
             addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
         }
+        deferredConditionIntents.forEach(intents::add);
         intents.add(new RetrievalIntent(
                 supplementaryQuery(question, context),
                 inferredSections(question, currentSection),
@@ -118,12 +126,6 @@ public final class AnswerRetrievalPlanner {
         append(query, AnswerRetrievalProcedureIntents.endgameResolutionTerms(question.normalizedQuestion()));
         if (context.currentLessonSection() != null) {
             append(query, context.currentLessonSection().replace('_', ' '));
-        }
-        if (context.gamePhase() != null) {
-            append(query, context.gamePhase().replace('_', ' '));
-        }
-        if (context.playerCount() != null) {
-            append(query, context.playerCount() + " players " + context.playerCount() + "人");
         }
         append(query, learningFacets(context.learningIntent()));
         return bounded(query.toString());
@@ -261,12 +263,7 @@ public final class AnswerRetrievalPlanner {
     public enum RetrievalPurpose {
         GENERAL,
         ENDGAME_RESOLUTION,
-        EXHAUSTED_SOURCE,
-        END_TURN_PROCEDURE,
-        STATE_TRANSITION,
-        ROUND_RESET,
-        DEFERRED_TURN,
-        MATCHING_VALUE_RESOLUTION
+        CONDITION_PROCEDURE
     }
 
     public record RetrievalIntent(

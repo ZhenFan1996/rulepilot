@@ -27,29 +27,6 @@ class AnswerEvidencePolicyTest {
     }
 
     @Test
-    void recognisesOnlyEvidenceThatActuallyDescribesEndOfTurnProcedure() {
-        EvidenceInput procedure = new EvidenceInput(
-                UUID.randomUUID(),
-                "TURN",
-                "End of turn",
-                "After your turn, reveal and resolve one event card.",
-                4,
-                4);
-
-        assertThat(AnswerEvidencePolicy.hasEndTurnProcedure("After your turn, reveal and resolve one event card."))
-                .isTrue();
-        assertThat(AnswerEvidencePolicy.hasEndTurnProcedure("Draw cards at the beginning of the round.")).isFalse();
-        assertThat(AnswerEvidencePolicy.requiresEndTurnProcedureCitation(
-                        "After I finish my turn, do I reveal an event card?", java.util.List.of(procedure)))
-                .isTrue();
-        assertThat(AnswerEvidencePolicy.citesEndTurnProcedure(java.util.List.of(procedure), java.util.List.of()))
-                .isFalse();
-        assertThat(AnswerEvidencePolicy.citesEndTurnProcedure(
-                        java.util.List.of(procedure), java.util.List.of(procedure.chunkId())))
-                .isTrue();
-    }
-
-    @Test
     void requiresOneDirectEndgameSourceAndKeepsOnlyItsCitation() {
         EvidenceInput resolution = new EvidenceInput(
                 UUID.randomUUID(),

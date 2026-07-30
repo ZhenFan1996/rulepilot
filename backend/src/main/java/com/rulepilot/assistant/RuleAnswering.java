@@ -41,10 +41,33 @@ public interface RuleAnswering {
             List<String> exceptions,
             String confidence,
             String answerBasis,
-            String clarification) {
+            String clarification,
+            List<Warning> warnings) {
         public Answer {
             citations = List.copyOf(citations);
             exceptions = List.copyOf(exceptions);
+            warnings = warnings == null ? List.of() : List.copyOf(warnings);
+        }
+
+        public Answer(
+                String status,
+                String shortVerdict,
+                String explanation,
+                List<Citation> citations,
+                List<String> exceptions,
+                String confidence,
+                String answerBasis,
+                String clarification) {
+            this(
+                    status,
+                    shortVerdict,
+                    explanation,
+                    citations,
+                    exceptions,
+                    confidence,
+                    answerBasis,
+                    clarification,
+                    List.of());
         }
 
         public Answer(
@@ -55,9 +78,11 @@ public interface RuleAnswering {
                 List<String> exceptions,
                 String confidence,
                 String clarification) {
-            this(status, shortVerdict, explanation, citations, exceptions, confidence, null, clarification);
+            this(status, shortVerdict, explanation, citations, exceptions, confidence, null, clarification, List.of());
         }
     }
 
     record Citation(String heading, int pageFrom, int pageTo) {}
+
+    record Warning(String type) {}
 }

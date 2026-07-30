@@ -141,18 +141,25 @@ public record IllustratedLesson(
     public record VisualFocus(
             int pageNumber,
             String label,
+            String visibleDescription,
             int x,
             int y,
             int width,
             int height) {
+        public VisualFocus(int pageNumber, String label, int x, int y, int width, int height) {
+            this(pageNumber, label, "", x, y, width, height);
+        }
+
         public VisualFocus {
             if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
+                    || visibleDescription == null || visibleDescription.length() > 240
                     || x < 0 || x > 980 || y < 0 || y > 980
                     || width < 20 || width > 1_000 - x
                     || height < 20 || height > 1_000 - y) {
                 throw new IllegalArgumentException("lesson visual focus is invalid");
             }
             label = label.strip();
+            visibleDescription = visibleDescription.strip();
         }
     }
 }

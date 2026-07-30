@@ -27,7 +27,7 @@ class VisualStepRelevancePolicyTest {
         assertThat(policy.directlyIllustrates(step("每位玩家拿取玩家板"), region("资源图例", "彩色方块对应资源名称"))).isFalse();
         assertThat(policy.directlyIllustrates(step("每位玩家拿取玩家板"), region("玩家板网格", "个人棋盘是 4×4 网格"))).isTrue();
         assertThat(policy.directlyIllustrates(step("确定起始玩家"), region("轮次表", "按顺序行动"))).isFalse();
-        assertThat(policy.directlyIllustrates(step("确定起始玩家"), region("锤子标记", "锤子标记表示起始玩家"))).isTrue();
+        assertThat(policy.directlyIllustrates(step("确定起始玩家"), region("先手标记", "该指示物表示首位玩家"))).isTrue();
     }
 
     @Test

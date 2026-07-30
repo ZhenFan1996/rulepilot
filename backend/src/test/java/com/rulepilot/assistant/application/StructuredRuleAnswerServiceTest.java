@@ -250,10 +250,11 @@ class StructuredRuleAnswerServiceTest {
             @Override
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
                 revisions.incrementAndGet();
-                assertThat(feedback).singleElement().asString().contains(
-                        "condition written into a player's question",
-                        "named replenishment condition",
-                        "DIRECT_REPLENISHMENT_PROCEDURE");
+                assertThat(feedback)
+                        .singleElement()
+                        .asString()
+                        .contains("condition written into a player's question", "bounded grounded application")
+                        .doesNotContain("replenishment", "DIRECT_REPLENISHMENT_PROCEDURE");
                 return new ModelDraft(
                         "把弃骰区全部移回抽骰区，再继续抽骰。",
                         "抽骰区为空时，先回收弃骰区的全部骰子到抽骰区；随后继续本次抽骰流程。",
@@ -276,7 +277,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void publishesACitedDirectReplenishmentProcedureOnlyAfterTwoEvidenceBackedAbstentions() {
+    void doesNotSynthesizeADeterministicAnswerAfterTwoModelAbstentions() {
         UUID pageChunkId = UUID.randomUUID();
         RuleEvidenceHit pageSource = new RuleEvidenceHit(
                 pageChunkId,
@@ -322,46 +323,23 @@ class StructuredRuleAnswerServiceTest {
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
                 new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
 
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).isEqualTo("若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。");
-        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(pageChunkId);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).contains(pageChunkId);
     }
 
     @Test
-    void retrievesExplicitReplenishmentEvidenceBeforeComposingAnExhaustedDrawZoneAnswer() {
+    void retrievesConditionalProcedureEvidenceWithoutPredictingTheRulebookVocabulary() {
         UUID pageChunkId = UUID.randomUUID();
         RuleEvidenceHit pageSource = new RuleEvidenceHit(
                 pageChunkId,
                 versionId,
                 "ROUND_STRUCTURE",
                 "Draw phase",
-                "Visual rulebook page evidence is available.",
+                "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
                 10,
                 10,
                 1.0);
-        List<String> visualQueries = new java.util.ArrayList<>();
-        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> {
-            visualQueries.add(query);
-            return query.contains("耗尽")
-                    ? List.of(visualFact(
-                            10,
-                            "Draw Zone, Discard Zone",
-                            "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
-                            95))
-                    : List.of();
-        };
-        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
-            @Override
-            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
-                return List.of();
-            }
-
-            @Override
-            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
-                assertThat(pageNumbers).contains(10);
-                return List.of(pageSource);
-            }
-        };
+        List<String> retrievalQueries = new java.util.ArrayList<>();
         RuleAnswerModel model = request -> {
             assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId).contains(pageChunkId);
             return new ModelDraft(
@@ -371,79 +349,22 @@ class StructuredRuleAnswerServiceTest {
                     List.of(),
                     "HIGH");
         };
-        var service = answerService(
-                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
+        var service = answerService((documentVersionId, query, options) -> {
+            retrievalQueries.add(query);
+            return query.contains("condition procedure")
+                    ? List.of(new HybridEvidenceHit(pageSource, 0.9, 1, null, false))
+                    : List.of();
+        }, model);
 
         var answer = service.answer(
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
                 new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(visualQueries).anyMatch(query -> query.contains("耗尽")
-                && query.contains("回收")
-                && query.contains("继续"));
-    }
-
-    @Test
-    void replacesAnAnswerThatCitesDrawAmountInsteadOfTheDirectReplenishmentProcedure() {
-        UUID replenishmentChunkId = UUID.randomUUID();
-        UUID drawAmountChunkId = UUID.randomUUID();
-        RuleEvidenceHit replenishment = new RuleEvidenceHit(
-                replenishmentChunkId,
-                versionId,
-                "ROUND_STRUCTURE",
-                "Draw phase",
-                "Visual rulebook page evidence is available.",
-                10,
-                10,
-                1.0);
-        RuleEvidenceHit drawAmount = new RuleEvidenceHit(
-                drawAmountChunkId,
-                versionId,
-                "ROUND_STRUCTURE",
-                "Draw amount",
-                "Visual rulebook page evidence is available.",
-                11,
-                11,
-                1.0);
-        VisualRulebookPageFactSearch visualFacts = (documentVersionId, query, limit) -> query.contains("耗尽")
-                ? List.of(visualFact(
-                        10,
-                        "Draw Zone, Discard Zone",
-                        "若抽骰区没有骰子，将弃骰区的所有骰子移回抽骰区，再继续抽骰。",
-                        95))
-                : List.of(visualFact(
-                        11,
-                        "Draw Amount",
-                        "基础抽牌量为9，手形标记和红线会调整抽牌量。",
-                        80));
-        RuleEvidenceLookup pageLookup = new RuleEvidenceLookup() {
-            @Override
-            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
-                return List.of();
-            }
-
-            @Override
-            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
-                return List.of(replenishment, drawAmount);
-            }
-        };
-        RuleAnswerModel model = request -> new ModelDraft(
-                "按抽牌量计算。",
-                "抽牌量由基础值和修正值组成，因此按剩余数量抽取。",
-                List.of(drawAmountChunkId),
-                List.of(),
-                "HIGH");
-        var service = answerService(
-                (documentVersionId, query, options) -> List.of(), visualFacts, pageLookup, model);
-
-        var answer = service.answer(
-                "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
-
-        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).contains("弃骰区", "继续抽骰");
-        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(replenishmentChunkId);
+        assertThat(retrievalQueries).anyMatch(query -> query.contains("condition procedure")
+                && query.contains("条件")
+                && query.contains("流程"));
+        assertThat(retrievalQueries).noneMatch(query -> query.contains("耗尽") || query.contains("回收"));
     }
 
     @Test
@@ -617,7 +538,7 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("无法从现有证据中可靠确定");
-        assertThat(answer.citations()).isEmpty();
+        assertThat(answer.citations()).isNotEmpty();
     }
 
     @Test
@@ -839,35 +760,15 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void repairsAContinuationThatAssignsTheNextActionToAPlayerWhoIsOut() {
+    void answersAnActorTransitionFromCurrentDocumentEvidence() {
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "ROUND_STRUCTURE", "Next eligible player",
                 "The trick winner leads next. If that winner is out of cards, the next player to the left starts instead.",
                 8, 8, 0.9);
-        AtomicInteger revisions = new AtomicInteger();
-        RuleAnswerModel model = new RuleAnswerModel() {
-            @Override
-            public ModelDraft compose(ModelRequest request) {
-                return new ModelDraft(
-                        "你出完所有手牌后，下一墩由你领出。",
-                        "你已经无牌并退出本轮，但默认仍由你开始下一墩。",
-                        List.of(source.chunkId()), List.of(), "HIGH");
-            }
-
-            @Override
-            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
-                int revision = revisions.incrementAndGet();
-                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("INACTIVE_ACTOR", "successor"));
-                if (revision == 1) {
-                    return new ModelDraft(false, "uncertain successor", null, null, List.of(), List.of(), "LOW");
-                }
-                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("EVIDENCED_SUCCESSOR_RULE"));
-                return new ModelDraft(
-                        "你出完所有手牌后，由你左手边的下一位玩家领出下一墩。",
-                        "你退出本轮；下一墩不由你领出，改由左手边下一位仍在本轮中的玩家开始。",
-                        List.of(source.chunkId()), List.of(), "HIGH");
-            }
-        };
+        RuleAnswerModel model = request -> new ModelDraft(
+                "你出完所有手牌后，由你左手边的下一位玩家领出下一墩。",
+                "你退出本轮；下一墩不由你领出，改由左手边下一位仍在本轮中的玩家开始。",
+                List.of(source.chunkId()), List.of(), "HIGH");
         var service = answerService(
                 (documentVersionId, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
                 model);
@@ -878,7 +779,7 @@ class StructuredRuleAnswerServiceTest {
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("左手边的下一位玩家");
-        assertThat(revisions).hasValue(2);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
     }
 
     @Test
@@ -1202,7 +1103,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void passesUnderstoodGameplayContextToTheAnswerModel() {
+    void excludesLegacyLiveTableStateFromTheAnswerModel() {
         RuleEvidenceHit source = evidence("ACTIONS");
         UUID expansionId = UUID.randomUUID();
         AtomicReference<RuleAnswerModel.ModelRequest> captured = new AtomicReference<>();
@@ -1223,9 +1124,7 @@ class StructuredRuleAnswerServiceTest {
         assertThat(captured.get().questionType())
                 .isEqualTo(com.rulepilot.assistant.domain.QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(captured.get().context().currentLessonSection()).isEqualTo("ACTIONS");
-        assertThat(captured.get().context().gamePhase()).isEqualTo("ACTION_PHASE");
-        assertThat(captured.get().context().playerCount()).isEqualTo(4);
-        assertThat(captured.get().context().activeExpansionCount()).isEqualTo(1);
+        assertThat(captured.get().context().previousQuestion()).isEqualTo("not provided");
     }
 
     @Test
@@ -1248,7 +1147,7 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("未能直接回答");
         assertThat(answer.shortVerdict()).doesNotContain("hidden bonus", "coins");
-        assertThat(answer.citations()).isEmpty();
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).contains(source.chunkId());
     }
 
     @Test
@@ -1357,7 +1256,9 @@ class StructuredRuleAnswerServiceTest {
                 new QuestionContext(versionId, null, null, 3, Set.of()));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
-        assertThat(answer.clarification()).contains("GAME_PHASE", "SITUATION_DETAILS");
+        assertThat(answer.clarification())
+                .contains("SITUATION_DETAILS")
+                .doesNotContain("GAME_PHASE");
         assertThat(called).isFalse();
     }
 
@@ -1431,7 +1332,9 @@ class StructuredRuleAnswerServiceTest {
                         assertThat(options.sectionTypes()).isEmpty();
                         return List.of();
                     }
-                    assertThat(query).contains("step prerequisite consequence exception", "ACTION PHASE", "4 players");
+                    assertThat(query)
+                            .contains("step prerequisite consequence exception", "ACTIONS")
+                            .doesNotContain("ACTION PHASE", "4 players");
                     assertThat(options.sectionTypes()).contains("ACTIONS");
                     return List.of(new HybridEvidenceHit(source, 0.03, 1, null, true));
                 },
@@ -1497,8 +1400,9 @@ class StructuredRuleAnswerServiceTest {
                     assertThat(request.evidence()).extracting(RuleAnswerModel.EvidenceInput::chunkId)
                             .contains(ending.chunkId(), ties.chunkId());
                     return new ModelDraft(
-                            "同分时比较信用点。", "游戏结束后，同分玩家比较信用点。",
-                            List.of(ties.chunkId()), List.of(), "HIGH");
+                            "最终轮后游戏结束；同分时比较信用点。",
+                            "游戏在最终轮后结束，同分玩家比较信用点。",
+                            List.of(ending.chunkId(), ties.chunkId()), List.of(), "HIGH");
                 });
 
         var answer = service.answer(
@@ -1506,7 +1410,8 @@ class StructuredRuleAnswerServiceTest {
                 new QuestionContext(versionId, null, null, 4, Set.of()));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(ties.chunkId());
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId())
+                .containsExactly(ending.chunkId(), ties.chunkId());
     }
 
     @Test
@@ -1604,7 +1509,9 @@ class StructuredRuleAnswerServiceTest {
         GeneratedContentCritic rejectingCritic = (request, risk) -> {
             criticCalls.incrementAndGet();
             assertThat(request.taskContext().objective()).contains("how does scoring work?");
-            assertThat(request.taskContext().requiredCoverage()).contains("RULE_QUERY", "player count not provided");
+            assertThat(request.taskContext().requiredCoverage())
+                    .contains("RULE_QUERY")
+                    .doesNotContain("player count", "game phase");
             return new GeneratedContentCritic.Review(true, List.of(new Issue(
                     IssueType.OVERREACH, 1, List.of(source.chunkId()), "The conclusion exceeds the evidence.")));
         };
@@ -1622,6 +1529,29 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.shortVerdict()).contains("一致性审查");
         assertThat(answer.citations()).isEmpty();
         assertThat(criticCalls).hasValue(1);
+    }
+
+    @Test
+    void publishesAnEvidenceScopedLowConfidenceAnswerWithAWarning() {
+        RuleEvidenceHit source = evidence("SCORING");
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> new ModelDraft(
+                        "Coins score one point.",
+                        "The cited scoring rule assigns one point to each coin.",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "LOW"),
+                acceptedCritic());
+
+        var answer = service.answer(
+                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
+        assertThat(answer.warnings())
+                .extracting(warning -> warning.type())
+                .containsExactly(com.rulepilot.assistant.domain.AnswerWarning.Type.LOW_CONFIDENCE);
     }
 
     @Test
@@ -1797,7 +1727,7 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void critiquesAndRepairsAnyDocumentSpecificLiveTableRuling() {
+    void critiquesAndRepairsAnExplicitConditionalRuleQuestionWithoutUsingSessionState() {
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "ACTIONS", "Tidal gate",
                 "A ship may cross the tidal gate only after raising its sail. Its crossing cost is the same as "
@@ -1901,7 +1831,7 @@ class StructuredRuleAnswerServiceTest {
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
         ConfirmedRulingLookup lookup = (documentVersionId, expansionIds, question, username) -> {
             assertThat(documentVersionId).isEqualTo(versionId);
-            assertThat(expansionIds).containsExactly(expansionId);
+            assertThat(expansionIds).isEmpty();
             assertThat(question).isEqualTo("how are coins scored?");
             assertThat(username).isEqualTo("alice");
             return Optional.of(new ConfirmedRulingLookup.ConfirmedAnswer(
@@ -1997,6 +1927,37 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void reusesOneGroundedAnswerAcrossDifferentSessionIdsAndLegacyTableState() {
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicInteger modelCalls = new AtomicInteger();
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                request -> {
+                    modelCalls.incrementAndGet();
+                    return new ModelDraft(
+                            "Coins score one point.",
+                            "Each coin contributes one point.",
+                            List.of(source.chunkId()),
+                            List.of(),
+                            "HIGH");
+                });
+
+        StructuredRuleAnswer first = service.answer(
+                "How are coins scored?",
+                new QuestionContext(versionId, "SCORING", "FIRST_PHASE", 2, Set.of(UUID.randomUUID())),
+                "alice",
+                UUID.randomUUID());
+        StructuredRuleAnswer second = service.answer(
+                "How are coins scored?",
+                new QuestionContext(versionId, "SCORING", "FINAL_PHASE", 8, Set.of(UUID.randomUUID())),
+                "alice",
+                UUID.randomUUID());
+
+        assertThat(second).isEqualTo(first);
+        assertThat(modelCalls).hasValue(1);
+    }
+
+    @Test
     void retrievesAndReturnsValidatedAnswerWhenCacheIsUnavailable() {
         RuleEvidenceHit source = evidence("SCORING");
         SimpleMeterRegistry metrics = new SimpleMeterRegistry();
@@ -2078,11 +2039,11 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
-    void repairsAnEndOfTurnAnswerUntilItCitesTheDirectProcedure() {
+    void repairsAConditionalAnswerUntilItCitesTheMostDirectCurrentEvidence() {
         RuleEvidenceHit setupOnly = new RuleEvidenceHit(
-                UUID.randomUUID(), versionId, "SETUP", "Event deck", "Put the event deck beside the board.", 3, 3, 0.9);
+                UUID.randomUUID(), versionId, "SETUP", "事件牌堆", "将事件牌堆放在版图旁边。", 3, 3, 0.9);
         RuleEvidenceHit turnProcedure = new RuleEvidenceHit(
-                UUID.randomUUID(), versionId, "GENERAL", "Turn end", "At the end of your turn, draw an event card and resolve its effect.", 6, 6, 0.8);
+                UUID.randomUUID(), versionId, "GENERAL", "回合结束", "结束自己的回合后，抽取一张事件牌并结算其效果。", 6, 6, 0.8);
         AtomicInteger revisions = new AtomicInteger();
         RuleAnswerModel model = new RuleAnswerModel() {
             @Override
@@ -2097,7 +2058,7 @@ class StructuredRuleAnswerServiceTest {
 
             @Override
             public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
-                assertThat(feedback).anyMatch(item -> item.startsWith("END_TURN_PROCEDURE_CITATION"));
+                assertThat(feedback).anyMatch(item -> item.startsWith("DIRECT_CONDITION_CITATION"));
                 revisions.incrementAndGet();
                 return new ModelDraft(
                         "Draw an event card and resolve it.",
@@ -2108,7 +2069,7 @@ class StructuredRuleAnswerServiceTest {
             }
         };
         var service = answerService(
-                (version, query, options) -> query.startsWith("completed turn draw reveal")
+                (version, query, options) -> query.contains("condition procedure consequence")
                         ? List.of(
                                 new HybridEvidenceHit(setupOnly, 0.04, 1, null, false),
                                 new HybridEvidenceHit(turnProcedure, 0.03, 2, null, false))

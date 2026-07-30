@@ -4,6 +4,7 @@ import { useLocale } from '@/lib/locale'
 interface VisualFocus {
   pageNumber: number
   label: string
+  visibleDescription?: string
   x: number
   y: number
   width: number
@@ -88,6 +89,10 @@ function pageList(pages: number[]) {
         <h3 id="chapter-core-title" class="mt-2 font-display text-xl font-semibold leading-7 sm:text-2xl sm:leading-8">{{ leadStep.heading || section.title }}</h3>
         <p class="mt-3 text-sm leading-6 text-panel-text/80 sm:text-base sm:leading-8">{{ leadStep.text }}</p>
         <figure v-if="leadStep.visualFocus" class="mt-5 overflow-hidden rounded-xl border border-panel-text/15 bg-canvas text-ink sm:max-w-2xl">
+          <figcaption class="border-b border-ink/10 bg-indigo/[0.045] px-3 py-2">
+            <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+            <p class="mt-1 text-sm leading-6 text-ink/70">{{ leadStep.visualFocus.visibleDescription || leadStep.visualFocus.label }}</p>
+          </figcaption>
           <a :href="pageImageUrl(leadStep.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
             <img :src="focusedPageImageUrl(leadStep.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: leadStep.visualFocus.label, page: leadStep.visualFocus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
           </a>
@@ -126,6 +131,10 @@ function pageList(pages: number[]) {
                   <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" class="mt-2 inline-flex text-xs font-semibold text-indigo hover:underline">{{ t('lesson.chapter.visual.openContext', { page: step.visualFocus.pageNumber }) }} ↗</a>
                 </div>
                 <figure class="mt-4 max-w-3xl overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
+                  <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-3 py-2">
+                    <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+                    <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
+                  </figcaption>
                   <a :href="pageImageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.chapter.openFullPage')">
                     <img :src="focusedPageImageUrl(step.visualFocus)" :alt="t('lesson.chapter.visual.alt', { label: step.visualFocus.label, page: step.visualFocus.pageNumber })" class="block max-h-[30rem] w-full object-contain" loading="lazy">
                   </a>

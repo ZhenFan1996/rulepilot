@@ -3,7 +3,6 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
-import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualFocus;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -64,7 +63,7 @@ public class PublicLessonQuestionService {
                 creation.assistantRunId(),
                 creation.answer(),
                 visualAids(lesson, citedPages, creation.citedEvidenceIds(), request.question(), creation.answer(), language),
-                examples(lesson, citedPages, creation.citedEvidenceIds(), request.question(), creation.answer(), language));
+                List.of());
     }
 
     private Set<Integer> citedPages(RuleAnswering.Answer answer) {
@@ -94,31 +93,6 @@ public class PublicLessonQuestionService {
                         true)
                 .stream()
                 .map(step -> new VisualAid(visibleFocus(step.visualFocus(), language), visibleStepLabel(step, language)))
-                .toList();
-    }
-
-    private List<Example> examples(
-            PublicLessonReader.PublicLesson lesson,
-            Set<Integer> citedPages,
-            Set<UUID> citedEvidenceIds,
-            String question,
-            RuleAnswering.Answer answer,
-            PlayerLocale language) {
-        return relevantSteps(
-                        lesson,
-                        citedPages,
-                        citedEvidenceIds,
-                        question,
-                        answer,
-                        step -> step.kind() == TeachingMove.EXAMPLE,
-                        false)
-                .stream()
-                .map(step -> language == PlayerLocale.EN
-                        ? new Example(
-                                "Cited rulebook example",
-                                "The answer above is grounded in the illustrated example on the cited page.",
-                                citedSourcePages(step, citedPages))
-                        : new Example(step.heading(), step.text(), citedSourcePages(step, citedPages)))
                 .toList();
     }
 
@@ -197,7 +171,14 @@ public class PublicLessonQuestionService {
 
     private VisualFocus visibleFocus(VisualFocus source, PlayerLocale language) {
         if (language != PlayerLocale.EN) return source;
-        return new VisualFocus(source.pageNumber(), "Rulebook illustration", source.x(), source.y(), source.width(), source.height());
+        return new VisualFocus(
+                source.pageNumber(),
+                "Rulebook illustration",
+                source.visibleDescription(),
+                source.x(),
+                source.y(),
+                source.width(),
+                source.height());
     }
 
     private String visibleStepLabel(LessonStep step, PlayerLocale language) {
@@ -206,10 +187,6 @@ public class PublicLessonQuestionService {
 
     private boolean sharesCitedEvidence(LessonStep step, Set<UUID> citedEvidenceIds) {
         return !citedEvidenceIds.isEmpty() && step.sourceChunkIds().stream().anyMatch(citedEvidenceIds::contains);
-    }
-
-    private List<Integer> citedSourcePages(LessonStep step, Set<Integer> citedPages) {
-        return step.sourcePages().stream().filter(citedPages::contains).toList();
     }
 
     private record RankedStep(LessonStep step, int relevance) {}

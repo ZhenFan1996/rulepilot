@@ -37,7 +37,15 @@ describe('PublicLessonView', () => {
         id: 'lesson-1', status: 'DRAFT_READY', sections: [{
           position: 1, title: '摆好鸟类保护区', visualCaption: '先把玩家板放在自己面前。', steps: [{
             position: 1, heading: '放置玩家板', kind: 'VISUAL', text: '把玩家板放在自己面前。', sourcePages: [2],
-            visualFocus: { pageNumber: 2, label: '玩家板设置', x: 100, y: 200, width: 500, height: 300 },
+            visualFocus: {
+              pageNumber: 2,
+              label: '玩家板设置',
+              visibleDescription: '玩家板左侧排列资源标记，右侧是行动格。',
+              x: 100,
+              y: 200,
+              width: 500,
+              height: 300,
+            },
           }],
         }],
       },
@@ -65,6 +73,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.text()).toContain('放置玩家板')
+    expect(wrapper.text()).toContain('图中看什么')
+    expect(wrapper.text()).toContain('玩家板左侧排列资源标记，右侧是行动格。')
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
@@ -76,7 +86,22 @@ describe('PublicLessonView', () => {
       lesson: {
         id: 'lesson-1', status: 'COMPLETE', sections: [{
           position: 1, title: '摆好鸟类保护区', visualCaption: '', steps: [
-            { position: 1, heading: '放置玩家板', kind: 'VISUAL', text: '把玩家板放在自己面前。', sourcePages: [2], visualFocus: { pageNumber: 2, label: '玩家板设置', x: 100, y: 200, width: 500, height: 300 } },
+            {
+              position: 1,
+              heading: '放置玩家板',
+              kind: 'VISUAL',
+              text: '把玩家板放在自己面前。',
+              sourcePages: [2],
+              visualFocus: {
+                pageNumber: 2,
+                label: '玩家板设置',
+                visibleDescription: '蓝色玩家板旁放着三枚木制标记。',
+                x: 100,
+                y: 200,
+                width: 500,
+                height: 300,
+              },
+            },
             { position: 2, heading: '开局示例', kind: 'EXAMPLE', text: '每位玩家从自己的玩家板开始。', sourcePages: [2], visualFocus: null },
           ],
         }],
@@ -87,7 +112,7 @@ describe('PublicLessonView', () => {
       if (init?.method === 'POST') {
         return Response.json({
           answer: {
-            status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步。',
+            status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步.', warnings: [],
             citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', answerBasis: 'GROUNDED_APPLICATION', clarification: null,
           },
           visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
@@ -117,9 +142,10 @@ describe('PublicLessonView', () => {
 
     expect(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')).toBeTruthy()
     expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
-    expect(wrapper.text()).toContain('按规则套用到你的局面')
+    expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
+    expect(wrapper.text()).toContain('蓝色玩家板旁放着三枚木制标记。')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
     expect(wrapper.get('a[aria-label="打开来源：设置，第 2 页"]').attributes('href'))
       .toBe('/api/public/lessons/plan-1/pages/2/image')
@@ -145,7 +171,7 @@ describe('PublicLessonView', () => {
       question,
       answer: {
         answer: {
-          status: 'ANSWERED', shortVerdict: verdict, explanation: null,
+          status: 'ANSWERED', shortVerdict: verdict, explanation: null, warnings: [],
           citations: [], exceptions: [], confidence: 'HIGH', clarification: null,
         },
         visualAids: [], examples: [],
@@ -218,7 +244,7 @@ describe('PublicLessonView', () => {
       if (init?.method === 'POST') {
         return Response.json({
           answer: {
-            status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.',
+            status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.', warnings: [],
             citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', clarification: null,
           }, visualAids: [], examples: [],
         })

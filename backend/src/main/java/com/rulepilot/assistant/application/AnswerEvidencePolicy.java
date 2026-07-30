@@ -24,21 +24,6 @@ final class AnswerEvidencePolicy {
     private static final Pattern VISUAL_EVIDENCE_PRIORITY_QUESTION = Pattern.compile(
             "(?iu)\\b(which|what|resource|token|icon|symbol|pay|cost|gain|spend|score|stake)\\b"
                     + "|支付|费用|代价|获得|得分|令牌|标记|图标|符号|胜利点|资源|下注");
-    private static final Pattern EVIDENCED_END_TURN_PROCEDURE = Pattern.compile(
-            "(?isu)(?=.*(?:(?:end|finish|after).{0,120}turn|(?:结束|完成).{0,32}回合|回合.{0,32}(?:结束|完成)))"
-                    + "(?=.*(?:draw|reveal|resolve|read|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final Pattern END_TURN_PROCEDURE_QUESTION = Pattern.compile(
-            "(?isu)(?=.*(?:(?:end|finish|after).{0,36}turn|(?:结束|完成).{0,16}回合|回合.{0,16}(?:结束|完成)))"
-                    + "(?=.*(?:draw|reveal|resolve|alert|event|card|抽|翻|结算|执行|警报|事件|牌)).*");
-    private static final Pattern MATCHING_VALUE_QUESTION = Pattern.compile(
-            "(?iu)(?:same|matching|equal).{0,24}(?:number|value|card)|"
-                    + "(?:number|value|card).{0,24}(?:same|matching|equal)|"
-                    + "相同数字|同样数字|数字相同|相同数值|相同点数|相同牌|同号|撞号|碰撞");
-    private static final Pattern EVIDENCED_MATCHING_VALUE_RESOLUTION = Pattern.compile(
-            "(?isu)(?=.*(?:same\s+(?:number|value|card)|matching\s+(?:number|value|card)|"
-                    + "equal\s+(?:number|value|card)|相同数字|同样数字|数字相同|相同数值|相同点数|相同牌|同号|碰撞))"
-                    + "(?=.*(?:bump|collision|resolve|priority|order|place.{0,80}(?:sideways|column)|"
-                    + "碰撞|处理|顺序|优先|横放|列)).*");
     private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
             "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
                     + "游戏结束|结束条件|终局))"
@@ -58,52 +43,6 @@ final class AnswerEvidencePolicy {
 
     static boolean visualEvidencePriority(String question) {
         return question != null && VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question).find();
-    }
-
-    static boolean hasEndTurnProcedure(EvidenceInput source) {
-        return source != null && hasEndTurnProcedure(source.excerpt());
-    }
-
-    static boolean hasEndTurnProcedure(HybridEvidenceHit hit) {
-        return hit != null && hasEndTurnProcedure(hit.evidence().excerpt());
-    }
-
-    static boolean hasEndTurnProcedure(String excerpt) {
-        return excerpt != null && EVIDENCED_END_TURN_PROCEDURE.matcher(excerpt).find();
-    }
-
-    static boolean requiresEndTurnProcedureCitation(String question, Collection<EvidenceInput> evidence) {
-        return question != null
-                && END_TURN_PROCEDURE_QUESTION.matcher(question).matches()
-                && evidence.stream().anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
-    }
-
-    static boolean citesEndTurnProcedure(Collection<EvidenceInput> evidence, Collection<UUID> citationIds) {
-        Set<UUID> citations = Set.copyOf(citationIds);
-        return evidence.stream()
-                .filter(source -> citations.contains(source.chunkId()))
-                .anyMatch(AnswerEvidencePolicy::hasEndTurnProcedure);
-    }
-
-    static boolean requiresMatchingValueResolutionCitation(String question, Collection<EvidenceInput> evidence) {
-        return question != null
-                && MATCHING_VALUE_QUESTION.matcher(question).find()
-                && evidence.stream().anyMatch(AnswerEvidencePolicy::hasMatchingValueResolution);
-    }
-
-    static boolean citesMatchingValueResolution(Collection<EvidenceInput> evidence, Collection<UUID> citationIds) {
-        Set<UUID> citations = Set.copyOf(citationIds);
-        return evidence.stream()
-                .filter(source -> citations.contains(source.chunkId()))
-                .anyMatch(AnswerEvidencePolicy::hasMatchingValueResolution);
-    }
-
-    static boolean hasMatchingValueResolution(EvidenceInput source) {
-        return source != null && hasMatchingValueResolution(source.excerpt());
-    }
-
-    static boolean hasMatchingValueResolution(String excerpt) {
-        return excerpt != null && EVIDENCED_MATCHING_VALUE_RESOLUTION.matcher(excerpt).matches();
     }
 
     static boolean hasEndgameResolution(EvidenceInput source) {

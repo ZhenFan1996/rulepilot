@@ -319,7 +319,14 @@ final class LessonDraftValidator {
             throw new IllegalArgumentException(
                     "VISUAL teaching blocks require a tight focus region, not an almost complete rulebook page.");
         }
-        return new VisualFocus(focus.pageNumber(), focus.label(), x, y, width, height);
+        return new VisualFocus(
+                focus.pageNumber(),
+                focus.label(),
+                focus.visibleDescription(),
+                x,
+                y,
+                width,
+                height);
     }
 
     static void validateDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {

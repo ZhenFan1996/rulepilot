@@ -36,7 +36,7 @@ class AnswerBasisPolicyTest {
         return new RuleAnswerModel.ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new RuleAnswerModel.AnswerContext(null, null, null, 0),
+                new RuleAnswerModel.AnswerContext(null, null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
                 List.of(new RuleAnswerModel.EvidenceInput(UUID.randomUUID(), "ACTIONS", "Actions", "Take a row.", 1, 1)));
     }
 }

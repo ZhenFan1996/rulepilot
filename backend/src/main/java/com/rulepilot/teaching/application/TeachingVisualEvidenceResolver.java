@@ -140,7 +140,7 @@ final class TeachingVisualEvidenceResolver {
                         visualFacts.find(documentVersionId, pages).stream(), supplementalFacts.stream())
                 .collect(Collectors.toUnmodifiableMap(
                         VisualRulebookPageFacts.PageFact::pageNumber,
-                        VisualRulebookPageFacts.PageFact::evidenceText,
+                        VisualRulebookPageFacts.PageFact::transcribedRuleEvidenceText,
                         (existing, supplied) -> supplied));
         if (factsByPage.isEmpty()) return evidence;
         return evidence.stream()

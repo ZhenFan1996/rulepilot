@@ -172,7 +172,8 @@ public interface VisualRegionLocator {
             int width,
             int height,
             List<UUID> supportedEvidenceIds,
-            List<Integer> supportedStepPositions) {
+            List<Integer> supportedStepPositions,
+            boolean claimContradicted) {
         public LocatedRegion {
             if (pageNumber < 1 || label == null || label.isBlank() || label.length() > 80
                     || (visibleDescription != null && visibleDescription.length() > 240)
@@ -197,8 +198,31 @@ public interface VisualRegionLocator {
                 int y,
                 int width,
                 int height,
+                List<UUID> supportedEvidenceIds,
+                List<Integer> supportedStepPositions) {
+            this(
+                    pageNumber,
+                    label,
+                    visibleDescription,
+                    x,
+                    y,
+                    width,
+                    height,
+                    supportedEvidenceIds,
+                    supportedStepPositions,
+                    false);
+        }
+
+        public LocatedRegion(
+                int pageNumber,
+                String label,
+                String visibleDescription,
+                int x,
+                int y,
+                int width,
+                int height,
                 List<UUID> supportedEvidenceIds) {
-            this(pageNumber, label, visibleDescription, x, y, width, height, supportedEvidenceIds, List.of());
+            this(pageNumber, label, visibleDescription, x, y, width, height, supportedEvidenceIds, List.of(), false);
         }
 
         public LocatedRegion(
@@ -209,7 +233,21 @@ public interface VisualRegionLocator {
                 int width,
                 int height,
                 List<UUID> supportedEvidenceIds) {
-            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds, List.of());
+            this(pageNumber, label, "", x, y, width, height, supportedEvidenceIds, List.of(), false);
+        }
+
+        public LocatedRegion withClaimContradiction() {
+            return new LocatedRegion(
+                    pageNumber,
+                    label,
+                    visibleDescription,
+                    x,
+                    y,
+                    width,
+                    height,
+                    supportedEvidenceIds,
+                    supportedStepPositions,
+                    true);
         }
     }
 }

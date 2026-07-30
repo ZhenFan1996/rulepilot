@@ -240,11 +240,11 @@ class TeachingPlanServiceTest {
                 List.of(
                         detailedTopic("turn-flow", "玩家回合流程", "说明移动与行动选择。"),
                         detailedTopic("game-end", "游戏结束与最终计分", "说明结束触发、最终计分和平局。"),
-                        detailedTopic("quality-scoring", "品质瓷砖计分", "说明每个品质瓷砖的得分条件。")));
+                        detailedTopic("bonus-scoring", "额外得分规则", "说明每项额外得分的计算条件。")));
 
         assertThat(TeachingOutlineRevisionPolicy.chapterOwnershipRevisionFeedback(outline))
                 .hasValueSatisfying(feedback -> assertThat(feedback)
-                        .contains("品质瓷砖计分", "游戏结束与最终计分", "scoring detail before the end/final-scoring conclusion"));
+                        .contains("额外得分规则", "游戏结束与最终计分", "scoring detail before the end/final-scoring conclusion"));
     }
 
     @Test
@@ -476,6 +476,31 @@ class TeachingPlanServiceTest {
                         topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
 
         VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, pages);
+    }
+
+    @Test
+    void acceptsExplicitChineseConditionalEndPhrasesWithoutTreatingScoringTimingAsTheTrigger() {
+        List<PageInput> supportedPages = List.of(
+                new PageInput(1, visualCatalogPage("设置", "设置：每位玩家拿取起始资源。")),
+                new PageInput(2, visualCatalogPage("游戏流程", "玩家依次执行回合行动。")),
+                new PageInput(3, visualCatalogPage(
+                        "结束与计分", "游戏在所有牌堆和市场牌被抽完时结束，随后计算分数，最高分者获胜。")));
+        OutlineDraft outline = new OutlineDraft(
+                "Game", "Premise", List.of(
+                        topicWithTags("setup", List.of("setup"), List.of(1)),
+                        topicWithTags("play", List.of("core_loop"), List.of(2)),
+                        topicWithTags("ending", List.of("end", "scoring"), List.of(3))));
+
+        VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, supportedPages);
+
+        List<PageInput> scoringOnlyPages = List.of(
+                supportedPages.get(0),
+                supportedPages.get(1),
+                new PageInput(3, visualCatalogPage("计分", "游戏结束时计算每座建筑的分数，最高分者获胜。")));
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> VisualOutlineEvidencePolicy.validateVisualCoreTopicBindings(outline, scoringOnlyPages))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("end");
     }
 
     @Test

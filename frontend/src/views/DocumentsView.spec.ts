@@ -2,12 +2,14 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import { readPendingRulebookLessons, rememberPendingRulebookLesson } from '@/lib/pendingRulebookLesson'
 
 import DocumentsView from './DocumentsView.vue'
 
 describe('DocumentsView recoverable lesson handoff', () => {
   afterEach(() => {
+    setLocale('zh-CN')
     vi.useRealTimers()
     localStorage.clear()
     FakeEventSource.instances = []
@@ -158,6 +160,15 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.find('#rulebook-camera').attributes('capture')).toBe('environment')
     expect(wrapper.find('#rulebook-camera').attributes('accept')).toBe('image/*')
     expect(wrapper.find('#rulebook-gallery').attributes('multiple')).toBeDefined()
+    expect(wrapper.get('label[for="rulebook-camera"]').classes()).toContain('bg-paper')
+    expect(wrapper.get('label[for="rulebook-gallery"]').classes()).toContain('bg-paper')
+    expect(wrapper.get('label[for="rulebook-camera"]').classes()).not.toContain('bg-[#fffaf2]')
+
+    setLocale('en')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('Photograph a page')
+    expect(wrapper.text()).toContain('Add photographed pages')
+    expect(wrapper.text()).not.toContain('现在拍一页')
     wrapper.unmount()
   })
 })

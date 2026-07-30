@@ -76,7 +76,7 @@ final class VisualLocatorResponsePolicy {
         }
     }
 
-    static Optional<Set<String>> acceptedCropReferences(String content, Set<String> offeredReferences) {
+    static Optional<CropReview> cropReview(String content, Set<String> offeredReferences) {
         if (content == null || content.isBlank() || offeredReferences == null || offeredReferences.isEmpty()) {
             return Optional.empty();
         }
@@ -85,16 +85,43 @@ final class VisualLocatorResponsePolicy {
         int objectEnd = json.lastIndexOf('}');
         if (objectStart < 0 || objectEnd <= objectStart) return Optional.empty();
         try {
-            JsonNode accepted = JSON.readTree(json.substring(objectStart, objectEnd + 1)).path("acceptedCropRefs");
+            JsonNode root = JSON.readTree(json.substring(objectStart, objectEnd + 1));
+            JsonNode accepted = root.path("acceptedCropRefs");
             if (!accepted.isArray()) return Optional.empty();
-            Set<String> references = new LinkedHashSet<>();
-            for (JsonNode reference : accepted) {
-                if (!reference.isTextual() || !offeredReferences.contains(reference.asText())) return Optional.empty();
-                references.add(reference.asText());
+            JsonNode contradicted = root.path("contradictedCropRefs");
+            if (!contradicted.isMissingNode() && !contradicted.isArray()) return Optional.empty();
+            Set<String> acceptedReferences = offeredReferences(accepted, offeredReferences);
+            Set<String> contradictedReferences = contradicted.isMissingNode()
+                    ? Set.of()
+                    : offeredReferences(contradicted, offeredReferences);
+            if (acceptedReferences == null
+                    || contradictedReferences == null
+                    || acceptedReferences.stream().anyMatch(contradictedReferences::contains)) {
+                return Optional.empty();
             }
-            return Optional.of(Set.copyOf(references));
+            return Optional.of(new CropReview(acceptedReferences, contradictedReferences));
         } catch (JsonProcessingException invalidJson) {
             return Optional.empty();
+        }
+    }
+
+    static Optional<Set<String>> acceptedCropReferences(String content, Set<String> offeredReferences) {
+        return cropReview(content, offeredReferences).map(CropReview::acceptedReferences);
+    }
+
+    private static Set<String> offeredReferences(JsonNode values, Set<String> offeredReferences) {
+        Set<String> references = new LinkedHashSet<>();
+        for (JsonNode reference : values) {
+            if (!reference.isTextual() || !offeredReferences.contains(reference.asText())) return null;
+            references.add(reference.asText());
+        }
+        return Set.copyOf(references);
+    }
+
+    record CropReview(Set<String> acceptedReferences, Set<String> contradictedReferences) {
+        CropReview {
+            acceptedReferences = Set.copyOf(acceptedReferences);
+            contradictedReferences = Set.copyOf(contradictedReferences);
         }
     }
 

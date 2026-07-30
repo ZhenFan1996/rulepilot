@@ -21,7 +21,10 @@ final class VisualRulebookCatalogPolicy {
 
     static Set<Integer> missingPages(Set<Integer> requestedPages, List<PageFact> cached) {
         LinkedHashSet<Integer> missing = new LinkedHashSet<>(requestedPages);
-        cached.stream().map(PageFact::pageNumber).forEach(missing::remove);
+        cached.stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .map(PageFact::pageNumber)
+                .forEach(missing::remove);
         return Collections.unmodifiableSet(missing);
     }
 
@@ -50,13 +53,16 @@ final class VisualRulebookCatalogPolicy {
         List<PageFact> retained = cached.stream()
                 .map(existing -> {
                     PageFact refreshed = freshByPage.remove(existing.pageNumber());
-                    if (refreshed == null || refreshed.visualAnchors().isEmpty()) return existing;
+                    if (refreshed == null) return existing;
+                    if (refreshed.schemaVersion() > existing.schemaVersion()) return refreshed;
+                    if (refreshed.visualAnchors().isEmpty()) return existing;
                     return new PageFact(
                             existing.pageNumber(),
                             existing.printedTerms(),
                             existing.factualSummary(),
                             existing.keywords(),
-                            refreshed.visualAnchors());
+                            refreshed.visualAnchors(),
+                            existing.schemaVersion());
                 })
                 .toList();
         return Stream.concat(retained.stream(), freshByPage.values().stream())

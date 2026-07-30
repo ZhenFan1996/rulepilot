@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse {
@@ -33,7 +32,6 @@ interface ConfigurationSnapshot {
   volatileSecrets: boolean
 }
 
-const router = useRouter()
 const { t } = useLocale()
 const snapshot = ref<ConfigurationSnapshot | null>(null)
 const selectedProvider = ref('gemini')
@@ -79,7 +77,7 @@ function selectProvider(id: string) {
 
 async function checkedResponse(response: Response) {
   if (response.status === 401) {
-    await router.push({ name: 'login' })
+    notifyLoginRequired()
     throw new Error(t('models.expired'))
   }
   if (response.status === 403) throw new Error(t('models.forbidden'))

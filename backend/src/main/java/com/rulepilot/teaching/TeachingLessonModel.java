@@ -22,6 +22,13 @@ public interface TeachingLessonModel {
         return supportsVisualEvidence();
     }
 
+    /**
+     * Provider accounts can impose a lower safe request concurrency than the lesson executor.
+     */
+    default int maxConcurrentSectionRequests(String modelConfigurationOwner) {
+        return Integer.MAX_VALUE;
+    }
+
     SectionDraft compose(SectionRequest request);
 
     default SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
@@ -200,12 +207,27 @@ public interface TeachingLessonModel {
     record VisualFocusDraft(
             int pageNumber,
             String label,
+            String visibleDescription,
             int x,
             int y,
             int width,
             int height) {
         public VisualFocusDraft {
             label = label == null ? "" : label.strip();
+            visibleDescription = visibleDescription == null ? "" : visibleDescription.strip();
+            if (visibleDescription.length() > 240) {
+                throw new IllegalArgumentException("visual focus description is too long");
+            }
+        }
+
+        public VisualFocusDraft(
+                int pageNumber,
+                String label,
+                int x,
+                int y,
+                int width,
+                int height) {
+            this(pageNumber, label, "", x, y, width, height);
         }
     }
 }

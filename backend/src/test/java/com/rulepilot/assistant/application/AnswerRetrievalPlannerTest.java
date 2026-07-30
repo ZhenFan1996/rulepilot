@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 class AnswerRetrievalPlannerTest {
 
     @Test
-    void plansAReplenishmentIntentForAnExhaustedChineseSourceAreaQuestion() {
+    void usesANeutralConditionIntentForAnExhaustedSourceQuestion() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
@@ -27,12 +27,18 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains(
-                "source area", "depleted", "recycle", "reshuffle", "继续");
+        assertThat(intents)
+                .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
+                .singleElement()
+                .satisfies(intent -> {
+                assertThat(intent.query())
+                        .contains("抽骰区", "condition", "procedure", "继续")
+                        .doesNotContain("source area", "recycle", "reshuffle");
+                });
     }
 
     @Test
-    void plansAProcedureIntentForAnEndOfTurnEventQuestion() {
+    void usesANeutralConditionIntentForAnEndOfTurnQuestion() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),
                 "我结束自己的回合后，事件牌要怎样处理？",
@@ -45,8 +51,14 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "TURN", 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains(
-                "completed turn", "draw", "resolve", "完成回合后", "结算", "事件牌");
+        assertThat(intents)
+                .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
+                .singleElement()
+                .satisfies(intent -> {
+                assertThat(intent.query())
+                        .contains("回合后", "事件牌", "condition", "procedure")
+                        .doesNotContain("draw", "resolve", "结算");
+                });
     }
 
     @Test
@@ -116,7 +128,8 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.getFirst().query()).isEqualTo(question.normalizedQuestion());
         assertThat(intents.getFirst().sectionTypes()).isEmpty();
         assertThat(intents.get(1).query())
-                .contains("legal action", "ACTION PHASE", "4 players", "4人");
+                .contains("legal action", "ACTIONS")
+                .doesNotContain("ACTION PHASE", "4 players", "4人");
         assertThat(intents.get(1).sectionTypes()).contains("ACTIONS");
         assertThat(intents.get(1).currentSectionType()).isEqualTo("ACTIONS");
     }
@@ -305,7 +318,7 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void addsAnUnfilteredExceptionQueryWhenAnExitingPlayerWouldNormallyActNext() {
+    void preservesAnActorTransitionQuestionWithoutInventingASuccessor() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -319,22 +332,22 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, "ROUND_END", null, 4, Set.of()));
 
-        assertThat(intents.getFirst().query())
-                .contains("state transition", "successor actor", "我出完所有手牌")
-                .doesNotContain("next player to the left");
-        assertThat(intents.getFirst().purpose())
-                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.STATE_TRANSITION);
-        assertThat(intents).anySatisfy(intent -> {
-            assertThat(intent.query()).contains("state transition", "successor actor", "例外");
-            assertThat(intent.sectionTypes()).isEmpty();
-            assertThat(intent.currentSectionType()).isNull();
-        });
+        assertThat(intents)
+                .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
+                .singleElement()
+                .satisfies(intent -> {
+                assertThat(intent.query())
+                        .contains("condition", "procedure", "我出完所有手牌", "例外")
+                        .doesNotContain("next player to the left");
+                    assertThat(intent.sectionTypes()).isEmpty();
+                    assertThat(intent.currentSectionType()).isNull();
+                });
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE", "PHASES");
         assertThat(intents.getLast().currentSectionType()).isEqualTo("ROUND_STRUCTURE");
     }
 
     @Test
-    void addsAnUnfilteredRoundResetIntentForQuestionsAboutWhatReturnsAtRoundEnd() {
+    void preservesARoundBoundaryQuestionWithoutInventingAResetOperation() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -348,15 +361,20 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains("end of round", "recover", "reset", "学生");
-        assertThat(intents.getFirst().purpose())
-                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.ROUND_RESET);
-        assertThat(intents.getFirst().sectionTypes()).isEmpty();
+        assertThat(intents)
+                .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
+                .singleElement()
+                .satisfies(intent -> {
+                assertThat(intent.query())
+                        .contains("学生", "condition", "procedure")
+                        .doesNotContain("recover", "reset");
+                assertThat(intent.sectionTypes()).isEmpty();
+                });
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
     }
 
     @Test
-    void addsWorkedExampleIntentForWhetherUnusedDiceCanWaitForALaterTurn() {
+    void preservesADeferredUseQuestionWithoutInventingAWorkedExample() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -370,9 +388,14 @@ class AnswerRetrievalPlannerTest {
         var intents = AnswerRetrievalPlanner.plan(
                 question, new QuestionContext(versionId, null, null, 4, Set.of()));
 
-        assertThat(intents.getFirst().query()).contains("worked example", "remaining pieces", "示例回合");
-        assertThat(intents.getFirst().purpose())
-                .isEqualTo(AnswerRetrievalPlanner.RetrievalPurpose.DEFERRED_TURN);
+        assertThat(intents)
+                .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
+                .singleElement()
+                .satisfies(intent -> {
+                assertThat(intent.query())
+                        .contains("剩下的骰子", "condition", "procedure")
+                        .doesNotContain("worked example", "remaining pieces", "示例回合");
+                });
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE");
     }
 }

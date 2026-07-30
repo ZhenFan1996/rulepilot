@@ -41,7 +41,7 @@ class AnswerDraftComposerTest {
         return new ModelRequest(
                 "完成行动后会发生什么？",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, 4, 0, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(
                         chunkId,
                         "ACTIONS",

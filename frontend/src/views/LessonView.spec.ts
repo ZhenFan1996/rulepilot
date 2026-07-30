@@ -111,8 +111,10 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('正在确认后台生成状态')
     expect(wrapper.text()).toContain('先摆主板')
     expect(wrapper.text()).toContain('我的图文讲解')
+    expect(wrapper.text()).toContain('图中看什么')
+    expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
-    expect(wrapper.text()).toContain('没有保存人数、轮次或实时局面')
+    expect(wrapper.text()).toContain('人数、轮次和实时局面不会参与回答')
     expect(wrapper.find('#lesson-question-panel').element.tagName).toBe('SECTION')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
@@ -485,7 +487,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('← My guides')
     expect(wrapper.text()).toContain('Read publicly')
     expect(wrapper.text()).toContain('My illustrated guide')
-    expect(wrapper.text()).toContain('it does not save player count, round, or live table state')
+    expect(wrapper.text()).toContain('Player count, round, and live table state do not affect the answer')
     expect(wrapper.text()).not.toContain('Start a game')
     expect(wrapper.text()).toContain('Guide diagnostics are unavailable, but you can keep reading.')
     expect(wrapper.text()).toContain('Audio is unavailable, so the complete reading guide is still here.')
@@ -543,7 +545,15 @@ function section(position: number, title: string) {
       {
         position: 3, heading: '对照主棋盘', kind: 'VISUAL', text: '找到主棋盘的拼接区域',
         sourcePages: [position],
-        visualFocus: { pageNumber: position, label: '主棋盘区域', x: 100, y: 200, width: 500, height: 400 },
+        visualFocus: {
+          pageNumber: position,
+          label: '主棋盘区域',
+          visibleDescription: '主棋盘中央有三条相连的行动轨道。',
+          x: 100,
+          y: 200,
+          width: 500,
+          height: 400,
+        },
       },
       {
         position: 4, heading: '别放反', kind: 'WATCH', text: '确认组件方向',

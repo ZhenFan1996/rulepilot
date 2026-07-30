@@ -6,8 +6,6 @@ public record AnswerRegressionCase(
         String id,
         String question,
         String previousQuestion,
-        String gamePhase,
-        Integer playerCount,
         AnswerStatus expectedStatus,
         List<Integer> requiredPages,
         List<List<String>> requiredTermGroups,

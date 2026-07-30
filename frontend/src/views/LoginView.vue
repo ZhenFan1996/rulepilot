@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useLocale } from '@/lib/locale'
+import { safeLoginReturnPath } from '@/lib/authSession'
 
 interface CsrfResponse {
   headerName: string
@@ -12,6 +13,7 @@ interface CsrfResponse {
 }
 
 const router = useRouter()
+const route = useRoute()
 const { t } = useLocale()
 const username = ref('player')
 const password = ref('')
@@ -41,7 +43,8 @@ async function login() {
     if (response.status === 401) throw new Error(t('auth.login.invalid'))
     if (!response.ok) throw new Error(t('auth.unavailable'))
 
-    await router.push({ name: 'account' })
+    const returnPath = safeLoginReturnPath(route.query.redirect)
+    await router.push(returnPath ?? { name: 'account' })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('auth.login.failed')
   } finally {

@@ -10,6 +10,7 @@ import { publicCoverUrl } from '@/lib/publicCover'
 interface VisualFocus {
   pageNumber: number
   label: string
+  visibleDescription?: string
   x: number
   y: number
   width: number
@@ -46,7 +47,7 @@ interface PublicLessonResponse {
 interface RuleCitation { heading: string; pageFrom: number; pageTo: number }
 interface PublicAnswer {
   answer: {
-    status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT'
+    status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'INVALID_MODEL_OUTPUT' | 'MODEL_TIMEOUT'
     shortVerdict: string
     explanation: string | null
     citations: RuleCitation[]
@@ -54,6 +55,7 @@ interface PublicAnswer {
     confidence: 'LOW' | 'MEDIUM' | 'HIGH'
     answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
     clarification: string | null
+    warnings: Array<{ type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE' }>
   }
   visualAids: Array<{ visualFocus: VisualFocus; relatedStep: string }>
   examples: Array<{ heading: string; text: string; sourcePages: number[] }>
@@ -177,6 +179,7 @@ function isPublicAnswer(value: unknown): value is PublicAnswer {
     && (answer.answerBasis === undefined || answer.answerBasis === null
       || answer.answerBasis === 'DIRECT_RULE' || answer.answerBasis === 'GROUNDED_APPLICATION')
     && (typeof answer.clarification === 'string' || answer.clarification === null)
+    && Array.isArray(answer.warnings) && answer.warnings.every(isAnswerWarning)
     && Array.isArray(value.visualAids) && value.visualAids.every(isVisualAid)
     && Array.isArray(value.examples) && value.examples.every(isExample)
 }
@@ -186,8 +189,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAnswerStatus(value: unknown): value is PublicAnswer['answer']['status'] {
-  return value === 'ANSWERED' || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
+  return value === 'ANSWERED' || value === 'ANSWERED_WITH_WARNING'
+    || value === 'CLARIFICATION_REQUIRED' || value === 'INSUFFICIENT_EVIDENCE'
     || value === 'INVALID_MODEL_OUTPUT' || value === 'MODEL_TIMEOUT'
+}
+
+function isAnswerWarning(value: unknown): value is PublicAnswer['answer']['warnings'][number] {
+  return isRecord(value) && (value.type === 'INDIRECT_CITATION'
+    || value.type === 'LOW_CONFIDENCE'
+    || value.type === 'REVIEW_UNRESOLVED'
+    || value.type === 'REVIEW_UNAVAILABLE')
 }
 
 function isConfidence(value: unknown): value is PublicAnswer['answer']['confidence'] {
@@ -275,6 +286,17 @@ function answerFailureMessage(answer: PublicAnswer['answer']) {
   if (answer.status === 'CLARIFICATION_REQUIRED') return answer.clarification ?? t('public.answer.clarify')
   if (answer.status === 'MODEL_TIMEOUT') return t('public.answer.timeout')
   return answer.shortVerdict
+}
+
+function publishesConclusion(status: PublicAnswer['answer']['status']) {
+  return status === 'ANSWERED' || status === 'ANSWERED_WITH_WARNING'
+}
+
+function answerWarningMessage(warning: PublicAnswer['answer']['warnings'][number]) {
+  if (warning.type === 'INDIRECT_CITATION') return t('lesson.answer.warning.INDIRECT_CITATION')
+  if (warning.type === 'LOW_CONFIDENCE') return t('lesson.answer.warning.LOW_CONFIDENCE')
+  if (warning.type === 'REVIEW_UNRESOLVED') return t('lesson.answer.warning.REVIEW_UNRESOLVED')
+  return t('lesson.answer.warning.REVIEW_UNAVAILABLE')
 }
 
 function askAboutSection(section: LessonSection) {
@@ -404,9 +426,10 @@ watch([locale, planId], () => {
               <div class="ml-auto max-w-[92%] rounded-2xl rounded-tr-md bg-copper px-4 py-3 text-sm font-medium leading-6 text-white sm:max-w-[78%]">{{ turn.question }}</div>
               <article :id="`public-answer-${index}`" tabindex="-1" class="max-w-[96%] overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm outline-none focus:ring-4 focus:ring-indigo/15 sm:max-w-[88%]">
                 <div class="p-5 sm:p-6">
-                  <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="turn.answer.answer.status === 'ANSWERED'" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
+                  <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/8 px-3 py-1 text-xs font-semibold text-indigo">{{ confidenceLabel(turn.answer.answer.confidence) }}</span><span v-if="publishesConclusion(turn.answer.answer.status)" class="rounded-full bg-copper/[0.1] px-3 py-1 text-xs font-semibold text-copper">{{ answerBasisLabel(turn.answer.answer.answerBasis) }}</span><span class="text-xs font-semibold text-ink/40">{{ t('public.question.answer') }}</span></div>
                   <p class="mt-4 font-display text-xl font-semibold leading-8">{{ turn.answer.answer.shortVerdict }}</p>
-                  <div v-if="turn.answer.answer.status === 'ANSWERED' && turn.answer.answer.explanation" class="mt-4 rounded-2xl bg-canvas p-4 text-sm leading-6 text-ink/70"><p class="font-semibold text-indigo">{{ t('public.answer.trace') }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(turn.answer.answer.answerBasis) }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ turn.answer.answer.explanation }}</p></div>
+                  <div v-if="turn.answer.answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status"><p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p><ul class="mt-1 list-disc pl-5"><li v-for="warning in turn.answer.answer.warnings" :key="warning.type">{{ answerWarningMessage(warning) }}</li></ul></div>
+                  <div v-if="publishesConclusion(turn.answer.answer.status) && turn.answer.answer.explanation" class="mt-4 rounded-2xl bg-canvas p-4 text-sm leading-6 text-ink/70"><p class="font-semibold text-indigo">{{ t('public.answer.trace') }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(turn.answer.answer.answerBasis) }}</p><p class="mt-2"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ turn.answer.answer.explanation }}</p></div>
                   <p v-else class="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">{{ answerFailureMessage(turn.answer.answer) }}</p>
                   <ul v-if="turn.answer.answer.exceptions.length" class="mt-4 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65"><li v-for="exception in turn.answer.answer.exceptions" :key="exception">{{ exception }}</li></ul>
 
@@ -424,7 +447,10 @@ watch([locale, planId], () => {
                     <div v-if="turn.answer.visualAids.length" class="mt-3 grid gap-3 sm:grid-cols-2">
                       <a v-for="aid in turn.answer.visualAids" :key="`${aid.visualFocus.pageNumber}-${aid.visualFocus.x}-${aid.visualFocus.y}`" :href="sourcePageUrl(aid.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-2xl border border-ink/10 bg-canvas transition hover:border-indigo/35">
                         <img :src="cropUrl(aid.visualFocus)" :alt="t('public.step.openSource', { label: aid.visualFocus.label })" class="aspect-[4/3] w-full object-contain">
-                        <span class="block border-t border-ink/10 px-3 py-2 text-xs font-semibold text-indigo">{{ t('public.question.aid', { step: aid.relatedStep }) }}</span>
+                        <span class="block border-t border-ink/10 px-3 py-2">
+                          <span class="block text-xs font-semibold text-indigo">{{ t('public.question.aid', { step: aid.relatedStep }) }}</span>
+                          <span class="mt-1 block text-xs leading-5 text-ink/60">{{ aid.visualFocus.visibleDescription || aid.visualFocus.label }}</span>
+                        </span>
                       </a>
                     </div>
                     <ul v-if="turn.answer.examples.length" class="mt-3 space-y-2"><li v-for="example in turn.answer.examples" :key="`${example.heading}-${example.text}`" class="rounded-2xl bg-copper/[0.07] px-4 py-3"><p class="text-sm font-semibold text-copper">{{ t('public.question.exampleWalkthrough', { heading: example.heading }) }}</p><p class="mt-1 text-sm leading-6 text-ink/70">{{ example.text }}</p><p v-if="example.sourcePages.length" class="mt-2 text-xs text-ink/45">{{ t('public.question.samePages', { pages: example.sourcePages.join(locale === 'en' ? ', ' : '、') }) }}</p></li></ul>
@@ -456,10 +482,16 @@ watch([locale, planId], () => {
                 <div class="min-w-0 flex-1">
                   <h3 class="font-display text-xl font-semibold">{{ step.heading }}</h3>
                   <p class="mt-2 leading-7 text-ink/75">{{ step.text }}</p>
-                  <a v-if="step.visualFocus" :href="sourcePageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="mt-5 block overflow-hidden rounded-lg border border-ink/10 bg-canvas">
-                    <img :src="cropUrl(step.visualFocus)" :alt="t('public.step.openSource', { label: step.visualFocus.label })" class="max-h-96 w-full object-contain">
-                    <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
-                  </a>
+                  <figure v-if="step.visualFocus" class="mt-5 overflow-hidden rounded-2xl border border-indigo/15 bg-canvas">
+                    <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-4 py-3">
+                      <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
+                      <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
+                    </figcaption>
+                    <a :href="sourcePageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="block">
+                      <img :src="cropUrl(step.visualFocus)" :alt="t('public.step.openSource', { label: step.visualFocus.label })" class="max-h-96 w-full object-contain">
+                      <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
+                    </a>
+                  </figure>
                   <p v-if="step.sourcePages.length" class="mt-4 text-sm text-ink/45">{{ t('public.step.source', { pages: step.sourcePages.join(locale === 'en' ? ', ' : '、') }) }}</p>
                 </div>
               </div>

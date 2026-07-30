@@ -24,7 +24,9 @@ describe('buildPersonalShelf', () => {
     )
 
     expect(shelf).toEqual([expect.objectContaining({
-      title: 'Root', documentCount: 1, lessonCount: 1, latestPlanId: 'plan-root', expansionCount: 1, players: '2–4 人', coverAttributionUrl: 'https://boardgamegeek.com/boardgame/root',
+      title: 'Root', documentCount: 1, lessonCount: 1, latestPlanId: 'plan-root', expansionCount: 1,
+      players: { min: 2, max: 4 }, playtimeMinutes: 90, minimumAge: 10,
+      coverAttributionUrl: 'https://boardgamegeek.com/boardgame/root',
     })])
   })
 

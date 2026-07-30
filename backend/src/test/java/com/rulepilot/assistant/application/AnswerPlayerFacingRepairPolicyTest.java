@@ -60,32 +60,51 @@ class AnswerPlayerFacingRepairPolicyTest {
     }
 
     @Test
-    void asksForTheDirectCollisionRuleWhenTheDraftCitesOnlySetupEvidence() {
+    void requestsTheMostDirectCurrentDocumentEvidenceWithoutNamingAMechanic() {
         UUID setup = UUID.randomUUID();
-        UUID collision = UUID.randomUUID();
+        UUID procedure = UUID.randomUUID();
         ModelRequest request = request(
-                "两位玩家出了相同数字时，该怎么处理？",
+                "两位玩家选择相同数值时，该怎么处理？",
                 List.of(
-                        new EvidenceInput(setup, "SETUP", "Setup", "Each player receives numbered cards.", 4, 4),
+                        new EvidenceInput(setup, "SETUP", "设置", "每位玩家获得一组数字牌。", 4, 4),
                         new EvidenceInput(
-                                collision,
+                                procedure,
                                 "ROUND_STRUCTURE",
-                                "Resolving a bump",
-                                "Players who played the same number resolve the bump in priority order.",
+                                "处理相同选择",
+                                "玩家选择相同数值时，按照规则所列顺序处理。",
                                 10,
                                 10)));
         ModelDraft draft = new ModelDraft(
                 "无法确定。", "组件说明没有给出同数字的处理。", List.of(setup), List.of(), "LOW");
 
         assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
-                .anyMatch(item -> item.startsWith("MATCHING_VALUE_RESOLUTION_CITATION:"));
+                .singleElement()
+                .asString()
+                .startsWith("DIRECT_CONDITION_CITATION:");
+    }
+
+    @Test
+    void asksTheModelToStopAfterAnUndefinedConditionInsteadOfOfferingAGuess() {
+        UUID chunk = UUID.randomUUID();
+        ModelRequest request = request(
+                "这个状态怎样达成？",
+                List.of(new EvidenceInput(chunk, "RULES", "状态", "处于该状态时得3分。", 5, 5)));
+        ModelDraft draft = new ModelDraft(
+                "证据没有定义达成方式。",
+                "规则未说明具体条件，玩家可以自行判断是否需要包裹或相邻。",
+                List.of(chunk),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
+                .anyMatch(item -> item.startsWith("UNDEFINED_TERM_SPECULATION:"));
     }
 
     private ModelRequest request(String question, List<EvidenceInput> evidence) {
         return new ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, 0, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
                 evidence);
     }
 }

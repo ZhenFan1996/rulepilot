@@ -156,7 +156,10 @@ class VisualRulebookCataloger {
                 outline, documentPages, visualCoverageProbePages);
         if (selected.isEmpty()) return List.of();
         List<PageFact> cached = visualFacts.find(documentVersionId, selected);
-        Set<Integer> cachedPages = cached.stream().map(PageFact::pageNumber).collect(Collectors.toSet());
+        Set<Integer> cachedPages = cached.stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .map(PageFact::pageNumber)
+                .collect(Collectors.toSet());
         Set<Integer> missing = selected.stream()
                 .filter(page -> !cachedPages.contains(page))
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -194,6 +197,7 @@ class VisualRulebookCataloger {
         if (selectedVisualPages.isEmpty()) return;
         try {
             Set<Integer> cachedPages = visualFacts.find(documentVersionId, selectedVisualPages).stream()
+                    .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
                     .map(PageFact::pageNumber)
                     .collect(Collectors.toSet());
             Set<Integer> uncatalogedPages = selectedVisualPages.stream()

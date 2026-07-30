@@ -21,6 +21,7 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v24-actor-and-example-fidelity-system.txt"),
                 resource("teaching-agent-v25-conditional-values-fidelity-system.txt"),
                 resource("teaching-agent-v26-conditional-scope-and-tie-fidelity-system.txt"),
+                resource("teaching-agent-v27-visible-observation-system.txt"),
                 resource("teaching-agent-v9-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
@@ -38,7 +39,6 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v12-direct-clause-citations-system.txt"),
                 resource("rule-answer-agent-v13-grounded-application-system.txt"),
                 resource("rule-answer-agent-v14-natural-language-condition-system.txt"),
-                resource("rule-answer-agent-v15-matching-value-resolution-system.txt"),
                 resource("rule-answer-agent-v16-fallback-branch-fidelity-system.txt"),
                 resource("rule-answer-agent-v17-correctable-revision-system.txt"),
                 resource("rule-answer-agent-v18-counterfactual-follow-up-system.txt"),
@@ -105,11 +105,14 @@ class VersionedAgentPromptsTest {
                         "player-count/value condition",
                         "Conditional-scope and tie fidelity revision v26",
                         "tie-break chain",
+                        "Visible-observation revision v27",
+                        "visibleDescription",
                         "Preserve timing boundaries exactly",
                         "fictional separate final-scoring phase",
                         "Fully teach only the current section objective",
                         "camel-case property names",
                         "visualCaption",
+                        "A named state or relationship is not its definition",
                         "Citation IDs are machine fields only",
                         "negative evidence statement is not a game rule",
                         "rest of the page hidden",
@@ -196,8 +199,6 @@ class VersionedAgentPromptsTest {
                         "not private reasoning",
                         "Natural-language condition revision v14",
                         "not required to use the rulebook's label",
-                        "Matching-value resolution revision v15",
-                        "same number",
                         "Fallback-branch fidelity revision v16",
                         "no-op",
                         "Correctable-revision completion revision v17",
@@ -205,7 +206,13 @@ class VersionedAgentPromptsTest {
                         "Counterfactual follow-up coverage revision v18",
                         "even when the immediate verdict is no");
         assertThat(prompts.answerUser())
-                .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}", "{outputLanguage}");
+                .contains(
+                        "{questionType}",
+                        "{learningIntent}",
+                        "{lessonSection}",
+                        "{outputLanguage}",
+                        "A named state or relationship is not its definition")
+                .doesNotContain("{gamePhase}", "{playerCount}", "{activeExpansionCount}");
         assertThat(prompts.lessonLocalizationSystem())
                 .contains("constrained translation", "exact section and step positions", "Do not add rules");
         assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");

@@ -249,7 +249,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void defersPlanRecommendedVisualEvidenceUntilAfterTheTextFirstBaseLesson() {
+    void givesPlanRecommendedVisualEvidenceToTheProgressiveBaseLesson() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -269,14 +269,25 @@ class GroundedTeachingAgentTest {
 
             @Override
             public SectionDraft compose(SectionRequest request) {
-                assertThat(request.pageImages()).isEmpty();
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(5);
                 return new SectionDraft(
                         "看懂卡牌图标",
-                        VisualKind.REFERENCE_CARD,
-                        "先认出费用与效果的位置。",
+                        VisualKind.TABLE_LAYOUT,
+                        "对照卡牌上的费用与效果。",
                         List.of(chunkId),
                         List.of(new StepDraft(
-                                "先看费用", TeachingMove.DO, "先看费用图标，再阅读旁边的效果。", List.of(chunkId))));
+                                "找到费用与效果",
+                                TeachingMove.VISUAL,
+                                "先找到费用图标，再阅读旁边的效果。",
+                                List.of(chunkId),
+                                new VisualFocusDraft(
+                                        5,
+                                        "费用与效果图标",
+                                        "费用图标位于效果文字左侧。",
+                                        120,
+                                        180,
+                                        520,
+                                        260))));
             }
         };
         TeachingPlan plan = new TeachingPlan(
@@ -310,7 +321,8 @@ class GroundedTeachingAgentTest {
         IllustratedLesson lesson = agent.createBase(plan, UUID.randomUUID(), null, ignored -> {});
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus()).isNull();
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().visibleDescription())
+                .isEqualTo("费用图标位于效果文字左侧。");
     }
 
     @Test
@@ -361,7 +373,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void turnsPersistedVisualPageFactsIntoCitedLessonEvidence() {
+    void exposesPersistedVisualPageFactsAsBoundedRuleTranscriptionForAnImageOnlyPage() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence pageEvidence = new RuleEvidence(
@@ -401,7 +413,8 @@ class GroundedTeachingAgentTest {
         TeachingLessonModel model = request -> {
             assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
                     .asString()
-                    .contains("每回合只能这样做一次");
+                    .contains("Visual-transcribed rule evidence", "每回合只能这样做一次")
+                    .doesNotContain("Printed terms:");
             return new SectionDraft(
                     "种群过剩",
                     VisualKind.FLOW_DIAGRAM,
@@ -450,7 +463,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void interpretsAnUncatalogedRequiredVisualPageBeforeWritingTheLesson() {
+    void catalogsAnUncatalogedRequiredVisualPageBeforeWritingAndUsesItsBoundedTranscription() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence pageEvidence = new RuleEvidence(
@@ -491,7 +504,13 @@ class GroundedTeachingAgentTest {
         TeachingLessonModel model = request -> {
             assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
                     .asString()
-                    .contains("至少拥有2个胜利点");
+                    .contains(
+                            "Visual-transcribed rule evidence",
+                            "至少拥有2个胜利点",
+                            "KODORA payment",
+                            "KODORA与两个胜利点标记。",
+                            "rect=120,220,320,280")
+                    .doesNotContain("Printed terms:");
             return new SectionDraft(
                     "KODORA行动",
                     VisualKind.REFERENCE_CARD,
@@ -560,7 +579,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void addsCrossPageVisualFactsToTextEvidenceWithMissingInlineIcons() {
+    void doesNotUseCrossPageVisualInterpretationToRepairPartiallyExtractedInlineRuleText() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence textEvidence = new RuleEvidence(
@@ -587,7 +606,9 @@ class GroundedTeachingAgentTest {
         TeachingLessonModel model = request -> {
             assertThat(request.pageImages()).isEmpty();
             assertThat(request.evidence()).singleElement().extracting(TeachingLessonModel.EvidenceInput::excerpt)
-                    .asString().contains("KODORA要求放置2个胜利点");
+                    .asString()
+                    .contains("Visual presentation data only", "Printed terms:")
+                    .doesNotContain("KODORA要求放置2个胜利点");
             return new SectionDraft(
                     "KODORA下注",
                     VisualKind.REFERENCE_CARD,

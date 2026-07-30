@@ -12,13 +12,6 @@ final class AnswerPlayerFacingRepairPolicy {
 
     static List<String> feedbackFor(ModelRequest request, ModelDraft draft) {
         List<String> feedback = new ArrayList<>();
-        if (AnswerEvidencePolicy.requiresEndTurnProcedureCitation(request.question(), request.evidence())
-                && !AnswerEvidencePolicy.citesEndTurnProcedure(request.evidence(), draft.citationIds())) {
-            feedback.add("END_TURN_PROCEDURE_CITATION: The question asks what happens after a player finishes a turn. "
-                    + "Cite the supplied excerpt that explicitly connects turn end to drawing, revealing, reading, "
-                    + "resolving, or executing the event/card effect. Setup instructions that only place that deck "
-                    + "or card area are not sufficient evidence for the end-of-turn procedure.");
-        }
         if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(request.question(), request.evidence())
                 && !AnswerEvidencePolicy.citesEndgameResolution(request.question(), request.evidence(), draft.citationIds())) {
             feedback.add("ENDGAME_RESOLUTION_CITATION: The question asks about an end trigger, end-of-round timing, "
@@ -27,12 +20,11 @@ final class AnswerPlayerFacingRepairPolicy {
                     + "marker, card, or resource cannot support that timing, scoring, or tie ruling. Preserve the "
                     + "printed order, including any numbered cleanup check, and do not invent a separate phase.");
         }
-        if (AnswerEvidencePolicy.requiresMatchingValueResolutionCitation(request.question(), request.evidence())
-                && !AnswerEvidencePolicy.citesMatchingValueResolution(request.evidence(), draft.citationIds())) {
-            feedback.add("MATCHING_VALUE_RESOLUTION_CITATION: The player's ordinary-language question states that "
-                    + "players used the same number, value, or card. A supplied excerpt directly names that matching "
-                    + "condition and gives its bump, collision, priority, placement, or resolution procedure. Cite that "
-                    + "procedure and answer it; setup or component evidence cannot replace the direct resolution rule.");
+        if (AnswerConditionEvidencePolicy.needsDirectCitation(request, draft.citationIds())) {
+            feedback.add("DIRECT_CONDITION_CITATION: The supplied evidence contains an excerpt that more directly "
+                    + "matches the condition and named objects in the player's question. Cite and apply that excerpt "
+                    + "instead of a broader setup, component, or neighbouring rule. Do not infer a mechanic label or "
+                    + "outcome that is absent from the current document.");
         }
         if (AnswerDraftSafetyPolicy.containsUncitedEnglishTitleLabel(request, draft)) {
             feedback.add("EXACT_PHASE_NAME: The draft uses an English multi-word phase label that does not appear in "
@@ -80,18 +72,19 @@ final class AnswerPlayerFacingRepairPolicy {
                     + "exact printed component label resolved by the supplied cross-page evidence; the UI will "
                     + "show the original cited page image.");
         }
-        if (AnswerDraftSafetyPolicy.containsInactiveActorContinuation(draft)) {
-            feedback.add("INACTIVE_ACTOR: The draft says an actor has emptied their hand or left active play, but "
-                    + "also assigns that same actor the next action. Do not apply the default next-actor rule across "
-                    + "that state change. Use the supplied evidence's explicit replacement, skip, or successor rule; "
-                    + "if the evidence does not resolve the successor, set answerable to false.");
-        }
         if (AnswerDraftSafetyPolicy.containsUnaskedUnsupportedRepeatabilityClaim(request, draft)) {
             feedback.add("UNASKED_REPEATABILITY: The answer adds a once-only, twice-only, repeatability, or "
                     + "loop-prevention restriction that the player did not ask about and the draft's own cited "
                     + "evidence does not establish for this ruling. Remove that peripheral restriction. Keep a "
                     + "repeatability boundary only when the question asks about it or cite the exact evidence that "
                     + "governs the same action.");
+        }
+        if (AnswerDraftSafetyPolicy.containsSpeculativeUndefinedTermDefinition(draft)) {
+            feedback.add("UNDEFINED_TERM_SPECULATION: The draft correctly says the supplied evidence does not define "
+                    + "a rule state or relationship, but then guesses a possible definition or tells the player to "
+                    + "infer one. End at the evidence boundary. Keep supported consequences, state that the defining "
+                    + "condition is unavailable, and remove every possible example, spatial guess, component guess, "
+                    + "or instruction to decide the missing rule oneself.");
         }
         if (AnswerSpatialScopePolicy.needsRepair(request, draft)) {
             feedback.add("SPATIAL_SCOPE: The player gave one board position, but the draft adds a different row, "

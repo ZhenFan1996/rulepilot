@@ -4,7 +4,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 import LessonChapterContent from './LessonChapterContent.vue'
 import { setLocale } from '@/lib/locale'
 
-const visualFocus = { pageNumber: 6, label: '行动网格', x: 100, y: 100, width: 500, height: 300 }
+const visualFocus = {
+  pageNumber: 6,
+  label: '行动网格',
+  visibleDescription: '六张牌排成两行，箭头从左侧指向右侧。',
+  x: 100,
+  y: 100,
+  width: 500,
+  height: 300,
+}
 const visualStep = { position: 2, heading: '从网格中取牌', kind: 'VISUAL' as const, text: '选择一行或一列。', sourcePages: [6], visualFocus }
 
 function mountContent(overrides: Record<string, unknown> = {}) {
@@ -15,7 +23,7 @@ function mountContent(overrides: Record<string, unknown> = {}) {
       pathSteps: [visualStep], supportSteps: [], checkSteps: [], visualStepCount: 1, pathTitle: '上桌时按这个顺序',
       currentVisualPageNumber: 6, visualFeedbackSaving: null, online: true,
       pageImageUrl: (page: number) => `/page/${page}`,
-      focusedPageImageUrl: (focus: typeof visualFocus) => `/crop/${focus.pageNumber}`,
+      focusedPageImageUrl: (focus) => `/crop/${focus.pageNumber}`,
       stepSourceLabel: (step: { sourcePages: number[] }) => `原文 ${step.sourcePages.join('、')} 页`,
       moveMeta: () => ({ label: '看桌面', tone: 'bg-indigo/10 text-indigo' }),
       visualKindLabel: () => '流程示意',
@@ -33,6 +41,8 @@ describe('LessonChapterContent', () => {
     const wrapper = mountContent()
 
     expect(wrapper.text()).toContain('查看第 6 页上下文')
+    expect(wrapper.text()).toContain('图中看什么')
+    expect(wrapper.text()).toContain('六张牌排成两行，箭头从左侧指向右侧。')
     expect(wrapper.get('img[alt*="行动网格"]').attributes('src')).toBe('/crop/6')
     expect(wrapper.text()).toContain('查看原文第 6 页')
     await wrapper.findAll('button').find((button) => button.text() === '有帮助')!.trigger('click')

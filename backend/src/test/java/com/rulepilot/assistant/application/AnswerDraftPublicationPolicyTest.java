@@ -36,7 +36,7 @@ class AnswerDraftPublicationPolicyTest {
     }
 
     @Test
-    void rejectsAnEndOfTurnAnswerThatOmitsItsDirectProcedureCitation() {
+    void warnsWhenAConditionalProcedureAnswerOmitsItsDirectCitation() {
         UUID procedureId = UUID.randomUUID();
         UUID otherId = UUID.randomUUID();
         var request = request(
@@ -52,8 +52,9 @@ class AnswerDraftPublicationPolicyTest {
 
         var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(otherId)));
 
-        assertThat(prepared.ready()).isFalse();
-        assertThat(prepared.failureMessage()).isEqualTo("回答没有引用回合结束处理的直接规则依据。");
+        assertThat(prepared.ready()).isTrue();
+        assertThat(prepared.warnings()).singleElement().satisfies(warning ->
+                assertThat(warning.type()).isEqualTo(com.rulepilot.assistant.domain.AnswerWarning.Type.INDIRECT_CITATION));
     }
 
     @Test
@@ -80,16 +81,16 @@ class AnswerDraftPublicationPolicyTest {
     }
 
     @Test
-    void rejectsASameNumberAnswerThatOmitsTheDirectCollisionProcedure() {
-        UUID collisionId = UUID.randomUUID();
+    void warnsWhenAConditionalAnswerOmitsTheMostDirectCurrentDocumentEvidence() {
+        UUID procedureId = UUID.randomUUID();
         UUID setupId = UUID.randomUUID();
         var request = request(
-                "What happens when two players play the same number?",
+                "What happens when two players choose equal values?",
                 new RuleAnswerModel.EvidenceInput(
-                        collisionId,
+                        procedureId,
                         "ROUND_STRUCTURE",
-                        "Resolving a bump",
-                        "Players who played the same number resolve the bump in priority order.",
+                        "Resolving equal choices",
+                        "Players who chose equal values follow the printed resolution procedure.",
                         10,
                         10),
                 new RuleAnswerModel.EvidenceInput(
@@ -97,8 +98,9 @@ class AnswerDraftPublicationPolicyTest {
 
         var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(setupId)));
 
-        assertThat(prepared.ready()).isFalse();
-        assertThat(prepared.failureMessage()).isEqualTo("回答没有引用相同数值条件的直接处理规则。");
+        assertThat(prepared.ready()).isTrue();
+        assertThat(prepared.warnings()).singleElement().satisfies(warning ->
+                assertThat(warning.type()).isEqualTo(com.rulepilot.assistant.domain.AnswerWarning.Type.INDIRECT_CITATION));
     }
 
     @Test
@@ -127,7 +129,7 @@ class AnswerDraftPublicationPolicyTest {
         return new RuleAnswerModel.ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new RuleAnswerModel.AnswerContext(null, null, null, 0),
+                new RuleAnswerModel.AnswerContext(null, null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
                 List.of(evidence));
     }
 

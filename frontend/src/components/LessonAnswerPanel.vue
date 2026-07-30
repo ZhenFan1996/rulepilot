@@ -97,12 +97,21 @@ function citationPages(citation: StructuredRuleAnswer['citations'][number]) {
 function answerFailureMessage(status: StructuredRuleAnswer['status']) {
   return {
     ANSWERED: '',
+    ANSWERED_WITH_WARNING: '',
     CLARIFICATION_REQUIRED: '',
     INSUFFICIENT_EVIDENCE: t('lesson.answer.failure.insufficient'),
     MODEL_TIMEOUT: t('public.answer.timeout'),
     INVALID_MODEL_OUTPUT: t('lesson.answer.failure.invalid'),
     VERSION_CONFLICT: t('lesson.answer.failure.version'),
   }[status]
+}
+
+function publishesConclusion(status: StructuredRuleAnswer['status']) {
+  return status === 'ANSWERED' || status === 'ANSWERED_WITH_WARNING'
+}
+
+function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
+  return t(`lesson.answer.warning.${warning.type}` as const)
 }
 </script>
 
@@ -120,7 +129,10 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
 
       <ol v-if="previousAnswerTurns.length" class="mt-5 space-y-3" :aria-label="t('lesson.answer.thread')">
         <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
-          <p class="text-xs font-semibold text-ink/45">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : t('lesson.answer.youAsked') }}</p>
+          <div class="flex flex-wrap items-center gap-2">
+            <p class="text-xs font-semibold text-ink/45">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : t('lesson.answer.youAsked') }}</p>
+            <span v-if="turn.answer.status === 'ANSWERED_WITH_WARNING'" class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">{{ t('lesson.answer.warning.badge') }}</span>
+          </div>
           <p class="mt-1 text-sm leading-6">{{ turn.question }}</p>
           <p class="mt-3 border-l-2 border-copper pl-3 text-sm font-semibold leading-6">{{ turn.answer.shortVerdict }}</p>
         </li>
@@ -192,15 +204,22 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
           <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
           <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
             <span :class="answer.confidence === 'LOW' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
-            <span v-if="answer.status === 'ANSWERED'" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
+            <span v-if="publishesConclusion(answer.status)" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
             <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? t('lesson.answer.source.confirmed') : answer.official ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
           </div>
           <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
 
           <p v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answer.clarification }}</p>
-          <p v-else-if="answer.status !== 'ANSWERED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
+          <p v-else-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
 
-          <div v-if="answer.status === 'ANSWERED'" class="mt-5 border-t border-ink/10 pt-4">
+          <div v-if="answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
+            <p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p>
+            <ul class="mt-1 list-disc space-y-1 pl-5">
+              <li v-for="warning in answer.warnings" :key="warning.type">{{ warningMessage(warning) }}</li>
+            </ul>
+          </div>
+
+          <div v-if="publishesConclusion(answer.status)" class="mt-5 border-t border-ink/10 pt-4">
             <p class="text-sm font-semibold text-indigo">{{ t('public.answer.trace') }}</p>
             <ol class="mt-3 space-y-3 text-sm leading-6 text-ink/70">
               <li class="rounded-2xl bg-indigo/[0.045] p-3"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(answer.answerBasis) }}</li>
@@ -209,7 +228,7 @@ function answerFailureMessage(status: StructuredRuleAnswer['status']) {
             </ol>
           </div>
 
-          <div v-if="answer.status === 'ANSWERED'" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
+          <div v-if="publishesConclusion(answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
             <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
             <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
             <button type="button" :disabled="answerLoading" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXCEPTIONS')">{{ t('lesson.answer.intent.exceptions') }}</button>

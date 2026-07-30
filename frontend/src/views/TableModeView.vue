@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import { notifyLoginRequired } from '@/lib/authSession'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 
 interface TeachingPlan {
@@ -14,11 +15,6 @@ interface TeachingPlan {
 
 interface GameSession {
   id: string
-  documentVersionId: string
-  playerCount: number
-  roundNumber: number
-  phase: string
-  activePlayer: number | null
 }
 
 interface Citation {
@@ -30,7 +26,7 @@ interface Citation {
 }
 
 interface RuleAnswer {
-  status: 'ANSWERED' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
+  status: 'ANSWERED' | 'ANSWERED_WITH_WARNING' | 'CLARIFICATION_REQUIRED' | 'INSUFFICIENT_EVIDENCE' | 'MODEL_TIMEOUT' | 'INVALID_MODEL_OUTPUT' | 'VERSION_CONFLICT'
   shortVerdict: string
   explanation: string
   citations: Citation[]
@@ -38,6 +34,7 @@ interface RuleAnswer {
   confidence: 'HIGH' | 'MEDIUM' | 'LOW'
   answerBasis?: 'DIRECT_RULE' | 'GROUNDED_APPLICATION' | null
   clarification: string | null
+  warnings: Array<{ type: 'INDIRECT_CITATION' | 'LOW_CONFIDENCE' | 'REVIEW_UNRESOLVED' | 'REVIEW_UNAVAILABLE' }>
 }
 
 interface ConversationTurn {
@@ -56,7 +53,6 @@ interface CsrfResponse {
 type FeedbackRating = 'HELPFUL' | 'UNCLEAR' | 'INCORRECT'
 
 const route = useRoute()
-const router = useRouter()
 const planId = computed(() => String(route.params.planId ?? ''))
 const plan = ref<TeachingPlan | null>(null)
 const session = ref<GameSession | null>(null)
@@ -64,7 +60,6 @@ const turns = ref<ConversationTurn[]>([])
 const question = ref('')
 const loading = ref(true)
 const asking = ref(false)
-const updating = ref(false)
 const feedbackByTurn = ref<Record<string, FeedbackRating>>({})
 const feedbackSubmitting = ref(false)
 const errorMessage = ref('')
@@ -75,7 +70,7 @@ const latestTurn = computed(() => turns.value[turns.value.length - 1] ?? null)
 const earlierTurns = computed(() => turns.value.slice(0, -1).reverse())
 const displayPlanTitle = computed(() => plan.value ? playerFacingTitle(plan.value.gameTitle) : '')
 const stageMessage = computed(() => {
-  if (elapsedSeconds.value < 3) return '正在理解问题和当前局面…'
+  if (elapsedSeconds.value < 3) return '正在理解问题…'
   if (elapsedSeconds.value < 8) return '正在规则书里查找相关条目…'
   return '正在核对结论与出处；可以留在此页等待。'
 })
@@ -87,7 +82,7 @@ function storageKey() {
 async function csrfToken() {
   const response = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (response.status === 401) {
-    await router.push({ name: 'login' })
+    notifyLoginRequired()
     throw new Error('请先登录。')
   }
   if (!response.ok) throw new Error('无法建立安全会话。')
@@ -102,10 +97,11 @@ async function createSession(targetPlan: TeachingPlan) {
     headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
     body: JSON.stringify({
       documentVersionId: targetPlan.documentVersionId,
+      // The legacy session schema requires storage-only fields; rule answering never reads them.
       expansionIds: [],
       playerCount: targetPlan.playerCount,
-      phase: '开局准备',
-      activePlayer: 1,
+      phase: '规则问答',
+      activePlayer: null,
     }),
   })
   if (!response.ok) throw new Error('无法开始桌边模式。')
@@ -119,7 +115,7 @@ async function loadConversation() {
     `/api/v1/document-versions/${plan.value.documentVersionId}/answers/conversation?gameSessionId=${session.value.id}`,
     { credentials: 'include' },
   )
-  if (!response.ok) throw new Error('无法恢复这局的问答记录。')
+  if (!response.ok) throw new Error('无法恢复本次问答记录。')
   turns.value = (await response.json()) as ConversationTurn[]
   feedbackByTurn.value = Object.fromEntries(
     turns.value
@@ -134,7 +130,8 @@ async function loadTable() {
   try {
     const planResponse = await fetch(`/api/v1/teaching-plans/${planId.value}`, { credentials: 'include' })
     if (planResponse.status === 401) {
-      await router.push({ name: 'login' })
+      notifyLoginRequired()
+      errorMessage.value = '请先登录后查看这份讲解。'
       return
     }
     if (!planResponse.ok) throw new Error('找不到这份讲解。')
@@ -202,43 +199,29 @@ async function submitFeedback(turnId: string, rating: FeedbackRating) {
   }
 }
 
-async function updateTurn() {
-  if (!session.value || updating.value) return
-  updating.value = true
-  errorMessage.value = ''
-  try {
-    const csrf = await csrfToken()
-    const response = await fetch(`/api/v1/game-sessions/${session.value.id}/turn`, {
-      method: 'PATCH',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
-      body: JSON.stringify({
-        roundNumber: session.value.roundNumber,
-        phase: session.value.phase,
-        activePlayer: session.value.activePlayer,
-      }),
-    })
-    if (!response.ok) throw new Error('当前局面保存失败。')
-    session.value = (await response.json()) as GameSession
-  } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '当前局面保存失败。'
-  } finally {
-    updating.value = false
-  }
-}
-
 function pages(citation: Citation) {
   return citation.pageFrom === citation.pageTo ? `第 ${citation.pageFrom} 页` : `第 ${citation.pageFrom}–${citation.pageTo} 页`
 }
 
 function answerBasisLabel(answerBasis: RuleAnswer['answerBasis']) {
-  return answerBasis === 'GROUNDED_APPLICATION' ? '按规则套用当前局面' : '规则原文直接裁定'
+  return answerBasis === 'GROUNDED_APPLICATION' ? '按规则回答当前问题' : '规则原文直接裁定'
 }
 
 function answerBasisDescription(answerBasis: RuleAnswer['answerBasis']) {
   return answerBasis === 'GROUNDED_APPLICATION'
-    ? '这条结论把已引用规则用于你刚才描述的局面；没有把未说明的桌面状态当作事实。'
+    ? '这条结论只把已引用规则用于你问题中明确写出的条件；不会读取或猜测桌面状态。'
     : '这条结论可由下方引用的规则原文直接核对。'
+}
+
+function publishesConclusion(status: RuleAnswer['status']) {
+  return status === 'ANSWERED' || status === 'ANSWERED_WITH_WARNING'
+}
+
+function warningMessage(type: RuleAnswer['warnings'][number]['type']) {
+  if (type === 'INDIRECT_CITATION') return '引用属于当前规则书，但可能不是这个条件下最直接的规则。'
+  if (type === 'LOW_CONFIDENCE') return '模型对这条结论把握较低，请结合规则原文确认。'
+  if (type === 'REVIEW_UNRESOLVED') return '事实审查仍有非关键疑点，请结合规则原文核对。'
+  return '引用检查已通过，但自动事实审查暂时无法完成。'
 }
 
 onMounted(() => void loadTable())
@@ -262,7 +245,7 @@ onUnmounted(() => {
 
       <main class="mx-auto max-w-3xl px-4 py-5">
         <div v-if="loading" class="space-y-4" aria-live="polite">
-          <p class="text-sm text-panel-text/65">正在恢复这局游戏…</p>
+          <p class="text-sm text-panel-text/65">正在恢复问答记录…</p>
           <div class="h-28 animate-pulse rounded-2xl bg-white/8" />
         </div>
 
@@ -273,26 +256,18 @@ onUnmounted(() => {
         </section>
 
         <template v-else>
-          <details class="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <summary class="cursor-pointer list-none font-semibold">
-              第 {{ session.roundNumber }} 轮 · {{ session.phase }}<span v-if="session.activePlayer"> · {{ session.activePlayer }} 号玩家</span>
-              <span class="float-right text-xs text-panel-text/50">修改局面</span>
-            </summary>
-            <form class="mt-4 grid grid-cols-2 gap-3" @submit.prevent="updateTurn">
-              <label class="text-xs text-panel-text/60">轮次<input v-model.number="session.roundNumber" min="1" type="number" class="mt-1 min-h-11 w-full rounded-xl border border-white/15 bg-black/20 px-3 text-base text-white"></label>
-              <label class="text-xs text-panel-text/60">当前玩家<input v-model.number="session.activePlayer" :max="session.playerCount" min="1" type="number" class="mt-1 min-h-11 w-full rounded-xl border border-white/15 bg-black/20 px-3 text-base text-white"></label>
-              <label class="col-span-2 text-xs text-panel-text/60">当前阶段<input v-model="session.phase" maxlength="80" class="mt-1 min-h-11 w-full rounded-xl border border-white/15 bg-black/20 px-3 text-base text-white" placeholder="例如：主要行动"></label>
-              <button :disabled="updating" class="col-span-2 min-h-11 rounded-xl border border-amber-200/40 text-sm font-semibold text-amber-100 disabled:opacity-40">{{ updating ? '保存中…' : '保存局面' }}</button>
-            </form>
-          </details>
+          <div class="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm leading-6 text-panel-text/70">
+            回答只参考这款桌游的当前规则书版本。人数、轮次、阶段和当前玩家不会影响检索或结论；若问题依赖某个条件，请直接写在问题里。
+          </div>
 
           <article v-if="latestTurn" class="mt-5 overflow-hidden rounded-3xl bg-paper text-ink shadow-2xl shadow-black/20" aria-live="polite">
             <div class="p-5 sm:p-7">
               <p class="text-xs font-semibold text-ink/45">你问：{{ latestTurn.question }}</p>
-              <p class="mt-4 text-xs font-bold text-emerald-700">{{ latestTurn.answer.status === 'ANSWERED' ? '已核对，可以继续游戏' : '先暂停这一步' }}</p>
+              <p class="mt-4 text-xs font-bold" :class="latestTurn.answer.status === 'ANSWERED' ? 'text-emerald-700' : latestTurn.answer.status === 'ANSWERED_WITH_WARNING' ? 'text-amber-700' : 'text-red-700'">{{ latestTurn.answer.status === 'ANSWERED' ? '已核对，可以继续游戏' : latestTurn.answer.status === 'ANSWERED_WITH_WARNING' ? '有依据，但请先核对提醒' : '先暂停这一步' }}</p>
               <h1 class="mt-2 font-display text-2xl font-semibold leading-9">{{ latestTurn.answer.shortVerdict }}</h1>
-              <p v-if="latestTurn.answer.status !== 'ANSWERED'" class="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{{ latestTurn.answer.clarification ?? '当前证据还不足以给出可靠裁定。' }}</p>
-              <details v-else class="mt-5 border-t border-ink/10 pt-4">
+              <p v-if="!publishesConclusion(latestTurn.answer.status)" class="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{{ latestTurn.answer.clarification ?? '当前证据还不足以给出可靠裁定。' }}</p>
+              <div v-if="latestTurn.answer.warnings.length" class="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status"><p class="font-semibold">使用这条裁定前请留意</p><ul class="mt-1 list-disc space-y-1 pl-5"><li v-for="warning in latestTurn.answer.warnings" :key="warning.type">{{ warningMessage(warning.type) }}</li></ul></div>
+              <details v-if="publishesConclusion(latestTurn.answer.status)" class="mt-5 border-t border-ink/10 pt-4">
                 <summary class="cursor-pointer font-semibold text-indigo">这条裁定如何得出？</summary>
                 <p class="mt-3 text-sm font-semibold text-copper">{{ answerBasisLabel(latestTurn.answer.answerBasis) }}</p>
                 <p class="mt-2 text-sm leading-6 text-ink/60">{{ answerBasisDescription(latestTurn.answer.answerBasis) }}</p>
@@ -332,16 +307,17 @@ onUnmounted(() => {
 
           <div v-else class="mt-5 rounded-3xl border border-white/10 p-6 text-center">
             <p class="font-display text-xl font-semibold">桌上遇到争议，就直接问</p>
-            <p class="mt-2 text-sm leading-6 text-panel-text/60">比如“我现在还能再登陆一次吗？”系统会结合当前轮次和阶段重新核对规则书。</p>
+            <p class="mt-2 text-sm leading-6 text-panel-text/60">直接描述规则疑问；如果有前提条件，也请一并写进问题。系统只依据这款桌游的规则书回答。</p>
           </div>
 
           <p v-if="errorMessage" class="mt-4 rounded-xl bg-red-950/60 p-3 text-sm text-red-100" role="alert">{{ errorMessage }}</p>
 
           <details v-if="earlierTurns.length" class="mt-5 rounded-2xl border border-white/10 p-4">
-            <summary class="cursor-pointer text-sm font-semibold text-panel-text/70">这局之前的 {{ earlierTurns.length }} 条裁定</summary>
+            <summary class="cursor-pointer text-sm font-semibold text-panel-text/70">本次问答之前的 {{ earlierTurns.length }} 条裁定</summary>
             <ol class="mt-3 space-y-3">
               <li v-for="turn in earlierTurns" :key="turn.id" class="border-l-2 border-amber-200/40 pl-3 text-sm">
                 <p class="text-panel-text/55">{{ turn.question }}</p>
+                <p v-if="turn.answer.status === 'ANSWERED_WITH_WARNING'" class="mt-1 text-xs font-semibold text-amber-200">带核对提醒</p>
                 <p class="mt-1 font-semibold">{{ turn.answer.shortVerdict }}</p>
               </li>
             </ol>
@@ -352,7 +328,7 @@ onUnmounted(() => {
       <div v-if="session" class="fixed inset-x-0 bottom-0 z-30 border-t border-white/10 bg-ink-panel/95 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur">
         <form class="mx-auto flex max-w-3xl gap-2" @submit.prevent="ask">
           <label for="table-question" class="sr-only">输入桌边规则问题</label>
-          <input id="table-question" v-model="question" maxlength="800" :disabled="asking" class="min-h-12 min-w-0 flex-1 rounded-xl border border-white/15 bg-white/10 px-4 text-base text-white placeholder:text-white/35 focus:border-amber-200 focus:outline-none" placeholder="现在发生了什么争议？">
+          <input id="table-question" v-model="question" maxlength="800" :disabled="asking" class="min-h-12 min-w-0 flex-1 rounded-xl border border-white/15 bg-white/10 px-4 text-base text-white placeholder:text-white/35 focus:border-amber-200 focus:outline-none" placeholder="要查哪条规则？">
           <button :disabled="asking || !question.trim()" class="min-h-12 rounded-xl bg-amber-300 px-5 font-bold text-ink disabled:opacity-40">{{ asking ? `${elapsedSeconds}s` : '查规则' }}</button>
         </form>
         <p v-if="asking" class="mx-auto mt-2 max-w-3xl text-xs text-panel-text/60" role="status">{{ stageMessage }}</p>

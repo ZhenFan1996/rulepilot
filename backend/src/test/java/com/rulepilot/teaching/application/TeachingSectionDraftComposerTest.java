@@ -60,7 +60,9 @@ class TeachingSectionDraftComposerTest {
         assertThat(requests).singleElement().satisfies(request -> {
             assertThat(request.pageImages()).extracting(TeachingLessonModel.PageImageInput::pageNumber).containsExactly(4);
             assertThat(request.evidence()).singleElement().satisfies(source ->
-                    assertThat(source.excerpt()).contains("Visual page facts", "Visible facts: The central board"));
+                    assertThat(source.excerpt())
+                            .contains("Visual presentation data only", "Cataloged visual anchors")
+                            .doesNotContain("The central board shows the shared setup area"));
         });
         assertThat(candidate.section().evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
         assertThat(candidate.section().visualSourcePages()).containsExactly(4);
@@ -178,7 +180,15 @@ class TeachingSectionDraftComposerTest {
                 pageNumber,
                 "Central board",
                 "The central board shows the shared setup area.",
-                List.of("board"));
+                List.of("board"),
+                List.of(new VisualRulebookPageFacts.VisualAnchor(
+                        "table layout",
+                        "中央设置区",
+                        "主棋盘位于资源供应区和卡牌行之间。",
+                        120,
+                        180,
+                        620,
+                        480)));
         return new VisualRulebookPageFacts() {
             @Override
             public void replace(UUID documentVersionId, List<PageFact> pages) {}

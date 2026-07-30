@@ -23,7 +23,7 @@ final class AnswerCritiquePolicy {
 
     private static final Pattern MATERIAL_CONDITION = Pattern.compile(
             "(?iu)\\b(?:if|when|after|before|unless|whether|then|once)\\b|"
-                    + "如果|若|当|除非|否则|之后|以后|之前|以前|怎么办|如何处理|是否|能否|不能|必须");
+                    + "如果|若|当|除非|否则|之后|以后|之前|以前|怎么办|如何处理|是否|能否|现在能|现在可以|不能|必须");
     private static final Pattern COUNTERFACTUAL_FOLLOW_UP = Pattern.compile(
             "(?iu)\\b(?:if\\s+(?:so|possible|true|that\\s+is\\s+the\\s+case)|if\\s+it\\s+can|then\\s+what)\\b|"
                     + "如果可以|若可以|如果满足|若满足|如果是这样|那么(?:其他|接下来)|其他玩家.*(?:继续|还会)");
@@ -33,18 +33,16 @@ final class AnswerCritiquePolicy {
     static ReviewRisk reviewRisk(
             UnderstoodQuestion question,
             QuestionContext context,
-            UUID gameSessionId,
             StructuredRuleAnswer answer) {
-        if (allowsBoundedCorrection(question, context, gameSessionId)) {
+        if (allowsBoundedCorrection(question, context)) {
             return ReviewRisk.HIGH_IMPACT;
         }
         return answer.confidence() == AnswerConfidence.LOW ? ReviewRisk.LOW_CONFIDENCE : ReviewRisk.STANDARD;
     }
 
     static boolean allowsBoundedCorrection(
-            UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
-        return gameSessionId != null
-                || context.previousQuestion() != null
+            UnderstoodQuestion question, QuestionContext context) {
+        return context.previousQuestion() != null
                 || context.learningIntent() != null
                 || requiresDirectFactualReview(question);
     }
@@ -83,9 +81,7 @@ final class AnswerCritiquePolicy {
                                         ? "not applicable"
                                         : answer.answerBasis().name())
                                 + "; preserve material exceptions for lesson section "
-                                + contextValue(context.currentLessonSection()) + ", game phase "
-                                + contextValue(context.gamePhase()) + ", and player count "
-                                + contextValue(context.playerCount())
+                                + contextValue(context.currentLessonSection())
                                 + ", and learning intent " + contextValue(context.learningIntent())
                                 + ". Preserve every named eligibility and identity condition. Reject any claim that a "
                                 + "condition is irrelevant, optional, or broader than stated unless evidence explicitly "

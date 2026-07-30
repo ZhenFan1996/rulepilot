@@ -4,11 +4,14 @@ import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Review;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
+import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.domain.AnswerStatus;
+import com.rulepilot.assistant.domain.AnswerWarning;
+import com.rulepilot.assistant.domain.AnswerWarning.Type;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
@@ -53,31 +56,45 @@ final class AnswerPostPublicationReviewer {
             StructuredRuleAnswer answer,
             List<HybridEvidenceHit> evidence) {
         try {
-            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, gameSessionId, answer);
+            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, answer);
             Review review = critic.review(
                     AnswerCritiquePolicy.request(assistantRunId, question, context, answer, evidence), risk);
             if (review.accepted()) return Result.accepted(answer);
-            if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context, gameSessionId)) {
-                return Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
+            if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
+                return unresolvedReview(answer, review, "事实一致性审查发现未修正的关键问题。");
             }
-            StructuredRuleAnswer revised = revise(
-                    assistantRunId,
-                    context.documentVersionId(),
-                    username,
-                    gameSessionId,
-                    modelRequest,
-                    draft,
-                    review,
-                    evidence);
-            Review revisionReview = critic.review(
-                    AnswerCritiquePolicy.request(assistantRunId, question, context, revised, evidence),
-                    ReviewRisk.HIGH_IMPACT);
+            StructuredRuleAnswer revised;
+            try {
+                revised = revise(
+                        assistantRunId,
+                        context.documentVersionId(),
+                        username,
+                        gameSessionId,
+                        modelRequest,
+                        draft,
+                        review,
+                        evidence);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException correctionFailure) {
+                return hasMaterialDefect(review)
+                        ? Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "事实一致性审查发现未修正的关键问题。")
+                        : Result.warned(answer, Type.REVIEW_UNRESOLVED);
+            }
+            Review revisionReview;
+            try {
+                revisionReview = critic.review(
+                        AnswerCritiquePolicy.request(assistantRunId, question, context, revised, evidence),
+                        ReviewRisk.HIGH_IMPACT);
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
+            } catch (RuntimeException reviewFailure) {
+                return Result.warned(revised, Type.REVIEW_UNAVAILABLE);
+            }
             if (!revisionReview.accepted()) {
-                return Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "局部重讲仍未通过事实一致性审查。");
+                return unresolvedReview(revised, revisionReview, "局部重讲仍未通过事实一致性审查。");
             }
             return Result.accepted(revised);
-        } catch (RuleAnswerModelTimeoutException exception) {
-            throw exception;
         } catch (AgentExecutionStoppedException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -86,8 +103,22 @@ final class AnswerPostPublicationReviewer {
                     assistantRunId,
                     exception.getMessage(),
                     exception.getClass().getSimpleName());
-            return Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "回答事实一致性审查失败。");
+            return Result.warned(answer, Type.REVIEW_UNAVAILABLE);
         }
+    }
+
+    private Result unresolvedReview(StructuredRuleAnswer answer, Review review, String materialFailureMessage) {
+        return hasMaterialDefect(review)
+                ? Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, materialFailureMessage)
+                : Result.warned(answer, Type.REVIEW_UNRESOLVED);
+    }
+
+    private boolean hasMaterialDefect(Review review) {
+        return review.issues().stream().map(GeneratedContentCritic.Issue::type).anyMatch(type ->
+                type == IssueType.UNSUPPORTED_CLAIM
+                        || type == IssueType.CONTRADICTION
+                        || type == IssueType.OVERREACH
+                        || type == IssueType.MISSING_CRITICAL_RULE);
     }
 
     private StructuredRuleAnswer revise(
@@ -144,6 +175,11 @@ final class AnswerPostPublicationReviewer {
 
         static Result accepted(StructuredRuleAnswer answer) {
             return new Result(answer, null, null);
+        }
+
+        static Result warned(StructuredRuleAnswer answer, Type warningType) {
+            return accepted(AnswerOutcomePolicy.withWarnings(
+                    answer, List.of(new AnswerWarning(warningType))));
         }
 
         static Result rejected(AnswerStatus failureStatus, String failureMessage) {

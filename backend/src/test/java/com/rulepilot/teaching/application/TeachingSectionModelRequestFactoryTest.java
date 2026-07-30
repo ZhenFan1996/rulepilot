@@ -41,7 +41,12 @@ class TeachingSectionModelRequestFactoryTest {
 
         assertThat(request.pageImages()).extracting(image -> image.pageNumber()).containsExactly(4);
         assertThat(request.evidence()).singleElement().satisfies(source ->
-                assertThat(source.excerpt()).contains("Visible facts: The central board"));
+                assertThat(source.excerpt())
+                        .contains("Visual presentation data only")
+                        .contains("Cataloged visual anchors")
+                        .contains("中央设置区")
+                        .contains("rect=120,180,620,480")
+                        .doesNotContain("The central board shows the shared setup area"));
         assertThat(request.chapterScope()).contains("【当前章节】第1章《开局准备》");
     }
 
@@ -72,7 +77,15 @@ class TeachingSectionModelRequestFactoryTest {
                 pageNumber,
                 "Central board",
                 "The central board shows the shared setup area.",
-                List.of("board"));
+                List.of("board"),
+                List.of(new VisualRulebookPageFacts.VisualAnchor(
+                        "table layout",
+                        "中央设置区",
+                        "主棋盘位于资源供应区和卡牌行之间。",
+                        120,
+                        180,
+                        620,
+                        480)));
         return new VisualRulebookPageFacts() {
             @Override
             public void replace(UUID documentVersionId, List<PageFact> pages) {}

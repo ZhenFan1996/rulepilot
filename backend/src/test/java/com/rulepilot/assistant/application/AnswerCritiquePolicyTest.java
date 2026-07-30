@@ -32,18 +32,16 @@ class AnswerCritiquePolicyTest {
         UnderstoodQuestion conditionalQuestion = question(
                 QuestionType.LESSON_STEP_FOLLOW_UP, "如果母舰经过检查点，接下来要怎么处理？");
 
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.STANDARD);
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, context("上一问", null), null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, context("上一问", null), highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
         assertThat(AnswerCritiquePolicy.reviewRisk(
-                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY), null, highConfidence))
+                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY), highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, UUID.randomUUID(), highConfidence))
-                .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, null, answer(AnswerConfidence.LOW, List.of())))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, answer(AnswerConfidence.LOW, List.of())))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.LOW_CONFIDENCE);
-        assertThat(AnswerCritiquePolicy.reviewRisk(conditionalQuestion, ordinary, null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(conditionalQuestion, ordinary, highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
     }
 
@@ -54,15 +52,13 @@ class AnswerCritiquePolicyTest {
         UnderstoodQuestion conditionalQuestion = question(
                 QuestionType.LESSON_STEP_FOLLOW_UP, "如果母舰经过检查点，接下来要怎么处理？");
 
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, ordinary, null)).isFalse();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, context("上一问", null), null))
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, ordinary)).isFalse();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, context("上一问", null)))
                 .isTrue();
         assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(
-                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY), null))
+                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY)))
                 .isTrue();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, ordinary, UUID.randomUUID()))
-                .isTrue();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(conditionalQuestion, ordinary, null)).isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(conditionalQuestion, ordinary)).isTrue();
     }
 
     @Test

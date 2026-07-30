@@ -1,6 +1,7 @@
 export interface VisualFocus {
   pageNumber: number
   label: string
+  visibleDescription?: string
   x: number
   y: number
   width: number

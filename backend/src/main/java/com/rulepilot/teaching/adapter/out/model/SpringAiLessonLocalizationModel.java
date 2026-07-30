@@ -66,7 +66,12 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
             throw new IllegalArgumentException("localized lesson section is structurally invalid");
         }
         List<StepTranslation> steps = draft.steps().stream()
-                .map(step -> new StepTranslation(step.position(), step.heading(), step.text(), step.visualLabel()))
+                .map(step -> new StepTranslation(
+                        step.position(),
+                        step.heading(),
+                        step.text(),
+                        step.visualLabel(),
+                        step.visualDescription()))
                 .toList();
         return new SectionTranslation(draft.position(), draft.title(), draft.visualCaption(), steps);
     }
@@ -81,14 +86,28 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
         }
     }
 
-    private record StepInput(int position, String heading, String text, String visualLabel) {
+    private record StepInput(
+            int position,
+            String heading,
+            String text,
+            String visualLabel,
+            String visualDescription) {
         static StepInput from(LessonStep step) {
             return new StepInput(
-                    step.position(), step.heading(), step.text(), step.visualFocus() == null ? "" : step.visualFocus().label());
+                    step.position(),
+                    step.heading(),
+                    step.text(),
+                    step.visualFocus() == null ? "" : step.visualFocus().label(),
+                    step.visualFocus() == null ? "" : step.visualFocus().visibleDescription());
         }
     }
 
     private record SectionTranslationDraft(int position, String title, String visualCaption, List<StepTranslationDraft> steps) {}
 
-    private record StepTranslationDraft(int position, String heading, String text, String visualLabel) {}
+    private record StepTranslationDraft(
+            int position,
+            String heading,
+            String text,
+            String visualLabel,
+            String visualDescription) {}
 }
