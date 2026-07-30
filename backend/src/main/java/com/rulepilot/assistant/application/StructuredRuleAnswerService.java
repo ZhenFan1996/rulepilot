@@ -45,8 +45,8 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Critic-guided conditional revisions now retry an empty correction, so prior failed cache entries are not reusable.
-    private static final String ANSWER_POLICY_VERSION = "answer-v70-evidence-backed-revision-retry";
+    // End-trigger follow-ups now retrieve their direct completion procedure, so older insufficiency cache entries are stale.
+    private static final String ANSWER_POLICY_VERSION = "answer-v71-end-trigger-completion-retrieval";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
