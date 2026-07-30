@@ -11,6 +11,7 @@ import LessonGenerationStatus from '@/components/LessonGenerationStatus.vue'
 import LessonNarrationPanel from '@/components/LessonNarrationPanel.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
 import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
+import RulebookIconGlossaryPanel from '@/components/RulebookIconGlossaryPanel.vue'
 import LessonVideoPanel from '@/components/LessonVideoPanel.vue'
 import {
   useLessonAnswers,
@@ -41,6 +42,10 @@ import {
   type TeachingRunProgress,
 } from '@/lib/teachingProgress'
 import { useLocale } from '@/lib/locale'
+import {
+  parseRulebookIconGlossary,
+  type RulebookIconGlossary,
+} from '@/lib/rulebookIconGlossary'
 
 interface TeachingPlan {
   id: string
@@ -107,6 +112,10 @@ const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const cardOcrOpen = ref(false)
 const teachingRun = ref<TeachingRunProgress | null>(null)
 const visualEnrichmentRun = ref<TeachingRunProgress | null>(null)
+const iconGlossary = ref<RulebookIconGlossary | null>(null)
+const iconGlossaryLoading = ref(false)
+const iconGlossaryError = ref('')
+const iconGlossaryStarting = ref(false)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
@@ -446,6 +455,10 @@ async function loadLesson() {
   resetLessonReader()
   teachingRun.value = null
   visualEnrichmentRun.value = null
+  iconGlossary.value = null
+  iconGlossaryLoading.value = true
+  iconGlossaryError.value = ''
+  iconGlossaryStarting.value = false
   generationStatusUnknown.value = false
   generationRefreshError.value = ''
   generationFinishedMessage.value = ''
@@ -457,14 +470,15 @@ async function loadLesson() {
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
-    const [planResponse, lessonResponse, runResponse, visualRunResponse] = await Promise.all([
+    const [planResponse, lessonResponse, runResponse, visualRunResponse, iconGlossaryResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
+      optionalFetch(iconGlossaryEndpoint(targetPlanId)),
     ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
+    if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401 || iconGlossaryResponse?.status === 401) {
       notifyLoginRequired()
       errorMessage.value = t('lesson.reader.error.loginRequired')
       return
@@ -486,6 +500,7 @@ async function loadLesson() {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     teachingRun.value = loadedRun
     visualEnrichmentRun.value = loadedVisualRun
+    await acceptIconGlossaryResponse(iconGlossaryResponse, targetPlanId, request)
     generationStatusUnknown.value = runResponse === null || (!runResponse.ok && runResponse.status !== 404)
     if (generationStatusUnknown.value) generationRefreshError.value = t('lesson.generation.refreshFailed')
     localStorage.setItem('rulepilot:last-plan-id', targetPlanId)
@@ -498,7 +513,10 @@ async function loadLesson() {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     errorMessage.value = t('lesson.reader.error.load')
   } finally {
-    if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
+    if (isCurrentLessonLoad(request, targetPlanId)) {
+      loading.value = false
+      iconGlossaryLoading.value = false
+    }
   }
 }
 
@@ -508,9 +526,12 @@ async function refreshVisualEnrichment() {
   const request = latestLessonLoad
   let retryDelay = 2500
   try {
-    const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`)
+    const [response, glossaryResponse] = await Promise.all([
+      optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
+      optionalFetch(iconGlossaryEndpoint(targetPlanId)),
+    ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (response?.status === 401) {
+    if (response?.status === 401 || glossaryResponse?.status === 401) {
       notifyLoginRequired()
       return
     }
@@ -519,10 +540,84 @@ async function refreshVisualEnrichment() {
       if (!isCurrentLessonLoad(request, targetPlanId)) return
       visualEnrichmentRun.value = incomingRun
     }
+    await acceptIconGlossaryResponse(glossaryResponse, targetPlanId, request)
   } catch {
     retryDelay = 5000
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) visualPolling.schedule(retryDelay)
+  }
+}
+
+function iconGlossaryEndpoint(targetPlanId = planId.value) {
+  return `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/illustrated-lessons/latest/icon-glossary`
+}
+
+function iconGlossaryImageUrl(occurrenceId: string) {
+  return `${iconGlossaryEndpoint()}/icons/${encodeURIComponent(occurrenceId)}/image`
+}
+
+async function acceptIconGlossaryResponse(
+  response: Response | null,
+  targetPlanId: string,
+  request = latestLessonLoad,
+) {
+  if (!isCurrentLessonLoad(request, targetPlanId)) return
+  if (!response || !response.ok) {
+    iconGlossaryError.value = t('iconGlossary.error.load')
+    return
+  }
+  try {
+    const received = parseRulebookIconGlossary(await response.json())
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    iconGlossary.value = received
+    iconGlossaryError.value = ''
+  } catch {
+    if (isCurrentLessonLoad(request, targetPlanId)) {
+      iconGlossaryError.value = t('iconGlossary.error.load')
+    }
+  } finally {
+    if (isCurrentLessonLoad(request, targetPlanId)) iconGlossaryLoading.value = false
+  }
+}
+
+async function reloadIconGlossary() {
+  const targetPlanId = planId.value
+  const request = latestLessonLoad
+  iconGlossaryLoading.value = iconGlossary.value === null
+  iconGlossaryError.value = ''
+  const response = await optionalFetch(iconGlossaryEndpoint(targetPlanId))
+  if (response?.status === 401) {
+    notifyLoginRequired()
+    iconGlossaryError.value = t('lesson.reader.error.loginRequired')
+    iconGlossaryLoading.value = false
+    return
+  }
+  await acceptIconGlossaryResponse(response, targetPlanId, request)
+}
+
+async function generateIconGlossary() {
+  if (!online.value || iconGlossaryStarting.value) return
+  const targetPlanId = planId.value
+  iconGlossaryStarting.value = true
+  iconGlossaryError.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await fetch(iconGlossaryEndpoint(targetPlanId), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { [csrf.headerName]: csrf.token },
+    })
+    if (response.status === 401) {
+      notifyLoginRequired()
+      throw new Error(t('lesson.reader.error.loginRequired'))
+    }
+    if (!response.ok) throw new Error(t('iconGlossary.error.generate'))
+    await refreshVisualEnrichment()
+    visualPolling.schedule(1500)
+  } catch (error) {
+    iconGlossaryError.value = error instanceof Error ? error.message : t('iconGlossary.error.generate')
+  } finally {
+    iconGlossaryStarting.value = false
   }
 }
 
@@ -768,6 +863,18 @@ onUnmounted(() => {
           <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ plan?.gameTitle }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/60">{{ t('lesson.reader.guideDescription') }}</p>
         </header>
+
+        <RulebookIconGlossaryPanel
+          :glossary="iconGlossary"
+          :loading="iconGlossaryLoading"
+          :error-message="iconGlossaryError"
+          :can-generate="true"
+          :generating="iconGlossaryStarting"
+          :online="online"
+          :image-url="iconGlossaryImageUrl"
+          @generate="generateIconGlossary"
+          @retry="reloadIconGlossary"
+        />
 
         <section class="mt-8 rounded-3xl border border-indigo/20 bg-indigo/[0.045] p-5 shadow-[0_18px_50px_-36px_rgba(40,57,128,0.75)] sm:p-7" aria-labelledby="private-question-title">
           <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

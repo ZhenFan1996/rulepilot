@@ -22,7 +22,7 @@ describe('LessonView progressive reading', () => {
     let runReads = 0
     let lessonReads = 0
     let qualityReads = 0
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
@@ -33,6 +33,12 @@ describe('LessonView progressive reading', () => {
             { position: 2, title: '开始第一轮', visualEvidenceRecommended: false },
           ],
         })
+      }
+      if (path.endsWith('/illustrated-lessons/latest/icon-glossary')) {
+        if (init?.method === 'POST') {
+          return Response.json({ assistantRunId: 'visual-run-1', state: 'QUEUED', revision: 0, reused: false }, { status: 202 })
+        }
+        return Response.json(iconGlossaryFixture())
       }
       if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
@@ -115,6 +121,10 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
     expect(wrapper.text()).toContain('人数、轮次和实时局面不会参与回答')
+    expect(wrapper.text()).toContain('图标速查表')
+    expect(wrapper.text()).toContain('执行一次行动。')
+    expect(wrapper.get('img[alt*="行动图标"]').attributes('src'))
+      .toContain('/illustrated-lessons/latest/icon-glossary/icons/icon-occurrence-1/image')
     expect(wrapper.find('#lesson-question-panel').element.tagName).toBe('SECTION')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
@@ -151,6 +161,11 @@ describe('LessonView progressive reading', () => {
       .map(([input]) => String(input))
       .filter((path) => path.includes('mode=TEACHING'))
     expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
+    await wrapper.findAll('button').find((button) => button.text() === '继续检查遗漏页面')!.trigger('click')
+    await flushPromises()
+    const iconGenerationRequest = fetchMock.mock.calls.find(([input, init]) =>
+      String(input).endsWith('/illustrated-lessons/latest/icon-glossary') && init?.method === 'POST')
+    expect(iconGenerationRequest?.[1]?.headers).toMatchObject({ 'X-CSRF-TOKEN': 'csrf' })
     wrapper.unmount()
   })
 
@@ -564,6 +579,33 @@ function section(position: number, title: string) {
         sourcePages: [position], visualFocus: null,
       },
     ],
+  }
+}
+
+function iconGlossaryFixture() {
+  return {
+    status: 'PARTIAL',
+    totalPages: 2,
+    inspectedPages: 2,
+    completePages: 1,
+    warnings: ['INCOMPLETE_PAGE_SCAN'],
+    icons: [{
+      id: 'icon-1',
+      name: '行动图标',
+      visualDescription: '蓝色圆形中的白色手掌',
+      explanation: '执行一次行动。',
+      evidenceText: '行动：执行一次行动',
+      meaningStatus: 'EXPLICIT',
+      representativeOccurrenceId: 'icon-occurrence-1',
+      occurrences: [{
+        id: 'icon-occurrence-1',
+        pageNumber: 2,
+        x: 100,
+        y: 100,
+        width: 80,
+        height: 80,
+      }],
+    }],
   }
 }
 

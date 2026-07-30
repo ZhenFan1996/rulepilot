@@ -3,9 +3,14 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import RulebookIconGlossaryPanel from '@/components/RulebookIconGlossaryPanel.vue'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
 import { publicCoverUrl } from '@/lib/publicCover'
+import {
+  parseRulebookIconGlossary,
+  type RulebookIconGlossary,
+} from '@/lib/rulebookIconGlossary'
 
 interface VisualFocus {
   pageNumber: number
@@ -72,6 +77,9 @@ const { locale, t } = useLocale()
 const loading = ref(true)
 const errorMessage = ref('')
 const publicLesson = ref<PublicLessonResponse | null>(null)
+const iconGlossary = ref<RulebookIconGlossary | null>(null)
+const iconGlossaryLoading = ref(true)
+const iconGlossaryError = ref('')
 const publicQuestion = ref('')
 const selectedSectionPosition = ref<number | null>(null)
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
@@ -238,26 +246,78 @@ function cropUrl(focus: VisualFocus) {
   return `${sourcePageUrl(focus.pageNumber)}/crop?${query.toString()}`
 }
 
+function publicIconGlossaryEndpoint(targetPlanId = planId.value) {
+  return `/api/public/lessons/${encodeURIComponent(targetPlanId)}/icon-glossary`
+}
+
+function publicIconImageUrl(occurrenceId: string) {
+  return `${publicIconGlossaryEndpoint()}/icons/${encodeURIComponent(occurrenceId)}/image`
+}
+
+async function optionalPublicFetch(url: string) {
+  try {
+    return await fetch(url)
+  } catch {
+    return null
+  }
+}
+
+async function acceptPublicIconGlossary(response: Response | null, request: number) {
+  if (request !== latestLoadRequest) return
+  if (!response?.ok) {
+    iconGlossaryError.value = t('iconGlossary.error.load')
+    iconGlossaryLoading.value = false
+    return
+  }
+  try {
+    const received = parseRulebookIconGlossary(await response.json())
+    if (request !== latestLoadRequest) return
+    iconGlossary.value = received
+    iconGlossaryError.value = ''
+  } catch {
+    if (request === latestLoadRequest) iconGlossaryError.value = t('iconGlossary.error.load')
+  } finally {
+    if (request === latestLoadRequest) iconGlossaryLoading.value = false
+  }
+}
+
+async function reloadPublicIconGlossary() {
+  const request = latestLoadRequest
+  iconGlossaryLoading.value = iconGlossary.value === null
+  iconGlossaryError.value = ''
+  await acceptPublicIconGlossary(await optionalPublicFetch(publicIconGlossaryEndpoint()), request)
+}
+
 async function load() {
   const requestedPlanId = planId.value
   const requestedLocale = locale.value
   const request = ++latestLoadRequest
   loading.value = true
   errorMessage.value = ''
+  iconGlossary.value = null
+  iconGlossaryLoading.value = true
+  iconGlossaryError.value = ''
   try {
     if (!requestedPlanId) throw new Error(t('public.error.missing'))
-    const response = await fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`)
+    const [response, glossaryResponse] = await Promise.all([
+      fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`),
+      optionalPublicFetch(publicIconGlossaryEndpoint(requestedPlanId)),
+    ])
     if (response.status === 404) throw new Error(t('public.error.unpublished'))
     if (!response.ok) throw new Error(t('public.error.open'))
     const received = await response.json() as PublicLessonResponse
     if (request !== latestLoadRequest) return
     publicLesson.value = received
     coverUnavailable.value = false
+    await acceptPublicIconGlossary(glossaryResponse, request)
   } catch (error) {
     if (request !== latestLoadRequest) return
     errorMessage.value = error instanceof Error ? error.message : t('public.error.open')
   } finally {
-    if (request === latestLoadRequest) loading.value = false
+    if (request === latestLoadRequest) {
+      loading.value = false
+      iconGlossaryLoading.value = false
+    }
   }
 }
 
@@ -390,6 +450,17 @@ watch([locale, planId], () => {
           <a v-if="publicLesson.officialSourceUrl" :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex min-h-11 items-center rounded-lg border border-indigo/30 px-4 font-semibold text-indigo hover:bg-indigo/5">{{ t('public.hero.openRulebook') }}</a>
           <p v-if="englishGuidePending" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/[0.045] px-4 py-3 text-sm leading-6 text-indigo" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
         </div>
+
+        <RulebookIconGlossaryPanel
+          :glossary="iconGlossary"
+          :loading="iconGlossaryLoading"
+          :error-message="iconGlossaryError"
+          :can-generate="false"
+          :generating="iconGlossary?.status === 'GENERATING'"
+          :online="true"
+          :image-url="publicIconImageUrl"
+          @retry="reloadPublicIconGlossary"
+        />
 
         <section class="mt-8 rounded-3xl border border-indigo/20 bg-indigo/[0.045] p-5 shadow-[0_18px_50px_-36px_rgba(40,57,128,0.75)] sm:p-7" aria-labelledby="public-question-title">
           <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
