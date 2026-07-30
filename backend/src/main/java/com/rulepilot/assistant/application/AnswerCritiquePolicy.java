@@ -16,21 +16,44 @@ import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /** Pure preparation for a bounded answer critique; retrieval and model calls stay in the answer workflow. */
 final class AnswerCritiquePolicy {
 
+    private static final Pattern MATERIAL_CONDITION = Pattern.compile(
+            "(?iu)\\b(?:if|when|after|before|unless|whether|then|once)\\b|"
+                    + "如果|若|当|除非|否则|之后|以后|之前|以前|怎么办|如何处理|是否|能否|不能|必须");
+
     private AnswerCritiquePolicy() {}
 
-    static ReviewRisk reviewRisk(QuestionContext context, UUID gameSessionId, StructuredRuleAnswer answer) {
-        if (allowsBoundedCorrection(context, gameSessionId)) {
+    static ReviewRisk reviewRisk(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            UUID gameSessionId,
+            StructuredRuleAnswer answer) {
+        if (allowsBoundedCorrection(question, context, gameSessionId)) {
             return ReviewRisk.HIGH_IMPACT;
         }
         return answer.confidence() == AnswerConfidence.LOW ? ReviewRisk.LOW_CONFIDENCE : ReviewRisk.STANDARD;
     }
 
-    static boolean allowsBoundedCorrection(QuestionContext context, UUID gameSessionId) {
-        return gameSessionId != null || context.previousQuestion() != null || context.learningIntent() != null;
+    static boolean allowsBoundedCorrection(
+            UnderstoodQuestion question, QuestionContext context, UUID gameSessionId) {
+        return gameSessionId != null
+                || context.previousQuestion() != null
+                || context.learningIntent() != null
+                || requiresDirectFactualReview(question);
+    }
+
+    /**
+     * A conditional table ruling has an observable branch and an immediate game consequence. It is cheap to identify
+     * before composition, but expensive for a player when a fluent answer silently turns the fallback branch into a
+     * no-op. Keep ordinary definition questions fast while reviewing these decision points before publication.
+     */
+    private static boolean requiresDirectFactualReview(UnderstoodQuestion question) {
+        return question.type() == com.rulepilot.assistant.domain.QuestionType.SITUATION_QUERY
+                || MATERIAL_CONDITION.matcher(question.normalizedQuestion()).find();
     }
 
     static ReviewRequest request(

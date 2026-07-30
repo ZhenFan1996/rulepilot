@@ -52,11 +52,11 @@ final class AnswerPostPublicationReviewer {
             StructuredRuleAnswer answer,
             List<HybridEvidenceHit> evidence) {
         try {
-            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(context, gameSessionId, answer);
+            ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, gameSessionId, answer);
             Review review = critic.review(
                     AnswerCritiquePolicy.request(assistantRunId, question, context, answer, evidence), risk);
             if (review.accepted()) return Result.accepted(answer);
-            if (!AnswerCritiquePolicy.allowsBoundedCorrection(context, gameSessionId)) {
+            if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context, gameSessionId)) {
                 return Result.rejected(AnswerStatus.INVALID_MODEL_OUTPUT, "回答未通过事实一致性审查。");
             }
             StructuredRuleAnswer revised = revise(

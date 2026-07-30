@@ -28,29 +28,41 @@ class AnswerCritiquePolicyTest {
     void raises_critique_risk_for_live_follow_up_and_learning_questions_before_confidence() {
         StructuredRuleAnswer highConfidence = answer(AnswerConfidence.HIGH, List.of());
         QuestionContext ordinary = context(null, null);
+        UnderstoodQuestion ordinaryQuestion = question(QuestionType.RULE_QUERY, "这个行动如何执行？");
+        UnderstoodQuestion conditionalQuestion = question(
+                QuestionType.LESSON_STEP_FOLLOW_UP, "如果母舰经过检查点，接下来要怎么处理？");
 
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinary, null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, null, highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.STANDARD);
-        assertThat(AnswerCritiquePolicy.reviewRisk(context("上一问", null), null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, context("上一问", null), null, highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-        assertThat(AnswerCritiquePolicy.reviewRisk(context(null, LearningIntent.SIMPLIFY), null, highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(
+                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY), null, highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinary, UUID.randomUUID(), highConfidence))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, UUID.randomUUID(), highConfidence))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
-        assertThat(AnswerCritiquePolicy.reviewRisk(ordinary, null, answer(AnswerConfidence.LOW, List.of())))
+        assertThat(AnswerCritiquePolicy.reviewRisk(ordinaryQuestion, ordinary, null, answer(AnswerConfidence.LOW, List.of())))
                 .isEqualTo(GeneratedContentCritic.ReviewRisk.LOW_CONFIDENCE);
+        assertThat(AnswerCritiquePolicy.reviewRisk(conditionalQuestion, ordinary, null, highConfidence))
+                .isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
     }
 
     @Test
     void allows_one_bounded_correction_for_each_high_impact_answer_context() {
         QuestionContext ordinary = context(null, null);
+        UnderstoodQuestion ordinaryQuestion = question(QuestionType.RULE_QUERY, "这个行动如何执行？");
+        UnderstoodQuestion conditionalQuestion = question(
+                QuestionType.LESSON_STEP_FOLLOW_UP, "如果母舰经过检查点，接下来要怎么处理？");
 
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinary, null)).isFalse();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(context("上一问", null), null)).isTrue();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(
-                        context(null, LearningIntent.SIMPLIFY), null))
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, ordinary, null)).isFalse();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, context("上一问", null), null))
                 .isTrue();
-        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinary, UUID.randomUUID())).isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(
+                        ordinaryQuestion, context(null, LearningIntent.SIMPLIFY), null))
+                .isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(ordinaryQuestion, ordinary, UUID.randomUUID()))
+                .isTrue();
+        assertThat(AnswerCritiquePolicy.allowsBoundedCorrection(conditionalQuestion, ordinary, null)).isTrue();
     }
 
     @Test
@@ -95,6 +107,17 @@ class AnswerCritiquePolicyTest {
     private QuestionContext context(String previousQuestion, LearningIntent learningIntent) {
         return new QuestionContext(
                 versionId, "行动", "主要行动", 4, Set.of(), previousQuestion, learningIntent);
+    }
+
+    private UnderstoodQuestion question(QuestionType type, String normalizedQuestion) {
+        return new UnderstoodQuestion(
+                versionId,
+                normalizedQuestion,
+                normalizedQuestion,
+                type,
+                List.of("行动"),
+                Set.of(),
+                "行动");
     }
 
     private StructuredRuleAnswer answer(AnswerConfidence confidence, List<RuleCitation> citations) {
