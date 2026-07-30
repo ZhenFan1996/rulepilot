@@ -62,4 +62,23 @@ class RulePageImageCropperTest {
 
         assertThat(ImageIO.read(new ByteArrayInputStream(result))).isNotNull();
     }
+
+    @Test
+    void supportsACompactContextMarginForIconQuickReferenceCrops() throws IOException {
+        BufferedImage source = new BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+
+        byte[] result = cropper.crop(
+                new PageImage(1, "image/jpeg", encoded.toByteArray(), 100, 100),
+                250,
+                250,
+                200,
+                200,
+                10);
+
+        BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
+        assertThat(cropped.getWidth()).isEqualTo(22);
+        assertThat(cropped.getHeight()).isEqualTo(22);
+    }
 }

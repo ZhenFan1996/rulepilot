@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.regex.Pattern;
 
 /** Rejects model-written stand-ins that cannot be an exact visible rulebook quotation. */
@@ -29,6 +30,16 @@ final class IconEvidencePolicy {
         return icons.stream().map(IconEvidencePolicy::sanitize).toList();
     }
 
+    static List<IconOccurrence> sanitize(List<IconOccurrence> icons, String sourcePageText) {
+        String normalizedSource = normalizedSourceText(sourcePageText);
+        return sanitize(icons).stream()
+                .map(icon -> icon.meaningStatus() == IconMeaningStatus.EXPLICIT
+                                && !normalizedSource.contains(normalizedSourceText(icon.evidenceText()))
+                        ? unexplained(icon)
+                        : icon)
+                .toList();
+    }
+
     private static IconOccurrence sanitize(IconOccurrence icon) {
         if (icon.meaningStatus() != IconMeaningStatus.EXPLICIT) {
             return icon;
@@ -49,6 +60,10 @@ final class IconEvidencePolicy {
                     icon.width(),
                     icon.height());
         }
+        return unexplained(icon);
+    }
+
+    private static IconOccurrence unexplained(IconOccurrence icon) {
         return new IconOccurrence(
                 icon.groupKey(),
                 icon.name(),
@@ -60,6 +75,12 @@ final class IconEvidencePolicy {
                 icon.y(),
                 icon.width(),
                 icon.height());
+    }
+
+    private static String normalizedSourceText(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", " ")
+                .strip();
     }
 
     static Optional<String> literalEvidence(String evidence, String groupKey) {
@@ -75,12 +96,14 @@ final class IconEvidencePolicy {
         var quoted = QUOTED_LITERAL.matcher(evidence);
         while (quoted.find()) {
             String candidate = quoted.group(1).strip();
-            if (containsIdentityTerm(candidate.toLowerCase(Locale.ROOT), groupKey) && compactLabel(candidate)) {
+            if (equivalentIdentity(candidate, groupKey)) {
                 return Optional.of(candidate);
             }
         }
         if (!containsIdentityTerm(normalizedEvidence, groupKey)) return Optional.empty();
-        if (compactLabel(evidence) || EXPLICIT_MAPPING.matcher(evidence).find()) return Optional.of(evidence);
+        if (equivalentIdentity(evidence, groupKey) || EXPLICIT_MAPPING.matcher(evidence).find()) {
+            return Optional.of(evidence);
+        }
         return Optional.empty();
     }
 
@@ -93,27 +116,36 @@ final class IconEvidencePolicy {
         return false;
     }
 
-    private static boolean compactLabel(String evidence) {
+    private static boolean equivalentIdentity(String evidence, String groupKey) {
         if (evidence.length() > 80) return false;
-        var words = IDENTITY_TERM.matcher(evidence);
-        int count = 0;
-        while (words.find()) {
-            count++;
-            if (count > 6) return false;
-        }
-        return count > 0;
+        String evidenceIdentity = normalizedIdentity(evidence);
+        return !evidenceIdentity.isBlank() && evidenceIdentity.equals(normalizedIdentity(groupKey));
     }
 
-    private static boolean meaningfulIdentityTerm(String term) {
-        if (GENERIC_VISUAL_TERMS.contains(term)) return false;
+    private static String normalizedIdentity(String value) {
+        var terms = IDENTITY_TERM.matcher(value == null ? "" : value.toLowerCase(Locale.ROOT));
+        return terms.results()
+                .map(result -> semanticIdentityTerm(result.group()))
+                .filter(term -> !term.isBlank())
+                .collect(Collectors.joining(" "));
+    }
+
+    private static String semanticIdentityTerm(String term) {
+        if (GENERIC_VISUAL_TERMS.contains(term)) return "";
         if (CJK.matcher(term).find()) {
-            String semantic = term
-                    .replace("图标", "")
+            return term.replace("图标", "")
                     .replace("符号", "")
                     .replace("标记", "")
                     .replace("轮廓", "");
-            return semantic.codePointCount(0, semantic.length()) >= 2;
         }
-        return term.length() >= 3;
+        return term;
+    }
+
+    private static boolean meaningfulIdentityTerm(String term) {
+        String semantic = semanticIdentityTerm(term);
+        if (semantic.isBlank()) return false;
+        return CJK.matcher(semantic).find()
+                ? semantic.codePointCount(0, semantic.length()) >= 2
+                : semantic.length() >= 3;
     }
 }

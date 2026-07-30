@@ -49,7 +49,7 @@ public interface VisualRulebookPageFacts {
             boolean iconInventoryComplete,
             int schemaVersion) {
 
-        public static final int CURRENT_SCHEMA_VERSION = 7;
+        public static final int CURRENT_SCHEMA_VERSION = 10;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);

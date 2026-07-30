@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -290,6 +291,7 @@ class VisualRulebookCataloger {
         if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog");
         List<VisualRulebookPageCatalogModel.PageSummary> summaries = new ArrayList<>();
         Set<Integer> timedOutPages = new LinkedHashSet<>();
+        Set<Integer> pagesWithProposedIcons = new LinkedHashSet<>();
         List<Integer> failedPages = inspectInBoundedWindows(
                 documentVersionId,
                 batches,
@@ -299,18 +301,28 @@ class VisualRulebookCataloger {
                 index -> "inspectRulebookVisualBatch|" + (index + 1),
                 summaries,
                 "Visual page batch timed out; retaining completed page facts",
-                timedOutPages);
+                timedOutPages,
+                allowTileFallback,
+                pagesWithProposedIcons);
         List<Integer> retryableFailures = failedPages.stream()
                 .filter(page -> !timedOutPages.contains(page))
                 .toList();
         List<Integer> retryFailures =
-                retryFailedPages(documentVersionId, retryableFailures, owner, rulebookTitle, assistantRunId, summaries);
+                retryFailedPages(
+                        documentVersionId,
+                        retryableFailures,
+                        owner,
+                        rulebookTitle,
+                        assistantRunId,
+                        summaries,
+                        allowTileFallback,
+                        pagesWithProposedIcons);
         Set<Integer> tileFallbackPages = new LinkedHashSet<>(timedOutPages);
         tileFallbackPages.addAll(retryFailures);
         if (allowTileFallback) {
             summaries.stream()
-                    .filter(summary -> summary.iconOccurrences().isEmpty())
-                    .filter(summary -> !summary.visualAnchors().isEmpty())
+                    .filter(VisualRulebookCatalogPolicy::needsIconTileFallback)
+                    .filter(summary -> !pagesWithProposedIcons.contains(summary.pageNumber()))
                     .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
                     .forEach(tileFallbackPages::add);
         }
@@ -367,7 +379,9 @@ class VisualRulebookCataloger {
             String owner,
             String rulebookTitle,
             UUID assistantRunId,
-            List<VisualRulebookPageCatalogModel.PageSummary> summaries) {
+            List<VisualRulebookPageCatalogModel.PageSummary> summaries,
+            boolean verifyIconBounds,
+            Set<Integer> pagesWithProposedIcons) {
         if (failedPages.isEmpty()) return List.of();
         List<Integer> retryPages = failedPages.stream().distinct().toList();
         List<List<Integer>> retryBatches = retryPages.stream().map(List::of).toList();
@@ -381,7 +395,9 @@ class VisualRulebookCataloger {
                 index -> "inspectRulebookVisualRetry|" + retryPages.get(index),
                 summaries,
                 "Visual page retry timed out; the page remains incomplete",
-                retryTimeouts);
+                retryTimeouts,
+                verifyIconBounds,
+                pagesWithProposedIcons);
     }
 
     private List<VisualRulebookPageCatalogModel.PageSummary> catalogDensePagesWithTiles(
@@ -443,8 +459,10 @@ class VisualRulebookCataloger {
             if (!completed.isEmpty()) {
                 VisualRulebookPageCatalogModel.PageSummary merged =
                         VisualPageTilePolicy.merge(pageNumber, completed);
-                mergedPages.add(merged);
-                persistCompletedFacts(documentVersionId, List.of(merged));
+                VisualRulebookPageCatalogModel.PageSummary localized =
+                        localizeIconBounds(documentVersionId, merged, owner, assistantRunId);
+                mergedPages.add(localized);
+                persistCompletedFacts(documentVersionId, List.of(localized));
             }
         }
         return mergedPages;
@@ -481,7 +499,9 @@ class VisualRulebookCataloger {
             IntFunction<String> operationForIndex,
             List<VisualRulebookPageCatalogModel.PageSummary> summaries,
             String timeoutSummary,
-            Set<Integer> timedOutPages) {
+            Set<Integer> timedOutPages,
+            boolean verifyIconBounds,
+            Set<Integer> pagesWithProposedIcons) {
         List<Integer> failedPages = new ArrayList<>();
         int parallelism = Math.min(visualRequestParallelism, batches.size());
         for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
@@ -504,6 +524,16 @@ class VisualRulebookCataloger {
                     try {
                         List<VisualRulebookPageCatalogModel.PageSummary> completed =
                                 awaitCatalog(futures.get(offset), visualCatalogTimeout).pages();
+                        if (verifyIconBounds) {
+                            completed.stream()
+                                    .filter(summary -> !summary.iconOccurrences().isEmpty())
+                                    .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
+                                    .forEach(pagesWithProposedIcons::add);
+                            completed = completed.stream()
+                                    .map(summary ->
+                                            localizeIconBounds(documentVersionId, summary, owner, assistantRunId))
+                                    .toList();
+                        }
                         summaries.addAll(completed);
                         persistCompletedFacts(documentVersionId, completed);
                     } catch (RuntimeException failedBatch) {
@@ -528,6 +558,93 @@ class VisualRulebookCataloger {
             }
         }
         return failedPages;
+    }
+
+    private VisualRulebookPageCatalogModel.PageSummary localizeIconBounds(
+            UUID documentVersionId,
+            VisualRulebookPageCatalogModel.PageSummary summary,
+            String owner,
+            UUID assistantRunId) {
+        if (summary.iconOccurrences().isEmpty()) return summary;
+        Optional<PageImage> page = pageImages.read(documentVersionId, Set.of(summary.pageNumber())).stream()
+                .filter(candidate -> candidate.pageNumber() == summary.pageNumber())
+                .findFirst();
+        if (page.isEmpty()) return withoutUnverifiedIcons(summary);
+        try {
+            var request = new VisualRulebookPageCatalogModel.IconLocalizationRequest(
+                    new PageImageInput(
+                            page.get().pageNumber(),
+                            page.get().mediaType(),
+                            page.get().content()),
+                    summary.iconOccurrences(),
+                    owner);
+            var localized = invokeModel(
+                    assistantRunId,
+                    "localizeRulebookIcons|" + summary.pageNumber(),
+                    Math.max(400, summary.iconOccurrences().size() * 80),
+                    "Rulebook icon rectangles verified",
+                    () -> visualCatalog.localizeIcons(request),
+                    result -> Math.max(1, result.locations().size() * 10));
+            Map<Integer, VisualRulebookPageCatalogModel.IconLocation> locations = localized.locations().stream()
+                    .collect(Collectors.toMap(
+                            VisualRulebookPageCatalogModel.IconLocation::candidateIndex,
+                            java.util.function.Function.identity()));
+            List<com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence> icons =
+                    java.util.stream.IntStream.range(0, summary.iconOccurrences().size())
+                            .mapToObj(index -> {
+                                var location = locations.get(index);
+                                if (location == null || !location.present()) return null;
+                                var icon = summary.iconOccurrences().get(index);
+                                if (!VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                                        icon,
+                                        location.x(),
+                                        location.y(),
+                                        location.width(),
+                                        location.height())) {
+                                    return null;
+                                }
+                                return new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
+                                        icon.groupKey(),
+                                        icon.name(),
+                                        icon.visualDescription(),
+                                        icon.explanation(),
+                                        icon.evidenceText(),
+                                        icon.meaningStatus(),
+                                        location.x(),
+                                        location.y(),
+                                        location.width(),
+                                        location.height());
+                            })
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+            return new VisualRulebookPageCatalogModel.PageSummary(
+                    summary.pageNumber(),
+                    summary.printedTerms(),
+                    summary.factualSummary(),
+                    summary.keywords(),
+                    summary.visualAnchors(),
+                    icons,
+                    summary.iconInventoryComplete());
+        } catch (RuntimeException localizationFailure) {
+            log.warn(
+                    "Icon rectangle verification failed for rulebook page {} in document {}; keeping the page incomplete",
+                    summary.pageNumber(),
+                    documentVersionId,
+                    localizationFailure);
+            return withoutUnverifiedIcons(summary);
+        }
+    }
+
+    private static VisualRulebookPageCatalogModel.PageSummary withoutUnverifiedIcons(
+            VisualRulebookPageCatalogModel.PageSummary summary) {
+        return new VisualRulebookPageCatalogModel.PageSummary(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                summary.visualAnchors(),
+                List.of(),
+                false);
     }
 
     private VisualRulebookPageCatalogModel.CatalogDraft catalogBatch(

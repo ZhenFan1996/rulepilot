@@ -32,7 +32,8 @@ Each icon occurrence has:
 - groupKey: an original-language printed icon label when one is visible; otherwise a neutral lowercase signature
   formed only from visible shape, color, and internal mark. Do not use the game title or invent a mechanic name.
 - name: the exact printed label when present; otherwise a short neutral Simplified-Chinese visual name.
-- visualDescription: a literal description that lets a player distinguish this icon from similar icons.
+- visualDescription: concise English containing only visible shape, colors, and internal marks needed to distinguish
+  this symbol. Do not include its position, use, meaning, semantic name, nearby words, row, example, card, or tile.
 - meaningStatus: EXPLICIT only when a visible legend, label, key, or definition on this page directly maps this icon
   to a stable rule meaning;
   otherwise UNEXPLAINED.

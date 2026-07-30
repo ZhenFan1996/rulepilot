@@ -19,17 +19,25 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
 
     @Override
     public byte[] crop(PageImage page, int x, int y, int width, int height) {
+        return crop(page, x, y, width, height, CONTEXT_PADDING);
+    }
+
+    @Override
+    public byte[] crop(PageImage page, int x, int y, int width, int height, int contextPadding) {
         validateFocus(x, y, width, height);
+        if (contextPadding < 0 || contextPadding > 100) {
+            throw new IllegalArgumentException("document page crop padding is invalid");
+        }
         try {
             BufferedImage source = ImageIO.read(new ByteArrayInputStream(page.content()));
             if (source == null) throw new IllegalArgumentException("document page image cannot be decoded");
 
-            int left = pixel(Math.max(0, x - CONTEXT_PADDING), source.getWidth());
-            int top = pixel(Math.max(0, y - CONTEXT_PADDING), source.getHeight());
+            int left = pixel(Math.max(0, x - contextPadding), source.getWidth());
+            int top = pixel(Math.max(0, y - contextPadding), source.getHeight());
             int right = pixelCeiling(
-                    Math.min(NORMALIZED_PAGE_SIZE, x + width + CONTEXT_PADDING), source.getWidth());
+                    Math.min(NORMALIZED_PAGE_SIZE, x + width + contextPadding), source.getWidth());
             int bottom = pixelCeiling(
-                    Math.min(NORMALIZED_PAGE_SIZE, y + height + CONTEXT_PADDING), source.getHeight());
+                    Math.min(NORMALIZED_PAGE_SIZE, y + height + contextPadding), source.getHeight());
             BufferedImage crop = source.getSubimage(left, top, right - left, bottom - top);
             BufferedImage rgb = new BufferedImage(crop.getWidth(), crop.getHeight(), BufferedImage.TYPE_INT_RGB);
             Graphics2D graphics = rgb.createGraphics();

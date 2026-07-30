@@ -11,6 +11,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -85,8 +86,13 @@ public class RulebookIconGlossaryService {
         Set<Integer> pageNumbers = pages.stream()
                 .map(DocumentProcessing.PageView::pageNumber)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<Integer, String> sourceTextByPage = pages.stream().collect(java.util.stream.Collectors.toMap(
+                DocumentProcessing.PageView::pageNumber,
+                DocumentProcessing.PageView::text,
+                (first, later) -> later));
         List<PageFact> facts = pageFacts.find(plan.documentVersionId(), pageNumbers).stream()
                 .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .map(fact -> withGroundedIconEvidence(fact, sourceTextByPage.get(fact.pageNumber())))
                 .toList();
         var projection = RulebookIconGlossaryPolicy.project(plan.documentVersionId(), facts);
         int completePages = (int) facts.stream().filter(PageFact::iconInventoryComplete).count();
@@ -141,6 +147,21 @@ public class RulebookIconGlossaryService {
                 List.copyOf(warnings));
     }
 
+    private static PageFact withGroundedIconEvidence(PageFact fact, String sourcePageText) {
+        return new PageFact(
+                fact.pageNumber(),
+                fact.printedTerms(),
+                fact.factualSummary(),
+                fact.keywords(),
+                fact.visualAnchors(),
+                IconEvidencePolicy.sanitize(fact.iconOccurrences(), sourcePageText).stream()
+                        .filter(icon -> VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                                icon, icon.x(), icon.y(), icon.width(), icon.height()))
+                        .toList(),
+                fact.iconInventoryComplete(),
+                fact.schemaVersion());
+    }
+
     private IconCrop crop(TeachingPlan plan, UUID occurrenceId) {
         GlossaryView glossary = view(plan, documents.pages(plan.documentVersionId()), cataloger.available(plan.createdBy()));
         IconOccurrenceView occurrence = glossary.icons().stream()
@@ -160,7 +181,8 @@ public class RulebookIconGlossaryService {
                         occurrence.x(),
                         occurrence.y(),
                         occurrence.width(),
-                        occurrence.height()));
+                        occurrence.height(),
+                        12));
     }
 
     private TeachingPlan requireOwned(UUID teachingPlanId, String owner) {

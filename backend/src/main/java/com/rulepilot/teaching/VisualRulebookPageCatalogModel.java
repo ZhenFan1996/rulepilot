@@ -13,6 +13,20 @@ public interface VisualRulebookPageCatalogModel {
 
     CatalogDraft summarize(CatalogRequest request);
 
+    /**
+     * Rechecks model-proposed icon rectangles in a dedicated spatial-grounding pass. Implementations that cannot
+     * perform a second visual pass preserve the proposed locations; the application still treats those pages as
+     * incomplete when a configured real model fails the check.
+     */
+    default IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+        return new IconLocalizationDraft(java.util.stream.IntStream.range(0, request.candidates().size())
+                .mapToObj(index -> {
+                    IconOccurrence icon = request.candidates().get(index);
+                    return new IconLocation(index, true, icon.x(), icon.y(), icon.width(), icon.height());
+                })
+                .toList());
+    }
+
     default boolean available(String modelConfigurationOwner) {
         return true;
     }
@@ -85,6 +99,50 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);
+        }
+    }
+
+    record IconLocalizationRequest(
+            PageImageInput page,
+            List<IconOccurrence> candidates,
+            String modelConfigurationOwner) {
+
+        public IconLocalizationRequest {
+            if (page == null || candidates == null || candidates.isEmpty() || candidates.size() > 32) {
+                throw new IllegalArgumentException("visual icon localization request is invalid");
+            }
+            candidates = List.copyOf(candidates);
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null
+                    : modelConfigurationOwner.strip();
+        }
+    }
+
+    record IconLocalizationDraft(List<IconLocation> locations) {
+        public IconLocalizationDraft {
+            if (locations == null || locations.isEmpty() || locations.size() > 32) {
+                throw new IllegalArgumentException("visual icon localization draft is invalid");
+            }
+            locations = List.copyOf(locations);
+        }
+    }
+
+    record IconLocation(int candidateIndex, boolean present, int x, int y, int width, int height) {
+        public IconLocation {
+            if (candidateIndex < 0 || candidateIndex > 31) {
+                throw new IllegalArgumentException("visual icon localization candidate is invalid");
+            }
+            if (present && (x < 0 || x > 980 || y < 0 || y > 980
+                    || width < 12 || height < 12 || x + width > 1_000 || y + height > 1_000)) {
+                throw new IllegalArgumentException("visual icon localization rectangle is invalid");
+            }
+            if (!present && (x != 0 || y != 0 || width != 0 || height != 0)) {
+                throw new IllegalArgumentException("absent visual icon localization must not have a rectangle");
+            }
+        }
+
+        public static IconLocation absent(int candidateIndex) {
+            return new IconLocation(candidateIndex, false, 0, 0, 0, 0);
         }
     }
 

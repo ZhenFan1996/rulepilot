@@ -6,12 +6,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -35,19 +39,22 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String systemPrompt;
+    private final String iconLocalizationPrompt;
     private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
+            @Value("classpath:prompts/visual-icon-localization-v1-system.txt") Resource iconLocalizationPrompt,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
         this.fake = fake;
         this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        if (this.systemPrompt.isBlank()) {
-            throw new IllegalArgumentException("visual page catalog prompt must not be blank");
+        this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank()) {
+            throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
             throw new IllegalArgumentException("visual page catalog output budget is invalid");
@@ -139,6 +146,108 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .call()
                 .content();
         return parseCatalog(content);
+    }
+
+    @Override
+    public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.localizeIcons(request);
+        }
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(OpenAiChatOptions.builder()
+                    .model(models.modelNameFor(Role.VISUAL, owner))
+                    .maxTokens(Math.min(2_000, maxCompletionTokens))
+                    .extraBody(Map.of("enable_thinking", false))
+                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
+        }
+        String candidates = iconLocalizationCandidates(request.candidates());
+        String content = prompt.system(iconLocalizationPrompt)
+                .user(user -> {
+                    user.text("""
+                                    PDF page number: {pageNumber}
+                                    Proposed symbols:
+                                    {candidates}
+                                    Return exactly one items entry for candidateIndex 0 through {lastCandidateIndex}.
+                                    """)
+                            .param("pageNumber", request.page().pageNumber())
+                            .param("candidates", candidates)
+                            .param("lastCandidateIndex", request.candidates().size() - 1);
+                    PageImageInput page = images.prepare(request.page());
+                    user.media(
+                            MimeTypeUtils.parseMimeType(page.mediaType()),
+                            new ByteArrayResource(page.content()));
+                })
+                .call()
+                .content();
+        return parseIconLocalization(content, request.candidates().size());
+    }
+
+    static String iconLocalizationCandidates(List<IconOccurrence> candidates) {
+        return java.util.stream.IntStream.range(0, candidates.size())
+                .mapToObj(index -> {
+                    IconOccurrence icon = candidates.get(index);
+                    return index + ": visible appearance=" + icon.visualDescription();
+                })
+                .collect(Collectors.joining("\n"));
+    }
+
+    static IconLocalizationDraft parseIconLocalization(String content, int expectedCandidates) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("visual icon localization model returned no content");
+        }
+        String json = content.strip();
+        if (json.startsWith("```")) {
+            int firstLineEnd = json.indexOf('\n');
+            int closingFence = json.lastIndexOf("```");
+            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
+                throw new IllegalArgumentException("visual icon localization returned malformed JSON fencing");
+            }
+            json = json.substring(firstLineEnd + 1, closingFence).strip();
+        }
+        try {
+            JsonNode root = JSON.readTree(json);
+            JsonNode items = root.isArray() ? root : root.path("items");
+            if (!items.isArray() || items.size() != expectedCandidates) {
+                throw new IllegalArgumentException("visual icon localization did not cover every candidate");
+            }
+            Map<Integer, IconLocation> byCandidate = new java.util.LinkedHashMap<>();
+            items.forEach(item -> {
+                int index = item.path("candidateIndex").asInt(Integer.MIN_VALUE);
+                if (index < 0 || index >= expectedCandidates) {
+                    throw new IllegalArgumentException("visual icon localization returned an unknown candidate");
+                }
+                boolean present = item.path("present").asBoolean(false);
+                IconLocation location;
+                try {
+                    location = present
+                            ? new IconLocation(
+                                    index,
+                                    true,
+                                    item.path("x").asInt(Integer.MIN_VALUE),
+                                    item.path("y").asInt(Integer.MIN_VALUE),
+                                    item.path("width").asInt(Integer.MIN_VALUE),
+                                    item.path("height").asInt(Integer.MIN_VALUE))
+                            : IconLocation.absent(index);
+                } catch (IllegalArgumentException invalidRectangle) {
+                    // A single malformed rectangle must not discard other independently verified candidates.
+                    location = IconLocation.absent(index);
+                }
+                if (byCandidate.putIfAbsent(index, location) != null) {
+                    throw new IllegalArgumentException("visual icon localization repeated a candidate");
+                }
+            });
+            if (!byCandidate.keySet().equals(
+                    java.util.stream.IntStream.range(0, expectedCandidates)
+                            .boxed()
+                            .collect(Collectors.toCollection(java.util.LinkedHashSet::new)))) {
+                throw new IllegalArgumentException("visual icon localization returned an unknown candidate");
+            }
+            return new IconLocalizationDraft(List.copyOf(byCandidate.values()));
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException("visual icon localization returned invalid JSON", invalidJson);
+        }
     }
 
     static CatalogDraft parseCatalog(String content) {

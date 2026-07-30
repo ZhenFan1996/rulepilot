@@ -63,6 +63,36 @@ class IconEvidencePolicyTest {
         assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
     }
 
+    @Test
+    void retainsAnEquivalentPrintedLabelButDemotesShortActionAndConditionText() {
+        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
+                icon("rainbow-button-icon", "Rainbow Button"),
+                icon("rainbow-button-icon", "Gain a Rainbow Button"),
+                icon("button", "Collect no buttons"),
+                icon("cat-icon", "Cat Scoring Tiles to be used")));
+
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("Rainbow Button");
+        assertThat(sanitized.subList(1, 4)).allSatisfy(icon -> {
+            assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+            assertThat(icon.explanation()).isEmpty();
+            assertThat(icon.evidenceText()).isEmpty();
+        });
+    }
+
+    @Test
+    void requiresPublishedEvidenceToOccurInTheExtractedSourcePage() {
+        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(
+                List.of(
+                        icon("victory point", "The star icon represents one victory point."),
+                        icon("cat head", "猫头图标表示该行得分条件与猫相关。")),
+                "ICON LEGEND\nThe star icon represents one victory point.");
+
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+        assertThat(sanitized.get(1).evidenceText()).isEmpty();
+    }
+
     private static IconOccurrence icon(String evidence) {
         return icon("wheat", evidence);
     }

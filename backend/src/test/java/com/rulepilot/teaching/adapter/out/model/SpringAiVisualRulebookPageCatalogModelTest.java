@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -117,6 +118,59 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(page.factualSummary()).hasSize(1_600);
             assertThat(page.keywords().getFirst()).hasSize(120);
         });
+    }
+
+    @Test
+    void parsesDedicatedIconLocationsFromQwenArrayOrObjectShape() {
+        var array = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
+                [
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
+                  {"candidateIndex":1,"present":false}
+                ]
+                """, 2);
+        var object = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
+                {"items":[
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
+                  {"candidateIndex":1,"present":false}
+                ]}
+                """, 2);
+
+        assertThat(array).isEqualTo(object);
+        assertThat(array.locations()).hasSize(2);
+        assertThat(array.locations().getFirst().present()).isTrue();
+        assertThat(array.locations().getLast().present()).isFalse();
+    }
+
+    @Test
+    void rejectsOnlyTheMalformedRectangleInsteadOfDiscardingVerifiedCandidates() {
+        var result = SpringAiVisualRulebookPageCatalogModel.parseIconLocalization("""
+                {"items":[
+                  {"candidateIndex":0,"present":true,"x":120,"y":300,"width":24,"height":20},
+                  {"candidateIndex":1,"present":true,"x":995,"y":995,"width":30,"height":30}
+                ]}
+                """, 2);
+
+        assertThat(result.locations().getFirst().present()).isTrue();
+        assertThat(result.locations().getLast()).isEqualTo(IconLocation.absent(1));
+    }
+
+    @Test
+    void localizesFromAppearanceWithoutSemanticNamesThatCanMatchNearbyProse() {
+        String candidates = SpringAiVisualRulebookPageCatalogModel.iconLocalizationCandidates(List.of(
+                new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
+                        "collect-no-buttons",
+                        "收集零个纽扣",
+                        "红色叉号叠加在白色纽扣图标上。",
+                        "",
+                        "",
+                        com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
+                        100,
+                        100,
+                        20,
+                        20)));
+
+        assertThat(candidates).contains("visible appearance=红色叉号叠加在白色纽扣图标上。");
+        assertThat(candidates).doesNotContain("collect-no-buttons", "收集零个纽扣");
     }
 
     @Test

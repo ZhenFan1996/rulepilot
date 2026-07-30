@@ -7,6 +7,12 @@ import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentProcessing.PageView;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
@@ -411,6 +417,128 @@ class VisualRulebookCatalogerTest {
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
             assertThat(fact.iconOccurrences()).singleElement();
+        });
+    }
+
+    @Test
+    void verifiesIconRectanglesInADedicatedPassAndDropsAbsentCandidates() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        AtomicInteger localizationCalls = new AtomicInteger();
+        byte[] pageContent = renderedPage();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                return new CatalogDraft(List.of(new PageSummary(
+                        1,
+                        "VISIBLE ICONS",
+                        "该页有两个候选图标。",
+                        List.of("icons"),
+                        List.of(),
+                        List.of(
+                                new IconOccurrence(
+                                        "leaf",
+                                        "叶子",
+                                        "绿色叶片。",
+                                        "",
+                                        "",
+                                        IconMeaningStatus.UNEXPLAINED,
+                                        600,
+                                        600,
+                                        30,
+                                        30),
+                                new IconOccurrence(
+                                        "nearby prose",
+                                        "误识别文字",
+                                        "黑色文字。",
+                                        "",
+                                        "",
+                                        IconMeaningStatus.UNEXPLAINED,
+                                        700,
+                                        700,
+                                        30,
+                                        30)),
+                        true)));
+            }
+
+            @Override
+            public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+                localizationCalls.incrementAndGet();
+                return new IconLocalizationDraft(List.of(
+                        new IconLocation(0, true, 120, 240, 24, 28),
+                        IconLocation.absent(1)));
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", pageContent, 100, 100)),
+                model,
+                facts);
+
+        List<PageFact> result = cataloger.catalogAllIconPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(localizationCalls).hasValue(1);
+        assertThat(result).singleElement().satisfies(fact -> {
+            assertThat(fact.iconInventoryComplete()).isTrue();
+            assertThat(fact.iconOccurrences()).singleElement().satisfies(icon -> {
+                assertThat(icon.name()).isEqualTo("叶子");
+                assertThat(icon.x()).isEqualTo(120);
+                assertThat(icon.y()).isEqualTo(240);
+                assertThat(icon.width()).isEqualTo(24);
+                assertThat(icon.height()).isEqualTo(28);
+            });
+        });
+    }
+
+    @Test
+    void doesNotPublishUnverifiedIconRectanglesWhenLocalizationFails() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        byte[] pageContent = renderedPage();
+        AtomicInteger summaryCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                summaryCalls.incrementAndGet();
+                return new CatalogDraft(List.of(new PageSummary(
+                        1,
+                        "LEAF",
+                        "该页有一个叶子图标。",
+                        List.of("leaf"),
+                        List.of(new VisualAnchor(
+                                "icon legend", "Leaf icon", "A labeled symbol.", 100, 100, 200, 200)),
+                        List.of(new IconOccurrence(
+                                "leaf",
+                                "叶子",
+                                "绿色叶片。",
+                                "",
+                                "",
+                                IconMeaningStatus.UNEXPLAINED,
+                                600,
+                                600,
+                                30,
+                                30)),
+                        true)));
+            }
+
+            @Override
+            public IconLocalizationDraft localizeIcons(IconLocalizationRequest request) {
+                throw new IllegalArgumentException("provider returned malformed coordinates");
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(
+                        new DocumentPageImages.PageImage(1, "image/png", pageContent, 100, 100)),
+                model,
+                new InMemoryFacts());
+
+        List<PageFact> result = cataloger.catalogAllIconPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", null);
+
+        assertThat(summaryCalls).hasValue(1);
+        assertThat(result).singleElement().satisfies(fact -> {
+            assertThat(fact.iconInventoryComplete()).isFalse();
+            assertThat(fact.iconOccurrences()).isEmpty();
         });
     }
 
