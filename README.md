@@ -244,6 +244,16 @@ BGG 元数据只用于目录识别，不进入规则讲解、Agent 或 RAG 证�
 
 图文讲解由 Teaching Agent 逐章执行版本隔离的混合检索和结构化生成。默认 `TEACHING_PROVIDER=fake` 便于本地无外部费用运行。无论使用哪个模型提供方，引用白名单、长度、章节结构和工具调用预算都由应用层校验。事实 Critic 默认仅审查低置信度回答；设置 `CRITIC_EVALUATION_MODE=true` 可在评测时审查普通回答与讲解步骤，发现无证据主张、矛盾、遗漏例外或过度推断时不会发布该内容。
 
+规则向量默认使用确定性的 64 维 Fake Provider，保证 CI 不调用付费服务。要使用阿里云百炼真实文本 Embedding，在 `.env` 中配置 `QWEN_API_KEY`、地域对应的 `QWEN_BASE_URL`，并设置：
+
+```dotenv
+EMBEDDING_PROVIDER=qwen
+QWEN_EMBEDDING_MODEL=text-embedding-v4
+QWEN_EMBEDDING_DIMENSIONS=1024
+```
+
+新上传规则书会自动使用当前 Provider 建立向量；既有文档可通过管理员版本 Embedding 接口重新索引。模型名和维度共同标识向量空间，切换任一配置都必须重建对应文档向量。全文检索与 RRF 始终保留，不会被向量检索替代。
+
 ### 配置大模型 API
 
 登录后打开 http://127.0.0.1:5173/settings/models，可以为当前账号配置 Gemini、OpenAI、DeepSeek、Qwen 或其他 OpenAI 兼容服务，并分别指定规则讲解、规则书页面视觉、答疑和事实审校使用的模型。API Key 只提交给后端：响应不返回密钥，前端不把密钥写入浏览器存储，停用供应商会让相关角色切回 Fake。
