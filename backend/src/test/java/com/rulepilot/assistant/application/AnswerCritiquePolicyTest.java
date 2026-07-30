@@ -104,6 +104,20 @@ class AnswerCritiquePolicyTest {
                 "MISSING_EXCEPTION: 遗漏例外。");
     }
 
+    @Test
+    void requiresTheCounterfactualConsequenceWhenThePlayerExplicitlyAsksForIt() {
+        HybridEvidenceHit evidence = evidence("游戏结束", "满足条件后完成本轮。", 13);
+        UnderstoodQuestion question = question(
+                QuestionType.SITUATION_QUERY,
+                "如果我可以结束游戏，其他玩家还会继续玩吗？");
+
+        GeneratedContentCritic.ReviewRequest request = AnswerCritiquePolicy.request(
+                UUID.randomUUID(), question, context(null, null), answer(AnswerConfidence.HIGH, List.of(citation(evidence))), List.of(evidence));
+
+        assertThat(request.taskContext().requiredCoverage()).contains(
+                "counterfactual follow-up", "immediate verdict is no", "named trigger is satisfied");
+    }
+
     private QuestionContext context(String previousQuestion, LearningIntent learningIntent) {
         return new QuestionContext(
                 versionId, "行动", "主要行动", 4, Set.of(), previousQuestion, learningIntent);

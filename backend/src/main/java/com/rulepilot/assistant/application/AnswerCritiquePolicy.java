@@ -24,6 +24,9 @@ final class AnswerCritiquePolicy {
     private static final Pattern MATERIAL_CONDITION = Pattern.compile(
             "(?iu)\\b(?:if|when|after|before|unless|whether|then|once)\\b|"
                     + "如果|若|当|除非|否则|之后|以后|之前|以前|怎么办|如何处理|是否|能否|不能|必须");
+    private static final Pattern COUNTERFACTUAL_FOLLOW_UP = Pattern.compile(
+            "(?iu)\\b(?:if\\s+(?:so|possible|true|that\\s+is\\s+the\\s+case)|if\\s+it\\s+can|then\\s+what)\\b|"
+                    + "如果可以|若可以|如果满足|若满足|如果是这样|那么(?:其他|接下来)|其他玩家.*(?:继续|还会)");
 
     private AnswerCritiquePolicy() {}
 
@@ -89,7 +92,8 @@ final class AnswerCritiquePolicy {
                                 + "says so. For an 'again' follow-up, reject any repeatability claim not explicitly "
                                 + "supported by evidence. A GROUNDED_APPLICATION may combine cited premises only to "
                                 + "apply the player's explicitly stated table condition; reject it if it invents a game "
-                                + "fact or silently assumes a missing branch."),
+                                + "fact or silently assumes a missing branch."
+                                + counterfactualFollowUpRequirement(question.normalizedQuestion())),
                 claims,
                 evidence.stream()
                         .map(HybridEvidenceHit::evidence)
@@ -105,5 +109,12 @@ final class AnswerCritiquePolicy {
 
     private static String contextValue(Object value) {
         return value == null ? "not provided" : value.toString();
+    }
+
+    private static String counterfactualFollowUpRequirement(String question) {
+        if (question == null || !COUNTERFACTUAL_FOLLOW_UP.matcher(question).find()) return "";
+        return " The player also asks for the stated counterfactual follow-up. Even if the immediate verdict is no, "
+                + "require the answer to state what happens when the named trigger is satisfied whenever the cited "
+                + "evidence provides that procedure.";
     }
 }
