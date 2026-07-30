@@ -57,6 +57,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v14-natural-language-condition-system.txt") Resource answerNaturalLanguageCondition,
             @Value("classpath:prompts/rule-answer-agent-v15-matching-value-resolution-system.txt") Resource answerMatchingValueResolution,
             @Value("classpath:prompts/rule-answer-agent-v16-fallback-branch-fidelity-system.txt") Resource answerFallbackBranchFidelity,
+            @Value("classpath:prompts/rule-answer-agent-v17-correctable-revision-system.txt") Resource answerCorrectableRevision,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -104,7 +105,8 @@ public class VersionedAgentPrompts {
                 answerGroundedApplication,
                 answerNaturalLanguageCondition,
                 answerMatchingValueResolution,
-                answerFallbackBranchFidelity);
+                answerFallbackBranchFidelity,
+                answerCorrectableRevision);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);

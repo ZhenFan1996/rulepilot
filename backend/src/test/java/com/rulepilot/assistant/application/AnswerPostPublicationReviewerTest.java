@@ -31,6 +31,86 @@ import org.junit.jupiter.api.Test;
 class AnswerPostPublicationReviewerTest {
 
     @Test
+    void retriesOneEvidenceBackedCorrectionWhenTheFirstRevisionIncorrectlyDeclaresInsufficiency() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "END_GAME",
+                "Ending the game",
+                "If two rows are complete and contain no disabled locations, you may end the game. Finish the round.",
+                13,
+                13,
+                0.9);
+        HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
+        StructuredRuleAnswer answer = answer(versionId, source);
+        AtomicInteger revisions = new AtomicInteger();
+        AtomicInteger reviews = new AtomicInteger();
+        AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
+                (reviewRequest, risk) -> reviews.getAndIncrement() == 0
+                        ? new GeneratedContentCritic.Review(
+                                true,
+                                List.of(new GeneratedContentCritic.Issue(
+                                        GeneratedContentCritic.IssueType.OVERREACH,
+                                        1,
+                                        List.of(source.chunkId()),
+                                        "The answer must keep the no-disabled-location condition.")))
+                        : new GeneratedContentCritic.Review(true, List.of()),
+                new AnswerModelGateway(
+                        new RuleAnswerModel() {
+                            @Override
+                            public ModelDraft compose(ModelRequest request) {
+                                throw new AssertionError("reviewer must use the bounded revision path");
+                            }
+
+                            @Override
+                            public ModelDraft revise(
+                                    ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                                if (revisions.getAndIncrement() == 0) {
+                                    return new ModelDraft(false, "incorrectly declined", null, null, List.of(), List.of(), null);
+                                }
+                                return new ModelDraft(
+                                        "You may end only with two complete rows and no disabled locations.",
+                                        "After the trigger, finish the current round so every player has the same number of turns.",
+                                        List.of(source.chunkId()),
+                                        List.of(),
+                                        "HIGH");
+                            }
+                        },
+                        unlimitedRateLimiter(),
+                        immediateInvocations()),
+                new AnswerPublicationValidator(verifiedEvidence()));
+
+        AnswerPostPublicationReviewer.Result result = reviewer.review(
+                UUID.randomUUID(),
+                new UnderstoodQuestion(
+                        versionId,
+                        "If a completed row has a disabled location, may I end the game?",
+                        "If a completed row has a disabled location, may I end the game?",
+                        QuestionType.SITUATION_QUERY,
+                        List.of("disabled location"),
+                        Set.of(),
+                        "Ending the game"),
+                new QuestionContext(versionId, null, null, null, Set.of()),
+                "player",
+                null,
+                request(source),
+                new ModelDraft(
+                        answer.shortVerdict(),
+                        answer.explanation(),
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH"),
+                answer,
+                List.of(evidence));
+
+        assertThat(result.accepted()).isTrue();
+        assertThat(result.answer().shortVerdict()).contains("no disabled locations");
+        assertThat(revisions).hasValue(2);
+        assertThat(reviews).hasValue(2);
+    }
+
+    @Test
     void rejectsAnUncorrectableCriticFailureWithoutAnotherModelCall() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(

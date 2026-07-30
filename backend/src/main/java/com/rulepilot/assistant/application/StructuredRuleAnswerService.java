@@ -45,8 +45,8 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Conditional table rulings now receive a factual-review pass, so pre-review cached answers are not reusable.
-    private static final String ANSWER_POLICY_VERSION = "answer-v69-conditional-branch-review";
+    // Critic-guided conditional revisions now retry an empty correction, so prior failed cache entries are not reusable.
+    private static final String ANSWER_POLICY_VERSION = "answer-v70-evidence-backed-revision-retry";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;

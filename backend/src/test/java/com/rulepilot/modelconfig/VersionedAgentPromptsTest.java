@@ -40,6 +40,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v14-natural-language-condition-system.txt"),
                 resource("rule-answer-agent-v15-matching-value-resolution-system.txt"),
                 resource("rule-answer-agent-v16-fallback-branch-fidelity-system.txt"),
+                resource("rule-answer-agent-v17-correctable-revision-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -197,7 +198,9 @@ class VersionedAgentPromptsTest {
                         "Matching-value resolution revision v15",
                         "same number",
                         "Fallback-branch fidelity revision v16",
-                        "no-op");
+                        "no-op",
+                        "Correctable-revision completion revision v17",
+                        "answerable=true");
         assertThat(prompts.answerUser())
                 .contains("{questionType}", "{learningIntent}", "{gamePhase}", "{playerCount}", "{outputLanguage}");
         assertThat(prompts.lessonLocalizationSystem())

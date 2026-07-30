@@ -12,6 +12,7 @@ import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -109,10 +110,34 @@ final class AnswerPostPublicationReviewer {
                 "reviseLearningResponse",
                 "Learning response revised from bounded critic feedback");
         if (revised == null || !revised.answerable()) {
+            revised = modelGateway.revise(
+                    assistantRunId,
+                    username,
+                    gameSessionId,
+                    modelRequest,
+                    previousDraft,
+                    completionRetryFeedback(feedback),
+                    "retryEvidenceBackedAnswerRevision",
+                    "Evidence-backed answer revision retried after an empty correction");
+        }
+        if (revised == null || !revised.answerable()) {
             throw new IllegalArgumentException("revised learning response is not answerable");
         }
         return publicationValidator.publish(
                 documentVersionId, AnswerBasisPolicy.classify(modelRequest, revised), evidence);
+    }
+
+    /**
+     * A confirmed critic defect means the first draft cannot be published, but it does not mean the retrieved rule
+     * evidence disappeared. Give one high-risk correction a precise opportunity to narrow its claim instead of
+     * turning a usable cited ruling into a player-visible generic failure.
+     */
+    private List<String> completionRetryFeedback(List<String> feedback) {
+        List<String> retry = new ArrayList<>(feedback);
+        retry.add("The supplied rulebook evidence remains available and a complete answer is required. Return "
+                + "answerable=true with the narrowest cited ruling that resolves the player's condition. Preserve "
+                + "every evidenced branch; do not replace a correctable answer with generic insufficiency.");
+        return List.copyOf(retry);
     }
 
     record Result(StructuredRuleAnswer answer, AnswerStatus failureStatus, String failureMessage) {
