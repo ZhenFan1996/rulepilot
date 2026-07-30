@@ -45,12 +45,14 @@ public interface VisualRulebookPageFacts {
             String factualSummary,
             List<String> keywords,
             List<VisualAnchor> visualAnchors,
+            List<IconOccurrence> iconOccurrences,
+            boolean iconInventoryComplete,
             int schemaVersion) {
 
-        public static final int CURRENT_SCHEMA_VERSION = 2;
+        public static final int CURRENT_SCHEMA_VERSION = 3;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), CURRENT_SCHEMA_VERSION);
+            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
         }
 
         public PageFact(
@@ -59,17 +61,37 @@ public interface VisualRulebookPageFacts {
                 String factualSummary,
                 List<String> keywords,
                 List<VisualAnchor> visualAnchors) {
-            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, CURRENT_SCHEMA_VERSION);
+            this(
+                    pageNumber,
+                    printedTerms,
+                    factualSummary,
+                    keywords,
+                    visualAnchors,
+                    List.of(),
+                    false,
+                    CURRENT_SCHEMA_VERSION);
+        }
+
+        public PageFact(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors,
+                int schemaVersion) {
+            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, List.of(), false, schemaVersion);
         }
 
         public PageFact {
             if (pageNumber < 1 || printedTerms == null || printedTerms.isBlank() || factualSummary == null
-                    || factualSummary.isBlank() || keywords == null || keywords.isEmpty() || visualAnchors == null) {
+                    || factualSummary.isBlank() || keywords == null || keywords.isEmpty() || visualAnchors == null
+                    || iconOccurrences == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
             if (printedTerms.length() > 2_000 || factualSummary.length() > 2_000 || keywords.size() > 12
                     || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)
-                    || visualAnchors.size() > 8) {
+                    || visualAnchors.size() > 8
+                    || iconOccurrences.size() > 32) {
                 throw new IllegalArgumentException("visual page fact is too large");
             }
             if (schemaVersion < 1 || schemaVersion > CURRENT_SCHEMA_VERSION) {
@@ -79,6 +101,7 @@ public interface VisualRulebookPageFacts {
             factualSummary = factualSummary.strip();
             keywords = keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors.stream().distinct().toList();
+            iconOccurrences = iconOccurrences.stream().distinct().toList();
         }
 
         public String evidenceText() {
@@ -183,5 +206,57 @@ public interface VisualRulebookPageFacts {
         public String retrievalText() {
             return kind + " " + label + " " + visibleDescription;
         }
+    }
+
+    /**
+     * One representative appearance of a gameplay icon on a rendered source page.
+     *
+     * <p>The icon crop proves appearance only. A player-facing explanation is publishable only when
+     * {@code meaningStatus} is {@link IconMeaningStatus#EXPLICIT} and {@code evidenceText} records the visible
+     * rulebook wording that maps the symbol to that meaning. Unexplained icons remain useful visual vocabulary but
+     * cannot acquire a guessed rule effect.</p>
+     */
+    record IconOccurrence(
+            String groupKey,
+            String name,
+            String visualDescription,
+            String explanation,
+            String evidenceText,
+            IconMeaningStatus meaningStatus,
+            int x,
+            int y,
+            int width,
+            int height) {
+
+        public IconOccurrence {
+            if (groupKey == null || groupKey.isBlank() || groupKey.length() > 160
+                    || name == null || name.isBlank() || name.length() > 180
+                    || visualDescription == null || visualDescription.isBlank() || visualDescription.length() > 480
+                    || explanation == null || explanation.length() > 600
+                    || evidenceText == null || evidenceText.length() > 480
+                    || meaningStatus == null
+                    || x < 0 || y < 0 || width < 12 || height < 12
+                    || x + width > 1_000 || y + height > 1_000) {
+                throw new IllegalArgumentException("visual icon occurrence is invalid");
+            }
+            groupKey = groupKey.strip();
+            name = name.strip();
+            visualDescription = visualDescription.strip();
+            explanation = explanation.strip();
+            evidenceText = evidenceText.strip();
+            if (meaningStatus == IconMeaningStatus.EXPLICIT
+                    && (explanation.isBlank() || evidenceText.isBlank())) {
+                throw new IllegalArgumentException("explained visual icon requires visible rulebook evidence");
+            }
+            if (meaningStatus == IconMeaningStatus.UNEXPLAINED
+                    && (!explanation.isBlank() || !evidenceText.isBlank())) {
+                throw new IllegalArgumentException("unexplained visual icon cannot carry a rule meaning");
+            }
+        }
+    }
+
+    enum IconMeaningStatus {
+        EXPLICIT,
+        UNEXPLAINED
     }
 }

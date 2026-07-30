@@ -12,6 +12,7 @@ import com.rulepilot.teaching.application.IllustratedLessonLauncher;
 import com.rulepilot.teaching.application.IllustratedLessonLauncher.LessonLaunch;
 import com.rulepilot.teaching.application.IllustratedLessonService;
 import com.rulepilot.teaching.application.LessonLocalizationService;
+import com.rulepilot.teaching.application.RulebookIconGlossaryService;
 import java.security.Principal;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,12 +26,15 @@ class IllustratedLessonControllerTest {
     private final IllustratedLessonLauncher launcher = mock(IllustratedLessonLauncher.class);
     private final TeachingPlanOwnerGuard owners = mock(TeachingPlanOwnerGuard.class);
     private final LessonLocalizationService localizations = mock(LessonLocalizationService.class);
+    private final RulebookIconGlossaryService iconGlossary = mock(RulebookIconGlossaryService.class);
     private final Principal alice = () -> "alice";
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new IllustratedLessonController(lessons, launcher, owners, localizations)).build();
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                        new IllustratedLessonController(lessons, launcher, owners, localizations, iconGlossary))
+                .build();
     }
 
     @Test

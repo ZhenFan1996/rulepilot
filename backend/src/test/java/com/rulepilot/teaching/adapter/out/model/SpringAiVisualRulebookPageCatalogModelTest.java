@@ -49,6 +49,46 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void parses_a_complete_icon_inventory_without_treating_unexplained_icons_as_rules() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
+                {"pages":[{"pageNumber":4,"printedTerms":["Resource icons"],"factualSummary":[],
+                "keywords":["resource"],
+                "iconOccurrences":[
+                  {"groupKey":"wood","name":"Wood","visualDescription":"棕色木块轮廓。",
+                   "meaningStatus":"EXPLICIT","explanation":"表示一份木材。","evidenceText":"Wood resource",
+                   "x":100,"y":240,"width":42,"height":42},
+                  {"groupKey":"blue circle wave","name":"蓝色波纹圆标","visualDescription":"蓝色圆形内有波纹。",
+                   "meaningStatus":"UNEXPLAINED","explanation":"","evidenceText":"",
+                   "x":300,"y":240,"width":42,"height":42}
+                ],"iconInventoryComplete":true}]}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.iconInventoryComplete()).isTrue();
+            assertThat(page.iconOccurrences()).hasSize(2);
+            assertThat(page.iconOccurrences().getFirst().explanation()).isEqualTo("表示一份木材。");
+            assertThat(page.iconOccurrences().getLast().explanation()).isEmpty();
+        });
+    }
+
+    @Test
+    void drops_only_a_malformed_icon_and_keeps_the_page_inventory_incomplete() {
+        var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
+                {"pages":[{"pageNumber":8,"printedTerms":"icons","factualSummary":"图标页。",
+                "keywords":["icons"],"iconOccurrences":[
+                  {"groupKey":"bad","name":"Bad","visualDescription":"越界图标。",
+                   "meaningStatus":"UNEXPLAINED","explanation":"","evidenceText":"",
+                   "x":990,"y":990,"width":80,"height":80}
+                ],"iconInventoryComplete":false}]}
+                """);
+
+        assertThat(draft.pages()).singleElement().satisfies(page -> {
+            assertThat(page.iconOccurrences()).isEmpty();
+            assertThat(page.iconInventoryComplete()).isFalse();
+        });
+    }
+
+    @Test
     void keeps_the_page_catalog_when_an_optional_anchor_has_invalid_geometry() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 {"pages":[{"pageNumber":7,"printedTerms":"power tokens",

@@ -3,6 +3,8 @@ package com.rulepilot.teaching.adapter.out.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 import java.util.UUID;
@@ -51,5 +53,34 @@ class JpaVisualRulebookPageFactsTest {
         var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
 
         assertThat(restored.visualAnchors()).containsExactlyElementsOf(original.visualAnchors());
+    }
+
+    @Test
+    void preserves_icon_meaning_evidence_and_page_scan_completeness() {
+        var icon = new IconOccurrence(
+                "energy",
+                "Energy",
+                "黄色闪电图标。",
+                "表示一份能量。",
+                "Energy resource",
+                IconMeaningStatus.EXPLICIT,
+                120,
+                240,
+                48,
+                48);
+        var original = new PageFact(
+                6,
+                "Energy",
+                "能量图标带有明确图例。",
+                List.of("Energy"),
+                List.of(),
+                List.of(icon),
+                true,
+                PageFact.CURRENT_SCHEMA_VERSION);
+
+        var restored = new VisualRulebookPageFactEntity(UUID.randomUUID(), original).toDomain();
+
+        assertThat(restored.iconOccurrences()).containsExactly(icon);
+        assertThat(restored.iconInventoryComplete()).isTrue();
     }
 }

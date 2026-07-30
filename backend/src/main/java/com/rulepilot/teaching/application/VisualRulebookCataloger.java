@@ -85,6 +85,40 @@ class VisualRulebookCataloger {
         return visualCatalog.available(owner);
     }
 
+    /**
+     * Reads every rendered page for the document-level icon glossary. Completed pages are reused, while an explicitly
+     * incomplete inventory is eligible for one later retry. Work remains page-by-page and is persisted after each
+     * provider response so a small production host can resume after a timeout or restart.
+     */
+    List<PageFact> catalogAllIconPages(
+            UUID documentVersionId,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId) {
+        Set<Integer> requestedPages = documentPages.stream()
+                .map(DocumentProcessing.PageView::pageNumber)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (requestedPages.isEmpty()) return List.of();
+        List<PageFact> cached = visualFacts.find(documentVersionId, requestedPages);
+        Set<Integer> completePages = cached.stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .filter(PageFact::iconInventoryComplete)
+                .map(PageFact::pageNumber)
+                .collect(Collectors.toSet());
+        Set<Integer> pagesToInspect = requestedPages.stream()
+                .filter(page -> !completePages.contains(page))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (!pagesToInspect.isEmpty()) {
+            List<PageFact> inspected =
+                    catalogPageFacts(documentVersionId, pagesToInspect, rulebookTitle, owner, assistantRunId);
+            if (!inspected.isEmpty()) visualFacts.merge(documentVersionId, inspected);
+        }
+        return visualFacts.find(documentVersionId, requestedPages).stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .toList();
+    }
+
     List<PageInput> catalogVisualPages(
             UUID documentVersionId,
             List<DocumentProcessing.PageView> documentPages,
@@ -313,7 +347,10 @@ class VisualRulebookCataloger {
                         summary.printedTerms(),
                         summary.factualSummary(),
                         summary.keywords(),
-                        summary.visualAnchors()))
+                        summary.visualAnchors(),
+                        summary.iconOccurrences(),
+                        summary.iconInventoryComplete(),
+                        PageFact.CURRENT_SCHEMA_VERSION))
                 .toList();
     }
 
@@ -332,7 +369,10 @@ class VisualRulebookCataloger {
                                 summary.printedTerms(),
                                 summary.factualSummary(),
                                 summary.keywords(),
-                                summary.visualAnchors()))
+                                summary.visualAnchors(),
+                                summary.iconOccurrences(),
+                                summary.iconInventoryComplete(),
+                                PageFact.CURRENT_SCHEMA_VERSION))
                         .toList());
     }
 
@@ -438,7 +478,13 @@ class VisualRulebookCataloger {
         int characters = catalog.pages().stream()
                 .mapToInt(page -> page.printedTerms().length()
                         + page.factualSummary().length()
-                        + page.keywords().stream().mapToInt(String::length).sum())
+                        + page.keywords().stream().mapToInt(String::length).sum()
+                        + page.iconOccurrences().stream()
+                                .mapToInt(icon -> icon.name().length()
+                                        + icon.visualDescription().length()
+                                        + icon.explanation().length()
+                                        + icon.evidenceText().length())
+                                .sum())
                 .sum();
         return Math.max(1, characters / 4);
     }

@@ -55,13 +55,21 @@ final class VisualRulebookCatalogPolicy {
                     PageFact refreshed = freshByPage.remove(existing.pageNumber());
                     if (refreshed == null) return existing;
                     if (refreshed.schemaVersion() > existing.schemaVersion()) return refreshed;
-                    if (refreshed.visualAnchors().isEmpty()) return existing;
+                    if (refreshed.visualAnchors().isEmpty()
+                            && refreshed.iconOccurrences().isEmpty()
+                            && !refreshed.iconInventoryComplete()) return existing;
                     return new PageFact(
                             existing.pageNumber(),
                             existing.printedTerms(),
                             existing.factualSummary(),
                             existing.keywords(),
-                            refreshed.visualAnchors(),
+                            refreshed.visualAnchors().isEmpty()
+                                    ? existing.visualAnchors()
+                                    : refreshed.visualAnchors(),
+                            refreshed.iconOccurrences().isEmpty()
+                                    ? existing.iconOccurrences()
+                                    : refreshed.iconOccurrences(),
+                            existing.iconInventoryComplete() || refreshed.iconInventoryComplete(),
                             existing.schemaVersion());
                 })
                 .toList();

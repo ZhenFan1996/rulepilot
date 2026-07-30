@@ -7,15 +7,21 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
 
@@ -25,42 +31,28 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    // Three source pages share one catalog response. This preserves cross-page icon matching while keeping a single
-    // vision request inside the interactive timeout. The value leaves enough room for three factual ledgers without
-    // cutting off Qwen's JSON response mid-array.
-    private static final int MAX_CATALOG_COMPLETION_TOKENS = 1_800;
-
-    private static final String SYSTEM = """
-            You are a board-game rulebook visual evidence recorder. Inspect only the supplied images. Return a JSON
-            object with exactly one pages item for every requested PDF page; do not write a lesson or infer a rule.
-
-            Each item has pageNumber, printedTerms, factualSummary, keywords, and visualAnchors. printedTerms has at
-            most sixteen visible headings, labels, action names, component names, icon labels, or numbers.
-            factualSummary is an array of at most twelve atomic Simplified-Chinese statements, each supported by a
-            complete visible sentence, list item, or table row. Preserve the exact subject, action, condition, quantity,
-            timing, order, optional/mandatory wording, and exception together. Record all named alternatives in a list;
-            never shorten a five-item list to examples. Keep a worked example as its printed input and total; do not
-            derive an unstated per-item value. Do not merge separate headings, labels, or nearby numbers into a rule.
-            If a rule's subject or relation is unreadable, omit that fact instead of completing it from the game title
-            or general knowledge. If a page is a cover, index, illustration, or unreadable, say so rather than guessing.
-            Use an icon's printed label only when that label is visible on this page or can be exactly matched to a
-            labeled icon in another supplied page.
-
-            keywords contains 2-8 visible original-language terms. visualAnchors contains at most six compact, useful
-            landmarks: a labeled icon group, legend, setup cluster, diagram state, worked example, or one score row.
-            Each anchor has kind, label, visibleDescription, x, y, width, and height on a top-left 0-1000 grid. Keep
-            at most three anchors per page, rectangles inside the page and at least 20 by 20; do not use a whole page,
-            a prose-only area, or an inferred rule as an anchor. Return structured data only.
-            """;
-
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
+    private final String systemPrompt;
+    private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
-            RuntimeModelConfiguration models, FakeVisualRulebookPageCatalogModel fake) {
+            RuntimeModelConfiguration models,
+            FakeVisualRulebookPageCatalogModel fake,
+            @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
+            @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
+            throws IOException {
         this.models = models;
         this.fake = fake;
+        this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        if (this.systemPrompt.isBlank()) {
+            throw new IllegalArgumentException("visual page catalog prompt must not be blank");
+        }
+        if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
+            throw new IllegalArgumentException("visual page catalog output budget is invalid");
+        }
+        this.maxCompletionTokens = maxCompletionTokens;
     }
 
     @Override
@@ -96,11 +88,11 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
             prompt = prompt.options(OpenAiChatOptions.builder()
                     .model(models.modelNameFor(Role.VISUAL, owner))
-                    .maxTokens(MAX_CATALOG_COMPLETION_TOKENS)
+                    .maxTokens(maxCompletionTokens)
                     .extraBody(Map.of("enable_thinking", false))
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
         }
-        String content = prompt.system(SYSTEM)
+        String content = prompt.system(systemPrompt)
                 .user(user -> {
                     user.text("""
                                     Attached rulebook page numbers: {pageNumbers}
@@ -112,7 +104,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                                     material for this rulebook. Do not treat it as a turn, scoring, or end-game rule.
                                     {correction}
                                     Return a JSON object with a pages array. Each array item must have pageNumber,
-                                    printedTerms, factualSummary, keywords, and visualAnchors.
+                                    printedTerms, factualSummary, keywords, visualAnchors, iconOccurrences, and
+                                    iconInventoryComplete.
                                     """)
                             .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
                             .param("rulebookTitle", request.rulebookTitle() == null
@@ -164,7 +157,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                         joinedText(page.get("printedTerms"), "; "),
                         joinedText(page.get("factualSummary"), "\n"),
                         stringValues(page.get("keywords")),
-                        visualAnchors(page.get("visualAnchors"))));
+                        visualAnchors(page.get("visualAnchors")),
+                        iconOccurrences(page.get("iconOccurrences")),
+                        page.path("iconInventoryComplete").asBoolean(false)));
             }
             return new CatalogDraft(summaries);
         } catch (JsonProcessingException invalidJson) {
@@ -220,6 +215,38 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return anchors;
     }
 
+    /** One malformed optional icon must not discard the rest of a page inventory. */
+    private static java.util.List<IconOccurrence> iconOccurrences(JsonNode value) {
+        if (value == null || value.isNull() || !value.isArray()) return java.util.List.of();
+        java.util.List<IconOccurrence> icons = new java.util.ArrayList<>();
+        value.forEach(icon -> {
+            if (icons.size() == 32 || !icon.isObject()) return;
+            try {
+                String rawStatus = joinedText(icon.get("meaningStatus"), " ");
+                IconMeaningStatus status = IconMeaningStatus.valueOf(
+                        rawStatus == null ? "UNEXPLAINED" : rawStatus.strip().toUpperCase(java.util.Locale.ROOT));
+                icons.add(new IconOccurrence(
+                        defaultText(joinedText(icon.get("groupKey"), " "), joinedText(icon.get("name"), " ")),
+                        defaultText(joinedText(icon.get("name"), " "), "未命名图标"),
+                        defaultText(joinedText(icon.get("visualDescription"), " "), "规则书中的一个图标。"),
+                        defaultText(joinedText(icon.get("explanation"), " "), ""),
+                        defaultText(joinedText(icon.get("evidenceText"), " "), ""),
+                        status,
+                        icon.path("x").asInt(Integer.MIN_VALUE),
+                        icon.path("y").asInt(Integer.MIN_VALUE),
+                        icon.path("width").asInt(Integer.MIN_VALUE),
+                        icon.path("height").asInt(Integer.MIN_VALUE)));
+            } catch (IllegalArgumentException invalidIcon) {
+                // Keep every other valid occurrence and let the incomplete flag expose model uncertainty.
+            }
+        });
+        return icons;
+    }
+
+    private static String defaultText(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
     static CatalogDraft normalizePageBindings(CatalogRequest request, CatalogDraft draft) {
         if (draft == null) throw new IllegalArgumentException("visual page catalog model returned no draft");
         java.util.List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
@@ -257,6 +284,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private static PageSummary rebound(PageSummary summary, int pageNumber) {
         return new PageSummary(
-                pageNumber, summary.printedTerms(), summary.factualSummary(), summary.keywords(), summary.visualAnchors());
+                pageNumber,
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                summary.visualAnchors(),
+                summary.iconOccurrences(),
+                summary.iconInventoryComplete());
     }
 }

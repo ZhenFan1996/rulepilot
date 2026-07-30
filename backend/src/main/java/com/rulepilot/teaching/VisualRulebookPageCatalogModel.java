@@ -1,6 +1,7 @@
 package com.rulepilot.teaching;
 
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
+import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 
@@ -65,10 +66,21 @@ public interface VisualRulebookPageCatalogModel {
             String printedTerms,
             String factualSummary,
             List<String> keywords,
-            List<VisualAnchor> visualAnchors) {
+            List<VisualAnchor> visualAnchors,
+            List<IconOccurrence> iconOccurrences,
+            boolean iconInventoryComplete) {
 
         public PageSummary(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
-            this(pageNumber, printedTerms, factualSummary, keywords, List.of());
+            this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false);
+        }
+
+        public PageSummary(
+                int pageNumber,
+                String printedTerms,
+                String factualSummary,
+                List<String> keywords,
+                List<VisualAnchor> visualAnchors) {
+            this(pageNumber, printedTerms, factualSummary, keywords, visualAnchors, List.of(), false);
         }
 
         public PageSummary {
@@ -77,7 +89,8 @@ public interface VisualRulebookPageCatalogModel {
                     || (factualSummary != null && factualSummary.length() > 1_600)
                     || (keywords != null && (keywords.size() > 16
                             || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
-                    || (visualAnchors != null && visualAnchors.size() > 8)) {
+                    || (visualAnchors != null && visualAnchors.size() > 8)
+                    || (iconOccurrences != null && iconOccurrences.size() > 32)) {
                 throw new IllegalArgumentException("visual page summary is invalid");
             }
             printedTerms = printedTerms == null || printedTerms.isBlank()
@@ -90,6 +103,7 @@ public interface VisualRulebookPageCatalogModel {
                     ? List.of("page " + pageNumber)
                     : keywords.stream().map(String::strip).distinct().toList();
             visualAnchors = visualAnchors == null ? List.of() : visualAnchors.stream().distinct().toList();
+            iconOccurrences = iconOccurrences == null ? List.of() : iconOccurrences.stream().distinct().toList();
         }
     }
 }
