@@ -22,14 +22,16 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v25-conditional-values-fidelity-system.txt"),
                 resource("teaching-agent-v26-conditional-scope-and-tie-fidelity-system.txt"),
                 resource("teaching-agent-v27-visible-observation-system.txt"),
-                resource("teaching-agent-v9-user.txt"),
+                resource("teaching-agent-v28-rulebook-scope-system.txt"),
+                resource("teaching-agent-v10-user.txt"),
                 resource("teaching-outline-v6-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
                 resource("teaching-outline-v8-visual-density-system.txt"),
                 resource("teaching-outline-v9-core-evidence-system.txt"),
                 resource("teaching-outline-v10-chapter-ownership-system.txt"),
                 resource("teaching-outline-v11-visual-coverage-system.txt"),
-                resource("teaching-outline-v3-user.txt"),
+                resource("teaching-outline-v12-rulebook-scope-system.txt"),
+                resource("teaching-outline-v4-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
                 resource("rule-answer-agent-v8-direct-rulings-system.txt"),
@@ -54,7 +56,7 @@ class VersionedAgentPromptsTest {
                 resource("objective-coverage-critic-v3-system.txt"),
                 resource("content-critic-v4-user.txt"),
                 resource("structured-output-repair-v1.txt"),
-                resource("lesson-localization-v1-system.txt"),
+                resource("lesson-localization-v2-system.txt"),
                 resource("lesson-localization-v1-user.txt"));
 
         assertThat(prompts.teachingSystem())
@@ -107,6 +109,8 @@ class VersionedAgentPromptsTest {
                         "tie-break chain",
                         "Visible-observation revision v27",
                         "visibleDescription",
+                        "Rulebook-scope revision v28",
+                        "compatibility metadata",
                         "Preserve timing boundaries exactly",
                         "fictional separate final-scoring phase",
                         "Fully teach only the current section objective",
@@ -130,7 +134,8 @@ class VersionedAgentPromptsTest {
                         "{evidence}",
                         "{visualEvidenceAvailable}",
                         "{visualPages}",
-                        "{repair}");
+                        "{repair}")
+                .doesNotContain("{players}", "{beginners}", "player_count", "beginner_count");
         assertThat(prompts.teachingOutlineSystem())
                 .contains(
                         "game-specific lesson",
@@ -160,7 +165,11 @@ class VersionedAgentPromptsTest {
                         "Visual-coverage revision v11",
                         "untrusted navigation context",
                         "missing visual catalog",
-                        "end trigger, winner, victory condition");
+                        "end trigger, winner, victory condition",
+                        "Rulebook-scope revision v12",
+                        "not one selected table size");
+        assertThat(prompts.teachingOutlineUser())
+                .doesNotContain("{players}", "{beginners}", "players, including");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",
@@ -214,7 +223,12 @@ class VersionedAgentPromptsTest {
                         "A named state or relationship is not its definition")
                 .doesNotContain("{gamePhase}", "{playerCount}", "{activeExpansionCount}");
         assertThat(prompts.lessonLocalizationSystem())
-                .contains("constrained translation", "exact section and step positions", "Do not add rules");
+                .contains(
+                        "constrained translation",
+                        "exact section and step positions",
+                        "Do not add rules",
+                        "80 characters",
+                        "240 characters");
         assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");
         assertThat(prompts.answerRetrievalRewriteSystem())
                 .contains("retrieval", "English phrase", "search phrases", "untrusted data", "Return JSON only");

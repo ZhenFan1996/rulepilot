@@ -39,14 +39,16 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-agent-v25-conditional-values-fidelity-system.txt") Resource teachingConditionalValues,
             @Value("classpath:prompts/teaching-agent-v26-conditional-scope-and-tie-fidelity-system.txt") Resource teachingConditionalScopeAndTie,
             @Value("classpath:prompts/teaching-agent-v27-visible-observation-system.txt") Resource teachingVisibleObservation,
-            @Value("classpath:prompts/teaching-agent-v9-user.txt") Resource teachingUser,
+            @Value("classpath:prompts/teaching-agent-v28-rulebook-scope-system.txt") Resource teachingRulebookScope,
+            @Value("classpath:prompts/teaching-agent-v10-user.txt") Resource teachingUser,
             @Value("classpath:prompts/teaching-outline-v6-system.txt") Resource teachingOutlineSystem,
             @Value("classpath:prompts/teaching-outline-v7-fidelity-system.txt") Resource teachingOutlineFidelity,
             @Value("classpath:prompts/teaching-outline-v8-visual-density-system.txt") Resource teachingOutlineVisualDensity,
             @Value("classpath:prompts/teaching-outline-v9-core-evidence-system.txt") Resource teachingOutlineCoreEvidence,
             @Value("classpath:prompts/teaching-outline-v10-chapter-ownership-system.txt") Resource teachingOutlineChapterOwnership,
             @Value("classpath:prompts/teaching-outline-v11-visual-coverage-system.txt") Resource teachingOutlineVisualCoverage,
-            @Value("classpath:prompts/teaching-outline-v3-user.txt") Resource teachingOutlineUser,
+            @Value("classpath:prompts/teaching-outline-v12-rulebook-scope-system.txt") Resource teachingOutlineRulebookScope,
+            @Value("classpath:prompts/teaching-outline-v4-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
             @Value("classpath:prompts/rule-answer-agent-v8-direct-rulings-system.txt") Resource answerDirectRulings,
@@ -71,7 +73,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
-            @Value("classpath:prompts/lesson-localization-v1-system.txt") Resource lessonLocalizationSystem,
+            @Value("classpath:prompts/lesson-localization-v2-system.txt") Resource lessonLocalizationSystem,
             @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
             throws IOException {
         this.teachingSystem = combined(
@@ -86,7 +88,8 @@ public class VersionedAgentPrompts {
                 teachingActorAndExampleFidelity,
                 teachingConditionalValues,
                 teachingConditionalScopeAndTie,
-                teachingVisibleObservation);
+                teachingVisibleObservation,
+                teachingRulebookScope);
         this.teachingUser = read(teachingUser);
         this.teachingOutlineSystem = combined(
                 teachingOutlineSystem,
@@ -94,7 +97,8 @@ public class VersionedAgentPrompts {
                 teachingOutlineVisualDensity,
                 teachingOutlineCoreEvidence,
                 teachingOutlineChapterOwnership,
-                teachingOutlineVisualCoverage);
+                teachingOutlineVisualCoverage,
+                teachingOutlineRulebookScope);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
                 answerSystem,

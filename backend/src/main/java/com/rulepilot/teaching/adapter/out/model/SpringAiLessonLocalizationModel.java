@@ -9,6 +9,7 @@ import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStep;
 import com.rulepilot.teaching.domain.LessonLocalization.SectionTranslation;
 import com.rulepilot.teaching.domain.LessonLocalization.StepTranslation;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.ai.chat.client.ChatClient;
@@ -61,19 +62,50 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
         return toDomain(section, draft);
     }
 
-    private SectionTranslation toDomain(LessonSection source, SectionTranslationDraft draft) {
+    static SectionTranslation toDomain(LessonSection source, SectionTranslationDraft draft) {
         if (draft == null || draft.position() != source.position() || draft.steps() == null) {
             throw new IllegalArgumentException("localized lesson section is structurally invalid");
         }
+        Map<Integer, LessonStep> sourceSteps = new HashMap<>();
+        source.steps().forEach(step -> sourceSteps.put(step.position(), step));
         List<StepTranslation> steps = draft.steps().stream()
-                .map(step -> new StepTranslation(
-                        step.position(),
-                        step.heading(),
-                        step.text(),
-                        step.visualLabel(),
-                        step.visualDescription()))
+                .map(step -> {
+                    LessonStep sourceStep = sourceSteps.get(step.position());
+                    if (sourceStep == null) {
+                        throw new IllegalArgumentException("localized lesson step position is invalid");
+                    }
+                    boolean hasVisual = sourceStep.visualFocus() != null;
+                    String visualLabel = hasVisual
+                            ? boundedOptional(
+                                    step.visualLabel(),
+                                    sourceStep.visualFocus().label(),
+                                    80)
+                            : "";
+                    String visualDescription = hasVisual
+                            ? boundedOptional(
+                                    step.visualDescription(),
+                                    sourceStep.visualFocus().visibleDescription(),
+                                    240)
+                            : "";
+                    return new StepTranslation(
+                            step.position(),
+                            step.heading(),
+                            step.text(),
+                            visualLabel,
+                            visualDescription);
+                })
                 .toList();
         return new SectionTranslation(draft.position(), draft.title(), draft.visualCaption(), steps);
+    }
+
+    private static String boundedOptional(String value, String fallback, int maxLength) {
+        String normalized = value == null || value.isBlank() ? fallback : value.strip();
+        if (normalized == null || normalized.isBlank() || normalized.length() <= maxLength) {
+            return normalized == null ? "" : normalized;
+        }
+        int boundary = normalized.lastIndexOf(' ', maxLength - 1);
+        int end = boundary >= maxLength / 2 ? boundary : maxLength - 1;
+        return normalized.substring(0, end).stripTrailing() + "…";
     }
 
     private record SectionInput(int position, String title, String visualCaption, List<StepInput> steps) {
@@ -102,9 +134,9 @@ public class SpringAiLessonLocalizationModel implements LessonLocalizationModel 
         }
     }
 
-    private record SectionTranslationDraft(int position, String title, String visualCaption, List<StepTranslationDraft> steps) {}
+    record SectionTranslationDraft(int position, String title, String visualCaption, List<StepTranslationDraft> steps) {}
 
-    private record StepTranslationDraft(
+    record StepTranslationDraft(
             int position,
             String heading,
             String text,

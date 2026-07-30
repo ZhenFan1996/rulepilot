@@ -147,6 +147,26 @@ class LessonDraftValidatorTest {
     }
 
     @Test
+    void doesNotTreatOneSupportedPlayerRangeAsAConditionalRuleBranch() {
+        UUID chunkId = UUID.randomUUID();
+        Map<UUID, RuleEvidence> evidence = Map.of(
+                chunkId,
+                new RuleEvidence(
+                        chunkId,
+                        UUID.randomUUID(),
+                        "OVERVIEW",
+                        "Overview",
+                        "A card-drafting game for 2–6 players.",
+                        1,
+                        1));
+
+        LessonDraftValidator.validatePlayerCountConditionalScopes(
+                draft(chunkId, "这是一款多人卡牌游戏。"), evidence);
+        LessonDraftValidator.validatePlayerCountConditionalScopes(
+                draft(chunkId, "示例桌面展示了4人游戏。"), evidence);
+    }
+
+    @Test
     void requiresTheCitedSharedVictoryAtTheEndOfATieBreakChain() {
         UUID chunkId = UUID.randomUUID();
         Map<UUID, RuleEvidence> evidence = Map.of(

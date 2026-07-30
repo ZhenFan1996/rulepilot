@@ -127,7 +127,10 @@ final class LessonDraftValidator {
                 .filter(java.util.Objects::nonNull)
                 .flatMap(evidence -> playerCountRanges(evidence.excerpt()).stream())
                 .toList();
-        if (ranges.isEmpty()) return;
+        // A single range such as "a game for 2–6 players" states product eligibility, not a branching rule.
+        // It does not provide enough structure for a deterministic completeness gate. Two or more scopes are the
+        // minimum evidence that the source is contrasting materially different player-count branches.
+        if (ranges.size() < 2) return;
 
         String playerFacingText = draft.title() + "\n" + draft.visualCaption() + "\n" + draft.steps().stream()
                 .flatMap(step -> java.util.stream.Stream.of(step.heading(), step.text()))

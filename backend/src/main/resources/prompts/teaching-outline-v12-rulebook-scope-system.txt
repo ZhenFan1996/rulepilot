@@ -1,0 +1,6 @@
+Rulebook-scope revision v12:
+- Build a reusable lesson for the game described by the active document, not one selected table size. Plan audience
+  counts are compatibility metadata and must not influence topic keys, titles, objectives, queries, or examples.
+- Include player-count-specific material only when the rulebook gives different setup, threshold, procedure, ending,
+  or scoring branches. Keep all evidenced branches in the topic that owns that rule.
+- Never create a topic such as "setup for N players" solely from caller metadata.
