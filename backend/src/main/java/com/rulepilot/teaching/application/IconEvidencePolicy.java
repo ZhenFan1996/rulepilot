@@ -23,6 +23,20 @@ final class IconEvidencePolicy {
     private static final Set<String> GENERIC_VISUAL_TERMS = Set.of(
             "icon", "icons", "symbol", "symbols", "silhouette", "shape", "mark", "marker",
             "illustration", "image", "pictogram", "outline");
+    private static final Set<String> NEUTRAL_IDENTITY_TERMS = Set.of(
+            "card",
+            "tile",
+            "token",
+            "piece",
+            "cube",
+            "disc",
+            "die",
+            "marker",
+            "category",
+            "type",
+            "resource",
+            "icon",
+            "symbol");
 
     private IconEvidencePolicy() {}
 
@@ -133,13 +147,10 @@ final class IconEvidencePolicy {
         String proposedIdentity = normalizedIdentity(groupKey);
         if (labelIdentity.isBlank() || proposedIdentity.isBlank()) return false;
         if (labelIdentity.equals(proposedIdentity)) return true;
-        String residual = proposedIdentity.startsWith(labelIdentity + " ")
-                ? proposedIdentity.substring(labelIdentity.length()).strip()
-                : "";
-        return !residual.isBlank()
-                && residual.matches(
-                        "(?i)(?:card|tile|token|piece|cube|disc|die|marker|category|type)"
-                                + "(?:\\s+(?:card|tile|token|piece|cube|disc|die|marker|category|type))*");
+        String proposedWithoutContainers = java.util.Arrays.stream(proposedIdentity.split("\\s+"))
+                .filter(term -> !NEUTRAL_IDENTITY_TERMS.contains(term))
+                .collect(Collectors.joining(" "));
+        return !proposedWithoutContainers.isBlank() && proposedWithoutContainers.equals(labelIdentity);
     }
 
     static Optional<String> literalEvidence(String evidence, String groupKey) {

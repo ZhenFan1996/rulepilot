@@ -57,7 +57,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
-            @Value("classpath:prompts/visual-icon-crop-review-v1-system.txt") Resource iconCropReviewPrompt,
+            @Value("classpath:prompts/visual-icon-crop-review-v2-system.txt") Resource iconCropReviewPrompt,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
@@ -333,9 +333,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 if (!expectedCandidates.contains(index) || byCandidate.containsKey(index)) {
                     throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
                 }
+                boolean matchesAppearance = item.path("matchesAppearance").asBoolean(false);
+                boolean fullyContained = item.path("fullyContained").asBoolean(false);
+                boolean standalonePictogram = item.path("standalonePictogram").asBoolean(false);
                 IconCropDecision decision;
                 try {
-                    decision = item.path("matchesAppearance").asBoolean(false)
+                    decision = matchesAppearance && fullyContained && standalonePictogram
                             ? new IconCropDecision(
                                     index,
                                     true,
@@ -416,7 +419,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     private static CropBounds cropBounds(IconLocation location) {
-        int padding = 8;
+        // Localization is deliberately approximate. Give the independent reviewer enough surrounding page context
+        // to see whether a proposed object continues outside the first box and to refine a complete compact symbol.
+        int padding = 24;
         int x = Math.max(0, location.x() - padding);
         int y = Math.max(0, location.y() - padding);
         int right = Math.min(1_000, location.x() + location.width() + padding);

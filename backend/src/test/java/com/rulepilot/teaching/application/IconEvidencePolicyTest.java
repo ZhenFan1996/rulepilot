@@ -111,18 +111,27 @@ class IconEvidencePolicyTest {
     void promotesAnUnexplainedCropOnlyWhenItsIndependentLabelMatchesTheProposedIdentity() {
         IconOccurrence matching = unexplainedWithVerifiedLabel("carrot card icon", "CARROT");
         IconOccurrence camelCaseContainer = unexplainedWithVerifiedLabel("brickCube", "BRICK");
+        IconOccurrence prefixedContainers = unexplainedWithVerifiedLabel("resource cube - wood", "WOOD");
         IconOccurrence neighboring = unexplainedWithVerifiedLabel("point card icon", "SALAD");
 
         List<IconOccurrence> sanitized =
                 IconEvidencePolicy.sanitize(
-                        List.of(matching, camelCaseContainer, neighboring),
+                        List.of(matching, camelCaseContainer, prefixedContainers, neighboring),
                         "The text layer has no card labels.");
 
         assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
         assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
         assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
         assertThat(sanitized.get(1).evidenceText()).isEqualTo("BRICK");
-        assertThat(sanitized.get(2).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+        assertThat(sanitized.get(2).meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+        assertThat(sanitized.get(2).evidenceText()).isEqualTo("WOOD");
+        assertThat(sanitized.get(3).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+    }
+
+    @Test
+    void doesNotTreatDescriptiveQualifiersAsNeutralIdentityContainers() {
+        assertThat(IconEvidencePolicy.compatibleIdentity("WOOD", "red resource cube - wood")).isFalse();
+        assertThat(IconEvidencePolicy.compatibleIdentity("WOOD", "resource cube - stone")).isFalse();
     }
 
     private static IconOccurrence icon(String evidence) {

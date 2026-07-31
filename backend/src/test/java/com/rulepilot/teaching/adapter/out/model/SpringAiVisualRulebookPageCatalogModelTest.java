@@ -160,7 +160,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void parsesCloseUpCropReviewForTheExactCandidateIndexes() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"x":100,"y":120,"width":300,"height":280},
+                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "x":100,"y":120,"width":300,"height":280},
                   {"candidateIndex":7,"matchesAppearance":false}
                 ]}
                 """, List.of(3, 7));
@@ -171,11 +172,27 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void rejectsAMatchingCropWhenItIsClippedOrContainsAMultiSymbolLayout() {
+        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
+                {"items":[
+                  {"candidateIndex":2,"matchesAppearance":true,"fullyContained":false,"standalonePictogram":true},
+                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false}
+                ]}
+                """, List.of(2, 5));
+
+        assertThat(result.decisions()).containsExactly(
+                IconCropDecision.rejected(2),
+                IconCropDecision.rejected(5));
+    }
+
+    @Test
     void rejectsOnlyTheMalformedCloseUpRectangle() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"x":100,"y":120,"width":300,"height":280},
-                  {"candidateIndex":7,"matchesAppearance":true,"x":990,"y":990,"width":40,"height":40}
+                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "x":100,"y":120,"width":300,"height":280},
+                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "x":990,"y":990,"width":40,"height":40}
                 ]}
                 """, List.of(3, 7));
 
