@@ -8,10 +8,28 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 
 class SpringAiVisualRulebookPageCatalogModelTest {
+
+    @Test
+    void cropPublicationGateKeepsCompleteCentralSymbolsWithoutTrustingNeighborFragments() throws IOException {
+        String prompt = new ClassPathResource("prompts/visual-icon-crop-review-v3-system.txt")
+                .getContentAsString(StandardCharsets.UTF_8)
+                .replaceAll("\\s+", " ");
+
+        assertThat(prompt)
+                .contains(
+                        "single compact graphic nearest the crop center",
+                        "separated from all four crop edges by visible background",
+                        "tiny clipped edge of a different neighboring symbol may be ignored",
+                        "isolated stylized resource cube is a valid pictogram",
+                        "grid or board with multiple cells");
+    }
 
     @Test
     void parsesQwenJsonContentWithoutDependingOnNativeStructuredOutput() {
