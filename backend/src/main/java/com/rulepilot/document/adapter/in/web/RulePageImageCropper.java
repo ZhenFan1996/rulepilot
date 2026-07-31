@@ -3,12 +3,17 @@ package com.rulepilot.document.adapter.in.web;
 import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.document.DocumentPageImageCropper;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Iterator;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReadParam;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -28,32 +33,45 @@ final class RulePageImageCropper implements DocumentPageImageCropper {
         if (contextPadding < 0 || contextPadding > 100) {
             throw new IllegalArgumentException("document page crop padding is invalid");
         }
-        try {
-            BufferedImage source = ImageIO.read(new ByteArrayInputStream(page.content()));
-            if (source == null) throw new IllegalArgumentException("document page image cannot be decoded");
-
-            int left = pixel(Math.max(0, x - contextPadding), source.getWidth());
-            int top = pixel(Math.max(0, y - contextPadding), source.getHeight());
-            int right = pixelCeiling(
-                    Math.min(NORMALIZED_PAGE_SIZE, x + width + contextPadding), source.getWidth());
-            int bottom = pixelCeiling(
-                    Math.min(NORMALIZED_PAGE_SIZE, y + height + contextPadding), source.getHeight());
-            BufferedImage crop = source.getSubimage(left, top, right - left, bottom - top);
-            BufferedImage rgb = new BufferedImage(crop.getWidth(), crop.getHeight(), BufferedImage.TYPE_INT_RGB);
-            Graphics2D graphics = rgb.createGraphics();
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(page.content()))) {
+            if (input == null) throw new IllegalArgumentException("document page image cannot be decoded");
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw new IllegalArgumentException("document page image cannot be decoded");
+            ImageReader reader = readers.next();
             try {
-                graphics.drawImage(crop, 0, 0, null);
+                reader.setInput(input, false, true);
+                int sourceWidth = reader.getWidth(0);
+                int sourceHeight = reader.getHeight(0);
+                int left = pixel(Math.max(0, x - contextPadding), sourceWidth);
+                int top = pixel(Math.max(0, y - contextPadding), sourceHeight);
+                int right = pixelCeiling(
+                        Math.min(NORMALIZED_PAGE_SIZE, x + width + contextPadding), sourceWidth);
+                int bottom = pixelCeiling(
+                        Math.min(NORMALIZED_PAGE_SIZE, y + height + contextPadding), sourceHeight);
+                ImageReadParam parameters = reader.getDefaultReadParam();
+                parameters.setSourceRegion(new Rectangle(left, top, right - left, bottom - top));
+                return encodeRgb(reader.read(0, parameters));
             } finally {
-                graphics.dispose();
+                reader.dispose();
             }
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            if (!ImageIO.write(rgb, "jpeg", output)) {
-                throw new IllegalStateException("JPEG image writer is unavailable");
-            }
-            return output.toByteArray();
         } catch (IOException exception) {
             throw new UncheckedIOException("could not crop document page image", exception);
         }
+    }
+
+    private byte[] encodeRgb(BufferedImage crop) throws IOException {
+        BufferedImage rgb = new BufferedImage(crop.getWidth(), crop.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = rgb.createGraphics();
+        try {
+            graphics.drawImage(crop, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        if (!ImageIO.write(rgb, "jpeg", output)) {
+            throw new IllegalStateException("JPEG image writer is unavailable");
+        }
+        return output.toByteArray();
     }
 
     private void validateFocus(int x, int y, int width, int height) {

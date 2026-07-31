@@ -9,6 +9,10 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
+import java.util.stream.IntStream;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
@@ -80,5 +84,45 @@ class RulePageImageCropperTest {
         BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
         assertThat(cropped.getWidth()).isEqualTo(22);
         assertThat(cropped.getHeight()).isEqualTo(22);
+    }
+
+    @Test
+    void decodesOnlyTheRequestedRegionOfALargeEvidencePage() throws IOException {
+        BufferedImage source = new BufferedImage(2_000, 3_000, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+
+        byte[] result = cropper.crop(
+                new PageImage(1, "image/jpeg", encoded.toByteArray(), 2_000, 3_000),
+                500,
+                500,
+                20,
+                20,
+                10);
+
+        BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result));
+        assertThat(cropped.getWidth()).isEqualTo(80);
+        assertThat(cropped.getHeight()).isEqualTo(120);
+    }
+
+    @Test
+    void servesConcurrentIconCropsWithoutMaterializingTheWholePageForEachRequest() throws Exception {
+        BufferedImage source = new BufferedImage(2_000, 3_000, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "jpeg", encoded);
+        PageImage page = new PageImage(1, "image/jpeg", encoded.toByteArray(), 2_000, 3_000);
+        List<Callable<byte[]>> requests = IntStream.range(0, 8)
+                .mapToObj(ignored -> (Callable<byte[]>) () -> cropper.crop(page, 500, 500, 20, 20, 10))
+                .toList();
+
+        try (var executor = Executors.newFixedThreadPool(requests.size())) {
+            var results = executor.invokeAll(requests);
+
+            for (var result : results) {
+                BufferedImage cropped = ImageIO.read(new ByteArrayInputStream(result.get()));
+                assertThat(cropped.getWidth()).isEqualTo(80);
+                assertThat(cropped.getHeight()).isEqualTo(120);
+            }
+        }
     }
 }
