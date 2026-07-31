@@ -108,6 +108,29 @@ class IconEvidencePolicyTest {
     }
 
     @Test
+    void preservesAnAlreadyIdentifiedContainerWhenTheIndependentImageLabelMatches() {
+        IconOccurrence identified = new IconOccurrence(
+                "resource cube - wood",
+                "木头资源方块",
+                "Brown cube with wood grain texture.",
+                "",
+                "WOOD",
+                "WOOD",
+                IconMeaningStatus.IDENTIFIED,
+                100,
+                100,
+                20,
+                20);
+
+        IconOccurrence sanitized =
+                IconEvidencePolicy.sanitize(List.of(identified), "The PDF text layer has no resource legend.")
+                        .getFirst();
+
+        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+        assertThat(sanitized.evidenceText()).isEqualTo("WOOD");
+    }
+
+    @Test
     void promotesAnUnexplainedCropOnlyWhenItsIndependentLabelMatchesTheProposedIdentity() {
         IconOccurrence matching = unexplainedWithVerifiedLabel("carrot card icon", "CARROT");
         IconOccurrence camelCaseContainer = unexplainedWithVerifiedLabel("brickCube", "BRICK");

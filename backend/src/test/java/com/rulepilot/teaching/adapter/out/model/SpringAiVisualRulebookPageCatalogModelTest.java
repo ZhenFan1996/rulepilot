@@ -160,9 +160,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void parsesCloseUpCropReviewForTheExactCandidateIndexes() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "x":100,"y":120,"width":300,"height":280},
-                  {"candidateIndex":7,"matchesAppearance":false}
+                  {"candidateIndex":3,"accepted":true,"rejectionCode":"ACCEPTED"},
+                  {"candidateIndex":7,"accepted":false,"rejectionCode":"NO_MATCHING_PICTOGRAM"}
                 ]}
                 """, List.of(3, 7));
 
@@ -172,11 +171,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void rejectsAMatchingCropWhenItIsClippedOrContainsAMultiSymbolLayout() {
+    void rejectsClippedAndMultiSymbolCropsFromThePublicationGate() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":2,"matchesAppearance":true,"fullyContained":false,"standalonePictogram":true},
-                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false}
+                  {"candidateIndex":2,"accepted":false,"rejectionCode":"CLIPPED_OR_PARTIAL"},
+                  {"candidateIndex":5,"accepted":false,"rejectionCode":"MULTIPLE_SYMBOLS"}
                 ]}
                 """, List.of(2, 5));
 
@@ -186,13 +185,11 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void rejectsOnlyTheMalformedCloseUpRectangle() {
+    void rejectsOnlyTheCandidateWhosePublicationVerdictIsMissing() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "x":100,"y":120,"width":300,"height":280},
-                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
-                   "x":990,"y":990,"width":40,"height":40}
+                  {"candidateIndex":3,"accepted":true,"rejectionCode":"ACCEPTED"},
+                  {"candidateIndex":7,"rejectionCode":"ACCEPTED"}
                 ]}
                 """, List.of(3, 7));
 

@@ -428,6 +428,7 @@ class VisualRulebookCatalogerTest {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger localizationCalls = new AtomicInteger();
+        AtomicInteger cropReviewCalls = new AtomicInteger();
         byte[] pageContent = renderedPage();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
             @Override
@@ -471,6 +472,15 @@ class VisualRulebookCatalogerTest {
                         new IconLocation(0, true, 120, 240, 24, 28),
                         new IconLocation(1, true, 700, 700, 120, 160)));
             }
+
+            @Override
+            public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
+                cropReviewCalls.incrementAndGet();
+                assertThat(request.candidates()).hasSize(1);
+                int candidateIndex = request.locations().getFirst().candidateIndex();
+                return new IconCropReviewDraft(
+                        List.of(new IconCropDecision(candidateIndex, true, 900, 900, 20, 20)));
+            }
         };
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> List.of(
@@ -482,6 +492,7 @@ class VisualRulebookCatalogerTest {
                 documentVersionId, List.of(page(1)), "Example game", "owner", null);
 
         assertThat(localizationCalls).hasValue(1);
+        assertThat(cropReviewCalls).hasValue(2);
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
             assertThat(fact.iconOccurrences()).hasSize(2);
@@ -492,7 +503,13 @@ class VisualRulebookCatalogerTest {
                 assertThat(icon.width()).isEqualTo(24);
                 assertThat(icon.height()).isEqualTo(28);
             });
-            assertThat(fact.iconOccurrences().get(1).name()).isEqualTo("积分卡");
+            assertThat(fact.iconOccurrences().get(1)).satisfies(icon -> {
+                assertThat(icon.name()).isEqualTo("积分卡");
+                assertThat(icon.x()).isEqualTo(700);
+                assertThat(icon.y()).isEqualTo(700);
+                assertThat(icon.width()).isEqualTo(120);
+                assertThat(icon.height()).isEqualTo(160);
+            });
         });
     }
 

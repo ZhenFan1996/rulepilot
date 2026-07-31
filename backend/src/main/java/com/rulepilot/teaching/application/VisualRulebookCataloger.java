@@ -682,8 +682,9 @@ class VisualRulebookCataloger {
                 .toList();
         if (present.isEmpty()) return Map.of();
         Map<Integer, VisualRulebookPageCatalogModel.IconLocation> confirmed = new LinkedHashMap<>();
-        for (int offset = 0, batch = 1; offset < present.size(); offset += 8, batch++) {
-            List<Integer> indexes = present.subList(offset, Math.min(present.size(), offset + 8));
+        // One crop per request prevents the provider from binding a verdict or relative box to a sibling image.
+        for (int offset = 0, batch = 1; offset < present.size(); offset++, batch++) {
+            List<Integer> indexes = present.subList(offset, offset + 1);
             var request = new VisualRulebookPageCatalogModel.IconCropReviewRequest(
                     new PageImageInput(page.pageNumber(), page.mediaType(), page.content()),
                     indexes.stream().map(summary.iconOccurrences()::get).toList(),
@@ -704,16 +705,21 @@ class VisualRulebookCataloger {
             }
             review.decisions().stream()
                     .filter(VisualRulebookPageCatalogModel.IconCropDecision::matchesAppearance)
-                    .forEach(decision -> confirmed.put(
-                            decision.candidateIndex(),
-                            new VisualRulebookPageCatalogModel.IconLocation(
-                                    decision.candidateIndex(),
-                                    true,
-                                    decision.x(),
-                                    decision.y(),
-                                    decision.width(),
-                                    decision.height(),
-                                    locations.get(decision.candidateIndex()).observedLabel())));
+                    .forEach(decision -> {
+                        // The close-up is a publication gate, not a second coordinate system. The full-page pass
+                        // already grounded this candidate against the immutable page and independently read its label.
+                        var localized = locations.get(decision.candidateIndex());
+                        confirmed.put(
+                                decision.candidateIndex(),
+                                new VisualRulebookPageCatalogModel.IconLocation(
+                                        decision.candidateIndex(),
+                                        true,
+                                        localized.x(),
+                                        localized.y(),
+                                        localized.width(),
+                                        localized.height(),
+                                        localized.observedLabel()));
+                    });
         }
         return Map.copyOf(confirmed);
     }

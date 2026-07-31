@@ -17,6 +17,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -57,7 +58,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
-            @Value("classpath:prompts/visual-icon-crop-review-v2-system.txt") Resource iconCropReviewPrompt,
+            @Value("classpath:prompts/visual-icon-crop-review-v3-system.txt") Resource iconCropReviewPrompt,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
@@ -232,10 +233,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 })
                 .call()
                 .content();
-        IconCropReviewDraft relativeReview = parseIconCropReview(
+        return parseIconCropReview(
                 content,
                 request.locations().stream().map(IconLocation::candidateIndex).toList());
-        return projectIconCropReview(relativeReview, request.locations());
     }
 
     static String iconLocalizationCandidates(List<IconOccurrence> candidates) {
@@ -333,24 +333,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 if (!expectedCandidates.contains(index) || byCandidate.containsKey(index)) {
                     throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
                 }
-                boolean matchesAppearance = item.path("matchesAppearance").asBoolean(false);
-                boolean fullyContained = item.path("fullyContained").asBoolean(false);
-                boolean standalonePictogram = item.path("standalonePictogram").asBoolean(false);
-                IconCropDecision decision;
-                try {
-                    decision = matchesAppearance && fullyContained && standalonePictogram
-                            ? new IconCropDecision(
-                                    index,
-                                    true,
-                                    item.path("x").asInt(Integer.MIN_VALUE),
-                                    item.path("y").asInt(Integer.MIN_VALUE),
-                                    item.path("width").asInt(Integer.MIN_VALUE),
-                                    item.path("height").asInt(Integer.MIN_VALUE))
-                            : IconCropDecision.rejected(index);
-                } catch (IllegalArgumentException invalidRectangle) {
-                    // Each close-up is independent; one malformed refinement must not discard valid sibling crops.
-                    decision = IconCropDecision.rejected(index);
-                }
+                IconCropDecision decision = item.path("accepted").asBoolean(false)
+                        ? new IconCropDecision(index, true, 0, 0, 1_000, 1_000)
+                        : IconCropDecision.rejected(index);
                 byCandidate.put(index, decision);
             });
             if (!byCandidate.keySet().equals(new java.util.LinkedHashSet<>(expectedCandidates))) {
@@ -372,10 +357,16 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             int right = pixelCeiling(bounds.x() + bounds.width(), source.getWidth());
             int bottom = pixelCeiling(bounds.y() + bounds.height(), source.getHeight());
             BufferedImage crop = source.getSubimage(left, top, right - left, bottom - top);
-            BufferedImage rgb = new BufferedImage(crop.getWidth(), crop.getHeight(), BufferedImage.TYPE_INT_RGB);
+            int largestEdge = Math.max(crop.getWidth(), crop.getHeight());
+            double scale = largestEdge < 512 ? 512.0 / largestEdge : 1.0;
+            int outputWidth = Math.max(1, (int) Math.round(crop.getWidth() * scale));
+            int outputHeight = Math.max(1, (int) Math.round(crop.getHeight() * scale));
+            BufferedImage rgb = new BufferedImage(outputWidth, outputHeight, BufferedImage.TYPE_INT_RGB);
             Graphics2D graphics = rgb.createGraphics();
             try {
-                graphics.drawImage(crop, 0, 0, null);
+                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+                graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+                graphics.drawImage(crop, 0, 0, outputWidth, outputHeight, null);
             } finally {
                 graphics.dispose();
             }
@@ -389,39 +380,9 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
     }
 
-    private static IconCropReviewDraft projectIconCropReview(
-            IconCropReviewDraft relativeReview, List<IconLocation> sourceLocations) {
-        Map<Integer, IconLocation> sourceByIndex = sourceLocations.stream()
-                .collect(Collectors.toMap(IconLocation::candidateIndex, java.util.function.Function.identity()));
-        return new IconCropReviewDraft(relativeReview.decisions().stream()
-                .map(decision -> {
-                    if (!decision.matchesAppearance()) return decision;
-                    CropBounds source = cropBounds(sourceByIndex.get(decision.candidateIndex()));
-                    int x = source.x() + decision.x() * source.width() / 1_000;
-                    int y = source.y() + decision.y() * source.height() / 1_000;
-                    int right = source.x()
-                            + (decision.x() + decision.width()) * source.width() / 1_000;
-                    int bottom = source.y()
-                            + (decision.y() + decision.height()) * source.height() / 1_000;
-                    try {
-                        return new IconCropDecision(
-                                decision.candidateIndex(),
-                                true,
-                                x,
-                                y,
-                                Math.max(1, right - x),
-                                Math.max(1, bottom - y));
-                    } catch (IllegalArgumentException invalidProjection) {
-                        return IconCropDecision.rejected(decision.candidateIndex());
-                    }
-                })
-                .toList());
-    }
-
     private static CropBounds cropBounds(IconLocation location) {
-        // Localization is deliberately approximate. Give the independent reviewer enough surrounding page context
-        // to see whether a proposed object continues outside the first box and to refine a complete compact symbol.
-        int padding = 24;
+        // Keep the independently localized object central while showing enough edge context to expose clipping.
+        int padding = 16;
         int x = Math.max(0, location.x() - padding);
         int y = Math.max(0, location.y() - padding);
         int right = Math.min(1_000, location.x() + location.width() + padding);

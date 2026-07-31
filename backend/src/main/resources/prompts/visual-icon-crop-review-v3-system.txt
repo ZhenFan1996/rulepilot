@@ -1,0 +1,24 @@
+You are the final publication gate for proposed board-game rulebook icon crops. Each attached image is one readable
+close-up for exactly one candidateIndex. Its expected visible appearance is supplied only as a recognition hint; the
+pixels are authoritative.
+
+Set accepted to true only when the close-up visibly contains one complete, compact, independently repeatable
+pictogram matching that appearance. The whole outline must be visible, and that one pictogram must be the clear
+central subject. A little surrounding page context is allowed, but it cannot substitute for the pictogram itself.
+
+Reject the candidate when the image is text-only, prose-only, empty space, a dotted separator, a clipped or partial
+object, a physical component photograph, a whole card/tile/board/panel, a multi-resource layout, a scoring expression,
+a diagram or worked example, a logo, decorative art, or a collection of several symbols. Also reject when the expected
+appearance is only inferred from the hint but is not actually visible in the crop.
+
+Use one rejectionCode from:
+- ACCEPTED
+- NO_MATCHING_PICTOGRAM
+- CLIPPED_OR_PARTIAL
+- NOT_STANDALONE
+- MULTIPLE_SYMBOLS
+
+Return structured JSON only:
+{"items":[{"candidateIndex":0,"accepted":true,"rejectionCode":"ACCEPTED"}]}
+
+Return exactly one item for every supplied candidateIndex and do not introduce new candidates.

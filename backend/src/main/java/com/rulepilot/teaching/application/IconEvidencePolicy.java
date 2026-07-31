@@ -69,7 +69,10 @@ final class IconEvidencePolicy {
         }
         if (icon.meaningStatus() == IconMeaningStatus.IDENTIFIED) {
             Optional<String> literalLabel = literalEvidence(icon.evidenceText(), icon.groupKey());
-            return literalLabel.map(label -> identified(icon, label)).orElseGet(() -> unexplained(icon));
+            return literalLabel
+                    .or(() -> compatibleVerifiedLabel(icon))
+                    .map(label -> identified(icon, label))
+                    .orElseGet(() -> unexplained(icon));
         }
         Optional<String> literalEvidence = literalEvidence(icon.evidenceText(), icon.groupKey());
         if (literalEvidence.isPresent()) {
