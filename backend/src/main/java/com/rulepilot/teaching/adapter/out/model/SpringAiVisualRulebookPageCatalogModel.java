@@ -106,11 +106,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(OpenAiChatOptions.builder()
-                    .model(models.modelNameFor(Role.VISUAL, owner))
-                    .maxTokens(maxCompletionTokens)
-                    .extraBody(Map.of("enable_thinking", false))
-                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
+            prompt = prompt.options(
+                    qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), maxCompletionTokens));
         }
         String content = prompt.system(systemPrompt)
                 .user(user -> {
@@ -169,11 +166,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(OpenAiChatOptions.builder()
-                    .model(models.modelNameFor(Role.VISUAL, owner))
-                    .maxTokens(Math.min(2_000, maxCompletionTokens))
-                    .extraBody(Map.of("enable_thinking", false))
-                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
+            prompt = prompt.options(qwenJsonOptions(
+                    models.modelNameFor(Role.VISUAL, owner), Math.min(2_000, maxCompletionTokens)));
         }
         String candidates = iconLocalizationCandidates(request.candidates());
         String content = prompt.system(iconLocalizationPrompt)
@@ -205,11 +199,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         }
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
-            prompt = prompt.options(OpenAiChatOptions.builder()
-                    .model(models.modelNameFor(Role.VISUAL, owner))
-                    .maxTokens(Math.min(1_000, maxCompletionTokens))
-                    .extraBody(Map.of("enable_thinking", false))
-                    .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()));
+            prompt = prompt.options(qwenJsonOptions(
+                    models.modelNameFor(Role.VISUAL, owner), Math.min(1_000, maxCompletionTokens)));
         }
         String attachmentOrder = java.util.stream.IntStream.range(0, request.candidates().size())
                 .mapToObj(index -> "image " + (index + 1) + " = candidateIndex "
@@ -396,6 +387,17 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private static int pixelCeiling(int normalized, int imageSize) {
         return Math.max(1, Math.min(imageSize, (normalized * imageSize + 999) / 1_000));
+    }
+
+    static OpenAiChatOptions.Builder qwenJsonOptions(String modelName, int maxTokens) {
+        return OpenAiChatOptions.builder()
+                .model(modelName)
+                // Spatial extraction and binary publication decisions must be replayable. Provider-default sampling
+                // made the same page alternate between valid rectangles, malformed JSON, and rejected crops.
+                .temperature(0.0)
+                .maxTokens(maxTokens)
+                .extraBody(Map.of("enable_thinking", false))
+                .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
 
     private record CropBounds(int x, int y, int width, int height) {}

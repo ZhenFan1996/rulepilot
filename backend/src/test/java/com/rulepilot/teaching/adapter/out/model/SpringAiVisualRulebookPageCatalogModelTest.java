@@ -32,6 +32,17 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void disablesSamplingForReplayableQwenVisualCatalogDecisions() {
+        var options = SpringAiVisualRulebookPageCatalogModel.qwenJsonOptions("qwen3-vl-235b-a22b-instruct", 1_000)
+                .build();
+
+        assertThat(options.getModel()).isEqualTo("qwen3-vl-235b-a22b-instruct");
+        assertThat(options.getTemperature()).isEqualTo(0.0);
+        assertThat(options.getMaxTokens()).isEqualTo(1_000);
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+    }
+
+    @Test
     void parsesQwenJsonContentWithoutDependingOnNativeStructuredOutput() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 ```json
