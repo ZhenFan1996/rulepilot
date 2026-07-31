@@ -47,7 +47,7 @@ services:
       # Vision work is optional after the cited text lesson exists. A single Qwen request avoids holding multiple
       # rendered rulebook pages in the API process and protects ordinary reading, upload, and question requests.
       VISUAL_REQUEST_PARALLELISM: ${PRODUCTION_VISUAL_REQUEST_PARALLELISM:-1}
-      VISUAL_CATALOG_TIMEOUT: PT75S
+      VISUAL_CATALOG_TIMEOUT: PT120S
       # Publish the cited text lesson first, then give the first visual pass enough breadth to cover the major
       # gameplay chapters. Vision still runs one request at a time on this small host, so it cannot create a burst
       # of rendered-page buffers or delay reading and answering requests.
