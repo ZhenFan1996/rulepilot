@@ -33,21 +33,36 @@ final class IconEvidencePolicy {
     static List<IconOccurrence> sanitize(List<IconOccurrence> icons, String sourcePageText) {
         String normalizedSource = normalizedSourceText(sourcePageText);
         return sanitize(icons).stream()
-                .map(icon -> icon.meaningStatus() == IconMeaningStatus.EXPLICIT
-                                && !normalizedSource.contains(normalizedSourceText(icon.evidenceText()))
-                                && !independentlyVerifiedVisualEvidence(icon)
-                        ? unexplained(icon)
-                        : icon)
+                .map(icon -> {
+                    boolean sourceContainsEvidence =
+                            normalizedSource.contains(normalizedSourceText(icon.evidenceText()));
+                    if (icon.meaningStatus() == IconMeaningStatus.EXPLICIT && !sourceContainsEvidence) {
+                        return unexplained(icon);
+                    }
+                    if (icon.meaningStatus() == IconMeaningStatus.IDENTIFIED
+                            && !sourceContainsEvidence
+                            && !independentlyVerifiedVisualEvidence(icon)) {
+                        return unexplained(icon);
+                    }
+                    return icon;
+                })
                 .toList();
     }
 
     private static IconOccurrence sanitize(IconOccurrence icon) {
-        if (icon.meaningStatus() != IconMeaningStatus.EXPLICIT) {
-            return icon;
+        if (icon.meaningStatus() == IconMeaningStatus.UNEXPLAINED) {
+            return compatibleVerifiedLabel(icon).map(label -> identified(icon, label)).orElse(icon);
+        }
+        if (icon.meaningStatus() == IconMeaningStatus.IDENTIFIED) {
+            Optional<String> literalLabel = literalEvidence(icon.evidenceText(), icon.groupKey());
+            return literalLabel.map(label -> identified(icon, label)).orElseGet(() -> unexplained(icon));
         }
         Optional<String> literalEvidence = literalEvidence(icon.evidenceText(), icon.groupKey());
         if (literalEvidence.isPresent()) {
             String canonicalEvidence = literalEvidence.get();
+            if (equivalentIdentity(canonicalEvidence, icon.groupKey())) {
+                return identified(icon, canonicalEvidence);
+            }
             if (canonicalEvidence.equals(icon.evidenceText())) return icon;
             return new IconOccurrence(
                     icon.groupKey(),
@@ -63,6 +78,28 @@ final class IconEvidencePolicy {
                     icon.height());
         }
         return unexplained(icon);
+    }
+
+    private static Optional<String> compatibleVerifiedLabel(IconOccurrence icon) {
+        String label = icon.verifiedVisualLabel();
+        return label != null && !label.isBlank() && compatibleIdentity(label, icon.groupKey())
+                ? Optional.of(label.strip())
+                : Optional.empty();
+    }
+
+    private static IconOccurrence identified(IconOccurrence icon, String label) {
+        return new IconOccurrence(
+                icon.groupKey(),
+                icon.name(),
+                icon.visualDescription(),
+                "",
+                label,
+                icon.verifiedVisualLabel(),
+                IconMeaningStatus.IDENTIFIED,
+                icon.x(),
+                icon.y(),
+                icon.width(),
+                icon.height());
     }
 
     private static IconOccurrence unexplained(IconOccurrence icon) {
@@ -89,6 +126,20 @@ final class IconEvidencePolicy {
     private static boolean independentlyVerifiedVisualEvidence(IconOccurrence icon) {
         String label = normalizedSourceText(icon.verifiedVisualLabel());
         return !label.isBlank() && label.equals(normalizedSourceText(icon.evidenceText()));
+    }
+
+    static boolean compatibleIdentity(String label, String groupKey) {
+        String labelIdentity = normalizedIdentity(label);
+        String proposedIdentity = normalizedIdentity(groupKey);
+        if (labelIdentity.isBlank() || proposedIdentity.isBlank()) return false;
+        if (labelIdentity.equals(proposedIdentity)) return true;
+        String residual = proposedIdentity.startsWith(labelIdentity + " ")
+                ? proposedIdentity.substring(labelIdentity.length()).strip()
+                : "";
+        return !residual.isBlank()
+                && residual.matches(
+                        "(?i)(?:card|tile|token|piece|cube|disc|die|marker|category|type)"
+                                + "(?:\\s+(?:card|tile|token|piece|cube|disc|die|marker|category|type))*");
     }
 
     static Optional<String> literalEvidence(String evidence, String groupKey) {
@@ -131,7 +182,10 @@ final class IconEvidencePolicy {
     }
 
     private static String normalizedIdentity(String value) {
-        var terms = IDENTITY_TERM.matcher(value == null ? "" : value.toLowerCase(Locale.ROOT));
+        String separated = value == null
+                ? ""
+                : value.replaceAll("(?<=[\\p{Ll}\\p{Nd}])(?=\\p{Lu})", " ");
+        var terms = IDENTITY_TERM.matcher(separated.toLowerCase(Locale.ROOT));
         return terms.results()
                 .map(result -> semanticIdentityTerm(result.group()))
                 .filter(term -> !term.isBlank())

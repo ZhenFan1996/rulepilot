@@ -28,6 +28,10 @@ final class VisualRulebookCatalogPolicy {
     private static final Pattern NON_GAMEPLAY_IDENTITY = Pattern.compile(
             "(?iu)(?:\\b(?:logo|publisher|compliance|certification|trademark|safety\\s+warning|"
                     + "age\\s+restriction)\\b|徽标|商标|出版商|合规|认证标志|年龄限制|安全警告)");
+    private static final Pattern NON_GAMEPLAY_PAGE = Pattern.compile(
+            "(?iu)(?:\\b(?:credits?|copyright|all\\s+rights\\s+reserved|printed\\s+in|choking\\s+hazard|"
+                    + "safety\\s+warning|advertisement|acknowledg(?:e)?ments?|table\\s+of\\s+contents|index)\\b"
+                    + "|版权|致谢|鸣谢|目录|广告|安全警告|窒息危险)");
     private static final Pattern NON_ICON_DESCRIPTION = Pattern.compile(
             "(?iu)(?:\\b(?:uppercase|lowercase|letters?|numbers?|numeral|printed\\s+text|text\\s+(?:label|mention)|"
                     + "whole\\s+(?:card|tile|token)|"
@@ -131,17 +135,56 @@ final class VisualRulebookCatalogPolicy {
     }
 
     /**
-     * Retry an apparently empty page at higher visual resolution only when the full-page catalog found a region
-     * whose own label says it is icon-bearing. A cover illustration, title block, or ordinary setup prose is not
-     * enough evidence to spend four more provider calls.
+     * Audit an icon-bearing page at higher visual resolution when the full-page pass is empty despite an icon-bearing
+     * anchor, or when a label-dense page contains multiple proposed symbols. The latter catches overconfident partial
+     * inventories without relying on a particular game's vocabulary.
      */
     static boolean needsIconTileFallback(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
-        if (!summary.iconOccurrences().isEmpty() || summary.visualAnchors().isEmpty()) return false;
-        return summary.visualAnchors().stream()
+        long visibleLabels = summary.printedTerms().lines()
+                .flatMap(line -> java.util.Arrays.stream(line.split(";")))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .count();
+        if (NON_GAMEPLAY_PAGE.matcher(summary.printedTerms() + "\n" + summary.factualSummary()).find()) {
+            return false;
+        }
+        if (visibleLabels >= 8 || summary.iconOccurrences().size() >= 8) return true;
+        if (!summary.iconOccurrences().isEmpty()) {
+            return false;
+        }
+        if (summary.visualAnchors().isEmpty()) return false;
+        return visibleLabels >= 8 || summary.visualAnchors().stream()
                 .anyMatch(anchor -> ICON_BEARING_ANCHOR
                         .matcher(anchor.kind() + " " + anchor.label())
                         .find());
+    }
+
+    /**
+     * A tile audit is complementary evidence, not a replacement for the full-page pass. Keep every independently
+     * observed identity, prefer a grounded definition or independently verified label on collisions, and let the
+     * four-tile result decide whether the audited inventory is complete.
+     */
+    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary mergeIconTileAudit(
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary fullPage,
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary tileAudit) {
+        if (fullPage.pageNumber() != tileAudit.pageNumber()) {
+            throw new IllegalArgumentException("icon tile audit page does not match its full-page summary");
+        }
+        Map<String, IconOccurrence> icons = new LinkedHashMap<>();
+        Stream.concat(fullPage.iconOccurrences().stream(), tileAudit.iconOccurrences().stream())
+                .forEach(icon -> icons.merge(
+                        normalizedIdentity(icon.groupKey()), icon, VisualRulebookCatalogPolicy::preferIconEvidence));
+        boolean withinLimit = icons.size() <= 32;
+        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
+                fullPage.pageNumber(),
+                fullPage.printedTerms(),
+                fullPage.factualSummary(),
+                fullPage.keywords(),
+                fullPage.visualAnchors().isEmpty() ? tileAudit.visualAnchors() : fullPage.visualAnchors(),
+                icons.values().stream().limit(32).toList(),
+                tileAudit.iconInventoryComplete() && withinLimit);
     }
 
     /**
@@ -164,6 +207,31 @@ final class VisualRulebookCatalogPolicy {
         }
         return !NON_ICON_SUBJECT.matcher(identity).find()
                 && !NON_GAMEPLAY_IDENTITY.matcher(identity).find();
+    }
+
+    private static IconOccurrence preferIconEvidence(IconOccurrence first, IconOccurrence second) {
+        if (first.meaningStatus() != second.meaningStatus()) {
+            return meaningRank(first.meaningStatus()) > meaningRank(second.meaningStatus()) ? first : second;
+        }
+        if (first.verifiedVisualLabel().isBlank() && !second.verifiedVisualLabel().isBlank()) return second;
+        return first;
+    }
+
+    private static int meaningRank(
+            com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus status) {
+        return switch (status) {
+            case EXPLICIT -> 2;
+            case IDENTIFIED -> 1;
+            case UNEXPLAINED -> 0;
+        };
+    }
+
+    private static String normalizedIdentity(String value) {
+        return value.strip()
+                .toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[\\p{Punct}\\p{Zs}]+", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
     }
 
     private static PageInput pageInput(int pageNumber, PageFact fact) {

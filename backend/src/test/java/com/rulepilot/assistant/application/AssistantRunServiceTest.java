@@ -59,18 +59,23 @@ class AssistantRunServiceTest {
                 72,
                 40,
                 300_000,
+                Duration.ofMinutes(30),
+                192,
+                600_000,
                 Duration.ofMinutes(30));
 
         service.start(AssistantRunMode.TEACHING, UUID.randomUUID(), "player");
+        service.start(AssistantRunMode.VISUAL_ENRICHMENT, UUID.randomUUID(), "player");
         service.start(AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player");
 
         ArgumentCaptor<BudgetLimits> limits = ArgumentCaptor.forClass(BudgetLimits.class);
-        verify(execution, times(2)).initialize(any(), limits.capture(), any());
+        verify(execution, times(3)).initialize(any(), limits.capture(), any());
         assertThat(limits.getAllValues())
-                .extracting(BudgetLimits::maxTokens, BudgetLimits::timeout)
+                .extracting(BudgetLimits::maxModelCalls, BudgetLimits::maxTokens, BudgetLimits::timeout)
                 .containsExactly(
-                        org.assertj.core.groups.Tuple.tuple(300_000, Duration.ofMinutes(30)),
-                        org.assertj.core.groups.Tuple.tuple(24_000, Duration.ofMinutes(2)));
+                        org.assertj.core.groups.Tuple.tuple(40, 300_000, Duration.ofMinutes(30)),
+                        org.assertj.core.groups.Tuple.tuple(192, 600_000, Duration.ofMinutes(30)),
+                        org.assertj.core.groups.Tuple.tuple(16, 24_000, Duration.ofMinutes(2)));
     }
 
     @Test
@@ -133,6 +138,9 @@ class AssistantRunServiceTest {
                 72,
                 40,
                 300_000,
+                Duration.ofMinutes(30),
+                192,
+                600_000,
                 Duration.ofMinutes(30));
         UUID planId = UUID.randomUUID();
         AssistantRun run = AssistantRun.start(AssistantRunMode.TEACHING, planId, "player", Instant.now());
@@ -200,6 +208,9 @@ class AssistantRunServiceTest {
                 72,
                 40,
                 300_000,
+                Duration.ofMinutes(30),
+                192,
+                600_000,
                 Duration.ofMinutes(30));
     }
 }

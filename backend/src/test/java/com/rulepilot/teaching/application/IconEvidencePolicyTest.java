@@ -23,10 +23,11 @@ class IconEvidencePolicyTest {
     }
 
     @Test
-    void retainsAPlainLiteralLegendLabel() {
+    void recordsAPlainLiteralLegendLabelWithoutInventingARuleEffect() {
         IconOccurrence sanitized = IconEvidencePolicy.sanitize(List.of(icon("WHEAT"))).getFirst();
 
-        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+        assertThat(sanitized.explanation()).isEmpty();
         assertThat(sanitized.evidenceText()).isEqualTo("WHEAT");
     }
 
@@ -58,7 +59,7 @@ class IconEvidencePolicyTest {
                 icon("cabbage", "卡片下方明确标注'CABBAGE'。"),
                 icon("cabbage", "Veggies that do not match scoring conditions are not scored (e.g., cabbage).")));
 
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
         assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CABBAGE");
         assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
     }
@@ -71,7 +72,7 @@ class IconEvidencePolicyTest {
                 icon("button", "Collect no buttons"),
                 icon("cat-icon", "Cat Scoring Tiles to be used")));
 
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
         assertThat(sanitized.getFirst().evidenceText()).isEqualTo("Rainbow Button");
         assertThat(sanitized.subList(1, 4)).allSatisfy(icon -> {
             assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
@@ -101,9 +102,27 @@ class IconEvidencePolicyTest {
                         iconWithVerifiedLabel("cabbage", "CABBAGE", "ONION")),
                 "The PDF text layer contains no card labels.");
 
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
         assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
         assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+    }
+
+    @Test
+    void promotesAnUnexplainedCropOnlyWhenItsIndependentLabelMatchesTheProposedIdentity() {
+        IconOccurrence matching = unexplainedWithVerifiedLabel("carrot card icon", "CARROT");
+        IconOccurrence camelCaseContainer = unexplainedWithVerifiedLabel("brickCube", "BRICK");
+        IconOccurrence neighboring = unexplainedWithVerifiedLabel("point card icon", "SALAD");
+
+        List<IconOccurrence> sanitized =
+                IconEvidencePolicy.sanitize(
+                        List.of(matching, camelCaseContainer, neighboring),
+                        "The text layer has no card labels.");
+
+        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
+        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+        assertThat(sanitized.get(1).evidenceText()).isEqualTo("BRICK");
+        assertThat(sanitized.get(2).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
     }
 
     private static IconOccurrence icon(String evidence) {
@@ -133,6 +152,21 @@ class IconEvidencePolicyTest {
                 evidence,
                 verifiedLabel,
                 IconMeaningStatus.EXPLICIT,
+                100,
+                100,
+                20,
+                20);
+    }
+
+    private static IconOccurrence unexplainedWithVerifiedLabel(String groupKey, String verifiedLabel) {
+        return new IconOccurrence(
+                groupKey,
+                groupKey,
+                "A compact visible pictogram.",
+                "",
+                "",
+                verifiedLabel,
+                IconMeaningStatus.UNEXPLAINED,
                 100,
                 100,
                 20,

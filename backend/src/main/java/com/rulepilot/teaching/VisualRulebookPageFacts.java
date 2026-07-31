@@ -49,7 +49,7 @@ public interface VisualRulebookPageFacts {
             boolean iconInventoryComplete,
             int schemaVersion) {
 
-        public static final int CURRENT_SCHEMA_VERSION = 14;
+        public static final int CURRENT_SCHEMA_VERSION = 17;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
@@ -211,10 +211,11 @@ public interface VisualRulebookPageFacts {
     /**
      * One representative appearance of a gameplay icon on a rendered source page.
      *
-     * <p>The icon crop proves appearance only. A player-facing explanation is publishable only when
-     * {@code meaningStatus} is {@link IconMeaningStatus#EXPLICIT} and {@code evidenceText} records the visible
-     * rulebook wording that maps the symbol to that meaning. Unexplained icons remain useful visual vocabulary but
-     * cannot acquire a guessed rule effect.</p>
+     * <p>The icon crop proves appearance only. {@link IconMeaningStatus#IDENTIFIED} records an exact printed label
+     * without pretending that the label explains a gameplay effect. A player-facing rule explanation is publishable
+     * only when {@code meaningStatus} is {@link IconMeaningStatus#EXPLICIT} and {@code evidenceText} records the
+     * visible rulebook wording that maps the symbol to that meaning. Unexplained icons remain useful visual vocabulary
+     * but cannot acquire a guessed rule effect.</p>
      */
     record IconOccurrence(
             String groupKey,
@@ -276,6 +277,10 @@ public interface VisualRulebookPageFacts {
                     && (explanation.isBlank() || evidenceText.isBlank())) {
                 throw new IllegalArgumentException("explained visual icon requires visible rulebook evidence");
             }
+            if (meaningStatus == IconMeaningStatus.IDENTIFIED
+                    && (!explanation.isBlank() || evidenceText.isBlank())) {
+                throw new IllegalArgumentException("identified visual icon requires a label but no rule meaning");
+            }
             if (meaningStatus == IconMeaningStatus.UNEXPLAINED
                     && (!explanation.isBlank() || !evidenceText.isBlank())) {
                 throw new IllegalArgumentException("unexplained visual icon cannot carry a rule meaning");
@@ -285,6 +290,7 @@ public interface VisualRulebookPageFacts {
 
     enum IconMeaningStatus {
         EXPLICIT,
+        IDENTIFIED,
         UNEXPLAINED
     }
 }

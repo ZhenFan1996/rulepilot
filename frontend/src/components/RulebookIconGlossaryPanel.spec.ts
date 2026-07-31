@@ -37,6 +37,18 @@ const readyGlossary: RulebookIconGlossary = {
         { id: 'occurrence-3', pageNumber: 5, x: 80, y: 20, width: 40, height: 40 },
       ],
     },
+    {
+      id: 'icon-3',
+      name: '胡萝卜',
+      visualDescription: '白色圆内有橙色胡萝卜剪影',
+      explanation: null,
+      evidenceText: 'CARROT',
+      meaningStatus: 'IDENTIFIED',
+      representativeOccurrenceId: 'occurrence-4',
+      occurrences: [
+        { id: 'occurrence-4', pageNumber: 6, x: 120, y: 20, width: 40, height: 40 },
+      ],
+    },
   ],
 }
 
@@ -63,6 +75,9 @@ describe('RulebookIconGlossaryPanel', () => {
     expect(wrapper.text()).toContain('图标速查表')
     expect(wrapper.text()).toContain('执行一次行动。')
     expect(wrapper.text()).toContain('行动：执行一次行动')
+    expect(wrapper.text()).toContain('原文已标注')
+    expect(wrapper.text()).toContain('CARROT')
+    expect(wrapper.text()).toContain('规则书直接标注了这个图标的身份')
     expect(wrapper.text()).toContain('规则书中没有找到与这个图标直接对应的解释')
     expect(wrapper.text()).toContain('第 3、8 页')
     expect(wrapper.get('img').attributes('src')).toBe('/icons/occurrence-1')

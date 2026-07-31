@@ -47,12 +47,31 @@ final class RulebookIconGlossaryPolicy {
                             located -> normalized(located.icon().explanation()),
                             LinkedHashMap::new,
                             Collectors.toList()));
+            List<LocatedIcon> identified = occurrences.stream()
+                    .filter(located -> located.icon().meaningStatus() == IconMeaningStatus.IDENTIFIED)
+                    .toList();
             List<LocatedIcon> unexplained = occurrences.stream()
                     .filter(located -> located.icon().meaningStatus() == IconMeaningStatus.UNEXPLAINED)
                     .toList();
 
             if (explicitDefinitions.isEmpty()) {
-                groups.add(group(documentVersionId, groupKey, "", publishable.getFirst(), publishable));
+                if (!identified.isEmpty()) {
+                    groups.add(group(
+                            documentVersionId,
+                            groupKey,
+                            IconMeaningStatus.IDENTIFIED,
+                            "",
+                            identified.getFirst(),
+                            publishable));
+                } else {
+                    groups.add(group(
+                            documentVersionId,
+                            groupKey,
+                            IconMeaningStatus.UNEXPLAINED,
+                            "",
+                            publishable.getFirst(),
+                            publishable));
+                }
                 return;
             }
             if (explicitDefinitions.size() == 1) {
@@ -60,6 +79,7 @@ final class RulebookIconGlossaryPolicy {
                 groups.add(group(
                         documentVersionId,
                         groupKey,
+                        IconMeaningStatus.EXPLICIT,
                         definition,
                         explicitDefinitions.values().iterator().next().getFirst(),
                         publishable));
@@ -73,6 +93,7 @@ final class RulebookIconGlossaryPolicy {
                     groups.add(group(
                             documentVersionId,
                             groupKey,
+                            IconMeaningStatus.EXPLICIT,
                             definition,
                             matching.getFirst(),
                             visibleMatching));
@@ -83,6 +104,7 @@ final class RulebookIconGlossaryPolicy {
                 groups.add(group(
                         documentVersionId,
                         groupKey,
+                        IconMeaningStatus.UNEXPLAINED,
                         "",
                         visibleUnexplained.getFirst(),
                         visibleUnexplained));
@@ -97,6 +119,7 @@ final class RulebookIconGlossaryPolicy {
     private static IconGroup group(
             UUID documentVersionId,
             String groupKey,
+            IconMeaningStatus status,
             String normalizedDefinition,
             LocatedIcon definitionSource,
             List<LocatedIcon> visibleOccurrences) {
@@ -117,9 +140,9 @@ final class RulebookIconGlossaryPolicy {
                 entryId,
                 definition.name(),
                 cropSource.icon().visualDescription(),
-                normalizedDefinition.isBlank() ? null : definition.explanation(),
-                normalizedDefinition.isBlank() ? null : definition.evidenceText(),
-                normalizedDefinition.isBlank() ? IconMeaningStatus.UNEXPLAINED : IconMeaningStatus.EXPLICIT,
+                status == IconMeaningStatus.EXPLICIT ? definition.explanation() : null,
+                status == IconMeaningStatus.UNEXPLAINED ? null : definition.evidenceText(),
+                status,
                 occurrenceViews.getFirst().id(),
                 occurrenceViews);
     }
@@ -139,6 +162,7 @@ final class RulebookIconGlossaryPolicy {
 
     private static String normalized(String value) {
         return value.strip()
+                .replaceAll("(?<=[\\p{Ll}\\p{Nd}])(?=\\p{Lu})", " ")
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[\\p{Punct}\\p{Zs}]+", " ")
                 .replaceAll("\\s+", " ")
@@ -148,7 +172,9 @@ final class RulebookIconGlossaryPolicy {
     private static String groupingIdentity(IconOccurrence icon) {
         String proposedIdentity = semanticIdentity(icon.groupKey());
         String verifiedLabel = semanticIdentity(icon.verifiedVisualLabel());
-        return !verifiedLabel.isBlank() && verifiedLabel.equals(proposedIdentity)
+        return !verifiedLabel.isBlank()
+                        && (verifiedLabel.equals(proposedIdentity)
+                                || IconEvidencePolicy.compatibleIdentity(verifiedLabel, proposedIdentity))
                 ? verifiedLabel
                 : normalized(icon.groupKey());
     }

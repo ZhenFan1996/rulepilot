@@ -152,6 +152,78 @@ class RulebookIconGlossaryPolicyTest {
                 .hasValueSatisfying(group -> assertThat(group.name()).isEqualTo("点数图标"));
     }
 
+    @Test
+    void mergesCardContainedAliasesIntoOneHonestlyIdentifiedEntry() {
+        IconOccurrence direct = iconWithVerifiedLabel(
+                "CARROT",
+                "胡萝卜",
+                "白色圆内有橙色胡萝卜剪影。",
+                "",
+                "CARROT",
+                "CARROT",
+                IconMeaningStatus.IDENTIFIED,
+                100,
+                60,
+                60);
+        IconOccurrence insideCard = iconWithVerifiedLabel(
+                "carrot card icon",
+                "胡萝卜卡图标",
+                "白色圆内有橙色胡萝卜剪影。",
+                "",
+                "CARROT",
+                "CARROT",
+                IconMeaningStatus.IDENTIFIED,
+                300,
+                60,
+                60);
+
+        var projection = RulebookIconGlossaryPolicy.project(
+                UUID.randomUUID(), List.of(page(5, direct), page(7, insideCard)));
+
+        assertThat(projection.conflictingGroupKeys()).isEmpty();
+        assertThat(projection.groups()).singleElement().satisfies(group -> {
+            assertThat(group.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+            assertThat(group.explanation()).isNull();
+            assertThat(group.evidenceText()).isEqualTo("CARROT");
+            assertThat(group.occurrences()).hasSize(2);
+        });
+    }
+
+    @Test
+    void mergesCamelCaseAndSpacedContainerAliasesByTheirVerifiedLabel() {
+        IconOccurrence spaced = iconWithVerifiedLabel(
+                "brick cube",
+                "砖块",
+                "红色方块。",
+                "",
+                "BRICK",
+                "BRICK",
+                IconMeaningStatus.IDENTIFIED,
+                100,
+                30,
+                30);
+        IconOccurrence camelCase = iconWithVerifiedLabel(
+                "brickCube",
+                "砖块资源方块",
+                "红色方块。",
+                "",
+                "BRICK",
+                "BRICK",
+                IconMeaningStatus.IDENTIFIED,
+                300,
+                30,
+                30);
+
+        var projection = RulebookIconGlossaryPolicy.project(
+                UUID.randomUUID(), List.of(page(2, spaced, camelCase)));
+
+        assertThat(projection.groups()).singleElement().satisfies(group -> {
+            assertThat(group.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+            assertThat(group.evidenceText()).isEqualTo("BRICK");
+            assertThat(group.occurrences()).hasSize(2);
+        });
+    }
+
     private static PageFact page(int pageNumber, IconOccurrence... icons) {
         return new PageFact(
                 pageNumber,

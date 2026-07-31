@@ -26,6 +26,7 @@ public class AssistantRunService implements AssistantRuns {
     private final AgentExecutionControl execution;
     private final BudgetLimits defaultLimits;
     private final BudgetLimits teachingLimits;
+    private final BudgetLimits visualEnrichmentLimits;
     private final Clock clock = Clock.systemUTC();
 
     public AssistantRunService(
@@ -39,12 +40,24 @@ public class AssistantRunService implements AssistantRuns {
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int teachingMaxToolCalls,
             @Value("${rulepilot.teaching.agent.max-model-calls:72}") int teachingMaxModelCalls,
             @Value("${rulepilot.teaching.agent.max-tokens:300000}") int teachingMaxTokens,
-            @Value("${rulepilot.teaching.agent.timeout:PT30M}") Duration teachingTimeout) {
+            @Value("${rulepilot.teaching.agent.timeout:PT30M}") Duration teachingTimeout,
+            @Value("${rulepilot.teaching.visual-enrichment.agent.max-model-calls:192}")
+                    int visualEnrichmentMaxModelCalls,
+            @Value("${rulepilot.teaching.visual-enrichment.agent.max-tokens:600000}")
+                    int visualEnrichmentMaxTokens,
+            @Value("${rulepilot.teaching.visual-enrichment.agent.timeout:PT30M}")
+                    Duration visualEnrichmentTimeout) {
         this.repository = repository;
         this.execution = execution;
         this.defaultLimits = new BudgetLimits(maxSteps, maxToolCalls, maxModelCalls, maxTokens, timeout);
         this.teachingLimits = new BudgetLimits(
                 maxSteps, teachingMaxToolCalls, teachingMaxModelCalls, teachingMaxTokens, teachingTimeout);
+        this.visualEnrichmentLimits = new BudgetLimits(
+                maxSteps,
+                teachingMaxToolCalls,
+                visualEnrichmentMaxModelCalls,
+                visualEnrichmentMaxTokens,
+                visualEnrichmentTimeout);
     }
 
     @Override
@@ -204,10 +217,11 @@ public class AssistantRunService implements AssistantRuns {
     }
 
     private BudgetLimits limitsFor(AssistantRunMode mode) {
-        return mode == AssistantRunMode.TEACHING || mode == AssistantRunMode.TEACHING_PREPARATION
-                || mode == AssistantRunMode.VISUAL_ENRICHMENT
-                ? teachingLimits
-                : defaultLimits;
+        return switch (mode) {
+            case TEACHING, TEACHING_PREPARATION -> teachingLimits;
+            case VISUAL_ENRICHMENT -> visualEnrichmentLimits;
+            case QUESTION_ANSWER -> defaultLimits;
+        };
     }
 
     private void persist(AssistantRun current, AssistantRun changed, String summary) {

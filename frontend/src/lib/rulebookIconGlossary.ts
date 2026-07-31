@@ -25,7 +25,7 @@ export interface RulebookIconEntry {
   visualDescription: string
   explanation: string | null
   evidenceText: string | null
-  meaningStatus: 'EXPLICIT' | 'UNEXPLAINED'
+  meaningStatus: 'EXPLICIT' | 'IDENTIFIED' | 'UNEXPLAINED'
   representativeOccurrenceId: string
   occurrences: RulebookIconOccurrence[]
 }
@@ -61,7 +61,9 @@ function isIconEntry(value: unknown): value is RulebookIconEntry {
     || !isNonBlankString(value.visualDescription)
     || !(value.explanation === null || isNonBlankString(value.explanation))
     || !(value.evidenceText === null || isNonBlankString(value.evidenceText))
-    || (value.meaningStatus !== 'EXPLICIT' && value.meaningStatus !== 'UNEXPLAINED')
+    || (value.meaningStatus !== 'EXPLICIT'
+      && value.meaningStatus !== 'IDENTIFIED'
+      && value.meaningStatus !== 'UNEXPLAINED')
     || !isNonBlankString(value.representativeOccurrenceId)
     || !Array.isArray(value.occurrences)
     || value.occurrences.length === 0
@@ -69,9 +71,13 @@ function isIconEntry(value: unknown): value is RulebookIconEntry {
     return false
   }
   if (!value.occurrences.some((occurrence) => occurrence.id === value.representativeOccurrenceId)) return false
-  return value.meaningStatus === 'UNEXPLAINED'
-    ? value.explanation === null && value.evidenceText === null
-    : value.explanation !== null && value.evidenceText !== null
+  if (value.meaningStatus === 'EXPLICIT') {
+    return value.explanation !== null && value.evidenceText !== null
+  }
+  if (value.meaningStatus === 'IDENTIFIED') {
+    return value.explanation === null && value.evidenceText !== null
+  }
+  return value.explanation === null && value.evidenceText === null
 }
 
 function isOccurrence(value: unknown): value is RulebookIconOccurrence {

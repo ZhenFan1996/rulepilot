@@ -120,12 +120,24 @@ function pageLabel(pageNumbers: number[]) {
               <div class="p-4">
                 <div class="flex flex-wrap items-start justify-between gap-2">
                   <h3 class="font-display text-xl font-semibold">{{ icon.name }}</h3>
-                  <span class="rounded-full px-2.5 py-1 text-xs font-semibold" :class="icon.meaningStatus === 'EXPLICIT' ? 'bg-indigo/10 text-indigo' : 'bg-amber-100 text-amber-950'">
-                    {{ icon.meaningStatus === 'EXPLICIT' ? t('iconGlossary.meaning.explicit') : t('iconGlossary.meaning.unexplained') }}
+                  <span
+                    class="rounded-full px-2.5 py-1 text-xs font-semibold"
+                    :class="icon.meaningStatus === 'EXPLICIT'
+                      ? 'bg-indigo/10 text-indigo'
+                      : icon.meaningStatus === 'IDENTIFIED'
+                        ? 'bg-emerald-100 text-emerald-950'
+                        : 'bg-amber-100 text-amber-950'"
+                  >
+                    {{ icon.meaningStatus === 'EXPLICIT'
+                      ? t('iconGlossary.meaning.explicit')
+                      : icon.meaningStatus === 'IDENTIFIED'
+                        ? t('iconGlossary.meaning.identified')
+                        : t('iconGlossary.meaning.unexplained') }}
                   </span>
                 </div>
                 <p class="mt-2 text-sm leading-6 text-ink/55">{{ icon.visualDescription }}</p>
                 <p v-if="icon.explanation" class="mt-3 leading-7 text-ink/80">{{ icon.explanation }}</p>
+                <p v-else-if="icon.meaningStatus === 'IDENTIFIED'" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-950">{{ t('iconGlossary.identifiedDetail') }}</p>
                 <p v-else class="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-950">{{ t('iconGlossary.unexplainedDetail') }}</p>
                 <blockquote v-if="icon.evidenceText" class="mt-3 border-l-2 border-indigo/35 pl-3 text-sm leading-6 text-ink/60">
                   {{ icon.evidenceText }}

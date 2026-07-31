@@ -158,11 +158,18 @@ final class VisualPageTilePolicy {
     }
 
     private static IconOccurrence preferGrounded(IconOccurrence first, IconOccurrence second) {
-        if (first.meaningStatus() == IconMeaningStatus.UNEXPLAINED
-                && second.meaningStatus() == IconMeaningStatus.EXPLICIT) {
+        if (meaningRank(second.meaningStatus()) > meaningRank(first.meaningStatus())) {
             return second;
         }
         return first;
+    }
+
+    private static int meaningRank(IconMeaningStatus status) {
+        return switch (status) {
+            case EXPLICIT -> 2;
+            case IDENTIFIED -> 1;
+            case UNEXPLAINED -> 0;
+        };
     }
 
     private static boolean substantiallySame(VisualAnchor first, VisualAnchor second) {

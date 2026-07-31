@@ -135,6 +135,12 @@ rulepilot:
       core-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE:1}
       max-pool-size: ${VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE:1}
       queue-capacity: ${VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY:2}
+      # Full-rulebook icon extraction performs independent full-page, tile, localization, and close-up review calls.
+      # Keep a distinct bounded budget so this resumable background job is not constrained by the shorter lesson run.
+      agent:
+        max-model-calls: ${VISUAL_ENRICHMENT_AGENT_MAX_MODEL_CALLS:192}
+        max-tokens: ${VISUAL_ENRICHMENT_AGENT_MAX_TOKENS:600000}
+        timeout: ${VISUAL_ENRICHMENT_AGENT_TIMEOUT:PT30M}
     base-section-parallelism: ${TEACHING_BASE_SECTION_PARALLELISM:3}
     # First-pass chapters use the planner's rulebook-language terms. Supplemental searches belong to
     # post-publication review instead of delaying the first complete, cited lesson.

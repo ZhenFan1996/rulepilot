@@ -45,4 +45,13 @@ describe('parseRulebookIconGlossary', () => {
 
     expect(() => parseRulebookIconGlossary(invalid)).toThrow('invalid rulebook icon glossary response')
   })
+
+  it('accepts a directly identified label without claiming a rule explanation', () => {
+    const identified = structuredClone(validGlossary)
+    identified.icons[0]!.meaningStatus = 'IDENTIFIED'
+    identified.icons[0]!.explanation = null as unknown as string
+    identified.icons[0]!.evidenceText = 'CARROT'
+
+    expect(parseRulebookIconGlossary(identified).icons[0]?.meaningStatus).toBe('IDENTIFIED')
+  })
 })

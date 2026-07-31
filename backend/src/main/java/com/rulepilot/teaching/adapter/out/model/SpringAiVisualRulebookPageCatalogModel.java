@@ -249,7 +249,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private static String appearanceWithoutProposedIdentity(IconOccurrence icon) {
         String appearance = icon.visualDescription();
-        if (icon.meaningStatus() != IconMeaningStatus.EXPLICIT) return appearance;
+        if (icon.meaningStatus() == IconMeaningStatus.UNEXPLAINED) return appearance;
         for (String proposedIdentity : List.of(icon.groupKey(), icon.name(), icon.evidenceText())) {
             if (proposedIdentity == null || proposedIdentity.strip().length() < 3) continue;
             appearance = Pattern.compile(Pattern.quote(proposedIdentity.strip()), Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
@@ -330,21 +330,25 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             Map<Integer, IconCropDecision> byCandidate = new java.util.LinkedHashMap<>();
             items.forEach(item -> {
                 int index = item.path("candidateIndex").asInt(Integer.MIN_VALUE);
-                if (!expectedCandidates.contains(index)
-                        || byCandidate.putIfAbsent(
-                                        index,
-                                        item.path("matchesAppearance").asBoolean(false)
-                                                ? new IconCropDecision(
-                                                        index,
-                                                        true,
-                                                        item.path("x").asInt(Integer.MIN_VALUE),
-                                                        item.path("y").asInt(Integer.MIN_VALUE),
-                                                        item.path("width").asInt(Integer.MIN_VALUE),
-                                                        item.path("height").asInt(Integer.MIN_VALUE))
-                                                : IconCropDecision.rejected(index))
-                                != null) {
+                if (!expectedCandidates.contains(index) || byCandidate.containsKey(index)) {
                     throw new IllegalArgumentException("visual icon crop review returned an unknown candidate");
                 }
+                IconCropDecision decision;
+                try {
+                    decision = item.path("matchesAppearance").asBoolean(false)
+                            ? new IconCropDecision(
+                                    index,
+                                    true,
+                                    item.path("x").asInt(Integer.MIN_VALUE),
+                                    item.path("y").asInt(Integer.MIN_VALUE),
+                                    item.path("width").asInt(Integer.MIN_VALUE),
+                                    item.path("height").asInt(Integer.MIN_VALUE))
+                            : IconCropDecision.rejected(index);
+                } catch (IllegalArgumentException invalidRectangle) {
+                    // Each close-up is independent; one malformed refinement must not discard valid sibling crops.
+                    decision = IconCropDecision.rejected(index);
+                }
+                byCandidate.put(index, decision);
             });
             if (!byCandidate.keySet().equals(new java.util.LinkedHashSet<>(expectedCandidates))) {
                 throw new IllegalArgumentException("visual icon crop review did not cover every candidate");

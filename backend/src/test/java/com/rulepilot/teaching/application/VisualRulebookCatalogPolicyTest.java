@@ -18,7 +18,7 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void retriesEmptyIconInventoryOnlyForAnIconBearingAnchor() {
+    void auditsEmptyIconAnchorsAndLabelDensePartialInventories() {
         PageSummary scoringReference = summary(
                 new VisualAnchor("table", "Scoring reference", "A structured reference.", 100, 100, 300, 300));
         PageSummary labeledIconGroup = summary(
@@ -27,11 +27,102 @@ class VisualRulebookCatalogPolicyTest {
                 new VisualAnchor("title block", "RULEBOOK", "Cover title and illustration.", 100, 100, 300, 300));
         PageSummary setupProse =
                 summary(new VisualAnchor("setup list", "Steps A-D", "Numbered setup prose.", 100, 100, 300, 300));
+        PageSummary denseVisualPageWithNoProposedIcons = new PageSummary(
+                1,
+                "A; B; C; D; E; F; G; H",
+                "Visible page facts.",
+                List.of("reference"),
+                List.of(new VisualAnchor(
+                        "component diagram", "Card anatomy", "A labeled card diagram.", 100, 100, 300, 300)),
+                List.of(),
+                true);
+        PageSummary denseProseWithNoVisualAnchor = new PageSummary(
+                1,
+                "A; B; C; D; E; F; G; H",
+                "Visible page facts.",
+                List.of("reference"),
+                List.of(),
+                List.of(),
+                true);
+        PageSummary denseCreditsPage = new PageSummary(
+                1,
+                "CREDITS; Game Design; Production; Editing; A; B; C; D",
+                "This page contains credits and copyright information.",
+                List.of("credits"),
+                List.of(new VisualAnchor(
+                        "publisher logo", "Publisher", "A publisher mark.", 100, 100, 300, 300)),
+                List.of(),
+                true);
+        PageSummary densePartialInventory = new PageSummary(
+                1,
+                "A; B; C; D; E; F; G; H",
+                "Visible page facts.",
+                List.of("reference"),
+                List.of(),
+                List.of(icon("leaf", "叶子图标"), icon("point", "计分图标")),
+                true);
+        PageSummary simpleInventory = new PageSummary(
+                1,
+                "VISIBLE ICONS",
+                "Visible page facts.",
+                List.of("reference"),
+                List.of(),
+                List.of(icon("leaf", "叶子图标"), icon("point", "计分图标")),
+                true);
 
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(scoringReference)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(labeledIconGroup)).isTrue();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseVisualPageWithNoProposedIcons))
+                .isTrue();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(densePartialInventory)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(cover)).isFalse();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(setupProse)).isFalse();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseProseWithNoVisualAnchor))
+                .isTrue();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseCreditsPage)).isFalse();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(simpleInventory)).isFalse();
+    }
+
+    @Test
+    void mergesTileAuditIconsWithoutDiscardingGroundedFullPageEvidence() {
+        IconOccurrence grounded = new IconOccurrence(
+                "leaf",
+                "叶子",
+                "Green leaf silhouette.",
+                "代表叶子资源。",
+                "LEAF",
+                "LEAF",
+                IconMeaningStatus.EXPLICIT,
+                100,
+                100,
+                24,
+                24);
+        PageSummary fullPage = new PageSummary(
+                3,
+                "LEAF; SUN; WATER",
+                "Visible facts.",
+                List.of("legend"),
+                List.of(),
+                List.of(grounded),
+                true);
+        PageSummary tileAudit = new PageSummary(
+                3,
+                "SUN; WATER",
+                "Tile facts.",
+                List.of("icons"),
+                List.of(),
+                List.of(
+                        icon("leaf", "叶片"),
+                        icon("sun", "太阳"),
+                        icon("water", "水滴")),
+                true);
+
+        PageSummary merged = VisualRulebookCatalogPolicy.mergeIconTileAudit(fullPage, tileAudit);
+
+        assertThat(merged.printedTerms()).isEqualTo(fullPage.printedTerms());
+        assertThat(merged.iconInventoryComplete()).isTrue();
+        assertThat(merged.iconOccurrences()).hasSize(3);
+        assertThat(merged.iconOccurrences().getFirst()).isEqualTo(grounded);
     }
 
     @Test

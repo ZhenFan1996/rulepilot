@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import java.util.List;
@@ -167,6 +168,19 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         assertThat(result.decisions()).hasSize(2);
         assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
         assertThat(result.decisions().getLast().matchesAppearance()).isFalse();
+    }
+
+    @Test
+    void rejectsOnlyTheMalformedCloseUpRectangle() {
+        var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
+                {"items":[
+                  {"candidateIndex":3,"matchesAppearance":true,"x":100,"y":120,"width":300,"height":280},
+                  {"candidateIndex":7,"matchesAppearance":true,"x":990,"y":990,"width":40,"height":40}
+                ]}
+                """, List.of(3, 7));
+
+        assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
+        assertThat(result.decisions().getLast()).isEqualTo(IconCropDecision.rejected(7));
     }
 
     @Test
