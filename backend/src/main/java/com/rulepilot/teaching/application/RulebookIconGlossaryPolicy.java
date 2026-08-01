@@ -21,9 +21,11 @@ final class RulebookIconGlossaryPolicy {
     private RulebookIconGlossaryPolicy() {}
 
     static GlossaryProjection project(UUID documentVersionId, List<PageFact> pageFacts) {
-        Map<String, List<LocatedIcon>> byVisualIdentity = pageFacts.stream()
+        List<LocatedIcon> cataloged = pageFacts.stream()
                 .flatMap(page -> page.iconOccurrences().stream()
                         .map(icon -> new LocatedIcon(page.pageNumber(), icon)))
+                .toList();
+        Map<String, List<LocatedIcon>> byVisualIdentity = deduplicateOverlappingOccurrences(cataloged).stream()
                 .collect(Collectors.groupingBy(
                         located -> groupingIdentity(located.icon()),
                         LinkedHashMap::new,
@@ -114,6 +116,64 @@ final class RulebookIconGlossaryPolicy {
         groups.sort(Comparator.comparing(IconGroup::name, String.CASE_INSENSITIVE_ORDER)
                 .thenComparing(group -> group.occurrences().getFirst().pageNumber()));
         return new GlossaryProjection(List.copyOf(groups), Set.copyOf(conflictingKeys));
+    }
+
+    /**
+     * Tile audits and full-page scans can report the same symbol twice with different neutral names. An exact or
+     * near-exact page-local overlap is strong evidence of a duplicate observation, but never merge two independently
+     * evidenced meanings or two identified labels merely because their artwork happens to be nearby.
+     */
+    private static List<LocatedIcon> deduplicateOverlappingOccurrences(List<LocatedIcon> cataloged) {
+        List<LocatedIcon> retained = new ArrayList<>();
+        for (LocatedIcon candidate : cataloged) {
+            int duplicateIndex = -1;
+            for (int index = 0; index < retained.size(); index++) {
+                LocatedIcon existing = retained.get(index);
+                if (existing.pageNumber() != candidate.pageNumber()
+                        || intersectionOverUnion(existing.icon(), candidate.icon()) < 0.85
+                        || !duplicateIdentity(existing.icon(), candidate.icon())) continue;
+                duplicateIndex = index;
+                break;
+            }
+            if (duplicateIndex < 0) {
+                retained.add(candidate);
+                continue;
+            }
+            LocatedIcon existing = retained.get(duplicateIndex);
+            if (meaningRank(candidate.icon().meaningStatus()) > meaningRank(existing.icon().meaningStatus())) {
+                retained.set(duplicateIndex, candidate);
+            }
+        }
+        return List.copyOf(retained);
+    }
+
+    private static boolean duplicateIdentity(IconOccurrence first, IconOccurrence second) {
+        IconMeaningStatus firstStatus = first.meaningStatus();
+        IconMeaningStatus secondStatus = second.meaningStatus();
+        if (firstStatus == IconMeaningStatus.EXPLICIT && secondStatus == IconMeaningStatus.EXPLICIT) return false;
+        if (firstStatus == IconMeaningStatus.UNEXPLAINED || secondStatus == IconMeaningStatus.UNEXPLAINED) return true;
+        return groupingIdentity(first).equals(groupingIdentity(second))
+                || normalized(first.visualDescription()).equals(normalized(second.visualDescription()));
+    }
+
+    private static int meaningRank(IconMeaningStatus status) {
+        return switch (status) {
+            case EXPLICIT -> 2;
+            case IDENTIFIED -> 1;
+            case UNEXPLAINED -> 0;
+        };
+    }
+
+    private static double intersectionOverUnion(IconOccurrence first, IconOccurrence second) {
+        int left = Math.max(first.x(), second.x());
+        int top = Math.max(first.y(), second.y());
+        int right = Math.min(first.x() + first.width(), second.x() + second.width());
+        int bottom = Math.min(first.y() + first.height(), second.y() + second.height());
+        long intersection = (long) Math.max(0, right - left) * Math.max(0, bottom - top);
+        long firstArea = (long) first.width() * first.height();
+        long secondArea = (long) second.width() * second.height();
+        long union = firstArea + secondArea - intersection;
+        return union == 0 ? 0.0 : (double) intersection / union;
     }
 
     private static IconGroup group(

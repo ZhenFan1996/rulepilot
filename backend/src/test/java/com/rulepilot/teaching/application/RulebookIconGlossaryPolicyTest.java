@@ -97,6 +97,41 @@ class RulebookIconGlossaryPolicyTest {
     }
 
     @Test
+    void drops_same_page_overlapping_unexplained_duplicate_when_identified_copy_exists() {
+        IconOccurrence identified = iconWithVerifiedLabel(
+                "onion",
+                "洋葱图标",
+                "粉色圆形内有洋葱轮廓。",
+                "",
+                "ONION",
+                "ONION",
+                IconMeaningStatus.IDENTIFIED,
+                400,
+                60,
+                60);
+        IconOccurrence duplicate = new IconOccurrence(
+                "pink vegetable icon",
+                "粉色蔬菜图标",
+                "粉色圆形内有洋葱轮廓。",
+                "",
+                "",
+                IconMeaningStatus.UNEXPLAINED,
+                402,
+                202,
+                58,
+                58);
+
+        var projection = RulebookIconGlossaryPolicy.project(
+                UUID.randomUUID(), List.of(page(4, identified, duplicate)));
+
+        assertThat(projection.groups()).singleElement().satisfies(group -> {
+            assertThat(group.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
+            assertThat(group.evidenceText()).isEqualTo("ONION");
+            assertThat(group.occurrences()).hasSize(1);
+        });
+    }
+
+    @Test
     void groupsAliasesOnlyWhenTheirIndependentVisualLabelsAgreeWithTheirSemanticKeys() {
         IconOccurrence explained = iconWithVerifiedLabel(
                 "carrot",

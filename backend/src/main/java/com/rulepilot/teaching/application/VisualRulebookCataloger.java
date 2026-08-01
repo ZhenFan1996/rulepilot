@@ -709,22 +709,71 @@ class VisualRulebookCataloger {
             if (returned.size() != review.decisions().size() || !returned.equals(new LinkedHashSet<>(indexes))) {
                 throw new IllegalArgumentException("visual icon crop review did not cover every candidate");
             }
+            int reviewBatch = batch;
             review.decisions().stream()
                     .filter(VisualRulebookPageCatalogModel.IconCropDecision::matchesAppearance)
                     .forEach(decision -> {
-                        confirmed.put(
+                        VisualRulebookPageCatalogModel.IconLocation firstPass = new VisualRulebookPageCatalogModel.IconLocation(
                                 decision.candidateIndex(),
-                                new VisualRulebookPageCatalogModel.IconLocation(
-                                        decision.candidateIndex(),
-                                        true,
-                                        decision.x(),
-                                        decision.y(),
-                                        decision.width(),
-                                        decision.height(),
-                                        locations.get(decision.candidateIndex()).observedLabel()));
+                                true,
+                                decision.x(),
+                                decision.y(),
+                                decision.width(),
+                                decision.height(),
+                                locations.get(decision.candidateIndex()).observedLabel());
+                        // A first verifier can still return the whole badge when the pictogram is printed inside a
+                        // colored field. Reinspect the accepted rectangle once at readable scale so the published
+                        // crop converges on the smallest standalone mark without any game-specific vocabulary.
+                        VisualRulebookPageCatalogModel.IconLocation tightened = reviewOneIconCrop(
+                                page,
+                                summary.iconOccurrences().get(decision.candidateIndex()),
+                                firstPass,
+                                owner,
+                                assistantRunId,
+                                summary.pageNumber(),
+                                reviewBatch,
+                                "tighten");
+                        if (tightened != null) confirmed.put(decision.candidateIndex(), tightened);
                     });
         }
         return Map.copyOf(confirmed);
+    }
+
+    private VisualRulebookPageCatalogModel.IconLocation reviewOneIconCrop(
+            PageImage page,
+            VisualRulebookPageFacts.IconOccurrence candidate,
+            VisualRulebookPageCatalogModel.IconLocation location,
+            String owner,
+            UUID assistantRunId,
+            int pageNumber,
+            int batch,
+            String pass) {
+        var request = new VisualRulebookPageCatalogModel.IconCropReviewRequest(
+                new PageImageInput(page.pageNumber(), page.mediaType(), page.content()),
+                List.of(candidate),
+                List.of(location),
+                owner);
+        var review = invokeModel(
+                assistantRunId,
+                "reviewRulebookIconCrops|" + pageNumber + "|" + batch + "|" + pass,
+                240,
+                "Localized rulebook icon crop reviewed",
+                () -> visualCatalog.reviewIconCrops(request),
+                result -> Math.max(1, result.decisions().size() * 4));
+        if (review.decisions().size() != 1 || review.decisions().getFirst().candidateIndex() != location.candidateIndex()) {
+            throw new IllegalArgumentException("visual icon crop review did not cover the candidate");
+        }
+        var decision = review.decisions().getFirst();
+        return decision.matchesAppearance()
+                ? new VisualRulebookPageCatalogModel.IconLocation(
+                        decision.candidateIndex(),
+                        true,
+                        decision.x(),
+                        decision.y(),
+                        decision.width(),
+                        decision.height(),
+                        location.observedLabel())
+                : null;
     }
 
     private static VisualRulebookPageCatalogModel.PageSummary withoutUnverifiedIcons(

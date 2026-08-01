@@ -475,9 +475,12 @@ class VisualRulebookCatalogerTest {
 
             @Override
             public IconCropReviewDraft reviewIconCrops(IconCropReviewRequest request) {
-                cropReviewCalls.incrementAndGet();
+                int call = cropReviewCalls.incrementAndGet();
                 assertThat(request.candidates()).hasSize(1);
                 int candidateIndex = request.locations().getFirst().candidateIndex();
+                if (candidateIndex == 0 && call == 2) {
+                    return new IconCropReviewDraft(List.of(new IconCropDecision(candidateIndex, true, 130, 250, 20, 22)));
+                }
                 return new IconCropReviewDraft(
                         List.of(candidateIndex == 0
                                 ? new IconCropDecision(candidateIndex, true, 120, 240, 24, 28)
@@ -494,16 +497,16 @@ class VisualRulebookCatalogerTest {
                 documentVersionId, List.of(page(1)), "Example game", "owner", null);
 
         assertThat(localizationCalls).hasValue(1);
-        assertThat(cropReviewCalls).hasValue(2);
+        assertThat(cropReviewCalls).hasValue(4);
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
             assertThat(fact.iconOccurrences()).hasSize(1);
             assertThat(fact.iconOccurrences().getFirst()).satisfies(icon -> {
                 assertThat(icon.name()).isEqualTo("叶子");
-                assertThat(icon.x()).isEqualTo(120);
-                assertThat(icon.y()).isEqualTo(240);
-                assertThat(icon.width()).isEqualTo(24);
-                assertThat(icon.height()).isEqualTo(28);
+                assertThat(icon.x()).isEqualTo(130);
+                assertThat(icon.y()).isEqualTo(250);
+                assertThat(icon.width()).isEqualTo(20);
+                assertThat(icon.height()).isEqualTo(22);
             });
         });
     }
