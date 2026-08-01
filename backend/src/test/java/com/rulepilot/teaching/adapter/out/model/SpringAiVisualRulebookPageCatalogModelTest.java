@@ -254,6 +254,27 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void stripsGenericContainerLanguageFromCropReviewHintsButKeepsShapeVocabulary() {
+        var icon = new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
+                "vegetable",
+                "蔬菜",
+                "Purple rectangular card with a white circle containing a purple vegetable illustration.",
+                "",
+                "",
+                com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
+                100,
+                100,
+                30,
+                30);
+
+        String hint = SpringAiVisualRulebookPageCatalogModel.cropReviewAppearance(icon);
+        assertThat(hint).doesNotContainIgnoringCase("card", "circle", "background", "containing");
+        assertThat(hint).containsIgnoringCase("purple");
+        assertThat(hint).containsIgnoringCase("vegetable");
+        assertThat(hint).containsIgnoringCase("illustration");
+    }
+
+    @Test
     void redactsFirstPassLabelsBeforeIndependentImageLabelVerification() {
         String candidates = SpringAiVisualRulebookPageCatalogModel.iconLocalizationCandidates(List.of(
                 new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(

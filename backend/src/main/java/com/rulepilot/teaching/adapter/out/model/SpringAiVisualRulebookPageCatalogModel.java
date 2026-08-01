@@ -205,7 +205,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         String attachmentOrder = java.util.stream.IntStream.range(0, request.candidates().size())
                 .mapToObj(index -> "image " + (index + 1) + " = candidateIndex "
                         + request.locations().get(index).candidateIndex() + ", expected appearance="
-                        + appearanceWithoutProposedIdentity(request.candidates().get(index)))
+                        + cropReviewAppearance(request.candidates().get(index)))
                 .collect(Collectors.joining("\n"));
         String content = prompt.system(iconCropReviewPrompt)
                 .user(user -> {
@@ -237,6 +237,20 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                     return index + ": visible appearance=" + appearanceWithoutProposedIdentity(icon);
                 })
                 .collect(Collectors.joining("\n"));
+    }
+
+    static String cropReviewAppearance(IconOccurrence icon) {
+        String appearance = appearanceWithoutProposedIdentity(icon);
+        // The crop reviewer needs enough literal shape/color vocabulary to distinguish siblings, but container and
+        // typography words bias it toward returning a whole card. These are generic layout terms, not a game lexicon.
+        return appearance
+                .replaceAll(
+                        "(?iu)\\b(?:card|tile|panel|token|background|container|circle|border|corner|"
+                                + "rectangular|square|rounded|text|label|above|below|inside|within|containing|"
+                                + "centered|featuring)\\b",
+                        " ")
+                .replaceAll("\\s+", " ")
+                .strip();
     }
 
     private static String appearanceWithoutProposedIdentity(IconOccurrence icon) {

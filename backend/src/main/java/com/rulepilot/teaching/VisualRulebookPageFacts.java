@@ -51,7 +51,9 @@ public interface VisualRulebookPageFacts {
 
         // Schema 23 records the crop-review rectangle after it has been projected back to source-page coordinates.
         // Schema 22 facts were cataloged before the application published that refined rectangle and must be rebuilt.
-        public static final int CURRENT_SCHEMA_VERSION = 23;
+        // Schema 24 removes generic card/container language from crop-review hints so the model locates the internal
+        // pictogram instead of publishing the surrounding card as the icon.
+        public static final int CURRENT_SCHEMA_VERSION = 24;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
