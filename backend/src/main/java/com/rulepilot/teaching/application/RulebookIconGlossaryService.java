@@ -23,6 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("!test")
 public class RulebookIconGlossaryService {
 
+    /** Glossary images should retain a small anti-aliasing margin without pulling a nearby printed label into the icon. */
+    private static final int ICON_CROP_CONTEXT_PADDING = 4;
+
     private final TeachingPlanRepository plans;
     private final DocumentProcessing documents;
     private final DocumentPageImages pageImages;
@@ -179,7 +182,7 @@ public class RulebookIconGlossaryService {
                         occurrence.y(),
                         occurrence.width(),
                         occurrence.height(),
-                        12));
+                        ICON_CROP_CONTEXT_PADDING));
     }
 
     private TeachingPlan requireOwned(UUID teachingPlanId, String owner) {
