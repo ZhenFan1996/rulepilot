@@ -145,7 +145,8 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog(json);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).hasSize(1_600);
+            assertThat(page.factualSummary()).hasSizeLessThanOrEqualTo(2_400);
+            assertThat(page.factualSummary()).hasSizeGreaterThan(1_600);
             assertThat(page.keywords().getFirst()).hasSize(120);
         });
     }

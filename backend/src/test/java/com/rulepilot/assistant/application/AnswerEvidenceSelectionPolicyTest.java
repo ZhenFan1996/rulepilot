@@ -61,6 +61,27 @@ class AnswerEvidenceSelectionPolicyTest {
                 .containsExactly(resolution.evidence().chunkId(), scoring.evidence().chunkId(), tie.evidence().chunkId());
     }
 
+    @Test
+    void keepsMoreThanThreeSourcesForACompleteListRequest() {
+        UUID documentVersionId = UUID.randomUUID();
+        Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
+        for (int index = 0; index < 7; index++) {
+            HybridEvidenceHit hit = hit(
+                    documentVersionId,
+                    "RULES",
+                    "Ability " + index,
+                    "Ability " + index + " has a distinct condition.",
+                    20 + index,
+                    0.9 - index * 0.01);
+            evidence.put(hit.evidence().chunkId(), hit);
+        }
+
+        List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
+                "List all seven abilities and explain each condition.", evidence, List.of(), Set.of());
+
+        assertThat(selected).hasSize(7);
+    }
+
     private HybridEvidenceHit hit(
             UUID documentVersionId, String sectionType, String heading, String excerpt, int page, double score) {
         RuleEvidenceHit source = new RuleEvidenceHit(

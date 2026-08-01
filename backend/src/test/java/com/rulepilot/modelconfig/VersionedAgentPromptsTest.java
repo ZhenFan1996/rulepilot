@@ -44,6 +44,7 @@ class VersionedAgentPromptsTest {
                 resource("rule-answer-agent-v16-fallback-branch-fidelity-system.txt"),
                 resource("rule-answer-agent-v17-correctable-revision-system.txt"),
                 resource("rule-answer-agent-v18-counterfactual-follow-up-system.txt"),
+                resource("rule-answer-agent-v19-complete-list-system.txt"),
                 resource("rule-answer-agent-v4-user.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-system.txt"),
                 resource("rule-answer-retrieval-rewrite-v1-user.txt"),
@@ -213,7 +214,10 @@ class VersionedAgentPromptsTest {
                         "Correctable-revision completion revision v17",
                         "answerable=true",
                         "Counterfactual follow-up coverage revision v18",
-                        "even when the immediate verdict is no");
+                        "even when the immediate verdict is no",
+                        "Complete-list coverage revision v19",
+                        "coverage contract",
+                        "Do not swap neighboring entries");
         assertThat(prompts.answerUser())
                 .contains(
                         "{questionType}",

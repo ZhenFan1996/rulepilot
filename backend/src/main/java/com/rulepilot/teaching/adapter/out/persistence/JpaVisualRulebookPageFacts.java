@@ -40,6 +40,7 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
     private static final Set<String> CJK_QUESTION_FILLER = Set.of(
             "哪些", "什么", "如何", "怎么", "是否", "为何", "为什么");
     private static final Pattern CJK_RUN = Pattern.compile("\\p{IsHan}+");
+    private static final Pattern SHORT_PRINTED_IDENTIFIER = Pattern.compile("(?i)([a-z]{1,4})[#_-](\\d{1,4})");
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -159,14 +160,18 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
     }
 
     private static List<String> searchLexemes(String query) {
-        return Stream.of(query.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
+        java.util.LinkedHashSet<String> terms = Stream.of(query.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
                 .filter(JpaVisualRulebookPageFacts::isLatin)
                 .filter(term -> term.length() >= 3)
                 .filter(term -> !SEARCH_FILLER.contains(term))
                 .map(JpaVisualRulebookPageFacts::normalizeEnglishTerm)
-                .distinct()
-                .limit(12)
-                .toList();
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        Matcher identifier = SHORT_PRINTED_IDENTIFIER.matcher(query);
+        while (identifier.find() && terms.size() < 12) {
+            terms.add(identifier.group(1).toLowerCase(Locale.ROOT));
+            if (terms.size() < 12) terms.add(identifier.group(2));
+        }
+        return terms.stream().limit(12).toList();
     }
 
     static List<String> cjkFragments(String query) {

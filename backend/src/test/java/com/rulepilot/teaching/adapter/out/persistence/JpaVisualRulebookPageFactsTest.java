@@ -20,6 +20,13 @@ class JpaVisualRulebookPageFactsTest {
     }
 
     @Test
+    void searchTermsKeepsShortPrintedIdentifiersSplitByPunctuation() {
+        assertThat(JpaVisualRulebookPageFacts.searchTerms(
+                        "What does TT#02 or A-01 do?"))
+                .contains("tt:*", "02:*", "a:*", "01:*");
+    }
+
+    @Test
     void extractsChineseFragmentsForImageFactMatching() {
         assertThat(JpaVisualRulebookPageFacts.cjkFragments("野生动物标记可以放在哪些板块上？"))
                 .contains("野生", "动物", "标记", "可以", "放在", "板块")

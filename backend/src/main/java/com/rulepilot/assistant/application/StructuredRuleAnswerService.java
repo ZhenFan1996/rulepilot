@@ -48,8 +48,8 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Counterfactual follow-ups now require their stated consequence, so prior partial cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v75-undefined-term-speculation-repair";
+    // Dense complete-list evidence and coverage rules changed, so prior partial list answers are stale.
+    private static final String ANSWER_POLICY_VERSION = "answer-v77-dense-list-evidence";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;

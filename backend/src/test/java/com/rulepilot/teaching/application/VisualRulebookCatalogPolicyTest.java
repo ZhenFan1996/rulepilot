@@ -120,6 +120,9 @@ class VisualRulebookCatalogPolicyTest {
         PageSummary merged = VisualRulebookCatalogPolicy.mergeIconTileAudit(fullPage, tileAudit);
 
         assertThat(merged.printedTerms()).isEqualTo(fullPage.printedTerms());
+        assertThat(merged.factualSummary()).contains("Visible facts.", "Tile facts.");
+        assertThat(merged.factualSummary()).startsWith("Tile facts.");
+        assertThat(merged.keywords()).containsExactly("legend", "icons");
         assertThat(merged.iconInventoryComplete()).isTrue();
         assertThat(merged.iconOccurrences()).hasSize(3);
         assertThat(merged.iconOccurrences().getFirst()).isEqualTo(grounded);

@@ -38,15 +38,17 @@ final class AnswerEvidenceSelectionPolicy {
             addAll(selected, selectedIntentAnchors);
             addAll(selected, selectedVisualEvidence);
         }
-        if (selected.size() < 3) {
+        int targetSize = AnswerEvidencePolicy.asksForCompleteList(normalizedQuestion) ? 8 : 3;
+        if (selected.size() < targetSize) {
             evidenceById.values().stream()
                     .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
                     .sorted(byScoreThenId())
                     .filter(hit -> !selected.containsKey(hit.evidence().chunkId()))
-                    .limit(3 - selected.size())
+                    .limit(targetSize - selected.size())
                     .forEach(hit -> selected.put(hit.evidence().chunkId(), hit));
         }
-        List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(5).toList();
+        int evidenceLimit = AnswerEvidencePolicy.asksForCompleteList(normalizedQuestion) ? 8 : 5;
+        List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(evidenceLimit).toList();
         return AnswerEvidencePolicy.isEndgameResolutionQuestion(normalizedQuestion)
                 ? withComplementaryEndgameEvidence(normalizedQuestion, selectedEvidence)
                 : selectedEvidence;

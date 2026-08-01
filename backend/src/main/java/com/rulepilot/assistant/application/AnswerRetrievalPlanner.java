@@ -85,8 +85,12 @@ public final class AnswerRetrievalPlanner {
     }
 
     private static List<String> questionParts(String question) {
-        List<String> parts = QUESTION_PART_SEPARATOR.splitAsStream(question)
+        java.util.regex.Pattern separator = AnswerEvidencePolicy.asksForCompleteList(question)
+                ? java.util.regex.Pattern.compile("[?？!！;；]+|[,，、]+|\\s+(?i:and|or)\\s+|\\s+(?:以及|和|或)\\s*")
+                : QUESTION_PART_SEPARATOR;
+        List<String> parts = separator.splitAsStream(question)
                 .map(String::strip)
+                .map(part -> part.replaceFirst("^(?i:and|or)\\s+", "").strip())
                 .filter(part -> part.length() >= 2)
                 .distinct()
                 .limit(MAX_INTENTS - 1L)

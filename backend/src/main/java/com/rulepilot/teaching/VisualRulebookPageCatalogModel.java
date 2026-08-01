@@ -262,7 +262,7 @@ public interface VisualRulebookPageCatalogModel {
         public PageSummary {
             if (pageNumber < 1
                     || (printedTerms != null && printedTerms.length() > 1_600)
-                    || (factualSummary != null && factualSummary.length() > 1_600)
+                    || (factualSummary != null && factualSummary.length() > 2_400)
                     || (keywords != null && (keywords.size() > 16
                             || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
                     || (visualAnchors != null && visualAnchors.size() > 8)

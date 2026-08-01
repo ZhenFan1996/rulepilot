@@ -77,10 +77,14 @@ final class VisualPageTilePolicy {
                 .toList();
         boolean complete = completedTiles.size() == 4
                 && completedTiles.stream().allMatch(tile -> tile.summary().iconInventoryComplete());
+        String printedTerms = joined(
+                completedTiles.stream().map(tile -> tile.summary().printedTerms()).toList(), 1_600);
+        String factualSummary = joined(
+                completedTiles.stream().map(tile -> tile.summary().factualSummary()).toList(), 2_400);
         return new PageSummary(
                 pageNumber,
-                joined(completedTiles.stream().map(tile -> tile.summary().printedTerms()).toList(), 1_600),
-                joined(completedTiles.stream().map(tile -> tile.summary().factualSummary()).toList(), 1_600),
+                printedTerms,
+                factualSummary,
                 keywords,
                 anchors,
                 icons.values().stream().limit(32).toList(),

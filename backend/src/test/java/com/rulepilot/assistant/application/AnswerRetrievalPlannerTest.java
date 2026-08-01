@@ -110,6 +110,43 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
+    void decomposesCompleteListRequestsSeparatedByCommasWithoutGameSpecificTerms() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "List all four blue, four red, and four green abilities, including each cost and timing.",
+                "list all four blue, four red, and four green abilities, including each cost and timing.",
+                QuestionType.RULE_QUERY,
+                List.of("abilities", "cost", "timing"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId, null));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .contains("list all four blue", "four red", "four green abilities")
+                .anyMatch(query -> query.contains("all four") && query.contains("timing"));
+    }
+
+    @Test
+    void keepsAnOrdinaryConjunctionAsOneIntentWhenNoCompleteListWasRequested() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "Can I pay one coin and move one space?",
+                "can i pay one coin and move one space?",
+                QuestionType.SITUATION_QUERY,
+                List.of("coin", "move"),
+                Set.of(),
+                null);
+
+        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId, null));
+
+        assertThat(intents).hasSize(2);
+        assertThat(intents.getFirst().query()).isEqualTo("can i pay one coin and move one space?");
+    }
+
+    @Test
     void buildsPrimaryAndContextualSupplementaryIntents() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(

@@ -483,7 +483,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 summaries.add(new PageSummary(
                         page.path("pageNumber").asInt(),
                         bounded(joinedText(page.get("printedTerms"), "; "), 1_600),
-                        bounded(joinedText(page.get("factualSummary"), "\n"), 1_600),
+                        bounded(joinedText(page.get("factualSummary"), "\n"), 2_400),
                         boundedStrings(page.get("keywords"), 16, 120),
                         visualAnchors(page.get("visualAnchors")),
                         iconOccurrences(page.get("iconOccurrences")),

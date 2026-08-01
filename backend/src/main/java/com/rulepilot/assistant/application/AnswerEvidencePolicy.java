@@ -32,6 +32,10 @@ final class AnswerEvidencePolicy {
             "(?iu)(?:score|scoring|points?|winner|wins?|计分|得分|分数|获胜|胜者)");
     private static final Pattern EVIDENCED_ENDGAME_TIE = Pattern.compile(
             "(?isu)(?:on\\s+a\\s+tie|tie.{0,100}(?:winner|wins?|break)|平局.{0,80}(?:获胜|胜者|比较|决胜)|同分.{0,80}(?:获胜|胜者|比较|决胜))");
+    private static final Pattern COMPLETE_LIST_QUESTION = Pattern.compile(
+            "(?iu)(?:\\b(?:all|each|every|respectively|list)\\b|\\bcomplete\\s+list\\b"
+                    + "|\\b\\d+\\s+(?:different|types?|items?|features?|technologies?|steps?)\\b"
+                    + "|全部|所有|每个|各个|分别|全部列出|逐一|一共有\\s*\\d+个)");
     private static final String VISUAL_PAGE_PLACEHOLDER =
             "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
 
@@ -43,6 +47,15 @@ final class AnswerEvidencePolicy {
 
     static boolean visualEvidencePriority(String question) {
         return question != null && VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question).find();
+    }
+
+    /**
+     * A complete-list request has a coverage obligation: a single highly ranked paragraph is not enough when the
+     * player asks for every item. This invariant is independent of any rulebook vocabulary and is shared by query
+     * planning and bounded evidence selection.
+     */
+    static boolean asksForCompleteList(String question) {
+        return question != null && COMPLETE_LIST_QUESTION.matcher(question).find();
     }
 
     static boolean hasEndgameResolution(EvidenceInput source) {

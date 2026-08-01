@@ -163,8 +163,8 @@ final class VisualRulebookCatalogPolicy {
 
     /**
      * A tile audit is complementary evidence, not a replacement for the full-page pass. Keep every independently
-     * observed identity, prefer a grounded definition or independently verified label on collisions, and let the
-     * four-tile result decide whether the audited inventory is complete.
+     * observed identity and atomic row fact, prefer a grounded definition or independently verified label on
+     * collisions, and let the four-tile result decide whether the audited inventory is complete.
      */
     static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary mergeIconTileAudit(
             com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary fullPage,
@@ -179,12 +179,34 @@ final class VisualRulebookCatalogPolicy {
         boolean withinLimit = icons.size() <= 32;
         return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
                 fullPage.pageNumber(),
-                fullPage.printedTerms(),
-                fullPage.factualSummary(),
-                fullPage.keywords(),
+                mergeBoundedLines(fullPage.printedTerms(), tileAudit.printedTerms(), 1_600, "; "),
+                // The tile pass exists because dense row/cell text was not reliably readable at full-page scale.
+                // Preserve its higher-resolution atomic facts first, then use remaining space for page-level context.
+                mergeBoundedLines(tileAudit.factualSummary(), fullPage.factualSummary(), 2_400, "\n"),
+                Stream.concat(fullPage.keywords().stream(), tileAudit.keywords().stream())
+                        .distinct()
+                        .limit(12)
+                        .toList(),
                 fullPage.visualAnchors().isEmpty() ? tileAudit.visualAnchors() : fullPage.visualAnchors(),
                 icons.values().stream().limit(32).toList(),
                 tileAudit.iconInventoryComplete() && withinLimit);
+    }
+
+    private static String mergeBoundedLines(String first, String second, int maxLength, String separator) {
+        LinkedHashSet<String> values = Stream.of(first, second)
+                .filter(java.util.Objects::nonNull)
+                .flatMap(value -> java.util.Arrays.stream(value.split(separator.equals("\n") ? "\\R+" : ";")))
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        StringBuilder merged = new StringBuilder();
+        for (String value : values) {
+            int remaining = maxLength - merged.length() - (merged.isEmpty() ? 0 : separator.length());
+            if (remaining <= 0) break;
+            if (!merged.isEmpty()) merged.append(separator);
+            merged.append(value, 0, Math.min(value.length(), remaining));
+        }
+        return merged.toString();
     }
 
     /**
