@@ -712,19 +712,16 @@ class VisualRulebookCataloger {
             review.decisions().stream()
                     .filter(VisualRulebookPageCatalogModel.IconCropDecision::matchesAppearance)
                     .forEach(decision -> {
-                        // The close-up is a publication gate, not a second coordinate system. The full-page pass
-                        // already grounded this candidate against the immutable page and independently read its label.
-                        var localized = locations.get(decision.candidateIndex());
                         confirmed.put(
                                 decision.candidateIndex(),
                                 new VisualRulebookPageCatalogModel.IconLocation(
                                         decision.candidateIndex(),
                                         true,
-                                        localized.x(),
-                                        localized.y(),
-                                        localized.width(),
-                                        localized.height(),
-                                        localized.observedLabel()));
+                                        decision.x(),
+                                        decision.y(),
+                                        decision.width(),
+                                        decision.height(),
+                                        locations.get(decision.candidateIndex()).observedLabel()));
                     });
         }
         return Map.copyOf(confirmed);

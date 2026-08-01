@@ -100,18 +100,7 @@ public class RulebookIconGlossaryService {
                 .map(AssistantRuns.RunDetails::run)
                 .filter(run -> !run.state().terminal())
                 .isPresent();
-        GlossaryStatus status;
-        if (!modelAvailable) {
-            status = GlossaryStatus.UNAVAILABLE;
-        } else if (completePages == pages.size() && facts.size() == pages.size()) {
-            status = GlossaryStatus.READY;
-        } else if (active) {
-            status = GlossaryStatus.GENERATING;
-        } else if (facts.isEmpty()) {
-            status = GlossaryStatus.NOT_STARTED;
-        } else {
-            status = GlossaryStatus.PARTIAL;
-        }
+        GlossaryStatus status = determineStatus(modelAvailable, active, completePages, facts.size(), pages.size());
 
         Set<GlossaryWarning> warnings = new LinkedHashSet<>();
         if (!projection.conflictingGroupKeys().isEmpty()) warnings.add(GlossaryWarning.CONFLICTING_EXPLANATIONS);
@@ -145,6 +134,17 @@ public class RulebookIconGlossaryService {
                                         .toList()))
                         .toList(),
                 List.copyOf(warnings));
+    }
+
+    static GlossaryStatus determineStatus(
+            boolean modelAvailable, boolean active, int completePages, int inspectedPages, int totalPages) {
+        if (!modelAvailable) return GlossaryStatus.UNAVAILABLE;
+        // A page scan can finish before dense tile audits and crop reviews. The public projection must not claim a
+        // terminal inventory while the owning visual run can still add or reject icon groups.
+        if (active) return GlossaryStatus.GENERATING;
+        if (completePages == totalPages && inspectedPages == totalPages) return GlossaryStatus.READY;
+        if (inspectedPages == 0) return GlossaryStatus.NOT_STARTED;
+        return GlossaryStatus.PARTIAL;
     }
 
     private static PageFact withGroundedIconEvidence(PageFact fact, String sourcePageText) {

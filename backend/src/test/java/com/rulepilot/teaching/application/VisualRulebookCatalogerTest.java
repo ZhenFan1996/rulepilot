@@ -479,7 +479,9 @@ class VisualRulebookCatalogerTest {
                 assertThat(request.candidates()).hasSize(1);
                 int candidateIndex = request.locations().getFirst().candidateIndex();
                 return new IconCropReviewDraft(
-                        List.of(new IconCropDecision(candidateIndex, true, 900, 900, 20, 20)));
+                        List.of(candidateIndex == 0
+                                ? new IconCropDecision(candidateIndex, true, 120, 240, 24, 28)
+                                : new IconCropDecision(candidateIndex, true, 700, 700, 30, 30)));
             }
         };
         VisualRulebookCataloger cataloger = cataloger(
