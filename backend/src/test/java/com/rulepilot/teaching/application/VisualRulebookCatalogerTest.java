@@ -495,20 +495,13 @@ class VisualRulebookCatalogerTest {
         assertThat(cropReviewCalls).hasValue(2);
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
-            assertThat(fact.iconOccurrences()).hasSize(2);
+            assertThat(fact.iconOccurrences()).hasSize(1);
             assertThat(fact.iconOccurrences().getFirst()).satisfies(icon -> {
                 assertThat(icon.name()).isEqualTo("叶子");
                 assertThat(icon.x()).isEqualTo(120);
                 assertThat(icon.y()).isEqualTo(240);
                 assertThat(icon.width()).isEqualTo(24);
                 assertThat(icon.height()).isEqualTo(28);
-            });
-            assertThat(fact.iconOccurrences().get(1)).satisfies(icon -> {
-                assertThat(icon.name()).isEqualTo("积分卡");
-                assertThat(icon.x()).isEqualTo(700);
-                assertThat(icon.y()).isEqualTo(700);
-                assertThat(icon.width()).isEqualTo(120);
-                assertThat(icon.height()).isEqualTo(160);
             });
         });
     }

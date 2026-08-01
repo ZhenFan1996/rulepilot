@@ -605,6 +605,12 @@ class VisualRulebookCataloger {
                                 var location = confirmedLocations.get(index);
                                 if (location == null) return null;
                                 var icon = summary.iconOccurrences().get(index);
+                                if (!VisualRulebookCatalogPolicy.publishableLocalizedIcon(
+                                        icon,
+                                        location.x(),
+                                        location.y(),
+                                        location.width(),
+                                        location.height())) return null;
                                 return new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
                                         icon.groupKey(),
                                         icon.name(),

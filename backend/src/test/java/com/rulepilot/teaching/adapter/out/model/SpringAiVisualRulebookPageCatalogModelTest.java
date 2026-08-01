@@ -189,13 +189,17 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void parsesCloseUpCropReviewForTheExactCandidateIndexes() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"accepted":true,"rejectionCode":"ACCEPTED"},
-                  {"candidateIndex":7,"accepted":false,"rejectionCode":"NO_MATCHING_PICTOGRAM"}
+                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "x":120,"y":160,"width":300,"height":280},
+                  {"candidateIndex":7,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false,
+                   "rejectionCode":"NO_MATCHING_PICTOGRAM"}
                 ]}
                 """, List.of(3, 7));
 
         assertThat(result.decisions()).hasSize(2);
         assertThat(result.decisions().getFirst().matchesAppearance()).isTrue();
+        assertThat(result.decisions().getFirst().x()).isEqualTo(120);
+        assertThat(result.decisions().getFirst().height()).isEqualTo(280);
         assertThat(result.decisions().getLast().matchesAppearance()).isFalse();
     }
 
@@ -203,8 +207,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void rejectsClippedAndMultiSymbolCropsFromThePublicationGate() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":2,"accepted":false,"rejectionCode":"CLIPPED_OR_PARTIAL"},
-                  {"candidateIndex":5,"accepted":false,"rejectionCode":"MULTIPLE_SYMBOLS"}
+                  {"candidateIndex":2,"matchesAppearance":false,"fullyContained":false,"standalonePictogram":false,
+                   "rejectionCode":"CLIPPED_OR_PARTIAL"},
+                  {"candidateIndex":5,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":false,
+                   "rejectionCode":"MULTIPLE_SYMBOLS"}
                 ]}
                 """, List.of(2, 5));
 
@@ -217,8 +223,10 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     void rejectsOnlyTheCandidateWhosePublicationVerdictIsMissing() {
         var result = SpringAiVisualRulebookPageCatalogModel.parseIconCropReview("""
                 {"items":[
-                  {"candidateIndex":3,"accepted":true,"rejectionCode":"ACCEPTED"},
-                  {"candidateIndex":7,"rejectionCode":"ACCEPTED"}
+                  {"candidateIndex":3,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "x":100,"y":100,"width":200,"height":200},
+                  {"candidateIndex":7,"matchesAppearance":true,"fullyContained":true,"standalonePictogram":true,
+                   "rejectionCode":"ACCEPTED"}
                 ]}
                 """, List.of(3, 7));
 
