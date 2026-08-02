@@ -220,27 +220,28 @@ preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
 log_stage "teaching-preparation-completed"
 
-documents_response=$(get_json "/api/v1/documents")
-document_response=$(jq -er --arg document_id "$document_id" \
-	'.[] | select(.document.id == $document_id)' <<<"$documents_response")
-actual_title=$(jq -er '.document.title' <<<"$document_response")
-if ! jq -e --arg expected "$expected_title" \
-	'(.document.title | ascii_downcase) == $expected' >/dev/null <<<"$document_response"; then
-	echo "Expected the source-grounded title Lantern Relay, got: $actual_title" >&2
-	exit 1
-fi
-log_stage "title-verified"
-
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
 plan_id=$(jq -er '.id' <<<"$plan")
 plan_title=$(jq -er '.gameTitle' <<<"$plan")
 plan_section_count=$(jq -er '.sections | length' <<<"$plan")
+log_stage "teaching-plan-inspected title=$plan_title sections=$plan_section_count"
 if ! jq -e --arg expected "$expected_title" \
 	'(.gameTitle | ascii_downcase) == $expected and (.sections | length > 0)' >/dev/null <<<"$plan"; then
 	echo "Teaching plan was unusable: title=$plan_title sections=$plan_section_count" >&2
 	exit 1
 fi
 log_stage "teaching-plan-verified"
+
+documents_response=$(get_json "/api/v1/documents")
+document_response=$(jq -er --arg document_id "$document_id" \
+	'.[] | select(.document.id == $document_id)' <<<"$documents_response")
+actual_title=$(jq -er '.document.title' <<<"$document_response")
+if ! jq -e --arg expected "$expected_title" \
+	'(.document.title | ascii_downcase) == $expected' >/dev/null <<<"$document_response"; then
+	echo "Expected the source-grounded title Lantern Relay, got: $actual_title (plan: $plan_title)" >&2
+	exit 1
+fi
+log_stage "title-verified"
 
 refresh_csrf
 lesson_launch=$(curl --fail-with-body --silent --show-error \
