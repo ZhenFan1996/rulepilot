@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { LOGIN_REQUIRED_EVENT, notifyLoginRequired, safeLoginReturnPath } from './authSession'
+import {
+  LOGIN_REQUIRED_EVENT,
+  SESSION_CLEARED_EVENT,
+  notifyLoginRequired,
+  notifySessionCleared,
+  safeLoginReturnPath,
+} from './authSession'
 
 describe('auth session UI policy', () => {
   it('announces an expired session without navigating', () => {
@@ -19,5 +25,15 @@ describe('auth session UI policy', () => {
     expect(safeLoginReturnPath('//example.com')).toBeNull()
     expect(safeLoginReturnPath('/login')).toBeNull()
     expect(safeLoginReturnPath(['/account'])).toBeNull()
+  })
+
+  it('announces a completed logout so mounted private views can discard owner data', () => {
+    const listener = vi.fn()
+    window.addEventListener(SESSION_CLEARED_EVENT, listener)
+
+    notifySessionCleared()
+
+    expect(listener).toHaveBeenCalledOnce()
+    window.removeEventListener(SESSION_CLEARED_EVENT, listener)
   })
 })

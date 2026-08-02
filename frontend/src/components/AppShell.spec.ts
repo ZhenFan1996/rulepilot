@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { notifyLoginRequired } from '@/lib/authSession'
+import { SESSION_CLEARED_EVENT, notifyLoginRequired } from '@/lib/authSession'
 import AppShell from './AppShell.vue'
 
 describe('AppShell', () => {
@@ -148,6 +148,47 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('保留的页面')
     expect(wrapper.get('main a[href="/login?redirect=/lessons?filter=pending"]')).toBeTruthy()
     expect(wrapper.get('header a[href="/login?redirect=/lessons?filter=pending"]').text()).toBe('登录')
+    wrapper.unmount()
+  })
+
+  it('clears account-owned notices and the active route state after logout succeeds', async () => {
+    const sessionCleared = vi.fn()
+    window.addEventListener(SESSION_CLEARED_EVENT, sessionCleared)
+    sessionStorage.setItem('rulepilot:active-teaching-runs', JSON.stringify([
+      { runId: 'run-1', planId: 'plan-1', gameTitle: 'Private lesson' },
+    ]))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'token' })
+      if (path.includes('/api/auth/logout')) return new Response(null, { status: 204 })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(AppShell, { slots: { default: '<p>私人讲解列表</p>' }, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '退出登录')!.trigger('click')
+    await flushPromises()
+
+    expect(sessionCleared).toHaveBeenCalledOnce()
+    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toBeNull()
+    expect(wrapper.text()).not.toContain('player')
+    window.removeEventListener(SESSION_CLEARED_EVENT, sessionCleared)
     wrapper.unmount()
   })
 })

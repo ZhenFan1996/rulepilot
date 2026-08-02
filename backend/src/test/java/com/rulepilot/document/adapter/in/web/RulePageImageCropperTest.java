@@ -87,6 +87,30 @@ class RulePageImageCropperTest {
     }
 
     @Test
+    void normalizesAFullEvidencePageToABrowserSafeRgbJpeg() throws IOException {
+        BufferedImage source = new BufferedImage(80, 120, BufferedImage.TYPE_4BYTE_ABGR);
+        var graphics = source.createGraphics();
+        graphics.setColor(new Color(245, 240, 232, 180));
+        graphics.fillRect(0, 0, 80, 120);
+        graphics.dispose();
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(source, "png", encoded);
+
+        byte[] result = cropper.crop(
+                new PageImage(1, "image/png", encoded.toByteArray(), 80, 120),
+                0,
+                0,
+                1_000,
+                1_000,
+                0);
+
+        BufferedImage normalized = ImageIO.read(new ByteArrayInputStream(result));
+        assertThat(normalized.getWidth()).isEqualTo(80);
+        assertThat(normalized.getHeight()).isEqualTo(120);
+        assertThat(normalized.getColorModel().hasAlpha()).isFalse();
+    }
+
+    @Test
     void decodesOnlyTheRequestedRegionOfALargeEvidencePage() throws IOException {
         BufferedImage source = new BufferedImage(2_000, 3_000, BufferedImage.TYPE_INT_RGB);
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
