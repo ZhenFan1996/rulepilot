@@ -1,6 +1,7 @@
 package com.rulepilot.modelconfig.adapter.out;
 
 import com.google.genai.Client;
+import com.google.genai.types.HttpOptions;
 import io.micrometer.observation.ObservationRegistry;
 import java.time.Duration;
 import org.springframework.ai.chat.model.ChatModel;
@@ -18,6 +19,7 @@ public class ChatModelFactory {
 
     private final ObservationRegistry observations;
     private final Duration requestTimeout;
+    private final int requestTimeoutMillis;
 
     public ChatModelFactory(
             ObservationRegistry observations,
@@ -27,6 +29,14 @@ public class ChatModelFactory {
             throw new IllegalArgumentException("model request timeout must be positive");
         }
         this.requestTimeout = requestTimeout;
+        try {
+            this.requestTimeoutMillis = Math.toIntExact(requestTimeout.toMillis());
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException("model request timeout exceeds the provider limit", exception);
+        }
+        if (requestTimeoutMillis == 0) {
+            throw new IllegalArgumentException("model request timeout must be at least one millisecond");
+        }
     }
 
     public ChatModel create(String provider, String apiKey, String baseUrl, String model) {
@@ -38,7 +48,10 @@ public class ChatModelFactory {
     }
 
     private ChatModel gemini(String apiKey, String model) {
-        Client client = Client.builder().apiKey(required(apiKey, "Gemini API key")).build();
+        Client client = Client.builder()
+                .apiKey(required(apiKey, "Gemini API key"))
+                .httpOptions(HttpOptions.builder().timeout(requestTimeoutMillis).build())
+                .build();
         return GoogleGenAiChatModel.builder()
                 .genAiClient(client)
                 .options(GoogleGenAiChatOptions.builder()
