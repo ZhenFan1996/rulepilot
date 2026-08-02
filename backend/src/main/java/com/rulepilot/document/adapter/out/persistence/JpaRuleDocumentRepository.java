@@ -11,7 +11,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Id;
-import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Collection;
@@ -27,8 +26,11 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class JpaRuleDocumentRepository implements RuleDocumentRepository {
 
-    @PersistenceContext
-    private EntityManager entityManager;
+    private final EntityManager entityManager;
+
+    public JpaRuleDocumentRepository(EntityManager entityManager) {
+        this.entityManager = entityManager;
+    }
 
     @Override
     public Optional<RuleDocument> findDocument(
@@ -93,6 +95,7 @@ public class JpaRuleDocumentRepository implements RuleDocumentRepository {
             throw new IllegalArgumentException("rule document does not exist");
         }
         entity.gameEditionId = document.gameEditionId();
+        entity.title = document.title();
         entity.officialSourceUrl = document.officialSourceUrl();
         entity.officialCoverUrl = document.officialCoverUrl();
         entityManager.flush();
