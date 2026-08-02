@@ -39,9 +39,7 @@ public final class RulebookTitleInferencePolicy {
         String[] tokens = canonical(value).split(" ");
         boolean documentWord = Arrays.stream(tokens).anyMatch(DOCUMENT_WORDS::contains);
         long exportMarkers = Arrays.stream(tokens)
-                .filter(token -> EXPORT_WORDS.contains(token)
-                        || token.matches("v?\\d+(?:\\.\\d+)*")
-                        || token.matches("rev\\d+"))
+                .filter(RulebookTitleInferencePolicy::isExportMarker)
                 .count();
         return documentWord && exportMarkers >= 1 || exportMarkers >= 2;
     }
@@ -59,11 +57,16 @@ public final class RulebookTitleInferencePolicy {
     private static String cleanedFilenameTitle(String value) {
         return Arrays.stream(canonical(value).split(" "))
                 .filter(token -> !DOCUMENT_WORDS.contains(token))
-                .filter(token -> !EXPORT_WORDS.contains(token))
-                .filter(token -> !token.matches("v?\\d+(?:\\.\\d+)*"))
-                .filter(token -> !token.matches("rev\\d+"))
+                .filter(token -> !isExportMarker(token))
                 .reduce((left, right) -> left + " " + right)
                 .orElse("");
+    }
+
+    private static boolean isExportMarker(String token) {
+        return EXPORT_WORDS.contains(token)
+                || token.matches("v?\\d+(?:\\.\\d+)*")
+                || token.matches("rev\\d+")
+                || token.matches("\\d+(?:pages?|pgs?)");
     }
 
     private static String canonical(String value) {

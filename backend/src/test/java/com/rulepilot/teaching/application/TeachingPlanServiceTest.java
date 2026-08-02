@@ -683,6 +683,19 @@ class TeachingPlanServiceTest {
     }
 
     @Test
+    void removesAConcatenatedPageCountWhenTheModelRepeatsTheUploadedFilenameTitle() {
+        OutlineDraft selected = TeachingPlanService.preferDocumentTitle(
+                "Lantern Relay rulebook EN v4 12pages",
+                new OutlineDraft(
+                        "Lantern Relay rulebook EN v4 12pages",
+                        "Premise",
+                        List.of(topic("setup", false, List.of(1)))),
+                List.of(new PageInput(1, "LANTERN RELAY\\nSETUP AND ROUND STRUCTURE")));
+
+        assertThat(selected.gameTitle()).isEqualTo("lantern relay");
+    }
+
+    @Test
     void refusesATranslatedTitleThatDoesNotAppearInTheActiveRulebook() {
         OutlineDraft selected = TeachingPlanService.preferDocumentTitle(
                 "aurora_rulebook_EN_36_web",
