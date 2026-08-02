@@ -67,6 +67,26 @@ class PublicLessonControllerTest {
         verify(coverThumbnails).thumbnailForRulebookCover(documentVersionId, firstPage);
     }
 
+    @Test
+    void serves_a_cited_full_page_as_a_browser_safe_jpeg() throws Exception {
+        UUID planId = UUID.randomUUID();
+        UUID documentVersionId = UUID.randomUUID();
+        var lesson = lesson(planId, documentVersionId);
+        var stored = new DocumentPageImages.PageImage(4, "image/png", new byte[] {1}, 800, 1_200);
+        byte[] normalized = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
+        when(lessons.requireCitedPage(planId, 4)).thenReturn(lesson);
+        when(pageImages.read(documentVersionId, Set.of(4))).thenReturn(List.of(stored));
+        when(crops.crop(stored, 0, 0, 1_000, 1_000, 0)).thenReturn(normalized);
+
+        mockMvc.perform(get("/api/public/lessons/{planId}/pages/{pageNumber}/image", planId, 4))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.IMAGE_JPEG))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(content().bytes(normalized));
+
+        verify(crops).crop(stored, 0, 0, 1_000, 1_000, 0);
+    }
+
     private PublicLessonReader.PublicLesson lesson(UUID planId, UUID documentVersionId) {
         var source = new IllustratedLesson(
                 UUID.randomUUID(),
