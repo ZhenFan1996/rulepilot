@@ -83,6 +83,10 @@ get_json() {
 		"$base_url$1"
 }
 
+log_stage() {
+	printf 'SMOKE_STAGE %s\n' "$1" >&2
+}
+
 refresh_csrf() {
 	local response
 	response=$(get_json "/api/auth/csrf")
@@ -106,10 +110,14 @@ cleanup() {
 		cancel_run "$lesson_run_id"
 		cancel_run "$preparation_run_id"
 		if [ -n "$document_id" ]; then
-			curl --silent --show-error --output /dev/null \
+			if curl --silent --show-error --output /dev/null \
 				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 				--request DELETE --header "$csrf_header: $csrf_token" \
-				"$base_url/api/v1/documents/$document_id"
+				"$base_url/api/v1/documents/$document_id"; then
+				log_stage "cleanup-completed"
+			else
+				log_stage "cleanup-failed"
+			fi
 		fi
 	fi
 	rm -rf "$work_dir"
@@ -165,6 +173,7 @@ wait_for_run() {
 }
 
 refresh_csrf
+log_stage "csrf-ready"
 curl --fail-with-body --silent --show-error --output /dev/null \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/x-www-form-urlencoded" \
@@ -174,7 +183,11 @@ curl --fail-with-body --silent --show-error --output /dev/null \
 	"$base_url/api/auth/login"
 
 session=$(get_json "/api/auth/session")
-jq -e --arg username "$username" '.username == $username' >/dev/null <<<"$session"
+if ! jq -e --arg username "$username" '.username == $username' >/dev/null <<<"$session"; then
+	echo "Authenticated session did not belong to the smoke user" >&2
+	exit 1
+fi
+log_stage "login-completed"
 
 refresh_csrf
 upload_response=$(curl --fail-with-body --silent --show-error \
@@ -187,8 +200,13 @@ upload_response=$(curl --fail-with-body --silent --show-error \
 
 document_id=$(jq -er '.document.id' <<<"$upload_response")
 version_id=$(jq -er '.version.id' <<<"$upload_response")
-jq -e '.duplicate == false' >/dev/null <<<"$upload_response"
+if ! jq -e '.duplicate == false' >/dev/null <<<"$upload_response"; then
+	echo "Synthetic smoke upload unexpectedly reused an existing document" >&2
+	exit 1
+fi
+log_stage "upload-completed"
 wait_for_document_ready "$version_id"
+log_stage "document-ready"
 
 refresh_csrf
 preparation_launch=$(curl --fail-with-body --silent --show-error \
@@ -200,18 +218,29 @@ preparation_launch=$(curl --fail-with-body --silent --show-error \
 preparation_run_id=$(jq -er '.assistantRunId' <<<"$preparation_launch")
 preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
+log_stage "teaching-preparation-completed"
 
 documents_response=$(get_json "/api/v1/documents")
 document_response=$(jq -er --arg document_id "$document_id" \
 	'.[] | select(.document.id == $document_id)' <<<"$documents_response")
 actual_title=$(jq -er '.document.title' <<<"$document_response")
-jq -e --arg expected "$expected_title" \
-	'(.document.title | ascii_downcase) == $expected' >/dev/null <<<"$document_response"
+if ! jq -e --arg expected "$expected_title" \
+	'(.document.title | ascii_downcase) == $expected' >/dev/null <<<"$document_response"; then
+	echo "Expected the source-grounded title Lantern Relay, got: $actual_title" >&2
+	exit 1
+fi
+log_stage "title-verified"
 
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
 plan_id=$(jq -er '.id' <<<"$plan")
-jq -e --arg expected "$expected_title" \
-	'(.gameTitle | ascii_downcase) == $expected and (.sections | length > 0)' >/dev/null <<<"$plan"
+plan_title=$(jq -er '.gameTitle' <<<"$plan")
+plan_section_count=$(jq -er '.sections | length' <<<"$plan")
+if ! jq -e --arg expected "$expected_title" \
+	'(.gameTitle | ascii_downcase) == $expected and (.sections | length > 0)' >/dev/null <<<"$plan"; then
+	echo "Teaching plan was unusable: title=$plan_title sections=$plan_section_count" >&2
+	exit 1
+fi
+log_stage "teaching-plan-verified"
 
 refresh_csrf
 lesson_launch=$(curl --fail-with-body --silent --show-error \
@@ -221,12 +250,17 @@ lesson_launch=$(curl --fail-with-body --silent --show-error \
 lesson_run_id=$(jq -er '.assistantRunId' <<<"$lesson_launch")
 lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson")
 lesson_state=$(jq -er '.run.state' <<<"$lesson_result")
+log_stage "lesson-generation-completed"
 
 lesson=$(get_json "/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest")
 lesson_status=$(jq -er '.status' <<<"$lesson")
 section_count=$(jq -er '.sections | length' <<<"$lesson")
-jq -e '(.status == "COMPLETE" or .status == "DRAFT_READY") and (.sections | length > 0)' \
-	>/dev/null <<<"$lesson"
+if ! jq -e '(.status == "COMPLETE" or .status == "DRAFT_READY") and (.sections | length > 0)' \
+	>/dev/null <<<"$lesson"; then
+	echo "Illustrated lesson was unusable: status=$lesson_status sections=$section_count" >&2
+	exit 1
+fi
+log_stage "lesson-verified"
 
 jq -n \
 	--arg title "$actual_title" \

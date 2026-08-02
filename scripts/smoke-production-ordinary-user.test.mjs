@@ -115,6 +115,10 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     })
     assert.equal(deleted, true)
     assert.ok(calls.some((call) => call.method === 'POST' && call.url === '/api/v1/documents'))
+    assert.match(result.stderr, /SMOKE_STAGE login-completed/)
+    assert.match(result.stderr, /SMOKE_STAGE title-verified/)
+    assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
+    assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))
