@@ -99,6 +99,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/smoke-production-ordinary-user.test.mjs
 	@node --test scripts/verify-ci-workflow.test.mjs
 	@sh scripts/verify-mockito-agent.sh
+	@sh scripts/verify-archunit-imports.sh
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \
