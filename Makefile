@@ -96,6 +96,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/evaluate-product.test.mjs
 	@node --test scripts/preflight-public-rulebook.test.mjs
 	@node --test scripts/generate-public-corpus-entry.test.mjs
+	@node --test scripts/smoke-production-ordinary-user.test.mjs
 	@if [ -f backend/mvnw ]; then \
 		(cd backend && ./mvnw verify); \
 	else \
