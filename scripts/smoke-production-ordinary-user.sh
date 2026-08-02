@@ -87,6 +87,17 @@ log_stage() {
 	printf 'SMOKE_STAGE %s\n' "$1" >&2
 }
 
+log_run_timing() {
+	local phase=$1
+	local response=$2
+	jq -r --arg phase "$phase" '
+        "SMOKE_TIMING phase=\($phase) kind=run createdAt=\(.run.createdAt // "unknown") completedAt=\(.run.completedAt // "unknown")",
+        (.steps[]? | "SMOKE_TIMING phase=\($phase) kind=step sequence=\(.sequence) from=\(.fromState) to=\(.toState) occurredAt=\(.occurredAt)"),
+        (.activities[]? | "SMOKE_TIMING phase=\($phase) kind=activity sequence=\(.sequence) type=\(.type) operation=\(.operation) outcome=\(.outcome) latencyMs=\(.latencyMs // 0) inputTokens=\(.estimatedInputTokens // 0) outputTokens=\(.estimatedOutputTokens // 0) occurredAt=\(.occurredAt // "unknown")"),
+        (if .budget then "SMOKE_TIMING phase=\($phase) kind=budget usedModelCalls=\(.budget.usedModelCalls // 0) usedToolCalls=\(.budget.usedToolCalls // 0) usedTokens=\(.budget.usedTokens // 0)" else empty end)
+    ' <<<"$response" >&2
+}
+
 refresh_csrf() {
 	local response
 	response=$(get_json "/api/auth/csrf")
@@ -218,6 +229,7 @@ preparation_launch=$(curl --fail-with-body --silent --show-error \
 preparation_run_id=$(jq -er '.assistantRunId' <<<"$preparation_launch")
 preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
+log_run_timing "preparation" "$preparation_result"
 log_stage "teaching-preparation-completed"
 
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
@@ -251,6 +263,7 @@ lesson_launch=$(curl --fail-with-body --silent --show-error \
 lesson_run_id=$(jq -er '.assistantRunId' <<<"$lesson_launch")
 lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson")
 lesson_state=$(jq -er '.run.state' <<<"$lesson_result")
+log_run_timing "lesson" "$lesson_result"
 log_stage "lesson-generation-completed"
 
 lesson=$(get_json "/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest")

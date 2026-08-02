@@ -57,7 +57,16 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       })
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/33333333-3333-3333-3333-333333333333') {
-      return json(response, 200, { run: { state: 'COMPLETED' } })
+      return json(response, 200, {
+        run: { state: 'COMPLETED', createdAt: '2026-08-02T00:00:00Z', completedAt: '2026-08-02T00:00:12Z' },
+        steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
+        activities: [{
+          sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', outcome: 'SUCCEEDED',
+          latencyMs: 11_000, estimatedInputTokens: 1200, estimatedOutputTokens: 300,
+          occurredAt: '2026-08-02T00:00:12Z',
+        }],
+        budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1500 },
+      })
     }
     if (request.method === 'GET' && request.url?.endsWith('/teaching-plans/latest')) {
       return json(response, 200, {
@@ -72,7 +81,16 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       })
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
-      return json(response, 200, { run: { state: 'COMPLETED' } })
+      return json(response, 200, {
+        run: { state: 'COMPLETED', createdAt: '2026-08-02T00:00:13Z', completedAt: '2026-08-02T00:00:20Z' },
+        steps: [],
+        activities: [{
+          sequence: 1, type: 'MODEL', operation: 'composeLessonSection', outcome: 'SUCCEEDED',
+          latencyMs: 6500, estimatedInputTokens: 900, estimatedOutputTokens: 250,
+          occurredAt: '2026-08-02T00:00:20Z',
+        }],
+        budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1150 },
+      })
     }
     if (request.method === 'GET' && request.url?.endsWith('/illustrated-lessons/latest')) {
       return json(response, 200, { status: 'COMPLETE', sections: [{ position: 1 }] })
@@ -119,6 +137,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_STAGE title-verified/)
     assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
+    assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=organizeTeachingOutline .*latencyMs=11000/)
+    assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
+    assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))
