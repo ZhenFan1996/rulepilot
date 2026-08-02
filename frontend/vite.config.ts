@@ -6,6 +6,8 @@ import vue from '@vitejs/plugin-vue'
 import { defineConfig, type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+import { pwaNavigationFallbackDenylist } from './src/lib/pwaRouting'
+
 const ocrAssets = [
   {
     fileName: 'ocr-assets/v7/worker.min.js',
@@ -91,6 +93,7 @@ export default defineConfig({
       workbox: {
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
+        navigateFallbackDenylist: pwaNavigationFallbackDenylist,
         globPatterns: ['**/*.{js,css,html,svg,jpg,woff2}'],
         globIgnores: ['ocr-assets/**'],
       },

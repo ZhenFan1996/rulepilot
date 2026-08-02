@@ -133,9 +133,9 @@ public class PublicLessonController {
     ResponseEntity<byte[]> pageImage(@PathVariable UUID planId, @PathVariable int pageNumber) {
         var image = image(planId, pageNumber);
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(image.mediaType()))
+                .contentType(MediaType.IMAGE_JPEG)
                 .cacheControl(CacheControl.noStore())
-                .body(image.content());
+                .body(crops.crop(image, 0, 0, 1_000, 1_000, 0));
     }
 
     @GetMapping("/{planId}/pages/{pageNumber}/image/crop")
