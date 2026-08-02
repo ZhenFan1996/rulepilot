@@ -90,6 +90,7 @@ public class TeachingPlanService {
         }
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
+        boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
         var pages = visualOnly
                 ? visualCataloger.catalogVisualPages(
                         documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)
@@ -121,7 +122,7 @@ public class TeachingPlanService {
         outline = refineChapterOwnership(
                 initialOutlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
         OutlineRequest outlineRequest = initialOutlineRequest;
-        if (!visualOnly && visualCataloger.available(createdBy)) {
+        if (textRulebookVisualCatalogAvailable) {
             List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
                     documentVersionId, outline, documentPages, scope.documentTitle(), createdBy, assistantRunId);
             if (!coverageFacts.isEmpty()) {
@@ -225,14 +226,13 @@ public class TeachingPlanService {
             }
         }
         if (visualOnly) validateVisualPageBindings(outline, documentPages);
-        if (!visualOnly && visualCataloger.available(createdBy)) {
-            visualCataloger.catalogSelectedOutlinePages(
-                    documentVersionId,
-                    outline,
-                    documentPages,
-                    scope.documentTitle(),
-                    createdBy,
-                    assistantRunId);
+        if (textRulebookVisualCatalogAvailable && assistantRunId != null) {
+            invocations.record(
+                    assistantRunId,
+                    ActivityType.VALIDATION,
+                    "deferSelectedVisualPageCatalog",
+                    ActivityOutcome.SUCCEEDED,
+                    "Optional selected-page visual interpretation was removed from preparation; later visual workflows interpret evidence on demand");
         }
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",

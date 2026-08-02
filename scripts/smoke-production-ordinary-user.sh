@@ -98,6 +98,20 @@ log_run_timing() {
     ' <<<"$response" >&2
 }
 
+verify_preparation_critical_path() {
+	local response=$1
+	if jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
+		>/dev/null <<<"$response"; then
+		echo "Text-rulebook preparation performed optional selected-page visual catalog work before publishing the plan" >&2
+		return 1
+	fi
+	if ! jq -e '.activities[]? | select(.operation == "deferSelectedVisualPageCatalog" and .outcome == "SUCCEEDED")' \
+		>/dev/null <<<"$response"; then
+		echo "Text-rulebook preparation did not report the deferred visual-catalog boundary" >&2
+		return 1
+	fi
+}
+
 refresh_csrf() {
 	local response
 	response=$(get_json "/api/auth/csrf")
@@ -230,6 +244,7 @@ preparation_run_id=$(jq -er '.assistantRunId' <<<"$preparation_launch")
 preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")
 preparation_state=$(jq -er '.run.state' <<<"$preparation_result")
 log_run_timing "preparation" "$preparation_result"
+verify_preparation_critical_path "$preparation_result"
 log_stage "teaching-preparation-completed"
 
 plan=$(get_json "/api/v1/document-versions/$version_id/teaching-plans/latest")
