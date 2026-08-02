@@ -260,7 +260,7 @@ public final class VisualRegionCandidateSelector {
             return new Candidate(block.pageNumber(), block.rectangle(), block.text());
         }
 
-        private static Candidate from(ScoredAnchor match) {
+        static Candidate from(ScoredAnchor match) {
             VisualAnchor anchor = match.anchor();
             return new Candidate(
                     match.pageNumber(),

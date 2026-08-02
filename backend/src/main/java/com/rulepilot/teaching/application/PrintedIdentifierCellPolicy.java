@@ -121,7 +121,7 @@ final class PrintedIdentifierCellPolicy {
         return rows.stream().map(RowBuilder::build).toList();
     }
 
-    private static int centerY(IdentifierLocation location) {
+    static int centerY(IdentifierLocation location) {
         return location.y() + location.height() / 2;
     }
 
