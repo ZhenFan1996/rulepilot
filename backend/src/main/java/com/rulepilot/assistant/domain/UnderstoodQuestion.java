@@ -10,8 +10,7 @@ public record UnderstoodQuestion(
         String normalizedQuestion,
         QuestionType type,
         List<String> terms,
-        Set<MissingQuestionContext> missingContext,
-        String currentLessonSection) {
+        Set<MissingQuestionContext> missingContext) {
 
     public UnderstoodQuestion {
         if (documentVersionId == null

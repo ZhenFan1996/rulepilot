@@ -660,10 +660,36 @@ class TeachingPlanServiceTest {
     void prefersTheUserProvidedRulebookTitleOverAGenericModelTitle() {
         OutlineDraft preferred = TeachingPlanService.preferDocumentTitle(
                 "My custom game title",
-                new OutlineDraft("Imported rulebook", "Premise", List.of(topic("setup", false, List.of(1)))));
+                new OutlineDraft("Imported rulebook", "Premise", List.of(topic("setup", false, List.of(1)))),
+                List.of(new PageInput(1, "IMPORTED RULEBOOK")));
 
         assertThat(preferred.gameTitle()).isEqualTo("My custom game title");
         assertThat(preferred.topics()).hasSize(1);
+    }
+
+    @Test
+    void usesTheRulebookInferredTitleWhenTheUploadTitleContainsExportMetadata() {
+        OutlineDraft first = TeachingPlanService.preferDocumentTitle(
+                "aurora_rulebook_EN_36_web",
+                new OutlineDraft("Aurora", "Premise", List.of(topic("setup", false, List.of(1)))),
+                List.of(new PageInput(1, "AURORA — RULES OF PLAY")));
+        OutlineDraft second = TeachingPlanService.preferDocumentTitle(
+                "harbor-manual-de-v2-print",
+                new OutlineDraft("Harbor", "Premise", List.of(topic("setup", false, List.of(1)))),
+                List.of(new PageInput(1, "HARBOR SPIELREGELN")));
+
+        assertThat(first.gameTitle()).isEqualTo("Aurora");
+        assertThat(second.gameTitle()).isEqualTo("Harbor");
+    }
+
+    @Test
+    void refusesATranslatedTitleThatDoesNotAppearInTheActiveRulebook() {
+        OutlineDraft selected = TeachingPlanService.preferDocumentTitle(
+                "aurora_rulebook_EN_36_web",
+                new OutlineDraft("极光探险", "Premise", List.of(topic("setup", false, List.of(1)))),
+                List.of(new PageInput(1, "AURORA — RULES OF PLAY")));
+
+        assertThat(selected.gameTitle()).isEqualTo("aurora");
     }
 
     @Test

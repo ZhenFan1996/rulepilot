@@ -80,9 +80,8 @@ final class AnswerCritiquePolicy {
                                 + "; answer basis " + (answer.answerBasis() == null
                                         ? "not applicable"
                                         : answer.answerBasis().name())
-                                + "; preserve material exceptions for lesson section "
-                                + contextValue(context.currentLessonSection())
-                                + ", and learning intent " + contextValue(context.learningIntent())
+                                + "; preserve material exceptions and learning intent "
+                                + contextValue(context.learningIntent())
                                 + ". Preserve every named eligibility and identity condition. Reject any claim that a "
                                 + "condition is irrelevant, optional, or broader than stated unless evidence explicitly "
                                 + "says so. For an 'again' follow-up, reject any repeatability claim not explicitly "

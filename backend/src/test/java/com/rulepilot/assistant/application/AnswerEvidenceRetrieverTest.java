@@ -201,11 +201,11 @@ class AnswerEvidenceRetrieverTest {
 
     private UnderstoodQuestion question(String text) {
         return new UnderstoodQuestion(
-                versionId, text, text.toLowerCase(), QuestionType.RULE_QUERY, List.of("score"), Set.of(), "ACTIONS");
+                versionId, text, text.toLowerCase(), QuestionType.RULE_QUERY, List.of("score"), Set.of());
     }
 
     private QuestionContext context() {
-        return new QuestionContext(versionId, "ACTIONS", null, 4, Set.of());
+        return new QuestionContext(versionId);
     }
 
     private HybridEvidenceHit evidence(String excerpt, double score) {

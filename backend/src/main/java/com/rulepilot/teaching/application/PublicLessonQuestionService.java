@@ -15,7 +15,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /** Anonymous Q&A constrained to a published lesson and its cited rulebook pages. */
 @Service
@@ -39,7 +38,6 @@ public class PublicLessonQuestionService {
         this.answers = answers;
     }
 
-    @Transactional
     public Optional<PublicAnswer> answer(UUID planId, QuestionRequest request) {
         validate(request);
         return lessons.find(planId).map(lesson -> answer(lesson, request));
@@ -47,15 +45,9 @@ public class PublicLessonQuestionService {
 
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
         PlayerLocale language = PlayerLocale.fromRequest(request.language());
-        String lessonContext = lesson.lesson().sections().stream()
-                .filter(section -> request.sectionPosition() != null && section.position() == request.sectionPosition())
-                .findFirst()
-                .map(section -> String.join(" ", section.topicKey(), section.title(), String.join(" ", section.coverageTags())))
-                .orElse(null);
         var creation = answers.answerForPublicReader(
                 lesson.documentVersionId(),
                 request.question().strip(),
-                lessonContext,
                 request.previousQuestion(),
                 language);
         Set<Integer> citedPages = citedPages(creation.answer());
@@ -194,15 +186,14 @@ public class PublicLessonQuestionService {
     private void validate(QuestionRequest request) {
         if (request == null || request.question() == null || request.question().isBlank()
                 || request.question().strip().length() > 800
-                || request.sectionPosition() != null && request.sectionPosition() < 1
                 || request.previousQuestion() != null && request.previousQuestion().strip().length() > 800) {
             throw new IllegalArgumentException("public lesson question is invalid");
         }
     }
 
-    public record QuestionRequest(String question, Integer sectionPosition, String previousQuestion, String language) {
-        public QuestionRequest(String question, Integer sectionPosition, String previousQuestion) {
-            this(question, sectionPosition, previousQuestion, "zh-CN");
+    public record QuestionRequest(String question, String previousQuestion, String language) {
+        public QuestionRequest(String question, String previousQuestion) {
+            this(question, previousQuestion, "zh-CN");
         }
     }
 

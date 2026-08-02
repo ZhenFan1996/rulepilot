@@ -84,14 +84,13 @@ class AnswerOutcomePolicyTest {
                 "我可以这样做吗？",
                 QuestionType.SITUATION_QUERY,
                 List.of(),
-                Set.of(MissingQuestionContext.SITUATION_DETAILS, MissingQuestionContext.GAME_PHASE),
-                null);
+                Set.of(MissingQuestionContext.SITUATION_DETAILS));
 
         StructuredRuleAnswer answer = AnswerOutcomePolicy.clarification(question);
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
-        assertThat(answer.explanation()).isEqualTo("缺少信息：GAME_PHASE, SITUATION_DETAILS");
-        assertThat(answer.clarification()).isEqualTo("请补充 GAME_PHASE, SITUATION_DETAILS。");
+        assertThat(answer.explanation()).isEqualTo("缺少信息：SITUATION_DETAILS");
+        assertThat(answer.clarification()).isEqualTo("请补充 SITUATION_DETAILS。");
         assertThat(answer.citations()).isEmpty();
     }
 

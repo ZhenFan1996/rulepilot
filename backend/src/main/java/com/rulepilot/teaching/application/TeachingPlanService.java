@@ -6,6 +6,7 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentVersionScopeLookup;
+import com.rulepilot.document.RulebookTitleInferencePolicy;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
@@ -115,7 +116,8 @@ public class TeachingPlanService {
                         outlineInputTokens(pages),
                         "Rulebook lesson topics organized",
                         () -> outlines.organize(initialOutlineRequest),
-                        this::outlineOutputTokens), documentPages));
+                        this::outlineOutputTokens), documentPages),
+                pages);
         outline = refineChapterOwnership(
                 initialOutlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
         OutlineRequest outlineRequest = initialOutlineRequest;
@@ -169,7 +171,7 @@ public class TeachingPlanService {
             }
             outline = preferDocumentTitle(
                     scope.documentTitle(), VisualOutlineEvidencePolicy.bindIconLegendEvidence(
-                            outlines.fallback(outlineRequest), documentPages));
+                            outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
             plans.validate(outline);
             if (visualOnly) {
                 outline = VisualOutlineEvidencePolicy.bindVisualCoreTopicEvidence(outline, pages);
@@ -193,7 +195,7 @@ public class TeachingPlanService {
                 }
                 var sourceOutline = preferDocumentTitle(
                         scope.documentTitle(), VisualOutlineEvidencePolicy.bindIconLegendEvidence(
-                                outlines.fallback(outlineRequest), documentPages));
+                                outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
                 outline = VisualOutlineEvidencePolicy.augmentVisualCoverage(outline, sourceOutline);
                 if (outline.topics().size() > 10) {
                     outline = VisualOutlineEvidencePolicy.keepFastVisualBaseline(outline, sourceOutline);
@@ -269,7 +271,9 @@ public class TeachingPlanService {
                         () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
                         this::outlineOutputTokens);
                 current = preferDocumentTitle(
-                        documentTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages));
+                        documentTitle,
+                        VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
+                        request.pages());
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline ownership refinement was skipped: {}", refinementFailure.getMessage());
@@ -312,7 +316,9 @@ public class TeachingPlanService {
                         () -> outlines.refineChapterOwnership(request, beforeRefinement, feedback.get()),
                         this::outlineOutputTokens);
                 current = preferDocumentTitle(
-                        documentTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages));
+                        documentTitle,
+                        VisualOutlineEvidencePolicy.bindIconLegendEvidence(refined, documentPages),
+                        request.pages());
                 if (current.equals(beforeRefinement)) return current;
             } catch (RuntimeException refinementFailure) {
                 log.warn("Teaching outline source-coverage refinement was skipped: {}", refinementFailure.getMessage());
@@ -358,9 +364,14 @@ public class TeachingPlanService {
     }
 
     static TeachingOutlineModel.OutlineDraft preferDocumentTitle(
-            String documentTitle, TeachingOutlineModel.OutlineDraft outline) {
-        if (documentTitle == null || documentTitle.isBlank()) return outline;
-        return new TeachingOutlineModel.OutlineDraft(documentTitle.strip(), outline.premise(), outline.topics());
+            String documentTitle,
+            TeachingOutlineModel.OutlineDraft outline,
+            List<PageInput> activeDocumentPages) {
+        String selectedTitle = RulebookTitleInferencePolicy.selectPlayerTitle(
+                documentTitle,
+                outline.gameTitle(),
+                activeDocumentPages.stream().map(PageInput::text).toList());
+        return new TeachingOutlineModel.OutlineDraft(selectedTitle, outline.premise(), outline.topics());
     }
 
     private <T> T invokeModel(

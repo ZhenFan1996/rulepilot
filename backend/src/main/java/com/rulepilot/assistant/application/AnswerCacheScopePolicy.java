@@ -23,7 +23,6 @@ final class AnswerCacheScopePolicy {
                 context.documentVersionId(),
                 ruleDataVersion,
                 scopedQuestion,
-                context.currentLessonSection(),
                 context.outputLanguage());
     }
 

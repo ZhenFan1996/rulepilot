@@ -5,7 +5,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import ProductMark from '@/components/ProductMark.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
-import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
 import {
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
@@ -172,8 +172,14 @@ async function logout() {
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
   const csrf = (await csrfResponse.json()) as { headerName: string; token: string }
-  await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token } })
+  const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token } })
+  if (!response.ok) return
   username.value = ''
+  activeTeaching.value = []
+  completedTeaching.value = []
+  sessionStorage.removeItem(ACTIVE_TEACHING_KEY)
+  sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
+  notifySessionCleared()
 }
 
 onMounted(() => applyAppearance(appearance.value, false))

@@ -17,12 +17,21 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Transactional;
 
 class PublicLessonQuestionServiceTest {
 
     private final PublicLessonReader lessons = mock(PublicLessonReader.class);
     private final RuleAnswering answers = mock(RuleAnswering.class);
     private final PublicLessonQuestionService service = new PublicLessonQuestionService(lessons, answers);
+
+    @Test
+    void doesNotHoldADatabaseTransactionAcrossTheRuleAnswerModelCall() throws NoSuchMethodException {
+        var answer = PublicLessonQuestionService.class.getDeclaredMethod(
+                "answer", UUID.class, PublicLessonQuestionService.QuestionRequest.class);
+
+        assertThat(answer.isAnnotationPresent(Transactional.class)).isFalse();
+    }
 
     @Test
     void returnsVerifiedVisualAidsWithoutAppendingLowerTrustLessonExamples() {
@@ -34,10 +43,10 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
-        var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", 1, null));
+        var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", null));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.visualAids()).hasSize(1);
@@ -60,10 +69,10 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "先放置标记。", "然后执行效果。",
                 List.of(new RuleAnswering.Citation("设置", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("标记怎么放？"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.ZH_CN)))
+                        eq(versionId), eq("标记怎么放？"), eq(null), eq(PlayerLocale.ZH_CN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
 
-        var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", 1, null));
+        var result = service.answer(planId, new PublicLessonQuestionService.QuestionRequest("标记怎么放？", null));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().citations()).singleElement()
@@ -127,14 +136,13 @@ class PublicLessonQuestionServiceTest {
         when(answers.answerForPublicReader(
                         eq(versionId),
                         eq("骑士的一个回合分成哪两个阶段？"),
-                        org.mockito.ArgumentMatchers.contains("骑士"),
                         eq(null),
                         eq(PlayerLocale.ZH_CN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(answerChunk)));
 
         var result = service.answer(
                 planId,
-                new PublicLessonQuestionService.QuestionRequest("骑士的一个回合分成哪两个阶段？", 1, null));
+                new PublicLessonQuestionService.QuestionRequest("骑士的一个回合分成哪两个阶段？", null));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.visualAids()).singleElement().satisfies(aid -> {
@@ -155,12 +163,12 @@ class PublicLessonQuestionServiceTest {
                 "ANSWERED", "Place the marker first.", "Then resolve its effect.",
                 List.of(new RuleAnswering.Citation("Setup", 2, 2)), List.of(), "HIGH", null);
         when(answers.answerForPublicReader(
-                        eq(versionId), eq("Where does the marker go?"), org.mockito.ArgumentMatchers.contains("设置"), eq(null), eq(PlayerLocale.EN)))
+                        eq(versionId), eq("Where does the marker go?"), eq(null), eq(PlayerLocale.EN)))
                 .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
 
         var result = service.answer(
                 planId,
-                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", 1, null, "en"));
+                new PublicLessonQuestionService.QuestionRequest("Where does the marker go?", null, "en"));
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");
@@ -174,9 +182,8 @@ class PublicLessonQuestionServiceTest {
         UUID planId = UUID.randomUUID();
         when(lessons.find(planId)).thenReturn(Optional.empty());
 
-        assertThat(service.answer(planId, new PublicLessonQuestionService.QuestionRequest("能做什么？", null, null))).isEmpty();
+        assertThat(service.answer(planId, new PublicLessonQuestionService.QuestionRequest("能做什么？", null))).isEmpty();
         verify(answers, never()).answerForPublicReader(
-                org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(),
@@ -185,7 +192,7 @@ class PublicLessonQuestionServiceTest {
 
     @Test
     void rejectsAnOversizedAnonymousQuestionBeforeCallingTheModel() {
-        assertThatThrownBy(() -> service.answer(UUID.randomUUID(), new PublicLessonQuestionService.QuestionRequest("x".repeat(801), null, null)))
+        assertThatThrownBy(() -> service.answer(UUID.randomUUID(), new PublicLessonQuestionService.QuestionRequest("x".repeat(801), null)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

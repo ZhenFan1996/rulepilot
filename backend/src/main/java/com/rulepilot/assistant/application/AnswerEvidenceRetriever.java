@@ -426,7 +426,7 @@ final class AnswerEvidenceRetriever {
                     assistantRunId,
                     username,
                     new RetrievalQueryRequest(
-                            question.normalizedQuestion(), context.previousQuestion(), context.currentLessonSection()));
+                            question.normalizedQuestion(), context.previousQuestion()));
         } catch (RuleAnswerModelTimeoutException exception) {
             LOGGER.info("Cross-language retrieval rewrite timed out; continuing with the original question");
             return List.of();

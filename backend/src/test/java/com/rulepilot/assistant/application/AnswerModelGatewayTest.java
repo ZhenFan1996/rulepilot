@@ -88,7 +88,7 @@ class AnswerModelGatewayTest {
                 model(draft("unused"), draft("unused"), List.of("setup actions", "end scoring")), limiter, invocations);
 
         List<String> phrases = gateway.rewriteRetrievalQueries(
-                runId, "alice", new RetrievalQueryRequest("如何设置？", null, "设置"));
+                runId, "alice", new RetrievalQueryRequest("如何设置？", null));
 
         assertThat(phrases).containsExactly("setup actions", "end scoring");
         assertThat(limiter.requests).containsExactly(new PermitRequest("alice", null, "test-provider"));
@@ -129,7 +129,7 @@ class AnswerModelGatewayTest {
         return new ModelRequest(
                 "如何执行行动？",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(UUID.randomUUID(), "RULES", "行动", "执行该行动。", 2, 2)));
     }
 

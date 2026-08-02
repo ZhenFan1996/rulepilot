@@ -16,7 +16,6 @@ final class AnswerModelRequestFactory {
                 question.normalizedQuestion(),
                 question.type(),
                 new AnswerContext(
-                        context.currentLessonSection(),
                         context.previousQuestion(),
                         context.learningIntent(),
                         context.outputLanguage()),

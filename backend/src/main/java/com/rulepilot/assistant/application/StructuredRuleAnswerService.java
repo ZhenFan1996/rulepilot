@@ -156,22 +156,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     @Override
     public RuleAnswering.AnswerResult answerForPublicReader(
-            UUID documentVersionId, String question, String currentLessonSection, String previousQuestion) {
-        return answerForPublicReader(documentVersionId, question, currentLessonSection, previousQuestion, PlayerLocale.ZH_CN);
+            UUID documentVersionId, String question, String previousQuestion) {
+        return answerForPublicReader(documentVersionId, question, previousQuestion, PlayerLocale.ZH_CN);
     }
 
     @Override
     public RuleAnswering.AnswerResult answerForPublicReader(
             UUID documentVersionId,
             String question,
-            String currentLessonSection,
             String previousQuestion,
             PlayerLocale outputLanguage) {
         AnswerCreation creation = answerWithRun(
                 question,
                 new QuestionContext(
                         documentVersionId,
-                        currentLessonSection,
                         previousQuestion,
                         null,
                         outputLanguage),

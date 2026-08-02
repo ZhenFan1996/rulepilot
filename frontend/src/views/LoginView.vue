@@ -15,7 +15,7 @@ interface CsrfResponse {
 const router = useRouter()
 const route = useRoute()
 const { t } = useLocale()
-const username = ref('player')
+const username = ref('')
 const password = ref('')
 const isSubmitting = ref(false)
 const errorMessage = ref('')
@@ -29,7 +29,7 @@ async function login() {
     if (!csrfResponse.ok) throw new Error(t('auth.connection'))
     const csrf = (await csrfResponse.json()) as CsrfResponse
 
-    const body = new URLSearchParams({ username: username.value, password: password.value })
+    const body = new URLSearchParams({ username: username.value.trim().toLowerCase(), password: password.value })
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       credentials: 'include',

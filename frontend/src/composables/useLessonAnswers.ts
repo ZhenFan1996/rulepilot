@@ -60,11 +60,6 @@ export interface CsrfResponse {
 interface AnswerContext {
   planId: string
   documentVersionId: string
-  section: {
-    topicKey: string
-    title: string
-    coverageTags: string[]
-  } | null
   locale: AppLocale
 }
 
@@ -76,7 +71,7 @@ interface UseLessonAnswersOptions {
   onReceived: (context: AnswerContext, question: string, answer: StructuredRuleAnswer) => void
 }
 
-/** Keeps a question attached to the exact lesson and chapter that created it. */
+/** Keeps a question attached to the exact lesson workspace that created it. */
 export function useLessonAnswers(options: UseLessonAnswersOptions) {
   const { t } = useLocale()
   const question = ref('')
@@ -133,9 +128,6 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
         body: JSON.stringify({
           question: text,
-          currentLessonSection: context.section
-            ? [context.section.topicKey, context.section.title, ...context.section.coverageTags].join(' ')
-            : null,
           previousQuestion: previousTurn?.question,
           learningIntent,
           language: context.locale,

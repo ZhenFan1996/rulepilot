@@ -56,7 +56,6 @@ public class StructuredRuleAnswerController {
                 request.question(),
                 new QuestionContext(
                         versionId,
-                        request.currentLessonSection(),
                         previousQuestion,
                         request.learningIntent(),
                         PlayerLocale.fromRequest(request.language())),
@@ -98,7 +97,6 @@ public class StructuredRuleAnswerController {
 
     record AnswerRequest(
             String question,
-            String currentLessonSection,
             UUID gameSessionId,
             String previousQuestion,
             com.rulepilot.assistant.domain.LearningIntent learningIntent,

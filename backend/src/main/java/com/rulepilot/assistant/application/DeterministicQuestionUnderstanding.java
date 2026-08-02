@@ -51,25 +51,22 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
                 normalized,
                 type,
                 extractTerms(normalized),
-                missing,
-                context.currentLessonSection());
+                missing);
     }
 
     private QuestionType classify(String question, QuestionContext context) {
         if (context.previousQuestion() != null
-                && context.currentLessonSection() != null
                 && VAGUE_REFERENCE.matcher(question).find()) {
             return QuestionType.LESSON_STEP_FOLLOW_UP;
         }
         if (context.previousQuestion() == null
-                && context.currentLessonSection() == null
                 && UNRESOLVED_FOLLOW_UP.matcher(question).find()) {
             return QuestionType.SITUATION_QUERY;
         }
         if (SITUATION.matcher(question).find()) {
             return QuestionType.SITUATION_QUERY;
         }
-        if (context.currentLessonSection() != null || STEP_REFERENCE.matcher(question).find()) {
+        if (STEP_REFERENCE.matcher(question).find()) {
             return QuestionType.LESSON_STEP_FOLLOW_UP;
         }
         return QuestionType.RULE_QUERY;
@@ -78,12 +75,8 @@ public class DeterministicQuestionUnderstanding implements QuestionUnderstanding
     private Set<MissingQuestionContext> missingContext(
             String question, QuestionType type, QuestionContext context) {
         Set<MissingQuestionContext> missing = new LinkedHashSet<>();
-        if (type == QuestionType.LESSON_STEP_FOLLOW_UP && context.currentLessonSection() == null) {
-            missing.add(MissingQuestionContext.CURRENT_LESSON_SECTION);
-        }
         if (type == QuestionType.SITUATION_QUERY) {
             if (VAGUE_REFERENCE.matcher(question).find()
-                    && context.currentLessonSection() == null
                     && context.previousQuestion() == null) {
                 missing.add(MissingQuestionContext.SITUATION_DETAILS);
             }

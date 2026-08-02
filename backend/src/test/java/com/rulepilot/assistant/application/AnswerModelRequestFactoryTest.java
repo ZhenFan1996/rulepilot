@@ -29,14 +29,9 @@ class AnswerModelRequestFactoryTest {
                         "标准化问题",
                         QuestionType.LESSON_STEP_FOLLOW_UP,
                         List.of("回合"),
-                        Set.of(),
-                        "回合流程"),
+                        Set.of()),
                 new QuestionContext(
                         documentVersionId,
-                        " 回合流程 ",
-                        " 行动阶段 ",
-                        3,
-                        Set.of(UUID.randomUUID(), UUID.randomUUID()),
                         " 前一个问题 ",
                         LearningIntent.EXAMPLE,
                         PlayerLocale.EN),
@@ -58,7 +53,6 @@ class AnswerModelRequestFactoryTest {
         assertThat(request.question()).isEqualTo("标准化问题");
         assertThat(request.questionType()).isEqualTo(QuestionType.LESSON_STEP_FOLLOW_UP);
         assertThat(request.context()).satisfies(context -> {
-            assertThat(context.currentLessonSection()).isEqualTo("回合流程");
             assertThat(context.previousQuestion()).isEqualTo("前一个问题");
             assertThat(context.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
             assertThat(context.outputLanguage()).isEqualTo(PlayerLocale.EN);

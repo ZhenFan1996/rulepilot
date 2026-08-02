@@ -34,6 +34,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     })
     expect(router.currentRoute.value.name).toBe('lessons')
     expect(router.currentRoute.value.query.started).toBe('plan-1')
+    expect(fetchMock.mock.calls.some(([input, options]) =>
+      String(input).endsWith('/teaching-plans/plan-1/illustrated-lessons') && options?.method === 'POST')).toBe(true)
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })

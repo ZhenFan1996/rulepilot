@@ -42,7 +42,6 @@ function createRuling() {
     documentVersionId,
     answer: currentAnswer,
     answeredQuestion,
-    currentSectionTitle: () => 'Final scoring',
     csrfToken,
     onApplied,
     messages: {
@@ -85,7 +84,6 @@ describe('useConfirmedRuling', () => {
     expect(fixture.onApplied).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ruling-1' }),
       'How is a tie resolved?',
-      'Final scoring',
     )
   })
 

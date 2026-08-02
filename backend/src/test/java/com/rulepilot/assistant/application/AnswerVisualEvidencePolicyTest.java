@@ -49,7 +49,7 @@ class AnswerVisualEvidencePolicyTest {
         ModelRequest request = new ModelRequest(
                 "What does this icon mean?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(
                         chunkId,
                         "RULES",
@@ -70,7 +70,7 @@ class AnswerVisualEvidencePolicyTest {
         ModelRequest request = new ModelRequest(
                 "What happens when two players choose the same number?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(
                         chunkId,
                         "ROUND_STRUCTURE",
@@ -93,7 +93,7 @@ class AnswerVisualEvidencePolicyTest {
         return new ModelRequest(
                 "What resource does this icon represent?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(
                         new EvidenceInput(operationalChunk, "RULES", "Operation", operationalExcerpt, 2, 2),
                         new EvidenceInput(referenceChunk, "COMPONENTS", "Legend", referenceExcerpt, 5, 5)));

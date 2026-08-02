@@ -20,7 +20,6 @@ const answered = {
 }
 
 const baseProps = {
-  currentSection: { position: 2, title: '完成本轮' },
   question: '',
   answer: null,
   answeredQuestion: '',

@@ -28,15 +28,11 @@ public class QuestionUnderstandingController {
     QuestionResponse understand(@PathVariable UUID versionId, @RequestBody QuestionRequest request) {
         UnderstoodQuestion result = understanding.understand(
                 request.question(),
-                new QuestionContext(
-                        versionId,
-                        request.currentLessonSection()));
+                new QuestionContext(versionId));
         return QuestionResponse.from(result);
     }
 
-    record QuestionRequest(
-            String question,
-            String currentLessonSection) {}
+    record QuestionRequest(String question) {}
 
     record QuestionResponse(
             UUID documentVersionId,
@@ -45,8 +41,7 @@ public class QuestionUnderstandingController {
             QuestionType type,
             List<String> terms,
             Set<MissingQuestionContext> missingContext,
-            boolean needsClarification,
-            String currentLessonSection) {
+            boolean needsClarification) {
 
         static QuestionResponse from(UnderstoodQuestion result) {
             return new QuestionResponse(
@@ -56,8 +51,7 @@ public class QuestionUnderstandingController {
                     result.type(),
                     result.terms(),
                     result.missingContext(),
-                    result.needsClarification(),
-                    result.currentLessonSection());
+                    result.needsClarification());
         }
     }
 }

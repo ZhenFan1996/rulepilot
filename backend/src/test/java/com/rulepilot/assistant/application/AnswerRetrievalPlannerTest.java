@@ -2,6 +2,7 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.LearningIntent;
@@ -21,11 +22,10 @@ class AnswerRetrievalPlannerTest {
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
                 QuestionType.RULE_QUERY,
                 List.of("抽骰区", "骰子"),
-                Set.of(),
-                "ROUND_STRUCTURE");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+                question, new QuestionContext(UUID.randomUUID()));
 
         assertThat(intents)
                 .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
@@ -45,11 +45,10 @@ class AnswerRetrievalPlannerTest {
                 "我结束自己的回合后，事件牌要怎样处理？",
                 QuestionType.RULE_QUERY,
                 List.of("回合", "事件牌"),
-                Set.of(),
-                "ROUND_STRUCTURE");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(UUID.randomUUID(), "ROUND_STRUCTURE", "TURN", 4, Set.of()));
+                question, new QuestionContext(UUID.randomUUID()));
 
         assertThat(intents)
                 .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
@@ -69,12 +68,11 @@ class AnswerRetrievalPlannerTest {
                 "万能牌能匹配行动花色吗？",
                 QuestionType.RULE_QUERY,
                 List.of("万能牌", "花色"),
-                Set.of(),
-                "ACTIONS");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(UUID.randomUUID(), "cards-and-suits", null, 4, Set.of()),
+                new QuestionContext(UUID.randomUUID()),
                 List.of("wild card matching action suit", "wild card matching action suit", "ignored"));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
@@ -92,12 +90,11 @@ class AnswerRetrievalPlannerTest {
                 "有人到30名声后立刻结束吗？承诺货物何时计分？平局怎么处理？",
                 QuestionType.RULE_QUERY,
                 List.of("名声", "承诺货物", "平局"),
-                Set.of(),
-                null);
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(versionId, "游戏结束与最终计分", null, 4, Set.of()),
+                new QuestionContext(versionId),
                 List.of("end game pledged cargo scoring tie breaker", "fame end gold tie"));
 
         assertThat(intents.getFirst().query()).contains(
@@ -118,10 +115,9 @@ class AnswerRetrievalPlannerTest {
                 "list all four blue, four red, and four green abilities, including each cost and timing.",
                 QuestionType.RULE_QUERY,
                 List.of("abilities", "cost", "timing"),
-                Set.of(),
-                null);
+                Set.of());
 
-        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId, null));
+        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .contains("list all four blue", "four red", "four green abilities")
@@ -137,17 +133,16 @@ class AnswerRetrievalPlannerTest {
                 "can i pay one coin and move one space?",
                 QuestionType.SITUATION_QUERY,
                 List.of("coin", "move"),
-                Set.of(),
-                null);
+                Set.of());
 
-        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId, null));
+        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId));
 
         assertThat(intents).hasSize(2);
         assertThat(intents.getFirst().query()).isEqualTo("can i pay one coin and move one space?");
     }
 
     @Test
-    void buildsPrimaryAndContextualSupplementaryIntents() {
+    void derivesActionScopeFromTheQuestionInsteadOfCallerContext() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -155,9 +150,8 @@ class AnswerRetrievalPlannerTest {
                 "can i play this card now?",
                 QuestionType.SITUATION_QUERY,
                 List.of("play", "card"),
-                Set.of(),
-                "ACTIONS");
-        var context = new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of());
+                Set.of());
+        var context = new QuestionContext(versionId);
 
         var intents = AnswerRetrievalPlanner.plan(question, context);
 
@@ -165,14 +159,14 @@ class AnswerRetrievalPlannerTest {
         assertThat(intents.getFirst().query()).isEqualTo(question.normalizedQuestion());
         assertThat(intents.getFirst().sectionTypes()).isEmpty();
         assertThat(intents.get(1).query())
-                .contains("legal action", "ACTIONS")
+                .contains("legal action")
                 .doesNotContain("ACTION PHASE", "4 players", "4人");
         assertThat(intents.get(1).sectionTypes()).contains("ACTIONS");
         assertThat(intents.get(1).currentSectionType()).isEqualTo("ACTIONS");
     }
 
     @Test
-    void scopesADirectSetupQuestionWhenThePlayerNamesTheSameActiveChapter() {
+    void scopesADirectSetupQuestionFromTheQuestionText() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -180,12 +174,11 @@ class AnswerRetrievalPlannerTest {
                 "开局准备时，玩家需要先完成哪些关键步骤？",
                 QuestionType.RULE_QUERY,
                 List.of("开局", "准备", "步骤"),
-                Set.of(),
-                "SETUP");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(versionId, "SETUP", null, null, Set.of()),
+                new QuestionContext(versionId),
                 List.of("Root setup steps in order"));
 
         assertThat(intents.getFirst().sectionTypes()).containsExactly("SETUP");
@@ -193,7 +186,7 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void infersScoringScopeWithoutTrustingUnknownSectionNames() {
+    void infersScoringScopeFromTheQuestionText() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -201,14 +194,13 @@ class AnswerRetrievalPlannerTest {
                 "how are points scored?",
                 QuestionType.RULE_QUERY,
                 List.of("points", "scored"),
-                Set.of(),
-                null);
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, "user supplied section", null, null, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents.get(1).sectionTypes()).containsExactly("SCORING");
-        assertThat(intents.get(1).currentSectionType()).isNull();
+        assertThat(intents.get(1).currentSectionType()).isEqualTo("SCORING");
     }
 
     @Test
@@ -220,11 +212,10 @@ class AnswerRetrievalPlannerTest {
                 "when does the game end? how are ties resolved?",
                 QuestionType.RULE_QUERY,
                 List.of("game", "end", "ties"),
-                Set.of(),
-                null);
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents).hasSize(4);
         assertThat(intents.getFirst().query()).contains("end condition", "final scoring", "tie");
@@ -246,11 +237,10 @@ class AnswerRetrievalPlannerTest {
                 "我的回合能先激活潮汐门，再移动船只吗？",
                 QuestionType.SITUATION_QUERY,
                 List.of("潮汐门", "船只"),
-                Set.of(),
-                "ACTIONS");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .allMatch(query -> !query.contains("moon") && !query.contains("probe") && !query.contains("publicity"))
@@ -267,16 +257,15 @@ class AnswerRetrievalPlannerTest {
                 "穿过潮汐门需要满足什么条件，费用怎么算？",
                 QuestionType.SITUATION_QUERY,
                 List.of("潮汐门", "条件", "费用"),
-                Set.of(),
-                "ACTIONS");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .anyMatch(query -> query.contains("潮汐门"))
                 .allMatch(query -> !query.contains("moon") && !query.contains("planet") && !query.contains("probe"));
-        assertThat(intents.getLast().sectionTypes()).contains("ACTIONS");
+        assertThat(intents.getLast().sectionTypes()).isEmpty();
     }
 
     @Test
@@ -288,14 +277,11 @@ class AnswerRetrievalPlannerTest {
                 "那还能再做一次吗？",
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 List.of(),
-                Set.of(),
-                "ACTIONS");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(
-                        versionId, "ACTIONS", null, 4, Set.of(),
-                        "完成主要行动后还能执行自由行动吗？"));
+                new QuestionContext(versionId, "完成主要行动后还能执行自由行动吗？", null, PlayerLocale.ZH_CN));
 
         assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
                 .anyMatch(query -> query.contains("完成主要行动后还能执行自由行动吗"))
@@ -306,7 +292,7 @@ class AnswerRetrievalPlannerTest {
     }
 
     @Test
-    void scopesAnExampleRequestAndSearchesForExecutableDetails() {
+    void searchesForExampleDetailsWithoutInventingAChapterScope() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -314,21 +300,19 @@ class AnswerRetrievalPlannerTest {
                 "请走一个具体例子。",
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 List.of(),
-                Set.of(),
-                "ACTIONS");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(
-                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.EXAMPLE));
+                new QuestionContext(versionId, null, LearningIntent.EXAMPLE, PlayerLocale.ZH_CN));
 
-        assertThat(intents.getFirst().sectionTypes()).containsExactly("ACTIONS");
-        assertThat(intents.getFirst().currentSectionType()).isEqualTo("ACTIONS");
+        assertThat(intents.getFirst().sectionTypes()).isEmpty();
+        assertThat(intents.getFirst().currentSectionType()).isNull();
         assertThat(intents.getLast().query()).contains("worked example", "cost", "result");
     }
 
     @Test
-    void mapsAgentGeneratedLessonTopicsBackToAnAllowedRuleScope() {
+    void doesNotInventAChapterScopeForASimplificationRequest() {
         UUID versionId = UUID.randomUUID();
         UnderstoodQuestion question = new UnderstoodQuestion(
                 versionId,
@@ -336,22 +320,13 @@ class AnswerRetrievalPlannerTest {
                 "请讲简单一点。",
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 List.of(),
-                Set.of(),
-                "turn-structure 回合结构与自由行动 core_loop first_round");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
                 question,
-                new QuestionContext(
-                        versionId,
-                        "turn-structure 回合结构与自由行动 core_loop first_round",
-                        null,
-                        4,
-                        Set.of(),
-                        null,
-                        LearningIntent.SIMPLIFY));
+                new QuestionContext(versionId, null, LearningIntent.SIMPLIFY, PlayerLocale.ZH_CN));
 
-        assertThat(intents).allSatisfy(intent ->
-                assertThat(intent.sectionTypes()).containsExactly("ROUND_STRUCTURE"));
+        assertThat(intents).allSatisfy(intent -> assertThat(intent.sectionTypes()).isEmpty());
     }
 
     @Test
@@ -363,11 +338,10 @@ class AnswerRetrievalPlannerTest {
                 "我出完所有手牌后，下一墩由谁领出？",
                 QuestionType.SITUATION_QUERY,
                 List.of("手牌", "下一墩"),
-                Set.of(),
-                "ROUND_STRUCTURE");
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, "ROUND_END", null, 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents)
                 .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
@@ -380,7 +354,7 @@ class AnswerRetrievalPlannerTest {
                     assertThat(intent.currentSectionType()).isNull();
                 });
         assertThat(intents.getLast().sectionTypes()).contains("ROUND_STRUCTURE", "PHASES");
-        assertThat(intents.getLast().currentSectionType()).isEqualTo("ROUND_STRUCTURE");
+        assertThat(intents.getLast().currentSectionType()).isEqualTo("PHASES");
     }
 
     @Test
@@ -392,11 +366,10 @@ class AnswerRetrievalPlannerTest {
                 "一轮结束时，颜料堆前的学生会全部回到玩家版图吗？",
                 QuestionType.RULE_QUERY,
                 List.of("一轮", "学生"),
-                Set.of(),
-                null);
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents)
                 .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)
@@ -419,11 +392,10 @@ class AnswerRetrievalPlannerTest {
                 "我能把剩下的骰子留到下一次轮到我时再用吗？",
                 QuestionType.RULE_QUERY,
                 List.of("骰子", "下一次"),
-                Set.of(),
-                null);
+                Set.of());
 
         var intents = AnswerRetrievalPlanner.plan(
-                question, new QuestionContext(versionId, null, null, 4, Set.of()));
+                question, new QuestionContext(versionId));
 
         assertThat(intents)
                 .filteredOn(intent -> intent.purpose() == AnswerRetrievalPlanner.RetrievalPurpose.CONDITION_PROCEDURE)

@@ -60,9 +60,9 @@ public class AnswerRegressionService {
                         testCase.question(),
                         new QuestionContext(
                                 documentVersionId,
-                                null,
                                 testCase.previousQuestion(),
-                                null),
+                                null,
+                                com.rulepilot.assistant.PlayerLocale.ZH_CN),
                         username,
                         documentVersionId);
                 long latency = Duration.between(started, Instant.now()).toMillis();

@@ -145,7 +145,13 @@ describe('PublicLessonView', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')).toBeTruthy()
+    const answerRequest = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')
+    expect(JSON.parse(String(answerRequest?.[1]?.body))).toMatchObject({
+      question: '玩家板先放哪里？',
+    })
+    expect(JSON.parse(String(answerRequest?.[1]?.body))).not.toHaveProperty('sectionPosition')
+    expect(wrapper.find('select').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
@@ -282,7 +288,10 @@ describe('PublicLessonView', () => {
     await flushPromises()
 
     const request = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')
-    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ language: 'en', question: 'Where does my mat go?' })
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({
+      language: 'en', question: 'Where does my mat go?',
+    })
+    expect(JSON.parse(String(request?.[1]?.body))).not.toHaveProperty('sectionPosition')
     expect(wrapper.text()).toContain('Place the mat in front of you.')
   })
 
