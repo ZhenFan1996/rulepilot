@@ -33,7 +33,6 @@ export interface OfflineRuling {
 
 export interface OfflineKnowledgeEntry {
   question: string
-  sectionTitle: string
   cachedAt: string
   answer: OfflineAnswer
   ruling: OfflineRuling | null
@@ -106,7 +105,6 @@ function isEntry(value: unknown): value is OfflineKnowledgeEntry {
   if (!value || typeof value !== 'object') return false
   const entry = value as Record<string, unknown>
   return isString(entry.question, 800)
-    && isString(entry.sectionTitle, 500)
     && isString(entry.cachedAt, 40)
     && !Number.isNaN(Date.parse(entry.cachedAt))
     && isAnswer(entry.answer)
@@ -121,7 +119,10 @@ export function loadOfflineKnowledge(planId: string): OfflineKnowledgeEntry[] {
     if (!parsed || typeof parsed !== 'object') return []
     const record = parsed as { version?: unknown; entries?: unknown }
     if (record.version !== VERSION || !Array.isArray(record.entries)) return []
-    return record.entries.filter(isEntry).slice(0, MAX_ENTRIES)
+    return record.entries
+      .filter(isEntry)
+      .slice(0, MAX_ENTRIES)
+      .map(({ question, cachedAt, answer, ruling }) => ({ question, cachedAt, answer, ruling }))
   } catch {
     return []
   }
@@ -140,23 +141,21 @@ function save(planId: string, entries: OfflineKnowledgeEntry[]) {
 export function cacheOfflineAnswer(
   planId: string,
   question: string,
-  sectionTitle: string,
   answer: unknown,
 ) {
   const normalized = question.trim()
-  if (!isString(normalized, 800) || !isString(sectionTitle, 500) || !isAnswer(answer)) return
+  if (!isString(normalized, 800) || !isAnswer(answer)) return
   const entries = loadOfflineKnowledge(planId).filter((entry) => entry.question !== normalized)
-  save(planId, [{ question: normalized, sectionTitle, cachedAt: new Date().toISOString(), answer, ruling: null }, ...entries])
+  save(planId, [{ question: normalized, cachedAt: new Date().toISOString(), answer, ruling: null }, ...entries])
 }
 
 export function cacheOfflineRuling(
   planId: string,
   question: string,
-  sectionTitle: string,
   ruling: unknown,
 ) {
   const normalized = question.trim()
-  if (!isString(normalized, 800) || !isString(sectionTitle, 500) || !isRuling(ruling)) return
+  if (!isString(normalized, 800) || !isRuling(ruling)) return
   const entries = loadOfflineKnowledge(planId)
   const existing = entries.find((entry) => entry.question === normalized)
   const answer: OfflineAnswer = existing?.answer ?? {
@@ -171,6 +170,6 @@ export function cacheOfflineRuling(
     confirmedRulingVersion: ruling.version,
     clarification: null,
   }
-  const updated = { question: normalized, sectionTitle, cachedAt: new Date().toISOString(), answer, ruling }
+  const updated = { question: normalized, cachedAt: new Date().toISOString(), answer, ruling }
   save(planId, [updated, ...entries.filter((entry) => entry.question !== normalized)])
 }

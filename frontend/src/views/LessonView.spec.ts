@@ -120,12 +120,14 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
-    expect(wrapper.text()).toContain('人数、轮次和实时局面不会参与回答')
     expect(wrapper.text()).toContain('图标速查表')
     expect(wrapper.text()).toContain('执行一次行动。')
     expect(wrapper.get('img[alt*="行动图标"]').attributes('src'))
       .toContain('/illustrated-lessons/latest/icon-glossary/icons/icon-occurrence-1/image')
-    expect(wrapper.find('#lesson-question-panel').element.tagName).toBe('SECTION')
+    expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
+    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toBe('问规则书')
+    expect(wrapper.find('a[href^="/lesson/plan-1/questions?section="]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
     expect(wrapper.find('img[alt*="主棋盘区域"]').attributes('src'))
@@ -220,7 +222,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('完整基础讲解已经可用')
     expect(wrapper.text()).toContain('后台只是在核对和修正细节')
     expect(wrapper.text()).toContain('我的图文讲解')
-    expect(wrapper.text()).toContain('问这一章')
+    expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('开始对局')
     expect(wrapper.text()).not.toContain('4 人 ·')
     wrapper.unmount()
@@ -345,144 +347,13 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
-  it('does not attach an answer from the previous guide after navigating away', async () => {
-    let resolveAnswer: ((response: Response) => void) | undefined
-    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') return Promise.resolve(Response.json(planFixture('plan-1', '第一份规则')))
-      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
-        return Promise.resolve(Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, '第一份讲解')] }))
-      }
-      if (path === '/api/v1/teaching-plans/plan-2') return Promise.resolve(Response.json(planFixture('plan-2', '第二份规则')))
-      if (path === '/api/v1/teaching-plans/plan-2/illustrated-lessons/latest') {
-        return Promise.resolve(Response.json({ id: 'lesson-2', status: 'COMPLETE', sections: [section(1, '第二份讲解')] }))
-      }
-      if (path === '/api/auth/csrf') return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
-      if (path.endsWith('/answers') && init?.method === 'POST') {
-        return new Promise<Response>((resolve) => { resolveAnswer = resolve })
-      }
-      if (path.includes('/api/v1/assistant-runs/latest')) return Promise.resolve(new Response(null, { status: 404 }))
-      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'player', roles: ['USER'] }))
-      return Promise.resolve(new Response(null, { status: 404 }))
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: {
-        plugins: [router],
-        stubs: {
-          AppShell: { template: '<div><slot /></div>' },
-          CardOcrCapture: true,
-          VoiceQuestionCapture: true,
-        },
-      },
-    })
-    await flushPromises()
-
-    await wrapper.get('#lesson-question').setValue('第一份规则里的问题')
-    await wrapper.get('#lesson-question-panel form').trigger('submit')
-    await flushPromises()
-
-    await router.push('/lesson/plan-2')
-    await flushPromises()
-    resolveAnswer!(Response.json({
-      assistantRunId: 'answer-run-1',
-      answer: {
-        status: 'ANSWERED', shortVerdict: '陈旧答案', explanation: '不应出现在第二份讲解中。', citations: [], exceptions: [],
-        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null, clarification: null,
-      },
-    }))
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('第二份讲解')
-    expect(wrapper.text()).not.toContain('陈旧答案')
-    wrapper.unmount()
-  })
-
-  it('does not attach an answer to a different chapter in the same guide', async () => {
-    let resolveAnswer: ((response: Response) => void) | undefined
-    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Promise.resolve(Response.json({
-          ...planFixture('plan-1', '同一份规则'),
-          sections: [
-            { position: 1, title: '第一节', visualEvidenceRecommended: true },
-            { position: 2, title: '第二节', visualEvidenceRecommended: false },
-          ],
-        }))
-      }
-      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
-        return Promise.resolve(Response.json({
-          id: 'lesson-1', status: 'COMPLETE', sections: [section(1, '第一节'), section(2, '第二节')],
-        }))
-      }
-      if (path === '/api/auth/csrf') return Promise.resolve(Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
-      if (path.endsWith('/answers') && init?.method === 'POST') {
-        return new Promise<Response>((resolve) => { resolveAnswer = resolve })
-      }
-      if (path.includes('/api/v1/assistant-runs/latest')) return Promise.resolve(new Response(null, { status: 404 }))
-      if (path === '/api/auth/session') return Promise.resolve(Response.json({ username: 'player', roles: ['USER'] }))
-      return Promise.resolve(new Response(null, { status: 404 }))
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const router = createMemoryRouter()
-    await router.push('/lesson/plan-1')
-    await router.isReady()
-    const wrapper = mount(LessonView, {
-      global: {
-        plugins: [router],
-        stubs: {
-          AppShell: { template: '<div><slot /></div>' },
-          CardOcrCapture: true,
-          VoiceQuestionCapture: true,
-        },
-      },
-    })
-    await flushPromises()
-
-    await wrapper.get('#lesson-question').setValue('第一节的问题')
-    await wrapper.get('#lesson-question-panel form').trigger('submit')
-    await flushPromises()
-
-    const secondChapter = wrapper.findAll('button').find((button) => button.text().trim() === '第 2 章 · 第二节')
-    await secondChapter!.trigger('click')
-    expect(wrapper.text()).toContain('第 2 章 · 第二节')
-
-    resolveAnswer!(Response.json({
-      assistantRunId: 'answer-run-1',
-      answer: {
-        status: 'ANSWERED', shortVerdict: '陈旧章节答案', explanation: '不应出现在第二节中。', citations: [], exceptions: [],
-        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null, clarification: null,
-      },
-    }))
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('第二节')
-    expect(wrapper.text()).not.toContain('陈旧章节答案')
-    wrapper.unmount()
-  })
-
-  it('sends an English grounded example request from an English reader', async () => {
+  it('keeps the focused English reader separate from the English Q&A entry', async () => {
     setLocale('en')
-    let answerRequest: Record<string, unknown> | null = null
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
-      if (path === '/api/v1/teaching-plans/plan-1') {
-        return Response.json({
-          ...planFixture('plan-1', 'First game'),
-          sections: [{ position: 1, title: 'First round', visualEvidenceRecommended: false }],
-        })
-      }
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Deep Space'))
       if (path.endsWith('/illustrated-lessons/latest')) {
         return Response.json({ id: 'lesson-1', status: 'COMPLETE', sections: [section(1, 'First round')] })
-      }
-      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      if (path.endsWith('/answers') && init?.method === 'POST') {
-        answerRequest = JSON.parse(String(init.body)) as Record<string, unknown>
-        return new Response(null, { status: 503 })
       }
       if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -494,33 +365,18 @@ describe('LessonView progressive reading', () => {
     const wrapper = mount(LessonView, {
       global: {
         plugins: [router],
-        stubs: { AppShell: { template: '<div><slot /></div>' }, CardOcrCapture: true, VoiceQuestionCapture: true },
+        stubs: { AppShell: { template: '<div><slot /></div>' } },
       },
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('← My guides')
-    expect(wrapper.text()).toContain('Read publicly')
     expect(wrapper.text()).toContain('My illustrated guide')
-    expect(wrapper.text()).toContain('Player count, round, and live table state do not affect the answer')
-    expect(wrapper.text()).not.toContain('Start a game')
-    expect(wrapper.text()).toContain('Guide diagnostics are unavailable, but you can keep reading.')
-    expect(wrapper.text()).toContain('Audio is unavailable, so the complete reading guide is still here.')
-    expect(wrapper.text()).toContain('Video is unavailable. You can still use reading or audio.')
+    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toBe('Ask the rulebook')
+    expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.text()).toContain('Rulebook pages 1')
-    await wrapper.findAll('button').find((button) => button.text() === 'Chapter 1 · First round')!.trigger('click')
-    await wrapper.findAll('button').find((button) => button.text() === 'Walk through an example')!.trigger('click')
-    await flushPromises()
-
-    expect(answerRequest).toMatchObject({
-      question: 'Using the rules for “First round”, walk through one concrete, legal table example.',
-      currentLessonSection: 'topic-1 First round setup',
-      learningIntent: 'EXAMPLE',
-      language: 'en',
-    })
-    expect(answerRequest).not.toHaveProperty('playerCount')
     wrapper.unmount()
   })
+
 })
 
 function planFixture(id: string, gameTitle: string) {
@@ -619,6 +475,7 @@ function createMemoryRouter() {
       { path: '/teach', name: 'teach', component: Empty },
       { path: '/lessons', name: 'lessons', component: Empty },
       { path: '/lesson/:planId', name: 'lesson', component: LessonView },
+      { path: '/lesson/:planId/questions', name: 'lesson-questions', component: Empty },
       { path: '/read/:planId', name: 'public-lesson', component: Empty },
       { path: '/table/:planId', name: 'table-mode', component: Empty },
       { path: '/account', name: 'account', component: Empty },

@@ -35,14 +35,13 @@ public interface RuleAnswerModel {
         }
     }
 
-    record RetrievalQueryRequest(String question, String previousQuestion, String currentLessonSection) {
+    record RetrievalQueryRequest(String question, String previousQuestion) {
         public RetrievalQueryRequest {
             if (question == null || question.isBlank() || question.length() > 800) {
                 throw new IllegalArgumentException("retrieval query request is invalid");
             }
             question = question.strip();
             previousQuestion = optional(previousQuestion);
-            currentLessonSection = optional(currentLessonSection);
         }
 
         private static String optional(String value) {
@@ -51,13 +50,11 @@ public interface RuleAnswerModel {
     }
 
     record AnswerContext(
-            String currentLessonSection,
             String previousQuestion,
             LearningIntent learningIntent,
             PlayerLocale outputLanguage) {
 
         public AnswerContext {
-            currentLessonSection = optional(currentLessonSection);
             previousQuestion = optional(previousQuestion);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
         }

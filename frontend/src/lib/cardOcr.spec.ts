@@ -11,13 +11,13 @@ describe('card OCR text', () => {
 
   it('turns confirmed OCR text into an explicit grounded question', () => {
     expect(buildCardQuestion('Gain 2 light.')).toBe(
-      '请根据当前规则版本解释这张卡牌在本节中如何执行：\nGain 2 light.',
+      '请根据当前规则版本解释这张卡牌如何执行：\nGain 2 light.',
     )
   })
 
   it('keeps the grounding instruction in the player-selected language', () => {
-    expect(buildCardQuestion('Gain 2 light.', 'Explain how this card is resolved in this chapter using the current rulebook version:\n')).toBe(
-      'Explain how this card is resolved in this chapter using the current rulebook version:\nGain 2 light.',
+    expect(buildCardQuestion('Gain 2 light.', 'Explain how this card is resolved using the current rulebook version:\n')).toBe(
+      'Explain how this card is resolved using the current rulebook version:\nGain 2 light.',
     )
   })
 

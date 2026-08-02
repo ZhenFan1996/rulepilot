@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.GeneratedContentCritic;
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
@@ -72,8 +73,7 @@ class AnswerCritiquePolicyTest {
                 "还能再做一次吗",
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 List.of("再做一次"),
-                Set.of(),
-                "行动");
+                Set.of());
         UUID runId = UUID.randomUUID();
 
         GeneratedContentCritic.ReviewRequest request = AnswerCritiquePolicy.request(
@@ -115,8 +115,7 @@ class AnswerCritiquePolicyTest {
     }
 
     private QuestionContext context(String previousQuestion, LearningIntent learningIntent) {
-        return new QuestionContext(
-                versionId, "行动", "主要行动", 4, Set.of(), previousQuestion, learningIntent);
+        return new QuestionContext(versionId, previousQuestion, learningIntent, PlayerLocale.ZH_CN);
     }
 
     private UnderstoodQuestion question(QuestionType type, String normalizedQuestion) {
@@ -126,8 +125,7 @@ class AnswerCritiquePolicyTest {
                 normalizedQuestion,
                 type,
                 List.of("行动"),
-                Set.of(),
-                "行动");
+                Set.of());
     }
 
     private StructuredRuleAnswer answer(AnswerConfidence confidence, List<RuleCitation> citations) {

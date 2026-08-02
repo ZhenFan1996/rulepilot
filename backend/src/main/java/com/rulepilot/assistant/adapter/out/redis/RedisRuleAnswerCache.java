@@ -82,13 +82,8 @@ public class RedisRuleAnswerCache implements RuleAnswerCache {
     private String redisKey(AnswerCacheKey key) {
         String canonical = String.join("\u001f",
                 key.normalizedQuestion(),
-                value(key.currentLessonSection()),
                 key.outputLanguage().name());
         return KEY_PREFIX + key.ruleDataVersion() + ":" + key.documentVersionId() + ":" + sha256(canonical);
-    }
-
-    private String value(String value) {
-        return value == null ? "" : value.strip();
     }
 
     private String sha256(String value) {

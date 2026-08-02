@@ -6,7 +6,6 @@ import { setLocale } from '@/lib/locale'
 
 const entries = [{
   question: '平局时怎么判断？',
-  sectionTitle: '最终计分',
   cachedAt: '2026-07-24T12:30:00.000Z',
   answer: {
     status: 'ANSWERED' as const, shortVerdict: '金币更多的玩家获胜。', explanation: '比较金币数量。',

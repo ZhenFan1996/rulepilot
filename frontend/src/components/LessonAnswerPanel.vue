@@ -10,13 +10,7 @@ import type {
   StructuredRuleAnswer,
 } from '@/composables/useLessonAnswers'
 
-interface LessonAnswerSection {
-  position: number
-  title: string
-}
-
 const props = defineProps<{
-  currentSection: LessonAnswerSection | null
   question: string
   answer: StructuredRuleAnswer | null
   answeredQuestion: string
@@ -122,9 +116,8 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
         <div>
           <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">{{ t('lesson.answer.eyebrow') }}</p>
           <h3 id="lesson-question-title" class="mt-1 font-display text-2xl font-semibold">{{ t('lesson.answer.title') }}</h3>
-          <p class="mt-2 text-sm leading-6 text-ink/55">{{ t('lesson.answer.description', { section: currentSection?.title ?? t('lesson.answer.sectionFallback') }) }}</p>
+          <p class="mt-2 text-sm leading-6 text-ink/55">{{ t('lesson.answer.description') }}</p>
         </div>
-        <span v-if="currentSection" class="rounded-full bg-indigo/8 px-3 py-1.5 text-xs font-semibold text-indigo">{{ t('lesson.answer.sectionContext', { position: currentSection.position }) }}</span>
       </div>
 
       <ol v-if="previousAnswerTurns.length" class="mt-5 space-y-3" :aria-label="t('lesson.answer.thread')">

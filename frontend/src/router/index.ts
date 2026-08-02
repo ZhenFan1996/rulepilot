@@ -5,6 +5,7 @@ import GameShelfView from '@/views/GameShelfView.vue'
 import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
 import LessonView from '@/views/LessonView.vue'
+import LessonQuestionsView from '@/views/LessonQuestionsView.vue'
 import PublicLessonView from '@/views/PublicLessonView.vue'
 import PublicLibraryView from '@/views/PublicLibraryView.vue'
 import LessonsView from '@/views/LessonsView.vue'
@@ -12,7 +13,6 @@ import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
 import ModelSettingsView from '@/views/ModelSettingsView.vue'
 import AccountView from '@/views/AccountView.vue'
-import PlaceholderView from '@/views/PlaceholderView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -68,6 +68,11 @@ const router = createRouter({
       component: LessonView,
     },
     {
+      path: '/lesson/:planId/questions',
+      name: 'lesson-questions',
+      component: LessonQuestionsView,
+    },
+    {
       path: '/read/:planId',
       name: 'public-lesson',
       component: PublicLessonView,
@@ -81,12 +86,6 @@ const router = createRouter({
       path: '/table/:planId',
       name: 'table-mode',
       redirect: (to) => ({ name: 'lesson', params: { planId: to.params.planId } }),
-    },
-    {
-      path: '/questions',
-      name: 'questions',
-      component: PlaceholderView,
-      meta: { title: '讲解中的问题，都留在原来的位置', description: '打开一份讲解后，可以直接针对当前章节提问。这样不用再次选择游戏和版本。' },
     },
   ],
 })

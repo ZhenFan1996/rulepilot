@@ -7,7 +7,6 @@ import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
 
 interface UseLessonQuestionInputOptions {
   question: Ref<string>
-  currentSectionTitle: () => string | null
   submitQuestion: (text: string, learningIntent: LearningIntent | null) => Promise<void>
   clearAnswerFeedback: () => void
   closeCardOcr: () => void
@@ -17,20 +16,19 @@ export function useLessonQuestionInput(options: UseLessonQuestionInputOptions) {
   const { t } = useLocale()
 
   function learningPrompt(intent: LearningIntent) {
-    const title = options.currentSectionTitle() ?? t('lesson.answer.sectionFallback')
     switch (intent) {
       case 'SIMPLIFY':
-        return t('lesson.answer.prompt.simplify', { title })
+        return t('lesson.answer.prompt.simplify')
       case 'EXAMPLE':
-        return t('lesson.answer.prompt.example', { title })
+        return t('lesson.answer.prompt.example')
       case 'WHY':
-        return t('lesson.answer.prompt.why', { title })
+        return t('lesson.answer.prompt.why')
       case 'EXCEPTIONS':
-        return t('lesson.answer.prompt.exceptions', { title })
+        return t('lesson.answer.prompt.exceptions')
     }
   }
 
-  async function askCurrentSection() {
+  async function askQuestion() {
     await options.submitQuestion(options.question.value.trim(), null)
   }
 
@@ -52,7 +50,7 @@ export function useLessonQuestionInput(options: UseLessonQuestionInputOptions) {
   }
 
   return {
-    askCurrentSection,
+    askQuestion,
     requestLearningHelp,
     useCardText,
     useVoiceTranscript,

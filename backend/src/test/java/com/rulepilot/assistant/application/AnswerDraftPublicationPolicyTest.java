@@ -129,7 +129,7 @@ class AnswerDraftPublicationPolicyTest {
         return new RuleAnswerModel.ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new RuleAnswerModel.AnswerContext(null, null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
+                new RuleAnswerModel.AnswerContext(null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
                 List.of(evidence));
     }
 

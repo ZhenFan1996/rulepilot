@@ -1,7 +1,6 @@
 <question_context>
   <question_type>{questionType}</question_type>
   <learning_intent>{learningIntent}</learning_intent>
-  <current_lesson_section>{lessonSection}</current_lesson_section>
   <output_language>{outputLanguage}</output_language>
 </question_context>
 

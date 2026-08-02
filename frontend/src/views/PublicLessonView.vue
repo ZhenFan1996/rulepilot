@@ -81,7 +81,6 @@ const iconGlossary = ref<RulebookIconGlossary | null>(null)
 const iconGlossaryLoading = ref(true)
 const iconGlossaryError = ref('')
 const publicQuestion = ref('')
-const selectedSectionPosition = ref<number | null>(null)
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
@@ -359,15 +358,6 @@ function answerWarningMessage(warning: PublicAnswer['answer']['warnings'][number
   return t('lesson.answer.warning.REVIEW_UNAVAILABLE')
 }
 
-function askAboutSection(section: LessonSection) {
-  selectedSectionPosition.value = section.position
-  publicQuestion.value = locale.value === 'en'
-    ? `Please explain the step people most often get wrong in “${section.title}”, then walk through one rulebook-supported example.`
-    : `请把“${section.title}”这一章最容易弄错的步骤讲清楚，并走一个规则书允许的例子。`
-  document.getElementById('public-question')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  window.setTimeout(() => (document.getElementById('public-question') as HTMLTextAreaElement | null)?.focus(), 250)
-}
-
 async function submitPublicQuestion() {
   const question = publicQuestion.value.trim()
   if (!question || publicAnswerLoading.value || !planId.value || !readerScopeReady.value) return
@@ -380,7 +370,6 @@ async function submitPublicQuestion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         question,
-        sectionPosition: selectedSectionPosition.value,
         previousQuestion: previousTurn?.question ?? null,
         language: locale.value,
       }),
@@ -476,16 +465,6 @@ watch([locale, planId], () => {
             </div>
           </div>
 
-          <div class="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <label class="text-sm font-semibold text-ink/70">{{ t('public.question.section') }} <span class="font-normal text-ink/40">{{ t('public.question.optional') }}</span>
-              <select v-model="selectedSectionPosition" :disabled="publicAnswerLoading" class="mt-2 min-h-11 w-full rounded-xl border border-ink/15 bg-paper px-3 font-normal outline-none focus:border-indigo disabled:opacity-50">
-                <option :value="null">{{ t('public.question.all') }}</option>
-                <option v-for="section in publicLesson.lesson.sections" :key="section.position" :value="section.position">{{ t('public.question.chapter', { position: section.position, title: section.title }) }}</option>
-              </select>
-            </label>
-            <div class="self-end rounded-xl border border-indigo/10 bg-paper px-4 py-3 text-xs leading-5 text-ink/50">{{ t('public.question.exampleLabel') }}<br><span class="font-semibold text-ink/65">{{ t('public.question.example') }}</span></div>
-          </div>
-
           <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
           <div v-else-if="publicAnswerLoading" class="mt-5 rounded-2xl border border-indigo/12 bg-paper p-5" role="status" aria-live="polite">
             <div class="flex items-center gap-3"><span class="size-3 animate-pulse rounded-full bg-copper" /><p class="text-sm font-semibold">{{ t('public.question.stage') }}</p></div>
@@ -542,7 +521,7 @@ watch([locale, planId], () => {
         </section>
 
         <section v-for="section in publicLesson.lesson.sections" :key="section.position" class="border-b border-ink/10 py-10">
-          <div class="flex flex-wrap items-center justify-between gap-3"><p class="text-sm font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p><button type="button" class="rounded-lg border border-indigo/20 px-3 py-2 text-xs font-semibold text-indigo hover:bg-indigo/5" @click="askAboutSection(section)">{{ t('public.question.askChapter') }}</button></div>
+          <p class="text-sm font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
           <h2 class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ section.title }}</h2>
           <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
 

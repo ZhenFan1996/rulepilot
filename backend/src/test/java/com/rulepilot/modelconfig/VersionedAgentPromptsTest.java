@@ -231,10 +231,10 @@ class VersionedAgentPromptsTest {
                 .contains(
                         "{questionType}",
                         "{learningIntent}",
-                        "{lessonSection}",
                         "{outputLanguage}",
                         "A named state or relationship is not its definition")
-                .doesNotContain("{gamePhase}", "{playerCount}", "{activeExpansionCount}");
+                .doesNotContain(
+                        "{lessonSection}", "{gamePhase}", "{playerCount}", "{activeExpansionCount}");
         assertThat(prompts.lessonLocalizationSystem())
                 .contains(
                         "constrained translation",
@@ -246,7 +246,8 @@ class VersionedAgentPromptsTest {
         assertThat(prompts.answerRetrievalRewriteSystem())
                 .contains("retrieval", "English phrase", "search phrases", "untrusted data", "Return JSON only");
         assertThat(prompts.answerRetrievalRewriteUser())
-                .contains("{question}", "{previousQuestion}", "{lessonSection}");
+                .contains("{question}", "{previousQuestion}")
+                .doesNotContain("{lessonSection}");
         assertThat(prompts.criticSystem())
                 .contains(
                         "MISSING_EXCEPTION",

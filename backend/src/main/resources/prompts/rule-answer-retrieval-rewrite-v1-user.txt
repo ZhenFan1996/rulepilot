@@ -1,3 +1,2 @@
 <untrusted_current_question>{question}</untrusted_current_question>
 <untrusted_previous_question>{previousQuestion}</untrusted_previous_question>
-<lesson_section_hint>{lessonSection}</lesson_section_hint>

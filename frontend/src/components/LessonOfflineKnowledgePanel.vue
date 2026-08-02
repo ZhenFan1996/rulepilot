@@ -45,8 +45,7 @@ function entryCountLabel(count: number) {
           <summary class="cursor-pointer list-none">
             <span class="flex flex-wrap items-start justify-between gap-3">
               <span>
-                <span class="block text-xs font-semibold text-copper">{{ entry.sectionTitle }}</span>
-                <span class="mt-1 block font-semibold leading-6">{{ entry.question }}</span>
+                <span class="block font-semibold leading-6">{{ entry.question }}</span>
               </span>
               <span class="text-xs font-semibold text-ink/45">{{ entry.ruling ? t('lesson.reader.offline.confirmedRuling') : t('lesson.reader.offline.recentAnswer') }} · {{ cachedAtLabel(entry.cachedAt) }}</span>
             </span>

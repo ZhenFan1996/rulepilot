@@ -21,10 +21,6 @@ class AnswerCacheScopePolicyTest {
     void scopesAFollowUpByPolicyLanguageAndLearningIntentOnly() {
         var context = new QuestionContext(
                 documentVersionId,
-                "回合流程",
-                "行动阶段",
-                3,
-                Set.of(UUID.randomUUID()),
                 " 上一问是什么？ ",
                 LearningIntent.EXAMPLE,
                 PlayerLocale.EN);
@@ -40,7 +36,6 @@ class AnswerCacheScopePolicyTest {
             assertThat(scoped.ruleDataVersion()).isEqualTo(7);
             assertThat(scoped.normalizedQuestion())
                     .isEqualTo("EXAMPLE:answer-v99:EN:上一问是什么？ -> What happens after that?");
-            assertThat(scoped.currentLessonSection()).isEqualTo("回合流程");
             assertThat(scoped.outputLanguage()).isEqualTo(PlayerLocale.EN);
         });
     }
@@ -51,26 +46,9 @@ class AnswerCacheScopePolicyTest {
                 "answer-v99",
                 1,
                 question("How many cards can I draw?"),
-                new QuestionContext(documentVersionId, null));
+                new QuestionContext(documentVersionId));
 
         assertThat(key.normalizedQuestion()).isEqualTo("answer-v99:ZH_CN:How many cards can I draw?");
-    }
-
-    @Test
-    void legacyTableStateCannotPartitionTheSameRuleAnswer() {
-        var question = question("How many cards can I draw?");
-        var first = AnswerCacheScopePolicy.key(
-                "answer-v99",
-                3,
-                question,
-                new QuestionContext(documentVersionId, "ACTIONS", "FIRST_PHASE", 2, Set.of(UUID.randomUUID())));
-        var second = AnswerCacheScopePolicy.key(
-                "answer-v99",
-                3,
-                question,
-                new QuestionContext(documentVersionId, "ACTIONS", "FINAL_PHASE", 8, Set.of(UUID.randomUUID())));
-
-        assertThat(first).isEqualTo(second);
     }
 
     @Test
@@ -79,7 +57,7 @@ class AnswerCacheScopePolicyTest {
                         " ",
                         1,
                         question("How many cards can I draw?"),
-                        new QuestionContext(documentVersionId, null)))
+                        new QuestionContext(documentVersionId)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("answer cache policy version is required");
     }
@@ -91,7 +69,6 @@ class AnswerCacheScopePolicyTest {
                 normalizedQuestion,
                 QuestionType.RULE_QUERY,
                 List.of(),
-                Set.of(),
-                null);
+                Set.of());
     }
 }

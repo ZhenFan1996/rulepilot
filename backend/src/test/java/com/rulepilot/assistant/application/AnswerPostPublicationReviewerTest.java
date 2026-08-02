@@ -90,9 +90,8 @@ class AnswerPostPublicationReviewerTest {
                         "If a completed row has a disabled location, may I end the game?",
                         QuestionType.SITUATION_QUERY,
                         List.of("disabled location"),
-                        Set.of(),
-                        "Ending the game"),
-                new QuestionContext(versionId, null, null, null, Set.of()),
+                        Set.of()),
+                new QuestionContext(versionId),
                 "player",
                 null,
                 request(source),
@@ -140,7 +139,7 @@ class AnswerPostPublicationReviewerTest {
         AnswerPostPublicationReviewer.Result result = reviewer.review(
                 UUID.randomUUID(),
                 understood(versionId),
-                new QuestionContext(versionId, null, null, null, Set.of()),
+                new QuestionContext(versionId),
                 "player",
                 null,
                 request,
@@ -185,7 +184,7 @@ class AnswerPostPublicationReviewerTest {
         AnswerPostPublicationReviewer.Result result = reviewer.review(
                 UUID.randomUUID(),
                 understood(versionId),
-                new QuestionContext(versionId, null, null, null, Set.of()),
+                new QuestionContext(versionId),
                 "player",
                 null,
                 request(source),
@@ -224,7 +223,7 @@ class AnswerPostPublicationReviewerTest {
         AnswerPostPublicationReviewer.Result result = reviewer.review(
                 UUID.randomUUID(),
                 understood(versionId),
-                new QuestionContext(versionId, null, null, null, Set.of()),
+                new QuestionContext(versionId),
                 "player",
                 null,
                 request(source),
@@ -273,15 +272,14 @@ class AnswerPostPublicationReviewerTest {
                 "How often can I take the main action?",
                 QuestionType.RULE_QUERY,
                 List.of("main action"),
-                Set.of(),
-                null);
+                Set.of());
     }
 
     private static ModelRequest request(RuleEvidenceHit source) {
         return new ModelRequest(
                 "How often can I take the main action?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(new EvidenceInput(
                         source.chunkId(),
                         source.sectionType(),

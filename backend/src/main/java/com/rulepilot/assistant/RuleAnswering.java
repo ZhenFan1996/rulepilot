@@ -8,15 +8,14 @@ import java.util.UUID;
 public interface RuleAnswering {
 
     AnswerResult answerForPublicReader(
-            UUID documentVersionId, String question, String currentLessonSection, String previousQuestion);
+            UUID documentVersionId, String question, String previousQuestion);
 
     default AnswerResult answerForPublicReader(
             UUID documentVersionId,
             String question,
-            String currentLessonSection,
             String previousQuestion,
             PlayerLocale outputLanguage) {
-        return answerForPublicReader(documentVersionId, question, currentLessonSection, previousQuestion);
+        return answerForPublicReader(documentVersionId, question, previousQuestion);
     }
 
     /**

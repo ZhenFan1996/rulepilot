@@ -46,7 +46,7 @@ class AnswerRepairOutcomePolicyTest {
         return new ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, null, PlayerLocale.ZH_CN),
+                new AnswerContext(null, null, PlayerLocale.ZH_CN),
                 List.of(evidence));
     }
 

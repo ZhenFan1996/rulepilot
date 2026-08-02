@@ -8,6 +8,7 @@ import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
@@ -52,7 +53,7 @@ class StructuredRuleAnswerServiceTest {
                         List.of(source.chunkId()), List.of("Only count remaining coins."), "HIGH"));
 
         var answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).singleElement().satisfies(citation -> {
@@ -96,7 +97,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "我已经完成前置条件，现在可以结算这个行动吗？",
-                new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.answerBasis().name()).isEqualTo("GROUNDED_APPLICATION");
@@ -128,7 +129,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).doesNotContain("322c770b");
@@ -194,7 +195,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Is clearing three matching wildlife tokens optional?",
-                new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(captured.get().evidence()).singleElement().satisfies(source -> {
@@ -268,7 +269,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("弃骰区");
@@ -321,7 +322,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).contains(pageChunkId);
@@ -358,7 +359,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "抽骰区的骰子不够我本轮要抽的数量时，应该怎么办？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "DRAW", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(retrievalQueries).anyMatch(query -> query.contains("condition procedure")
@@ -411,7 +412,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "What token pays for the wager?",
-                new QuestionContext(versionId, null, null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.shortVerdict()).contains("胜利点");
     }
@@ -485,7 +486,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "下注支付哪一种令牌，获胜后怎么结算？",
-                new QuestionContext(versionId, "SPECIAL_RULE", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("得分令牌").doesNotContain("🔴", "能量令牌");
@@ -534,7 +535,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "激活时支付哪一种资源？",
-                new QuestionContext(versionId, null, null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("无法从现有证据中可靠确定");
@@ -592,7 +593,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "主动玩家掷出的骰子落在殖民地卡上时，其他玩家是否也能获得奖励？双方各要怎样处理？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "骰子与奖励", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("主动玩家", "被动奖励");
@@ -640,7 +641,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "掷骰后如何领取奖励？", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+                "掷骰后如何领取奖励？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.explanation()).doesNotContain("一次", "无限循环");
@@ -694,7 +695,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "下注支付哪一种令牌？", new QuestionContext(versionId, null, null, 4, Set.of()));
+                "下注支付哪一种令牌？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("得分令牌", "score token");
@@ -751,7 +752,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "我第一个出完手牌后，其他玩家继续吗？",
-                new QuestionContext(versionId, null, null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).doesNotContain("score token");
@@ -775,7 +776,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "我出完手牌后，下一墩由谁领出？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("左手边的下一位玩家");
@@ -839,7 +840,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "发动时支付哪一种资源？", new QuestionContext(versionId, null, null, 4, Set.of()));
+                "发动时支付哪一种资源？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.explanation()).contains("2个得分令牌").doesNotContain("2张基础牌", "手牌不足");
@@ -893,7 +894,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "需要至少2张手牌才能发动吗？", new QuestionContext(versionId, null, null, 4, Set.of()));
+                "需要至少2张手牌才能发动吗？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("不需要至少2张手牌", "score token");
@@ -949,7 +950,7 @@ class StructuredRuleAnswerServiceTest {
                 model);
 
         var answer = service.answer(
-                "下注支付哪一种令牌？", new QuestionContext(versionId, null, null, 4, Set.of()));
+                "下注支付哪一种令牌？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.shortVerdict()).contains("score token").doesNotContain("🔴");
@@ -1014,7 +1015,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Where can I place a Wildlife Token, and what do I gain after placing one on a Keystone Tile?",
-                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(7, 8);
@@ -1096,14 +1097,14 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "主动玩家掷出骰子后，其他被动玩家能领取自己的已部署奖励吗",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.pageFrom()).containsExactly(12, 7);
     }
 
     @Test
-    void excludesLegacyLiveTableStateFromTheAnswerModel() {
+    void sendsOnlyTheQuestionContractToTheAnswerModel() {
         RuleEvidenceHit source = evidence("ACTIONS");
         UUID expansionId = UUID.randomUUID();
         AtomicReference<RuleAnswerModel.ModelRequest> captured = new AtomicReference<>();
@@ -1118,12 +1119,11 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Can I take this action now?",
-                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of(expansionId)));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(captured.get().questionType())
-                .isEqualTo(com.rulepilot.assistant.domain.QuestionType.LESSON_STEP_FOLLOW_UP);
-        assertThat(captured.get().context().currentLessonSection()).isEqualTo("ACTIONS");
+                .isEqualTo(com.rulepilot.assistant.domain.QuestionType.RULE_QUERY);
         assertThat(captured.get().context().previousQuestion()).isEqualTo("not provided");
     }
 
@@ -1142,7 +1142,7 @@ class StructuredRuleAnswerServiceTest {
                         "LOW"));
 
         var answer = service.answer(
-                "How is the hidden bonus scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How is the hidden bonus scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("未能直接回答");
@@ -1176,7 +1176,7 @@ class StructuredRuleAnswerServiceTest {
                 (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.04, 1, 1, true)), model);
 
         var answer = service.answer(
-                "Can a ship cross the tidal gate?", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+                "Can a ship cross the tidal gate?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(revisions).hasValue(1);
@@ -1217,7 +1217,7 @@ class StructuredRuleAnswerServiceTest {
                 }, model);
 
         var answer = service.answer(
-                "万能牌能匹配行动花色吗？", new QuestionContext(versionId, "ACTIONS", null, 4, Set.of()));
+                "万能牌能匹配行动花色吗？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(firstQuery).hasValue("wild card matching action suit");
@@ -1232,7 +1232,7 @@ class StructuredRuleAnswerServiceTest {
                 request -> new ModelDraft("Unsupported", "Unsupported", List.of(UUID.randomUUID()), List.of(), "HIGH"));
 
         var answer = service.answer(
-                "How is scoring resolved?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How is scoring resolved?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(answer.citations()).isEmpty();
@@ -1253,7 +1253,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Can I play this card from my hand?",
-                new QuestionContext(versionId, null, null, 3, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
         assertThat(answer.clarification())
@@ -1274,7 +1274,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "What does this unknown symbol do?",
-                new QuestionContext(versionId, null, null, null, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.citations()).isEmpty();
@@ -1294,7 +1294,7 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         var answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(answer.shortVerdict()).isEqualTo("规则检索暂时不可用，尚未生成答案。");
@@ -1316,7 +1316,7 @@ class StructuredRuleAnswerServiceTest {
                         List.of(source.chunkId()), List.of(), "HIGH"));
 
         var answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
@@ -1333,7 +1333,7 @@ class StructuredRuleAnswerServiceTest {
                         return List.of();
                     }
                     assertThat(query)
-                            .contains("step prerequisite consequence exception", "ACTIONS")
+                            .contains("rule definition timing restriction exception")
                             .doesNotContain("ACTION PHASE", "4 players");
                     assertThat(options.sectionTypes()).contains("ACTIONS");
                     return List.of(new HybridEvidenceHit(source, 0.03, 1, null, true));
@@ -1344,7 +1344,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Can I take this action now?",
-                new QuestionContext(versionId, "ACTIONS", "ACTION_PHASE", 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(retrievalCalls).hasValue(2);
@@ -1377,7 +1377,7 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         var answer = service.answer(
-                "开局有多少信用点？", new QuestionContext(versionId, "SETUP", null, 4, Set.of()));
+                "开局有多少信用点？", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(relevant.chunkId());
@@ -1407,7 +1407,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "When does the game end, and how are ties resolved?",
-                new QuestionContext(versionId, null, null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId())
@@ -1430,7 +1430,7 @@ class StructuredRuleAnswerServiceTest {
                         List.of(source.chunkId()), List.of(), "HIGH"));
 
         var answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).hasSize(1);
@@ -1448,7 +1448,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Which actions are available during a turn?",
-                new QuestionContext(versionId, null, null, null, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.MODEL_TIMEOUT);
         assertThat(answer.shortVerdict()).doesNotContain("provider details", "secret");
@@ -1470,7 +1470,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "How does scoring work?",
-                new QuestionContext(versionId, null, null, null, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.VERSION_CONFLICT);
         assertThat(answer.citations()).isEmpty();
@@ -1495,7 +1495,7 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         var answer = service.answer(
-                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How does scoring work?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INSUFFICIENT_EVIDENCE);
         assertThat(answer.shortVerdict()).contains("冲突");
@@ -1523,7 +1523,7 @@ class StructuredRuleAnswerServiceTest {
                 rejectingCritic);
 
         var answer = service.answer(
-                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How does scoring work?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(answer.shortVerdict()).contains("一致性审查");
@@ -1545,7 +1545,7 @@ class StructuredRuleAnswerServiceTest {
                 acceptedCritic());
 
         var answer = service.answer(
-                "How does scoring work?", new QuestionContext(versionId, null, null, null, Set.of()));
+                "How does scoring work?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED_WITH_WARNING);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
@@ -1574,9 +1574,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "那还能再做一次吗？",
-                new QuestionContext(
-                        versionId, "ACTIONS", null, 4, Set.of(),
-                        "执行一次主要行动后还能执行自由行动吗？"));
+                new QuestionContext(versionId, "执行一次主要行动后还能执行自由行动吗？", null, PlayerLocale.ZH_CN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(capturedRisk.get()).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
@@ -1623,13 +1621,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "那还能再做一次吗？",
-                new QuestionContext(
-                        versionId,
-                        "ACTIONS",
-                        null,
-                        4,
-                        Set.of(),
-                        "执行一次主要行动后还能执行自由行动吗？"));
+                new QuestionContext(versionId, "执行一次主要行动后还能执行自由行动吗？", null, PlayerLocale.ZH_CN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.explanation()).contains("没有说明可以重复多少次");
@@ -1659,8 +1651,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "请讲简单一点。",
-                new QuestionContext(
-                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.SIMPLIFY));
+                new QuestionContext(versionId, null, LearningIntent.SIMPLIFY, PlayerLocale.ZH_CN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(modelRequest.get().context().learningIntent()).isEqualTo(LearningIntent.SIMPLIFY);
@@ -1714,8 +1705,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "请讲简单一点。",
-                new QuestionContext(
-                        versionId, "ACTIONS", null, 4, Set.of(), null, LearningIntent.SIMPLIFY));
+                new QuestionContext(versionId, null, LearningIntent.SIMPLIFY, PlayerLocale.ZH_CN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.explanation()).contains("没有说明可重复多少次");
@@ -1771,7 +1761,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "我的船现在能穿过潮汐门吗，费用是多少？",
-                new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
+                new QuestionContext(versionId),
                 "alice",
                 UUID.randomUUID());
 
@@ -1812,7 +1802,7 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "我还没有升起船帆，现在能穿过潮汐门吗？之后费用怎么算？",
-                new QuestionContext(versionId, "ACTIONS", "主要行动", 4, Set.of()),
+                new QuestionContext(versionId),
                 "alice",
                 UUID.randomUUID());
 
@@ -1869,7 +1859,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service.answer(
                 "How are coins scored?",
-                new QuestionContext(versionId, "SCORING", null, 3, Set.of(expansionId)),
+                new QuestionContext(versionId),
                 "alice",
                 null);
 
@@ -1909,7 +1899,7 @@ class StructuredRuleAnswerServiceTest {
                 new ImmediateAuditedAgentInvocations(),
                 io.micrometer.observation.ObservationRegistry.NOOP,
                 metrics);
-        QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
+        QuestionContext context = new QuestionContext(versionId);
 
         StructuredRuleAnswer first = service.answer("How are coins scored?", context);
         StructuredRuleAnswer second = service.answer("How are coins scored?", context);
@@ -1944,12 +1934,12 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer first = service.answer(
                 "How are coins scored?",
-                new QuestionContext(versionId, "SCORING", "FIRST_PHASE", 2, Set.of(UUID.randomUUID())),
+                new QuestionContext(versionId),
                 "alice",
                 UUID.randomUUID());
         StructuredRuleAnswer second = service.answer(
                 "How are coins scored?",
-                new QuestionContext(versionId, "SCORING", "FINAL_PHASE", 8, Set.of(UUID.randomUUID())),
+                new QuestionContext(versionId),
                 "alice",
                 UUID.randomUUID());
 
@@ -1983,7 +1973,7 @@ class StructuredRuleAnswerServiceTest {
                 metrics);
 
         StructuredRuleAnswer answer = service.answer(
-                "How are coins scored?", new QuestionContext(versionId, "SCORING", null, 3, Set.of()));
+                "How are coins scored?", new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).hasSize(1);
@@ -2027,7 +2017,7 @@ class StructuredRuleAnswerServiceTest {
                 new ImmediateAuditedAgentInvocations(),
                 io.micrometer.observation.ObservationRegistry.NOOP,
                 new SimpleMeterRegistry());
-        QuestionContext context = new QuestionContext(versionId, "SCORING", null, 3, Set.of());
+        QuestionContext context = new QuestionContext(versionId);
 
         StructuredRuleAnswer first = service.answer("How are coins scored?", context);
         StructuredRuleAnswer second = service.answer("How are coins scored?", context);
@@ -2078,7 +2068,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service.answer(
                 "我结束自己的回合后，事件牌要怎样处理？",
-                new QuestionContext(versionId, "ROUND_STRUCTURE", "TURN", 3, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(turnProcedure.chunkId());
@@ -2130,7 +2120,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service.answer(
                 "有人达到30名声后要立刻结束吗？承诺货物何时计分，平局如何处理？",
-                new QuestionContext(versionId, "END_CONDITIONS", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(endgameProcedure.chunkId());
@@ -2203,7 +2193,7 @@ class StructuredRuleAnswerServiceTest {
 
         StructuredRuleAnswer answer = service.answer(
                 "有人达到30名声后要立刻结束吗？承诺货物何时计分，平局如何处理？",
-                new QuestionContext(versionId, "END_CONDITIONS", null, 4, Set.of()));
+                new QuestionContext(versionId));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
         assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(endgameProcedure.chunkId());
@@ -2242,7 +2232,7 @@ class StructuredRuleAnswerServiceTest {
                 new SimpleMeterRegistry());
 
         assertThatThrownBy(() -> service.answer(
-                        "How are coins scored?", new QuestionContext(versionId, null, null, null, Set.of())))
+                        "How are coins scored?", new QuestionContext(versionId)))
                 .isInstanceOf(RuleAnswerRateLimitUnavailableException.class);
         assertThat(retrievalCalled).isFalse();
     }

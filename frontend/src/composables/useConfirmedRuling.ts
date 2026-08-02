@@ -15,9 +15,8 @@ interface UseConfirmedRulingOptions {
   documentVersionId: Readonly<Ref<string | null>>
   answer: Ref<StructuredRuleAnswer | null>
   answeredQuestion: Readonly<Ref<string>>
-  currentSectionTitle: () => string
   csrfToken: () => Promise<CsrfResponse>
-  onApplied: (ruling: ConfirmedRuling, question: string, sectionTitle: string) => void
+  onApplied: (ruling: ConfirmedRuling, question: string) => void
   messages: ConfirmedRulingMessages
 }
 
@@ -36,7 +35,7 @@ export function useConfirmedRuling(options: UseConfirmedRulingOptions) {
     editedExplanation.value = value.explanation
     conflict.value = false
     editing.value = false
-    options.onApplied(value, options.answeredQuestion.value, options.currentSectionTitle())
+    options.onApplied(value, options.answeredQuestion.value)
   }
 
   function reset() {

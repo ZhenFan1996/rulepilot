@@ -24,8 +24,8 @@ describe('offline knowledge cache', () => {
   beforeEach(() => localStorage.clear())
 
   it('keeps a recent answer and upgrades it with a confirmed ruling', () => {
-    cacheOfflineAnswer('plan-1', '硬币如何计分？', '计分', answer)
-    cacheOfflineRuling('plan-1', '硬币如何计分？', '计分', {
+    cacheOfflineAnswer('plan-1', '硬币如何计分？', answer)
+    cacheOfflineRuling('plan-1', '硬币如何计分？', {
       id: 'ruling-1',
       shortVerdict: answer.shortVerdict,
       explanation: answer.explanation,

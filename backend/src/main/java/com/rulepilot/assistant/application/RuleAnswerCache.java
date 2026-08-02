@@ -15,7 +15,6 @@ public interface RuleAnswerCache {
             UUID documentVersionId,
             long ruleDataVersion,
             String normalizedQuestion,
-            String currentLessonSection,
             PlayerLocale outputLanguage) {
 
         public AnswerCacheKey {

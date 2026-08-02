@@ -118,8 +118,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                     .system(prompts.answerRetrievalRewriteSystem())
                     .user(user -> user.text(prompts.answerRetrievalRewriteUser())
                             .param("question", request.question())
-                            .param("previousQuestion", request.previousQuestion())
-                            .param("lessonSection", request.currentLessonSection()))
+                            .param("previousQuestion", request.previousQuestion()))
                     .call()
                     .entity(RetrievalQueryDraft.class);
             if (draft == null || draft.queries() == null) {
@@ -160,7 +159,6 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())
                         .param("questionType", request.questionType().name())
-                        .param("lessonSection", request.context().currentLessonSection())
                         .param("previousQuestion", request.context().previousQuestion())
                         .param("learningIntent", request.context().learningIntentForPrompt())
                         .param("outputLanguage", request.context().outputLanguageForPrompt())

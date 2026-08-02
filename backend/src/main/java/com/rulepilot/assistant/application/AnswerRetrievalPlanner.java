@@ -6,11 +6,10 @@ import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public final class AnswerRetrievalPlanner {
 
@@ -19,17 +18,6 @@ public final class AnswerRetrievalPlanner {
     private static final int MAX_INTENTS = 5;
     private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
             java.util.regex.Pattern.compile("[?？!！;；]+");
-    private static final Set<String> KNOWN_SECTIONS = Set.of(
-            "OBJECTIVE",
-            "COMPONENTS",
-            "SETUP",
-            "ROUND_STRUCTURE",
-            "PHASES",
-            "ACTIONS",
-            "END_CONDITIONS",
-            "SCORING",
-            "TIE_BREAKERS");
-
     private AnswerRetrievalPlanner() {}
 
     public static List<RetrievalIntent> plan(UnderstoodQuestion question, QuestionContext context) {
@@ -41,7 +29,8 @@ public final class AnswerRetrievalPlanner {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
-        String currentSection = knownSection(context.currentLessonSection());
+        Set<String> inferredSectionScope = inferredSections(question, context);
+        String currentSection = inferredSectionScope.stream().findFirst().orElse(null);
         Set<String> directQuestionScope = directQuestionScope(question, currentSection);
         List<RetrievalIntent> procedureIntents =
                 AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion());
@@ -72,7 +61,7 @@ public final class AnswerRetrievalPlanner {
         deferredConditionIntents.forEach(intents::add);
         intents.add(new RetrievalIntent(
                 supplementaryQuery(question, context),
-                inferredSections(question, currentSection),
+                inferredSectionScope,
                 currentSection));
         return intents.stream().limit(MAX_INTENTS).toList();
     }
@@ -128,9 +117,6 @@ public final class AnswerRetrievalPlanner {
         }
         append(query, facets(question.type()));
         append(query, AnswerRetrievalProcedureIntents.endgameResolutionTerms(question.normalizedQuestion()));
-        if (context.currentLessonSection() != null) {
-            append(query, context.currentLessonSection().replace('_', ' '));
-        }
         append(query, learningFacets(context.learningIntent()));
         return bounded(query.toString());
     }
@@ -155,12 +141,9 @@ public final class AnswerRetrievalPlanner {
         };
     }
 
-    private static Set<String> inferredSections(UnderstoodQuestion question, String currentSection) {
+    private static Set<String> inferredSections(UnderstoodQuestion question, QuestionContext context) {
         LinkedHashSet<String> sections = new LinkedHashSet<>();
-        if (currentSection != null) {
-            sections.add(currentSection);
-        }
-        String text = question.normalizedQuestion();
+        String text = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
         addWhenContains(sections, text, "SETUP", "setup", "starting", "开局", "设置", "布置");
         if (containsAny(text, "tie", "tied", "平局", "同分")) {
             sections.add("TIE_BREAKERS");
@@ -171,7 +154,16 @@ public final class AnswerRetrievalPlanner {
                 sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数", "名声", "声望");
         addWhenContains(
                 sections, text, "END_CONDITIONS", "game end", "ending", "end of round", "结束条件", "游戏结束", "轮末", "结束");
-        addWhenContains(sections, text, "ACTIONS", "action", "play card", "行动", "打出", "卡牌");
+        addWhenContains(
+                sections,
+                text,
+                "ACTIONS",
+                "action",
+                "play card",
+                "play this card",
+                "行动",
+                "打出",
+                "卡牌");
         addWhenContains(sections, text, "PHASES", "phase", "trick", "阶段", "墩");
         addWhenContains(
                 sections,
@@ -194,19 +186,17 @@ public final class AnswerRetrievalPlanner {
                 "领出");
         addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
         addWhenContains(sections, text, "OBJECTIVE", "objective", "win", "目标", "获胜", "胜利");
-        return sections.stream().limit(MAX_SECTION_FILTERS).collect(Collectors.toUnmodifiableSet());
+        LinkedHashSet<String> bounded = new LinkedHashSet<>();
+        sections.stream().limit(MAX_SECTION_FILTERS).forEach(bounded::add);
+        return Collections.unmodifiableSet(bounded);
     }
 
-    /**
-     * A chapter selector stays a soft hint for ordinary questions. It becomes a hard retrieval scope only when the
-     * player explicitly asks for an executable sequence in that same rule area, preventing an overview paragraph
-     * from displacing the steps the player asked to carry out.
-     */
+    /** Question-derived scope may narrow an executable sequence; no caller supplies a chapter hint. */
     private static Set<String> directQuestionScope(UnderstoodQuestion question, String currentSection) {
         if (currentSection == null || !asksForExecutableSequence(question.normalizedQuestion())) {
             return Set.of();
         }
-        return inferredSections(question, null).contains(currentSection) ? Set.of(currentSection) : Set.of();
+        return Set.of(currentSection);
     }
 
     private static boolean asksForExecutableSequence(String question) {
@@ -225,30 +215,6 @@ public final class AnswerRetrievalPlanner {
 
     static boolean containsAny(String text, String... indicators) {
         return Arrays.stream(indicators).anyMatch(text::contains);
-    }
-
-    private static String knownSection(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        String normalized = value.strip().toUpperCase(Locale.ROOT);
-        if (KNOWN_SECTIONS.contains(normalized)) {
-            return normalized;
-        }
-        if (containsAny(normalized, "SETUP", "设置", "布置")) return "SETUP";
-        if (containsAny(normalized, "SCOR", "计分", "得分")) return "SCORING";
-        if (containsAny(normalized, "TIE", "同分", "平局")) return "TIE_BREAKERS";
-        if (containsAny(normalized, "TURN", "ROUND", "PASS", "FIRST_ROUND", "回合", "轮次")) {
-            return "ROUND_STRUCTURE";
-        }
-        if (containsAny(normalized, "END", "结束")) return "END_CONDITIONS";
-        if (containsAny(
-                normalized, "ACTION", "CARD", "CORE_LOOP", "行动")) {
-            return "ACTIONS";
-        }
-        if (containsAny(normalized, "COMPONENT", "组件", "配件")) return "COMPONENTS";
-        if (containsAny(normalized, "GOAL", "OBJECTIVE", "WINNER", "目标", "胜利")) return "OBJECTIVE";
-        return null;
     }
 
     private static void append(StringBuilder target, String value) {
