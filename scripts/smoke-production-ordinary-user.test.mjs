@@ -10,6 +10,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   const calls = []
   let planStarted = false
   let deleted = false
+  let includeBlockingVisualCatalog = false
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -60,11 +61,23 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       return json(response, 200, {
         run: { state: 'COMPLETED', createdAt: '2026-08-02T00:00:00Z', completedAt: '2026-08-02T00:00:12Z' },
         steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
-        activities: [{
-          sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', outcome: 'SUCCEEDED',
-          latencyMs: 11_000, estimatedInputTokens: 1200, estimatedOutputTokens: 300,
-          occurredAt: '2026-08-02T00:00:12Z',
-        }],
+        activities: [
+          {
+            sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', outcome: 'SUCCEEDED',
+            latencyMs: 11_000, estimatedInputTokens: 1200, estimatedOutputTokens: 300,
+            occurredAt: '2026-08-02T00:00:11Z',
+          },
+          {
+            sequence: 2, type: 'VALIDATION', operation: 'deferSelectedVisualPageCatalog', outcome: 'SUCCEEDED',
+            latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
+            occurredAt: '2026-08-02T00:00:12Z',
+          },
+          ...(includeBlockingVisualCatalog ? [{
+            sequence: 3, type: 'MODEL', operation: 'inspectRulebookVisualBatch|1', outcome: 'SUCCEEDED',
+            latencyMs: 19_000, estimatedInputTokens: 800, estimatedOutputTokens: 250,
+            occurredAt: '2026-08-02T00:00:12Z',
+          }] : []),
+        ],
         budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1500 },
       })
     }
@@ -138,8 +151,25 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=organizeTeachingOutline .*latencyMs=11000/)
+    assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=deferSelectedVisualPageCatalog .*outcome=SUCCEEDED/)
+    assert.doesNotMatch(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=inspectRulebookVisualBatch/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
+
+    includeBlockingVisualCatalog = true
+    deleted = false
+    planStarted = false
+    const regression = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(regression.code, 1)
+    assert.match(regression.stderr, /performed optional selected-page visual catalog work before publishing the plan/)
+    assert.equal(deleted, true)
   } finally {
     server.closeAllConnections()
     await new Promise((resolvePromise) => server.close(resolvePromise))

@@ -227,58 +227,6 @@ class VisualRulebookCataloger {
         return VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh);
     }
 
-    void catalogSelectedOutlinePages(
-            UUID documentVersionId,
-            TeachingOutlineModel.OutlineDraft outline,
-            List<DocumentProcessing.PageView> documentPages,
-            String rulebookTitle,
-            String owner,
-            UUID assistantRunId) {
-        Set<Integer> selectedVisualPages = VisualOutlineEvidencePolicy.selectedVisualPageNumbers(outline, documentPages);
-        if (selectedVisualPages.isEmpty()) return;
-        try {
-            Set<Integer> cachedPages = visualFacts.find(documentVersionId, selectedVisualPages).stream()
-                    .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
-                    .map(PageFact::pageNumber)
-                    .collect(Collectors.toSet());
-            Set<Integer> uncatalogedPages = selectedVisualPages.stream()
-                    .filter(page -> !cachedPages.contains(page))
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
-            if (uncatalogedPages.isEmpty()) {
-                log.info(
-                        "Visual page interpretation reused existing facts for document {} pages {}",
-                        documentVersionId,
-                        selectedVisualPages);
-                return;
-            }
-            List<PageFact> interpreted = catalogPageFacts(
-                    documentVersionId,
-                    uncatalogedPages,
-                    rulebookTitle,
-                    owner,
-                    assistantRunId,
-                    false);
-            if (interpreted.isEmpty()) {
-                log.warn(
-                        "Visual page interpretation produced no usable facts for document {} pages {}",
-                        documentVersionId,
-                        uncatalogedPages);
-                return;
-            }
-            visualFacts.merge(documentVersionId, interpreted);
-            log.info(
-                    "Visual page interpretation stored document {} pages {}",
-                    documentVersionId,
-                    interpreted.stream().map(PageFact::pageNumber).toList());
-        } catch (RuntimeException visualFailure) {
-            log.warn(
-                    "Visual page interpretation skipped for document {} pages {}",
-                    documentVersionId,
-                    selectedVisualPages,
-                    visualFailure);
-        }
-    }
-
     private List<PageFact> catalogPageFacts(
             UUID documentVersionId,
             Set<Integer> pageNumbers,
