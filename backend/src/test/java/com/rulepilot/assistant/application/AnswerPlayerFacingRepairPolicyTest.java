@@ -100,6 +100,55 @@ class AnswerPlayerFacingRepairPolicyTest {
                 .anyMatch(item -> item.startsWith("UNDEFINED_TERM_SPECULATION:"));
     }
 
+    @Test
+    void asksToRemoveVisualAppearanceAndKeepSharedMechanicalRulesConsistent() {
+        UUID chunk = UUID.randomUUID();
+        ModelRequest request = request(
+                "List what A-01 and B-02 do, including their shared upper-slot reward.",
+                List.of(new EvidenceInput(
+                        chunk,
+                        "RULES",
+                        "Catalogue",
+                        "A-01 grants one card. B-02 grants one energy. Every upper slot grants 2 points.",
+                        7,
+                        7)));
+        ModelDraft draft = new ModelDraft(
+                "A-01 grants one card; B-02 shows a lightning icon.",
+                "A-01 has an upper reward of 2 points, while B-02 has an upper level of 2.",
+                List.of(chunk),
+                List.of(),
+                "HIGH");
+
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
+                .anyMatch(item -> item.startsWith("MECHANICAL_EFFECT_ONLY:"));
+    }
+
+    @Test
+    void treatsAnExplicitNoIconInstructionAsMechanicalOnly() {
+        UUID chunk = UUID.randomUUID();
+        ModelRequest request = request(
+                "Explain A-01's function, but do not describe icon appearance.",
+                List.of(new EvidenceInput(chunk, "RULES", "Catalogue", "A-01 grants one energy.", 7, 7)));
+        ModelDraft draft = new ModelDraft(
+                "A-01 shows an energy icon.", "Its artwork depicts a lightning bolt.", List.of(chunk), List.of(), "HIGH");
+
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
+                .anyMatch(item -> item.startsWith("MECHANICAL_EFFECT_ONLY:"));
+    }
+
+    @Test
+    void allowsVisualDescriptionWhenThePlayerExplicitlyAsksForIt() {
+        UUID chunk = UUID.randomUUID();
+        ModelRequest request = request(
+                "What does the icon on A-01 look like?",
+                List.of(new EvidenceInput(chunk, "RULES", "Catalogue", "A-01 shows a star icon.", 7, 7)));
+        ModelDraft draft = new ModelDraft(
+                "It shows a star icon.", "The artwork depicts a five-pointed star.", List.of(chunk), List.of(), "HIGH");
+
+        assertThat(AnswerPlayerFacingRepairPolicy.feedbackFor(request, draft))
+                .noneMatch(item -> item.startsWith("MECHANICAL_EFFECT_ONLY:"));
+    }
+
     private ModelRequest request(String question, List<EvidenceInput> evidence) {
         return new ModelRequest(
                 question,

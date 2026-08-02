@@ -33,8 +33,10 @@ class AnswerVisualEvidenceEnricherTest {
                 Set.of(4));
 
         assertThat(enriched).containsExactly(source.chunkId());
-        assertThat(evidence.get(source.chunkId()).evidence().excerpt())
-                .contains("Gain one point", "The score marker advances one space.");
+        String enrichedExcerpt = evidence.get(source.chunkId()).evidence().excerpt();
+        assertThat(enrichedExcerpt).contains("Gain one point", "The score marker advances one space.");
+        assertThat(enrichedExcerpt.indexOf("The score marker advances one space."))
+                .isLessThan(enrichedExcerpt.indexOf("Gain one point after the action."));
     }
 
     @Test

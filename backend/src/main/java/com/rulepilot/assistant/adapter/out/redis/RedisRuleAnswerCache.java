@@ -21,7 +21,8 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class RedisRuleAnswerCache implements RuleAnswerCache {
 
-    private static final String KEY_PREFIX = "rulepilot:answer:pipeline-v14:data-v";
+    // v15 invalidates drafts created before mechanical-only list consistency and its repair gate.
+    private static final String KEY_PREFIX = "rulepilot:answer:pipeline-v15:data-v";
 
     private final StringRedisTemplate redis;
     private final ObjectMapper json = new ObjectMapper();

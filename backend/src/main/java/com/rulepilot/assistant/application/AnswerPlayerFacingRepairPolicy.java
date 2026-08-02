@@ -86,6 +86,15 @@ final class AnswerPlayerFacingRepairPolicy {
                     + "condition is unavailable, and remove every possible example, spatial guess, component guess, "
                     + "or instruction to decide the missing rule oneself.");
         }
+        if (!AnswerVisualEvidencePolicy.hasEvidencedCrossPageIconMapping(request)
+                && AnswerDraftSafetyPolicy.containsUnaskedVisualDescription(request, draft)) {
+            feedback.add("MECHANICAL_EFFECT_ONLY: The player asks for item functions or rules, not visual identity. "
+                    + "Remove color, shape, artwork, pictogram, icon, and 'shows/depicts' descriptions. State a "
+                    + "resolved name and quantity only when supplied evidence binds that mechanical meaning; "
+                    + "otherwise omit the peripheral visual clause. Apply supplied shared slot, reward, timing, and "
+                    + "placement rules consistently to every listed item. Do not rename a shared numeric reward as "
+                    + "a level, rank, type, or unrelated quantity unless direct item evidence states an exception.");
+        }
         if (AnswerSpatialScopePolicy.needsRepair(request, draft)) {
             feedback.add("SPATIAL_SCOPE: The player gave one board position, but the draft adds a different row, "
                     + "column, or geometric restriction not stated in that question. Do not infer that a marker "

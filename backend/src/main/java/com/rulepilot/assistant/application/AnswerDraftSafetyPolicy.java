@@ -51,6 +51,16 @@ final class AnswerDraftSafetyPolicy {
                     + "does\\s+not\\s+define|doesn't\\s+define|not\\s+defined|doesn't\\s+specify)"
                     + ".{0,220}(?:可能|例如|比如|通常|一般|自行|推测|猜测|相邻|邻接|包裹|"
                     + "maybe|perhaps|such\\s+as|for\\s+example|infer|assume)");
+    private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
+            "(?iu)\\b(?:icon|symbol|pictogram|artwork|appearance|look like|depict|show)\\b"
+                    + "|图标|符号|图案|外观|长什么|画着|画的|表示什么");
+    private static final Pattern VISUAL_DESCRIPTION = Pattern.compile(
+            "(?iu)\\b(?:icon|symbol|pictogram|artwork|depicts?|shows?)\\b"
+                    + "|图标|符号|图案|外观|画着|画的|显示(?:为|了)?");
+    private static final Pattern NEGATED_VISUAL_REQUEST = Pattern.compile(
+            "(?iu)\\b(?:do not|don't|without|omit|exclude)\\b.{0,32}"
+                    + "(?:icon|symbol|pictogram|artwork|appearance|visual)"
+                    + "|(?:不要|无需|不必|不用|省略|排除|不描述).{0,24}(?:图标|符号|图案|外观|视觉|画面)");
 
     private AnswerDraftSafetyPolicy() {}
 
@@ -105,6 +115,14 @@ final class AnswerDraftSafetyPolicy {
 
     static boolean containsSpeculativeUndefinedTermDefinition(ModelDraft draft) {
         return SPECULATIVE_UNDEFINED_TERM_DEFINITION.matcher(playerFacingText(draft)).find();
+    }
+
+    static boolean containsUnaskedVisualDescription(ModelRequest request, ModelDraft draft) {
+        return request != null
+                && draft != null
+                && (!VISUAL_IDENTITY_QUESTION.matcher(request.question()).find()
+                        || NEGATED_VISUAL_REQUEST.matcher(request.question()).find())
+                && VISUAL_DESCRIPTION.matcher(playerFacingText(draft)).find();
     }
 
     static ModelDraft normalizeSingleMappedVisualGlyph(ModelDraft draft, List<String> components) {

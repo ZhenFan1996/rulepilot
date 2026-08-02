@@ -113,7 +113,9 @@ final class AnswerVisualEvidenceEnricher {
                 textSource.documentVersionId(),
                 textSource.sectionType(),
                 textSource.heading(),
-                textSource.excerpt() + "\n\n" + fact.evidenceText(),
+                AnswerVisualFactPresentationPolicy.evidenceText(fact)
+                        + "\n\nExtracted page text (may omit inline visual symbols):\n"
+                        + textSource.excerpt(),
                 textSource.pageFrom(),
                 textSource.pageTo(),
                 Math.max(textSource.score(), fact.score()));
@@ -131,7 +133,7 @@ final class AnswerVisualEvidenceEnricher {
                 source.documentVersionId(),
                 source.sectionType(),
                 source.heading(),
-                fact.evidenceText(),
+                AnswerVisualFactPresentationPolicy.evidenceText(fact),
                 source.pageFrom(),
                 source.pageTo(),
                 Math.max(0.01, fact.score()));
