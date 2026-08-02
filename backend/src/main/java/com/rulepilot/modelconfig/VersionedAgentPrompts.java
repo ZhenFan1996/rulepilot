@@ -62,6 +62,8 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v17-correctable-revision-system.txt") Resource answerCorrectableRevision,
             @Value("classpath:prompts/rule-answer-agent-v18-counterfactual-follow-up-system.txt") Resource answerCounterfactualFollowUp,
             @Value("classpath:prompts/rule-answer-agent-v19-complete-list-system.txt") Resource answerCompleteList,
+            @Value("classpath:prompts/rule-answer-agent-v20-identifier-binding-system.txt") Resource answerIdentifierBinding,
+            @Value("classpath:prompts/rule-answer-agent-v21-resolved-visual-language-system.txt") Resource answerResolvedVisualLanguage,
             @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
@@ -114,7 +116,9 @@ public class VersionedAgentPrompts {
                 answerFallbackBranchFidelity,
                 answerCorrectableRevision,
                 answerCounterfactualFollowUp,
-                answerCompleteList);
+                answerCompleteList,
+                answerIdentifierBinding,
+                answerResolvedVisualLanguage);
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);

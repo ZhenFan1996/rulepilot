@@ -40,6 +40,24 @@ class AnswerEvidenceSelectionPolicyTest {
     }
 
     @Test
+    void placesIdentifierBoundPageEvidenceBeforeGenericTextAnchors() {
+        UUID documentVersionId = UUID.randomUUID();
+        HybridEvidenceHit visual = hit(
+                documentVersionId, "VISUAL", "A-01", "A-01 grants one movement when activated.", 7, 0.4);
+        HybridEvidenceHit textAnchor = hit(
+                documentVersionId, "RULES", "Actions", "Actions may grant movement or resources.", 5, 0.9);
+        Map<UUID, HybridEvidenceHit> evidence = Map.of(
+                visual.evidence().chunkId(), visual,
+                textAnchor.evidence().chunkId(), textAnchor);
+
+        List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
+                "A-01 的功能是什么？", evidence, List.of(textAnchor), Set.of(visual.evidence().chunkId()));
+
+        assertThat(selected).extracting(hit -> hit.evidence().chunkId())
+                .containsExactly(visual.evidence().chunkId(), textAnchor.evidence().chunkId());
+    }
+
+    @Test
     void retainsDistinctEndgameResolutionScoringAndTieEvidence() {
         UUID documentVersionId = UUID.randomUUID();
         HybridEvidenceHit resolution = hit(

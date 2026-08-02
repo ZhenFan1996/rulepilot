@@ -7,6 +7,9 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +18,93 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 
 class SpringAiVisualRulebookPageCatalogModelTest {
+
+    @Test
+    void identifierCellPromptRequiresExactCrossPageArtworkAndPreservesRewardTiming() throws IOException {
+        String prompt = new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt")
+                .getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(prompt).contains(
+                "Require the same distinctive shape",
+                "rectangular card or sheet pictogram",
+                "lower-space reward",
+                "do not change it to a tile-acquisition reward");
+    }
+
+    @Test
+    void referenceMatcherSeparatesLowerRewardFromAnUpperScoreMedallion() throws IOException {
+        String prompt = new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt")
+                .getContentAsString(StandardCharsets.UTF_8)
+                .replaceAll("\\s+", " ");
+
+        assertThat(prompt).contains(
+                "When the draft distinguishes upper and lower spaces",
+                "match only the compact lower-space reward",
+                "never report the upper-space medallion as the matched resource");
+    }
+
+    @Test
+    void acceptsOnlySuppliedIdentifierBindingsAndPreservesAtomicCellFacts() {
+        var locations = SpringAiVisualRulebookPageCatalogModel.parseIdentifierLocations("""
+                {"items":[
+                  {"identifier":"A-01","x":10,"y":20,"width":30,"height":10},
+                  {"identifier":"B#02","x":500,"y":20,"width":35,"height":10}
+                ]}
+                """);
+        assertThat(locations.locations()).extracting(location -> location.identifier())
+                .containsExactly("A-01", "B#02");
+
+        var facts = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellFacts("""
+                {"items":[
+                  {"identifier":"A-01","factualSummary":"A-01：支付一个蓝色方块后移动。"},
+                  {"identifier":"B#02","factualSummary":"B#02：上格得2分，下格抽一张牌。"},
+                  {"identifier":"X-99","factualSummary":"不得进入结果。"}
+                ]}
+                """, List.of("A-01", "B#02"));
+        assertThat(facts.facts()).extracting(fact -> fact.identifier())
+                .containsExactly("A-01", "B#02");
+        assertThat(facts.facts()).extracting(fact -> fact.factualSummary())
+                .containsExactly("A-01：支付一个蓝色方块后移动。", "B#02：上格得2分，下格抽一张牌。");
+    }
+
+    @Test
+    void referenceVerificationCannotPublishALabelOutsideTheDocumentEvidence() {
+        var image = new PageImageInput(3, "image/png", new byte[] {1});
+        var request = new IdentifierCellVerificationRequest(
+                new IdentifierCellInput("B#02", image),
+                new IdentifierReferencePage(image, "2 amber, 3 teal, and 1 card"),
+                List.of("amber", "teal", "card"),
+                "B#02: lower reward is unclear.",
+                "owner");
+
+        var accepted = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
+                {"identifier":"B#02","matchedLabel":"card","quantity":1,
+                 "factualSummary":"B#02: the lower-space reward is 1 card."}
+                """, request);
+        assertThat(accepted.matchedLabel()).isEqualTo("card");
+
+        var acceptedWithVisualNoun = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
+                {"identifier":"B#02","matchedLabel":"card token","quantity":1,
+                 "factualSummary":"Target identifier B#02: the lower-space reward is 1 card."}
+                """, request);
+        assertThat(acceptedWithVisualNoun.matchedLabel()).isEqualTo("card");
+        assertThat(acceptedWithVisualNoun.factualSummary()).startsWith("B#02:");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
+                                {"identifier":"B#02","matchedLabel":"amber","quantity":4}
+                                """, request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantity from reference evidence");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
+                                {"identifier":"B#02","matchedLabel":"coins","quantity":1,
+                                 "factualSummary":"B#02: reward is coins."}
+                                """, request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the evidence set");
+    }
 
     @Test
     void cropPublicationGateKeepsCompleteCentralSymbolsWithoutTrustingNeighborFragments() throws IOException {
@@ -145,7 +235,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog(json);
 
         assertThat(draft.pages()).singleElement().satisfies(page -> {
-            assertThat(page.factualSummary()).hasSizeLessThanOrEqualTo(2_400);
+            assertThat(page.factualSummary()).hasSizeLessThanOrEqualTo(4_000);
             assertThat(page.factualSummary()).hasSizeGreaterThan(1_600);
             assertThat(page.keywords().getFirst()).hasSize(120);
         });

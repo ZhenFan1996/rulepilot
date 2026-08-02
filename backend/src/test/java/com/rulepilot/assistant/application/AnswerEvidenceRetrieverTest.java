@@ -14,6 +14,7 @@ import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -50,6 +51,40 @@ class AnswerEvidenceRetrieverTest {
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
         assertThat(result.evidence()).singleElement().satisfies(hit ->
                 assertThat(hit.evidence().excerpt()).contains("执行该行动后获得一分", "Visible facts", "marker"));
+    }
+
+    @Test
+    void performsAnExactBoundedVisualLookupForPrintedIdentifiersBeforeIntentExpansion() {
+        HybridEvidenceHit generic = evidence("Actions may provide several different benefits.", 0.9);
+        List<String> visualQueries = new ArrayList<>();
+        VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
+            visualQueries.add(query);
+            if (!query.equals("A-01 B#02")) return List.of();
+            assertThat(limit).isEqualTo(4);
+            return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
+                    7, "A-01 B#02", "A-01 grants movement; B#02 grants energy.", List.of("A-01", "B#02"), 1.0));
+        };
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                assertThat(pageNumbers).contains(7);
+                return List.of(hit("VISUAL", "Catalogue", "Printed catalogue.", 7, 0.5).evidence());
+            }
+        };
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(generic), facts, lookup);
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question("比较 A-01 和 B#02 的功能。"), context(), "alice");
+
+        assertThat(visualQueries).first().isEqualTo("A-01 B#02");
+        assertThat(result.evidence()).first().satisfies(hit ->
+                assertThat(hit.evidence().excerpt()).contains("A-01 grants movement", "B#02 grants energy"));
     }
 
     @Test

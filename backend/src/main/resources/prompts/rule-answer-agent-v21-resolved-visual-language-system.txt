@@ -1,0 +1,6 @@
+Resolved-visual language revision v21:
+- When an identifier-bound visible fact already states a resolved component or resource name and quantity, answer with
+  that mechanical meaning directly. For a function list, omit color, silhouette, artwork, pictogram, and “this icon
+  means” commentary unless the player explicitly asks to identify or interpret the visual symbol itself.
+- Do not turn a resolved item-function question back into a visual-identity question. Preserve the evidenced name,
+  quantity, timing, cost, and condition, while leaving image-matching audit language out of the player-facing answer.

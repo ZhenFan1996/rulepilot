@@ -71,6 +71,12 @@ final class AnswerEvidenceRetriever {
         boolean conflicting = false;
         int successfulCoreRetrievals = 0;
         int failedCoreRetrievals = 0;
+        retrieveIdentifierBoundVisualFacts(
+                assistantRunId,
+                context.documentVersionId(),
+                question.normalizedQuestion(),
+                visualFactsByPage,
+                directQuestionVisualFactPages);
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
         List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
@@ -208,6 +214,41 @@ final class AnswerEvidenceRetriever {
                     "Endgame evidence pages=" + pages + "; decisive pages=" + decisivePages);
         }
         return new Result(selectedEvidence, State.READY);
+    }
+
+    private void retrieveIdentifierBoundVisualFacts(
+            UUID assistantRunId,
+            UUID documentVersionId,
+            String normalizedQuestion,
+            Map<Integer, PageFactMatch> visualFactsByPage,
+            Set<Integer> directQuestionVisualFactPages) {
+        List<String> identifiers = AnswerEvidencePolicy.printedIdentifiers(normalizedQuestion);
+        if (identifiers.isEmpty()) return;
+        String query = String.join(" ", identifiers);
+        try {
+            List<PageFactMatch> matches = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    "searchIdentifierBoundVisualFacts",
+                    estimateTokens(query),
+                    "Page facts retrieved by printed identifier",
+                    () -> visualFacts.search(documentVersionId, query, Math.min(5, Math.max(4, identifiers.size()))),
+                    result -> result.size() * 80);
+            matches.forEach(match -> {
+                visualFactsByPage.merge(
+                        match.pageNumber(),
+                        match,
+                        (first, candidate) -> candidate.score() > first.score() ? candidate : first);
+                directQuestionVisualFactPages.add(match.pageNumber());
+            });
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException lookupFailure) {
+            LOGGER.warn(
+                    "Optional identifier-bound visual fact lookup failed for document version {}: {}",
+                    documentVersionId,
+                    lookupFailure.getClass().getSimpleName());
+        }
     }
 
     private void selectIntentAnchor(

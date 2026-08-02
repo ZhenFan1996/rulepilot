@@ -80,7 +80,7 @@ final class VisualPageTilePolicy {
         String printedTerms = joined(
                 completedTiles.stream().map(tile -> tile.summary().printedTerms()).toList(), 1_600);
         String factualSummary = joined(
-                completedTiles.stream().map(tile -> tile.summary().factualSummary()).toList(), 2_400);
+                completedTiles.stream().map(tile -> tile.summary().factualSummary()).toList(), 4_000);
         return new PageSummary(
                 pageNumber,
                 printedTerms,

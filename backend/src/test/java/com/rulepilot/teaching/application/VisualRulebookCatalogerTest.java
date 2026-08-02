@@ -15,6 +15,12 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewReque
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellFact;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
@@ -771,6 +777,28 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
+    void removesAConflictingQuantifiedLabelWithoutLeavingADanglingConjunction() {
+        assertThat(VisualRulebookCataloger.removeConflictingReferenceLabels(
+                        "B#04: gain 2 amber and 2 teal.",
+                        "amber",
+                        2,
+                        List.of("amber", "teal", "card")))
+                .isEqualTo("B#04: gain 2 amber.");
+    }
+
+    @Test
+    void preservesSharedCatalogRulesWithoutRepeatingIdentifierEffects() {
+        String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
+                "A-01: Move one space.\nA-02: Draw one card.",
+                "Move one space. Draw one card. Items may occupy any slot. Fill upper slots from left to right.");
+
+        assertThat(merged)
+                .contains("A-01: Move one space.", "A-02: Draw one card.", "Items may occupy any slot.",
+                        "Fill upper slots from left to right.")
+                .doesNotContain("\nMove one space.\n", "\nDraw one card.\n");
+    }
+
+    @Test
     void reusesAnchorlessFactsBecauseAnchorsAreOptionalCropHints() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
@@ -792,6 +820,50 @@ class VisualRulebookCatalogerTest {
 
         assertThat(inputs.getFirst().text()).contains("Visible setup instruction");
         assertThat(modelCalls).hasValue(0);
+    }
+
+    @Test
+    void rereadsDenseIdentifierCatalogsAsIndependentlyBoundCells() throws IOException {
+        UUID documentVersionId = UUID.randomUUID();
+        byte[] pageContent = renderedPage();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                return new CatalogDraft(List.of(new PageSummary(
+                        1,
+                        "A-01; A-02; B#03; B#04",
+                        "A dense reference catalog is visible.",
+                        List.of("reference"))));
+            }
+
+            @Override
+            public IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
+                return new IdentifierLocalizationDraft(List.of(
+                        new IdentifierLocation("A-01", 80, 300, 40, 12),
+                        new IdentifierLocation("A-02", 520, 300, 40, 12),
+                        new IdentifierLocation("B#03", 80, 650, 40, 12),
+                        new IdentifierLocation("B#04", 520, 650, 40, 12)));
+            }
+
+            @Override
+            public IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
+                return new IdentifierCellDraft(request.cells().stream()
+                        .map(cell -> new IdentifierCellFact(
+                                cell.identifier(), cell.identifier() + "：可见效果。"))
+                        .toList());
+            }
+        };
+        VisualRulebookCataloger cataloger = cataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", pageContent, 1_000, 1_000)),
+                model,
+                new InMemoryFacts());
+
+        List<PageInput> result = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Fictional reference", "owner", null);
+
+        assertThat(result).singleElement().satisfies(input -> assertThat(input.text())
+                .contains("A-01：可见效果。", "A-02：可见效果。", "B#03：可见效果。", "B#04：可见效果。"));
     }
 
     private static VisualRulebookCataloger cataloger(

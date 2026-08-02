@@ -182,7 +182,7 @@ final class VisualRulebookCatalogPolicy {
                 mergeBoundedLines(fullPage.printedTerms(), tileAudit.printedTerms(), 1_600, "; "),
                 // The tile pass exists because dense row/cell text was not reliably readable at full-page scale.
                 // Preserve its higher-resolution atomic facts first, then use remaining space for page-level context.
-                mergeBoundedLines(tileAudit.factualSummary(), fullPage.factualSummary(), 2_400, "\n"),
+                mergeBoundedLines(tileAudit.factualSummary(), fullPage.factualSummary(), 4_000, "\n"),
                 Stream.concat(fullPage.keywords().stream(), tileAudit.keywords().stream())
                         .distinct()
                         .limit(12)

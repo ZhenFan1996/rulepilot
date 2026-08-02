@@ -24,6 +24,8 @@ final class AnswerEvidencePolicy {
     private static final Pattern VISUAL_EVIDENCE_PRIORITY_QUESTION = Pattern.compile(
             "(?iu)\\b(which|what|resource|token|icon|symbol|pay|cost|gain|spend|score|stake)\\b"
                     + "|支付|费用|代价|获得|得分|令牌|标记|图标|符号|胜利点|资源|下注");
+    private static final Pattern PRINTED_IDENTIFIER = Pattern.compile(
+            "(?iu)(?<![\\p{L}\\p{N}])[\\p{L}]{1,4}\\s*[#_-]\\s*\\d{1,4}(?![\\p{L}\\p{N}])");
     private static final Pattern EVIDENCED_ENDGAME_TRIGGER = Pattern.compile(
             "(?isu)(?=.*(?:\\bend\\s+(?:the\\s+)?game\\b|\\bgame\\s+ends?\\b|\\bend\\s+condition\\b|"
                     + "游戏结束|结束条件|终局))"
@@ -46,7 +48,24 @@ final class AnswerEvidencePolicy {
     }
 
     static boolean visualEvidencePriority(String question) {
-        return question != null && VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question).find();
+        return question != null
+                && (VISUAL_EVIDENCE_PRIORITY_QUESTION.matcher(question).find()
+                        || PRINTED_IDENTIFIER.matcher(question).find());
+    }
+
+    /**
+     * Printed catalogue identifiers are document-derived coordinates, not game vocabulary. Preserving them as an
+     * exact bounded query prevents a language rewrite or a broad intent expansion from dropping the strongest page
+     * locator available in the player's question.
+     */
+    static List<String> printedIdentifiers(String question) {
+        if (question == null || question.isBlank()) return List.of();
+        LinkedHashSet<String> identifiers = new LinkedHashSet<>();
+        var matcher = PRINTED_IDENTIFIER.matcher(question);
+        while (matcher.find() && identifiers.size() < 24) {
+            identifiers.add(matcher.group().replaceAll("\\s+", "").toUpperCase(Locale.ROOT));
+        }
+        return List.copyOf(identifiers);
     }
 
     /**

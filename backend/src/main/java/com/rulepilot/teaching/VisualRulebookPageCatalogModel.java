@@ -13,6 +13,21 @@ public interface VisualRulebookPageCatalogModel {
 
     CatalogDraft summarize(CatalogRequest request);
 
+    /** Locates document-derived short item identifiers before their surrounding cells are read separately. */
+    default IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
+        return new IdentifierLocalizationDraft(List.of());
+    }
+
+    /** Reads bounded cells whose identifiers were independently supplied and spatially verified. */
+    default IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
+        return new IdentifierCellDraft(List.of());
+    }
+
+    default IdentifierCellVerificationDraft verifyIdentifierCell(IdentifierCellVerificationRequest request) {
+        return new IdentifierCellVerificationDraft(
+                request.cell().identifier(), "NONE", 0, request.draftSummary());
+    }
+
     /**
      * Rechecks model-proposed icon rectangles in a dedicated spatial-grounding pass. Implementations that cannot
      * perform a second visual pass preserve the proposed locations; the application still treats those pages as
@@ -115,6 +130,133 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);
+        }
+    }
+
+    record IdentifierLocalizationRequest(
+            PageImageInput page,
+            List<String> identifiers,
+            String modelConfigurationOwner) {
+        public IdentifierLocalizationRequest {
+            if (page == null || identifiers == null || identifiers.size() < 4 || identifiers.size() > 24) {
+                throw new IllegalArgumentException("visual identifier localization request is invalid");
+            }
+            identifiers = identifiers.stream().map(String::strip).distinct().toList();
+            if (identifiers.size() < 4 || identifiers.stream().anyMatch(value -> value.isBlank() || value.length() > 24)) {
+                throw new IllegalArgumentException("visual identifiers are invalid");
+            }
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null : modelConfigurationOwner.strip();
+        }
+    }
+
+    record IdentifierLocalizationDraft(List<IdentifierLocation> locations) {
+        public IdentifierLocalizationDraft {
+            locations = locations == null ? List.of() : List.copyOf(locations);
+            if (locations.size() > 24) throw new IllegalArgumentException("too many visual identifier locations");
+        }
+    }
+
+    record IdentifierLocation(String identifier, int x, int y, int width, int height) {
+        public IdentifierLocation {
+            if (identifier == null || identifier.isBlank() || identifier.length() > 24
+                    || x < 0 || y < 0 || width < 4 || height < 4
+                    || x + width > 1_000 || y + height > 1_000) {
+                throw new IllegalArgumentException("visual identifier location is invalid");
+            }
+            identifier = identifier.strip();
+        }
+    }
+
+    record IdentifierCellInput(String identifier, PageImageInput image) {
+        public IdentifierCellInput {
+            if (identifier == null || identifier.isBlank() || identifier.length() > 24 || image == null) {
+                throw new IllegalArgumentException("visual identifier cell is invalid");
+            }
+            identifier = identifier.strip();
+        }
+    }
+
+    record IdentifierCellRequest(
+            List<IdentifierCellInput> cells,
+            List<IdentifierReferencePage> referencePages,
+            String modelConfigurationOwner) {
+        public IdentifierCellRequest(List<IdentifierCellInput> cells, String modelConfigurationOwner) {
+            this(cells, List.of(), modelConfigurationOwner);
+        }
+
+        public IdentifierCellRequest {
+            if (cells == null || cells.isEmpty() || cells.size() > 4) {
+                throw new IllegalArgumentException("visual identifier cell request is invalid");
+            }
+            cells = List.copyOf(cells);
+            referencePages = referencePages == null ? List.of() : List.copyOf(referencePages);
+            if (referencePages.size() > 3) throw new IllegalArgumentException("too many identifier reference pages");
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null : modelConfigurationOwner.strip();
+        }
+    }
+
+    record IdentifierReferencePage(PageImageInput image, String evidenceText) {
+        public IdentifierReferencePage {
+            if (image == null || evidenceText == null || evidenceText.isBlank() || evidenceText.length() > 1_600) {
+                throw new IllegalArgumentException("visual identifier reference page is invalid");
+            }
+            evidenceText = evidenceText.strip();
+        }
+    }
+
+    record IdentifierCellVerificationRequest(
+            IdentifierCellInput cell,
+            IdentifierReferencePage referencePage,
+            List<String> allowedLabels,
+            String draftSummary,
+            String modelConfigurationOwner) {
+        public IdentifierCellVerificationRequest {
+            if (cell == null || referencePage == null || allowedLabels == null || allowedLabels.size() < 2
+                    || allowedLabels.size() > 12 || draftSummary == null || draftSummary.isBlank()
+                    || draftSummary.length() > 800) {
+                throw new IllegalArgumentException("identifier cell verification request is invalid");
+            }
+            allowedLabels = allowedLabels.stream().map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
+            if (allowedLabels.size() < 2 || allowedLabels.stream().anyMatch(value -> value.length() > 60)) {
+                throw new IllegalArgumentException("identifier cell verification labels are invalid");
+            }
+            draftSummary = draftSummary.strip();
+            modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null : modelConfigurationOwner.strip();
+        }
+    }
+
+    record IdentifierCellVerificationDraft(String identifier, String matchedLabel, int quantity, String factualSummary) {
+        public IdentifierCellVerificationDraft {
+            if (identifier == null || identifier.isBlank() || identifier.length() > 24
+                    || matchedLabel == null || matchedLabel.isBlank() || matchedLabel.length() > 60
+                    || quantity < 0 || quantity > 99
+                    || factualSummary == null || factualSummary.isBlank() || factualSummary.length() > 800) {
+                throw new IllegalArgumentException("identifier cell verification draft is invalid");
+            }
+            identifier = identifier.strip();
+            matchedLabel = matchedLabel.strip();
+            factualSummary = factualSummary.strip();
+        }
+    }
+
+    record IdentifierCellDraft(List<IdentifierCellFact> facts) {
+        public IdentifierCellDraft {
+            facts = facts == null ? List.of() : List.copyOf(facts);
+            if (facts.size() > 4) throw new IllegalArgumentException("too many visual identifier cell facts");
+        }
+    }
+
+    record IdentifierCellFact(String identifier, String factualSummary) {
+        public IdentifierCellFact {
+            if (identifier == null || identifier.isBlank() || identifier.length() > 24
+                    || factualSummary == null || factualSummary.isBlank() || factualSummary.length() > 800) {
+                throw new IllegalArgumentException("visual identifier cell fact is invalid");
+            }
+            identifier = identifier.strip();
+            factualSummary = factualSummary.strip();
         }
     }
 
@@ -262,7 +404,7 @@ public interface VisualRulebookPageCatalogModel {
         public PageSummary {
             if (pageNumber < 1
                     || (printedTerms != null && printedTerms.length() > 1_600)
-                    || (factualSummary != null && factualSummary.length() > 2_400)
+                    || (factualSummary != null && factualSummary.length() > 4_000)
                     || (keywords != null && (keywords.size() > 16
                             || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)))
                     || (visualAnchors != null && visualAnchors.size() > 8)

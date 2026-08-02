@@ -100,9 +100,14 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
         }
         List<String> lexemes = searchLexemes(query);
         List<String> cjkFragments = cjkFragments(query);
-        if (lexemes.isEmpty() && cjkFragments.isEmpty()) return List.of();
+        List<String> printedIdentifiers = printedIdentifiers(query);
+        if (lexemes.isEmpty() && cjkFragments.isEmpty() && printedIdentifiers.isEmpty()) return List.of();
         String documentVector = "to_tsvector('simple', printed_terms || ' ' || factual_summary || ' ' || keywords)";
         String documentText = "lower(printed_terms || ' ' || factual_summary || ' ' || keywords)";
+        String compactDocumentText = "regexp_replace(" + documentText + ", '\\s+', '', 'g')";
+        Stream<String> identifierCoverage = IntStream.range(0, printedIdentifiers.size())
+                .mapToObj(index -> "CASE WHEN position(:identifier" + index + " in " + compactDocumentText
+                        + ") > 0 THEN 100 ELSE 0 END");
         Stream<String> lexicalCoverage = IntStream.range(0, lexemes.size())
                 .mapToObj(index -> "CASE WHEN " + documentVector
                         + " @@ to_tsquery('simple', :term" + index + ") THEN "
@@ -110,7 +115,7 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
         Stream<String> cjkCoverage = IntStream.range(0, cjkFragments.size())
                 .mapToObj(index -> "CASE WHEN position(:cjk" + index + " in " + documentText
                         + ") > 0 THEN 1 ELSE 0 END");
-        String coverage = Stream.concat(lexicalCoverage, cjkCoverage)
+        String coverage = Stream.concat(identifierCoverage, Stream.concat(lexicalCoverage, cjkCoverage))
                 .collect(java.util.stream.Collectors.joining(" + "));
         String requested = lexemes.isEmpty()
                 ? ""
@@ -142,6 +147,8 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
                 .forEach(index -> databaseQuery.setParameter("term" + index, lexemes.get(index) + ":*"));
         IntStream.range(0, cjkFragments.size())
                 .forEach(index -> databaseQuery.setParameter("cjk" + index, cjkFragments.get(index)));
+        IntStream.range(0, printedIdentifiers.size())
+                .forEach(index -> databaseQuery.setParameter("identifier" + index, printedIdentifiers.get(index)));
         List<Object[]> rows = databaseQuery.getResultList();
         return rows.stream()
                 .map(row -> new PageFactMatch(
@@ -157,6 +164,15 @@ public class JpaVisualRulebookPageFacts implements VisualRulebookPageFacts, Visu
         return searchLexemes(query).stream()
                 .map(term -> term + ":*")
                 .collect(java.util.stream.Collectors.joining(" | "));
+    }
+
+    static List<String> printedIdentifiers(String query) {
+        java.util.LinkedHashSet<String> identifiers = new java.util.LinkedHashSet<>();
+        Matcher matcher = SHORT_PRINTED_IDENTIFIER.matcher(query);
+        while (matcher.find() && identifiers.size() < 12) {
+            identifiers.add(matcher.group().toLowerCase(Locale.ROOT));
+        }
+        return List.copyOf(identifiers);
     }
 
     private static List<String> searchLexemes(String query) {

@@ -13,6 +13,12 @@ import org.junit.jupiter.api.Test;
 class JpaVisualRulebookPageFactsTest {
 
     @Test
+    void preservesExactPrintedIdentifiersForCandidateDisambiguation() {
+        assertThat(JpaVisualRulebookPageFacts.printedIdentifiers("Compare A-01, B#02, and a-01"))
+                .containsExactly("a-01", "b#02");
+    }
+
+    @Test
     void buildsBoundedPrefixOrQueryWithoutConversationalFiller() {
         assertThat(JpaVisualRulebookPageFacts.searchTerms(
                         "Is clearing three matching wildlife tokens optional and how often can you do this?"))

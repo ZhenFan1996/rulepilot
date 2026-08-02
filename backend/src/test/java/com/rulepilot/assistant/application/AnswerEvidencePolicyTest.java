@@ -72,4 +72,13 @@ class AnswerEvidencePolicyTest {
         assertThat(AnswerEvidencePolicy.requiresCrossLanguageExpansion("这个图标表示什么？")).isTrue();
         assertThat(AnswerEvidencePolicy.requiresCrossLanguageExpansion("one icon")).isFalse();
     }
+
+    @Test
+    void treatsDocumentDerivedPrintedIdentifiersAsVisualLocators() {
+        assertThat(AnswerEvidencePolicy.visualEvidencePriority("A-01 的功能是什么？")).isTrue();
+        assertThat(AnswerEvidencePolicy.printedIdentifiers("比较 a - 01、B#02 和 A-01"))
+                .containsExactly("A-01", "B#02");
+        assertThat(AnswerEvidencePolicy.visualEvidencePriority("How does this ordinary action work?"))
+                .isFalse();
+    }
 }

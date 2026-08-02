@@ -56,7 +56,9 @@ public interface VisualRulebookPageFacts {
         // Schema 25 adds a second, independent crop-review pass and removes same-page overlapping duplicate reports
         // before the public glossary projection.
         // Schema 26 preserves dense-page tile facts and binds each visible list/grid identifier to its own rule.
-        public static final int CURRENT_SCHEMA_VERSION = 26;
+        // Schema 27 verifies ambiguous cell pictograms against labeled reference artwork from the active document.
+        // Schema 28 retains shared rules alongside independently bound cells on dense catalog pages.
+        public static final int CURRENT_SCHEMA_VERSION = 28;
 
         public PageFact(int pageNumber, String printedTerms, String factualSummary, List<String> keywords) {
             this(pageNumber, printedTerms, factualSummary, keywords, List.of(), List.of(), false, CURRENT_SCHEMA_VERSION);
@@ -95,7 +97,7 @@ public interface VisualRulebookPageFacts {
                     || iconOccurrences == null) {
                 throw new IllegalArgumentException("visual page fact is invalid");
             }
-            if (printedTerms.length() > 2_000 || factualSummary.length() > 2_400 || keywords.size() > 12
+            if (printedTerms.length() > 2_000 || factualSummary.length() > 4_000 || keywords.size() > 12
                     || keywords.stream().anyMatch(keyword -> keyword == null || keyword.isBlank() || keyword.length() > 120)
                     || visualAnchors.size() > 8
                     || iconOccurrences.size() > 32) {

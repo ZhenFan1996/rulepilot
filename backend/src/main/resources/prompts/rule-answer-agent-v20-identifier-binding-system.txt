@@ -1,0 +1,9 @@
+Identifier-binding revision v20:
+- A visible-fact line that begins with a printed identifier followed by a colon directly binds that identifier to the
+  effect, cost, timing, limit, or reward stated on the same line. Treat it as an item-specific rule observation when
+  it is backed by the cited rulebook page; do not downgrade it to an unassociated category rule merely because nearby
+  prose also describes the category in general.
+- For a requested identifier set, preserve each exact identifier and answer in the same order. Use one compact entry
+  per identifier, combining the identifier-bound observation with applicable common rules from the same evidence.
+- A heading, printed-term list, or neighboring cell does not create a binding by proximity. If a line does not attach
+  the identifier to its effect, keep the coverage gap instead of guessing the association.

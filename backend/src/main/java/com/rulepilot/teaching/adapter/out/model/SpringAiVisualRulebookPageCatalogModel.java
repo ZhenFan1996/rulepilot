@@ -8,6 +8,16 @@ import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocalizationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellFact;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
@@ -51,6 +61,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final String systemPrompt;
     private final String iconLocalizationPrompt;
     private final String iconCropReviewPrompt;
+    private final String identifierCellPrompt;
+    private final String identifierReferenceMatchPrompt;
     private final int maxCompletionTokens;
 
     public SpringAiVisualRulebookPageCatalogModel(
@@ -59,6 +71,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
             @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
+            @Value("classpath:prompts/visual-identifier-cell-v1-system.txt") Resource identifierCellPrompt,
+            @Value("classpath:prompts/visual-identifier-reference-match-v1-system.txt") Resource identifierReferenceMatchPrompt,
             @Value("${rulepilot.visual.catalog-max-output-tokens:4800}") int maxCompletionTokens)
             throws IOException {
         this.models = models;
@@ -66,13 +80,122 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()) {
+        this.identifierCellPrompt = identifierCellPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        this.identifierReferenceMatchPrompt = identifierReferenceMatchPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()
+                || this.identifierCellPrompt.isBlank() || this.identifierReferenceMatchPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
         if (maxCompletionTokens < 800 || maxCompletionTokens > 8_000) {
             throw new IllegalArgumentException("visual page catalog output budget is invalid");
         }
         this.maxCompletionTokens = maxCompletionTokens;
+    }
+
+    @Override
+    public IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.locateIdentifiers(request);
+        }
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 2_000));
+        }
+        String content = prompt.system(identifierCellPrompt)
+                .user(user -> {
+                    user.text("""
+                            Task: locate-identifiers
+                            PDF page number: {pageNumber}
+                            Required identifiers: {identifiers}
+                            Return one location for every required identifier that is literally visible. Coordinates
+                            use a top-left 0-1000 grid on the complete attached page.
+                            """)
+                            .param("pageNumber", request.page().pageNumber())
+                            .param("identifiers", request.identifiers());
+                    // Identifier labels are often deliberately small, light-gray catalog furniture. Preserve the
+                    // immutable rendered page resolution for this spatial pass; the ordinary overview catalog may
+                    // still use its bounded 1024px preparation.
+                    PageImageInput page = request.page();
+                    user.media(MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content()));
+                })
+                .call().content();
+        return parseIdentifierLocations(content);
+    }
+
+    @Override
+    public IdentifierCellDraft summarizeIdentifierCells(IdentifierCellRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.summarizeIdentifierCells(request);
+        }
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 2_400));
+        }
+        String content = prompt.system(identifierCellPrompt)
+                .user(user -> {
+                    user.text("""
+                            Task: read-identifier-cells
+                            Attachment mapping:
+                            {mapping}
+                            Reference page mapping:
+                            {references}
+                            Return exactly one fact for each attachment and use its supplied identifier verbatim.
+                            """).param("mapping", java.util.stream.IntStream.range(0, request.cells().size())
+                            .mapToObj(index -> "image " + (index + 1) + " = " + request.cells().get(index).identifier())
+                            .collect(Collectors.joining("\n")))
+                            .param("references", request.referencePages().isEmpty()
+                                    ? "none"
+                                    : java.util.stream.IntStream.range(0, request.referencePages().size())
+                                            .mapToObj(index -> "image " + (request.cells().size() + index + 1)
+                                                    + " = complete PDF page "
+                                                    + request.referencePages().get(index).image().pageNumber()
+                                                    + "; extracted page evidence: "
+                                                    + request.referencePages().get(index).evidenceText())
+                                            .collect(Collectors.joining("\n")));
+                    request.cells().stream().map(IdentifierCellInput::image).map(images::prepare).forEach(image ->
+                            user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
+                    request.referencePages().stream().map(IdentifierReferencePage::image).map(images::prepare).forEach(image ->
+                            user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content())));
+                })
+                .call().content();
+        return parseIdentifierCellFacts(content, request.cells().stream().map(IdentifierCellInput::identifier).toList());
+    }
+
+    @Override
+    public IdentifierCellVerificationDraft verifyIdentifierCell(IdentifierCellVerificationRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return VisualRulebookPageCatalogModel.super.verifyIdentifierCell(request);
+        }
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(qwenJsonOptions(models.modelNameFor(Role.VISUAL, owner), 900));
+        }
+        String content = prompt.system(identifierReferenceMatchPrompt)
+                .user(user -> {
+                    user.text("""
+                            Task: verify-reference-match
+                            Target identifier: {identifier}
+                            Draft fact: {draft}
+                            Allowed reference labels: {labels}
+                            Reference evidence: {evidence}
+                            image 1 is the target cell; image 2 is the labeled reference crop.
+                            Return identifier, matchedLabel, and quantity only. matchedLabel must be exactly one allowed
+                            label or NONE. Do not rewrite or summarize the draft.
+                            """)
+                            .param("identifier", request.cell().identifier())
+                            .param("draft", request.draftSummary())
+                            .param("labels", request.allowedLabels())
+                            .param("evidence", request.referencePage().evidenceText());
+                    for (PageImageInput input : List.of(request.cell().image(), request.referencePage().image())) {
+                        PageImageInput image = images.prepare(input);
+                        user.media(MimeTypeUtils.parseMimeType(image.mediaType()), new ByteArrayResource(image.content()));
+                    }
+                })
+                .call().content();
+        return parseIdentifierCellVerification(content, request);
     }
 
     @Override
@@ -483,7 +606,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 summaries.add(new PageSummary(
                         page.path("pageNumber").asInt(),
                         bounded(joinedText(page.get("printedTerms"), "; "), 1_600),
-                        bounded(joinedText(page.get("factualSummary"), "\n"), 2_400),
+                        bounded(joinedText(page.get("factualSummary"), "\n"), 4_000),
                         boundedStrings(page.get("keywords"), 16, 120),
                         visualAnchors(page.get("visualAnchors")),
                         iconOccurrences(page.get("iconOccurrences")),
@@ -493,6 +616,137 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson);
         }
+    }
+
+    static IdentifierLocalizationDraft parseIdentifierLocations(String content) {
+        JsonNode items = structuredItems(content, "visual identifier localization");
+        java.util.List<IdentifierLocation> locations = new java.util.ArrayList<>();
+        items.forEach(item -> {
+            if (!item.isObject()) return;
+            try {
+                locations.add(new IdentifierLocation(
+                        item.path("identifier").asText(),
+                        item.path("x").asInt(Integer.MIN_VALUE),
+                        item.path("y").asInt(Integer.MIN_VALUE),
+                        item.path("width").asInt(Integer.MIN_VALUE),
+                        item.path("height").asInt(Integer.MIN_VALUE)));
+            } catch (IllegalArgumentException ignored) {
+                // A malformed optional location does not discard other independently verified labels.
+            }
+        });
+        return new IdentifierLocalizationDraft(locations);
+    }
+
+    static IdentifierCellDraft parseIdentifierCellFacts(String content, List<String> expectedIdentifiers) {
+        JsonNode items = structuredItems(content, "visual identifier cells");
+        Map<String, String> expected = expectedIdentifiers.stream().collect(Collectors.toMap(
+                SpringAiVisualRulebookPageCatalogModel::normalizedIdentifier,
+                java.util.function.Function.identity(),
+                (first, ignored) -> first,
+                java.util.LinkedHashMap::new));
+        Map<String, IdentifierCellFact> facts = new java.util.LinkedHashMap<>();
+        items.forEach(item -> {
+            if (!item.isObject()) return;
+            String supplied = expected.get(normalizedIdentifier(item.path("identifier").asText()));
+            if (supplied == null || facts.containsKey(normalizedIdentifier(supplied))) return;
+            try {
+                facts.put(normalizedIdentifier(supplied), new IdentifierCellFact(
+                        supplied, bounded(joinedText(item.get("factualSummary"), " "), 800)));
+            } catch (IllegalArgumentException ignored) {
+                // Keep other cells; an unreadable crop remains absent rather than being guessed.
+            }
+        });
+        return new IdentifierCellDraft(List.copyOf(facts.values()));
+    }
+
+    static IdentifierCellVerificationDraft parseIdentifierCellVerification(
+            String content, IdentifierCellVerificationRequest request) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("identifier cell verification returned no content");
+        }
+        try {
+            JsonNode root = JSON.readTree(content.strip().replaceFirst("(?s)^```(?:json)?\\s*", "")
+                    .replaceFirst("(?s)\\s*```$", ""));
+            String identifier = root.path("identifier").asText();
+            if (!normalizedIdentifier(identifier).equals(normalizedIdentifier(request.cell().identifier()))) {
+                throw new IllegalArgumentException("identifier cell verification changed the identifier");
+            }
+            String returnedLabel = root.path("matchedLabel").asText();
+            String matchedLabel;
+            if ("NONE".equalsIgnoreCase(returnedLabel)) {
+                matchedLabel = "NONE";
+            } else {
+                String normalizedReturned = normalizedEvidenceLabel(returnedLabel);
+                List<String> matched = request.allowedLabels().stream()
+                        .filter(label -> {
+                            String normalizedAllowed = normalizedEvidenceLabel(label);
+                            return normalizedAllowed.equals(normalizedReturned)
+                                    || normalizedReturned.matches(".*\\b" + Pattern.quote(normalizedAllowed) + "\\b.*");
+                        })
+                        .toList();
+                if (matched.size() != 1) {
+                    throw new IllegalArgumentException(
+                            "identifier cell verification returned a label outside the evidence set");
+                }
+                matchedLabel = matched.getFirst();
+            }
+            int quantity = "NONE".equals(matchedLabel) ? 0 : root.path("quantity").asInt(0);
+            if (!"NONE".equals(matchedLabel) && quantity < 1) {
+                throw new IllegalArgumentException("identifier cell verification omitted the matched quantity");
+            }
+            if (quantity > 1 && !java.util.regex.Pattern.compile("(?<!\\d)" + quantity + "(?!\\d)")
+                    .matcher(request.draftSummary())
+                    .find()) {
+                throw new IllegalArgumentException("identifier cell verification copied a quantity from reference evidence");
+            }
+            return new IdentifierCellVerificationDraft(
+                    request.cell().identifier(),
+                    matchedLabel,
+                    quantity,
+                    identifierBoundSummary(request.cell().identifier(), request.draftSummary()));
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException("identifier cell verification returned invalid JSON", invalidJson);
+        }
+    }
+
+    private static JsonNode structuredItems(String content, String operation) {
+        if (content == null || content.isBlank()) throw new IllegalArgumentException(operation + " returned no content");
+        String json = content.strip();
+        if (json.startsWith("```")) {
+            int firstLineEnd = json.indexOf('\n');
+            int closingFence = json.lastIndexOf("```");
+            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
+                throw new IllegalArgumentException(operation + " returned malformed JSON fencing");
+            }
+            json = json.substring(firstLineEnd + 1, closingFence).strip();
+        }
+        try {
+            JsonNode items = JSON.readTree(json).path("items");
+            if (!items.isArray()) throw new IllegalArgumentException(operation + " JSON has no items array");
+            return items;
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException(operation + " returned invalid JSON", invalidJson);
+        }
+    }
+
+    private static String normalizedIdentifier(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase(java.util.Locale.ROOT);
+    }
+
+    private static String normalizedEvidenceLabel(String value) {
+        String normalized = value == null ? "" : value.strip().toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("(?iu)\\b(?:icon|pictogram|resource|token)s?\\b", " ")
+                .replaceAll("\\s+", " ")
+                .strip();
+        return normalized.length() > 4 && normalized.endsWith("s")
+                ? normalized.substring(0, normalized.length() - 1)
+                : normalized;
+    }
+
+    private static String identifierBoundSummary(String identifier, String summary) {
+        String normalized = summary.replaceFirst("(?iu)^Target\\s+identifier\\s+", "").strip();
+        if (normalizedIdentifier(normalized).startsWith(normalizedIdentifier(identifier))) return normalized;
+        return identifier + ": " + normalized;
     }
 
     private static String joinedText(JsonNode value, String separator) {
