@@ -1,18 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import CatalogView from '@/views/CatalogView.vue'
-import GameShelfView from '@/views/GameShelfView.vue'
-import DocumentsView from '@/views/DocumentsView.vue'
 import HomeView from '@/views/HomeView.vue'
-import LessonView from '@/views/LessonView.vue'
-import LessonQuestionsView from '@/views/LessonQuestionsView.vue'
-import PublicLessonView from '@/views/PublicLessonView.vue'
-import PublicLibraryView from '@/views/PublicLibraryView.vue'
-import LessonsView from '@/views/LessonsView.vue'
-import LoginView from '@/views/LoginView.vue'
-import RegisterView from '@/views/RegisterView.vue'
-import ModelSettingsView from '@/views/ModelSettingsView.vue'
-import AccountView from '@/views/AccountView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -25,62 +13,62 @@ const router = createRouter({
     {
       path: '/login',
       name: 'login',
-      component: LoginView,
+      component: () => import('@/views/LoginView.vue'),
     },
     {
       path: '/register',
       name: 'register',
-      component: RegisterView,
+      component: () => import('@/views/RegisterView.vue'),
     },
     {
       path: '/catalog',
       name: 'catalog',
-      component: GameShelfView,
+      component: () => import('@/views/GameShelfView.vue'),
     },
     {
       path: '/catalog/manage',
       name: 'catalog-manage',
-      component: CatalogView,
+      component: () => import('@/views/CatalogView.vue'),
     },
     {
       path: '/teach',
       name: 'teach',
-      component: DocumentsView,
+      component: () => import('@/views/DocumentsView.vue'),
     },
     {
       path: '/lessons',
       name: 'lessons',
-      component: LessonsView,
+      component: () => import('@/views/LessonsView.vue'),
     },
     {
       path: '/account',
       name: 'account',
-      component: AccountView,
+      component: () => import('@/views/AccountView.vue'),
     },
     {
       path: '/settings/models',
       name: 'model-settings',
-      component: ModelSettingsView,
+      component: () => import('@/views/ModelSettingsView.vue'),
     },
     {
       path: '/lesson/:planId?',
       name: 'lesson',
-      component: LessonView,
+      component: () => import('@/views/LessonView.vue'),
     },
     {
       path: '/lesson/:planId/questions',
       name: 'lesson-questions',
-      component: LessonQuestionsView,
+      component: () => import('@/views/LessonQuestionsView.vue'),
     },
     {
       path: '/read/:planId',
       name: 'public-lesson',
-      component: PublicLessonView,
+      component: () => import('@/views/PublicLessonView.vue'),
     },
     {
       path: '/library',
       name: 'public-library',
-      component: PublicLibraryView,
+      component: () => import('@/views/PublicLibraryView.vue'),
     },
     {
       path: '/table/:planId',

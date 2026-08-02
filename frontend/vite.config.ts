@@ -94,8 +94,33 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
         navigateFallbackDenylist: pwaNavigationFallbackDenylist,
-        globPatterns: ['**/*.{js,css,html,svg,jpg,woff2}'],
+        globPatterns: [
+          'index.html',
+          'manifest.webmanifest',
+          'rulepilot-icon.svg',
+          'assets/index-*.{js,css}',
+          'assets/LessonView-*.js',
+          'assets/offlineKnowledge-*.js',
+          'assets/rulebookIconGlossary-*.js',
+          'assets/teachingProgress-*.js',
+        ],
         globIgnores: ['ocr-assets/**'],
+        runtimeCaching: [
+          {
+            urlPattern: /\/assets\/.*\.(?:js|css)$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'rulepilot-visited-route-assets',
+              expiration: {
+                maxEntries: 80,
+                maxAgeSeconds: 30 * 24 * 60 * 60,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+        ],
       },
     }),
   ],

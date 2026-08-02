@@ -21,3 +21,14 @@ test('keeps the primary journey usable on a mobile viewport', async ({ page }) =
   )
   expect(hasHorizontalOverflow).toBe(false)
 })
+
+test('loads the rulebook workflow through its lazy route boundary', async ({ page }) => {
+  await page.goto('/')
+
+  const teachLinks = page.locator('a[href="/teach"]:visible')
+  await expect(teachLinks.first()).toBeVisible()
+  await teachLinks.first().click()
+
+  await expect(page).toHaveURL('/teach')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(/\S+/)
+})

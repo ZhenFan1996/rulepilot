@@ -11,7 +11,7 @@
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "test": "npm run verify",
-    "verify": "npm run typecheck && npm run lint && npm run test:unit && npm run build",
+    "verify": "npm run typecheck && npm run lint && npm run test:unit && npm run build && node ../scripts/verify-frontend-delivery.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
