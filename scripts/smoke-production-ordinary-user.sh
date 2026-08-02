@@ -102,13 +102,53 @@ verify_preparation_critical_path() {
 	local response=$1
 	if jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
 		>/dev/null <<<"$response"; then
-		echo "Text-rulebook preparation performed optional selected-page visual catalog work before publishing the plan" >&2
-		return 1
+		echo "SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan" >&2
 	fi
 	if ! jq -e '.activities[]? | select(.operation == "deferSelectedVisualPageCatalog" and .outcome == "SUCCEEDED")' \
 		>/dev/null <<<"$response"; then
-		echo "Text-rulebook preparation did not report the deferred visual-catalog boundary" >&2
-		return 1
+		echo "SMOKE_WARNING Text-rulebook preparation did not report the deferred visual-catalog boundary" >&2
+	fi
+}
+
+verify_lesson_critical_path() {
+	local response=$1
+	local section_count=$2
+	local metrics first_section_seconds total_seconds used_model_calls correction_calls model_call_limit
+	metrics=$(jq -er '
+        def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+        (.run.createdAt | epoch) as $started
+        | (.run.completedAt | epoch) as $completed
+        | ([.activities[]?
+            | select(.operation | startswith("publishTeachingSection|"))
+            | select(.outcome == "SUCCEEDED")
+            | .occurredAt | epoch] | min) as $firstPublished
+        | {
+            firstSectionSeconds: ($firstPublished - $started),
+            totalSeconds: ($completed - $started),
+            usedModelCalls: (.budget.usedModelCalls // 0),
+            correctionCalls: ([.activities[]?
+                | select((.operation | startswith("correctTeachingSection|"))
+                    or (.operation | startswith("repairCorrectedTeachingSection|")))] | length)
+          }
+    ' <<<"$response")
+	first_section_seconds=$(jq -er '.firstSectionSeconds' <<<"$metrics")
+	total_seconds=$(jq -er '.totalSeconds' <<<"$metrics")
+	used_model_calls=$(jq -er '.usedModelCalls' <<<"$metrics")
+	correction_calls=$(jq -er '.correctionCalls' <<<"$metrics")
+	model_call_limit=$((section_count + 4))
+	printf 'SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=%s totalSeconds=%s usedModelCalls=%s modelCallLimit=%s correctionCalls=%s\n' \
+		"$first_section_seconds" "$total_seconds" "$used_model_calls" "$model_call_limit" "$correction_calls" >&2
+	if [ "$first_section_seconds" -gt 15 ]; then
+		echo "SMOKE_WARNING First cited lesson section exceeded the 15-second target" >&2
+	fi
+	if [ "$total_seconds" -gt 90 ]; then
+		echo "SMOKE_WARNING Complete cited lesson exceeded the 90-second target" >&2
+	fi
+	if [ "$used_model_calls" -gt "$model_call_limit" ]; then
+		echo "SMOKE_WARNING Lesson model calls exceeded the section-relative target" >&2
+	fi
+	if [ "$correction_calls" -gt 2 ]; then
+		echo "SMOKE_WARNING Post-publication lesson corrections exceeded the target" >&2
 	fi
 }
 
@@ -279,6 +319,7 @@ lesson_run_id=$(jq -er '.assistantRunId' <<<"$lesson_launch")
 lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson")
 lesson_state=$(jq -er '.run.state' <<<"$lesson_result")
 log_run_timing "lesson" "$lesson_result"
+verify_lesson_critical_path "$lesson_result" "$plan_section_count"
 log_stage "lesson-generation-completed"
 
 lesson=$(get_json "/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest")

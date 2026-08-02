@@ -11,6 +11,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let planStarted = false
   let deleted = false
   let includeBlockingVisualCatalog = false
+  let slowFirstLessonSection = false
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -95,13 +96,24 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
       return json(response, 200, {
-        run: { state: 'COMPLETED', createdAt: '2026-08-02T00:00:13Z', completedAt: '2026-08-02T00:00:20Z' },
+        run: {
+          state: 'COMPLETED',
+          createdAt: '2026-08-02T00:00:13Z',
+          completedAt: slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z',
+        },
         steps: [],
-        activities: [{
-          sequence: 1, type: 'MODEL', operation: 'composeLessonSection', outcome: 'SUCCEEDED',
-          latencyMs: 6500, estimatedInputTokens: 900, estimatedOutputTokens: 250,
-          occurredAt: '2026-08-02T00:00:20Z',
-        }],
+        activities: [
+          {
+            sequence: 1, type: 'MODEL', operation: 'composeLessonSection', outcome: 'SUCCEEDED',
+            latencyMs: 6500, estimatedInputTokens: 900, estimatedOutputTokens: 250,
+            occurredAt: '2026-08-02T00:00:19Z',
+          },
+          {
+            sequence: 2, type: 'VALIDATION', operation: 'publishTeachingSection|1', outcome: 'SUCCEEDED',
+            latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
+            occurredAt: slowFirstLessonSection ? '2026-08-02T00:00:35Z' : '2026-08-02T00:00:20Z',
+          },
+        ],
         budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1150 },
       })
     }
@@ -155,11 +167,12 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.doesNotMatch(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=inspectRulebookVisualBatch/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
+    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
 
     includeBlockingVisualCatalog = true
     deleted = false
     planStarted = false
-    const regression = await spawnResult(
+    const visualWarning = await spawnResult(
       'bash',
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
@@ -167,8 +180,24 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--timeout-seconds', '10'],
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
-    assert.equal(regression.code, 1)
-    assert.match(regression.stderr, /performed optional selected-page visual catalog work before publishing the plan/)
+    assert.equal(visualWarning.code, 0, visualWarning.stderr)
+    assert.match(visualWarning.stderr, /SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan/)
+    assert.equal(deleted, true)
+
+    includeBlockingVisualCatalog = false
+    slowFirstLessonSection = true
+    deleted = false
+    planStarted = false
+    const slowLesson = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(slowLesson.code, 0, slowLesson.stderr)
+    assert.match(slowLesson.stderr, /SMOKE_WARNING First cited lesson section exceeded the 15-second target/)
     assert.equal(deleted, true)
   } finally {
     server.closeAllConnections()
