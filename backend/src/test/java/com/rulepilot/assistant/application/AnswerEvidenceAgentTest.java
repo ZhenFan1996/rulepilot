@@ -13,6 +13,7 @@ import com.rulepilot.assistant.NativeToolAgent;
 import com.rulepilot.assistant.NativeToolAgent.ObservationRecord;
 import com.rulepilot.assistant.NativeToolAgent.RunResult;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
+import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
@@ -30,11 +31,28 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class AnswerEvidenceAgentTest {
 
     private final UUID versionId = UUID.randomUUID();
     private final UUID runId = UUID.randomUUID();
+
+    @Test
+    void startsAsANonTestSpringBeanWithTheApplicationScopePort() {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(NativeToolAgent.class, () -> mock(NativeToolAgent.class));
+            context.registerBean(RuleEvidenceLookup.class, this::emptyLookup);
+            context.registerBean(NativeToolScopes.class, () -> mock(NativeToolScopes.class));
+            context.registerBean(RuleAnswerRateLimiter.class, () -> mock(RuleAnswerRateLimiter.class));
+            context.register(AnswerEvidenceAgent.class);
+
+            context.refresh();
+
+            assertThat(context.getBean(AnswerEvidenceRefiner.class))
+                    .isInstanceOf(AnswerEvidenceAgent.class);
+        }
+    }
 
     @Test
     void keepsTheFastPathForAReadyDirectQuestionWithoutCallingTheNativeAgent() {
