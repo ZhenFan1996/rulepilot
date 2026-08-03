@@ -28,12 +28,40 @@ class GameSessionConversationServiceTest {
         assertThat(conversations.history(sessionId, "alice"))
                 .extracting(GameSessionConversationTurn::question)
                 .containsExactly("月球登陆要付多少？", "那之后还能再做一次吗？");
-        assertThat(conversations.previousQuestion(sessionId, "alice"))
-                .contains("那之后还能再做一次吗？");
+        assertThat(conversations.priorTurnReference(sessionId, "alice", versionId()))
+                .isEmpty();
+    }
+
+    @Test
+    void exposesOnlyTheLatestGroundedSameVersionTurnAsAReferenceHint() {
+        InMemoryTurns repository = new InMemoryTurns();
+        GameSessionConversationService conversations = new GameSessionConversationService(repository);
+        UUID sessionId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        StructuredRuleAnswer answer = answer(versionId);
+        conversations.record(sessionId, "月球登陆要付多少？", answer, "alice");
+
+        var reference = conversations.priorTurnReference(sessionId, "alice", versionId);
+
+        assertThat(reference).isPresent();
+        assertThat(reference.orElseThrow().groundedVerdict()).isEqualTo(answer.shortVerdict());
+        assertThat(reference.orElseThrow().citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.chunkId()).isEqualTo(answer.citations().getFirst().chunkId());
+            assertThat(citation.pageFrom()).isEqualTo(17);
+        });
+        assertThat(conversations.priorTurnReference(sessionId, "alice", UUID.randomUUID())).isEmpty();
+        assertThat(conversations.priorTurnReference(sessionId, "bob", versionId)).isEmpty();
     }
 
     private StructuredRuleAnswer answer() {
-        UUID versionId = UUID.randomUUID();
+        return answer(UUID.randomUUID());
+    }
+
+    private UUID versionId() {
+        return UUID.randomUUID();
+    }
+
+    private StructuredRuleAnswer answer(UUID versionId) {
         return new StructuredRuleAnswer(
                 versionId,
                 AnswerStatus.ANSWERED,

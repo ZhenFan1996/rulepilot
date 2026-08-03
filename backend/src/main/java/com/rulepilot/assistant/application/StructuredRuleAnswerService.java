@@ -53,6 +53,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
+    private final AnswerEvidenceRefiner evidenceRefiner;
     private final AnswerModelRequestFactory modelRequestFactory;
     private final RuleAnswerCache cache;
     private final RuleAnswerRateLimiter rateLimiter;
@@ -87,11 +88,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             AssistantRuns runs,
             AuditedAgentInvocations invocations,
             ObservationRegistry observations,
-            MeterRegistry metrics) {
+            MeterRegistry metrics,
+            AnswerEvidenceRefiner evidenceRefiner) {
         this.understanding = understanding;
         this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
         this.evidenceRetriever = new AnswerEvidenceRetriever(
                 retrieval, visualFacts, evidenceLookup, invocations, modelGateway);
+        this.evidenceRefiner = evidenceRefiner;
         this.modelRequestFactory = new AnswerModelRequestFactory();
         this.cache = cache;
         this.rateLimiter = rateLimiter;
@@ -109,6 +112,41 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
         this.cacheWriteErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "write");
         this.confirmedRulingHits = metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling");
+    }
+
+    public StructuredRuleAnswerService(
+            QuestionUnderstanding understanding,
+            HybridRuleSearch retrieval,
+            VisualRulebookPageFactSearch visualFacts,
+            RuleEvidenceLookup evidenceLookup,
+            RuleAnswerModel model,
+            RuleAnswerCache cache,
+            RuleAnswerRateLimiter rateLimiter,
+            RuleDataVersion ruleDataVersion,
+            ConfirmedRulingLookup confirmedRulings,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AssistantRuns runs,
+            AuditedAgentInvocations invocations,
+            ObservationRegistry observations,
+            MeterRegistry metrics) {
+        this(
+                understanding,
+                retrieval,
+                visualFacts,
+                evidenceLookup,
+                model,
+                cache,
+                rateLimiter,
+                ruleDataVersion,
+                confirmedRulings,
+                evidenceVerifier,
+                critic,
+                runs,
+                invocations,
+                observations,
+                metrics,
+                null);
     }
 
     public StructuredRuleAnswerService(
@@ -140,7 +178,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 runs,
                 invocations,
                 observations,
-                metrics);
+                metrics,
+                null);
     }
 
     StructuredRuleAnswer answer(String question, QuestionContext context) {
@@ -273,6 +312,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             cacheMisses.increment();
         }
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(assistantRunId, understood, context, username);
+        if (evidenceRefiner != null) {
+            retrievalResult = evidenceRefiner.refine(
+                    assistantRunId, understood, context, username, gameSessionId, retrievalResult);
+        }
         AnswerEvidenceAdmissionGate.Admission admission = evidenceAdmissionGate.admit(
                 context.documentVersionId(), retrievalResult);
         if (!admission.ready()) {

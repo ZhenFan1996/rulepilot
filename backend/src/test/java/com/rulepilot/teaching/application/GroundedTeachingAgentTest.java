@@ -132,6 +132,51 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void composesASectionOnlyAfterTheEvidenceRefinerReturnsVerifiedCanonicalEvidence() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        RuleEvidence recovered = new RuleEvidence(
+                chunkId, versionId, "SETUP", "Setup", "Place the board in the center.", 4, 4);
+        AtomicInteger refinementCalls = new AtomicInteger();
+        TeachingEvidenceRefiner refiner = (plan, planned, runId, deterministic) -> {
+            refinementCalls.incrementAndGet();
+            assertThat(deterministic.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.EMPTY);
+            return new TeachingSectionEvidenceRetriever.Result(
+                    List.of(recovered),
+                    deterministic.toolCalls() + 1,
+                    TeachingSectionEvidenceRetriever.State.VERIFIED);
+        };
+        TeachingLessonModel model = request -> {
+            assertThat(request.evidence()).singleElement().satisfies(source -> {
+                assertThat(source.chunkId()).isEqualTo(chunkId);
+                assertThat(source.excerpt()).isEqualTo(recovered.excerpt());
+            });
+            return oneStepDraft(chunkId, "把主棋盘放在桌面中央。");
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                VisualRulebookPageFacts.empty(),
+                VisualRulebookPageCatalogModel.unavailable(),
+                4,
+                1,
+                1,
+                refiner);
+
+        IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID());
+
+        assertThat(refinementCalls).hasValue(1);
+        assertThat(lesson.sections()).singleElement().satisfies(section -> {
+            assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+            assertThat(section.steps()).singleElement().satisfies(step ->
+                    assertThat(step.sourceChunkIds()).containsExactly(chunkId));
+        });
+    }
+
+    @Test
     void givesImageOnlyRulebookPagesToTheBaseLessonModel() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

@@ -44,6 +44,61 @@ class StructuredRuleAnswerServiceTest {
     private final DeterministicQuestionUnderstanding understanding = new DeterministicQuestionUnderstanding();
 
     @Test
+    void publishesOnlyAfterTheEvidenceAgentRefinementReachesTheProductOrchestrator() {
+        RuleEvidenceHit deterministic = evidence("ACTIONS");
+        RuleEvidenceHit refined = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "PAYMENT", "Payment timing",
+                "Pay the cost before placing the piece.", 12, 12, 0.95);
+        AtomicInteger refinementCalls = new AtomicInteger();
+        AnswerEvidenceRefiner refiner = (runId, question, context, username, gameSessionId, result) -> {
+            refinementCalls.incrementAndGet();
+            assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+            assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                    .contains(deterministic.chunkId());
+            return new AnswerEvidenceRetriever.Result(
+                    List.of(new HybridEvidenceHit(refined, 0.95, 1, null, false)),
+                    AnswerEvidenceRetriever.State.READY);
+        };
+        RuleAnswerModel model = request -> {
+            assertThat(request.evidence()).extracting(input -> input.chunkId())
+                    .containsExactly(refined.chunkId());
+            return new ModelDraft(
+                    "Pay before placement.",
+                    "The payment is resolved before the piece is placed.",
+                    List.of(refined.chunkId()),
+                    List.of(),
+                    "HIGH");
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(deterministic, 0.8, 1, null, false)),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of(),
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                new ImmediateAuditedAgentInvocations(),
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry(),
+                refiner);
+
+        StructuredRuleAnswer answer = service.answer(
+                "When do I pay and place the piece?", new QuestionContext(versionId));
+
+        assertThat(refinementCalls).hasValue(1);
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.chunkId()).isEqualTo(refined.chunkId());
+            assertThat(citation.pageFrom()).isEqualTo(12);
+        });
+    }
+
+    @Test
     void returnsOnlyValidatedCitationsFromCurrentVersion() {
         RuleEvidenceHit source = evidence("SCORING");
         var service = answerService(

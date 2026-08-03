@@ -181,6 +181,28 @@ class ValidatedAssistantReadToolsTest {
         assertThat(tools.readRuleEvidencePages(versionId, requestedPages, false)).isEmpty();
     }
 
+    @Test
+    void rehydratesOnlyBoundedVersionScopedEvidenceHandles() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit source = evidence(UUID.randomUUID(), versionId, "Canonical source text.", 6);
+        RuleEvidenceLookup lookup = (documentVersionId, chunkIds) -> {
+            assertThat(documentVersionId).isEqualTo(versionId);
+            assertThat(chunkIds).containsExactly(source.chunkId());
+            return List.of(source);
+        };
+        var tools = new ValidatedAssistantReadTools((requestedVersion, query, options) -> List.of(), lookup);
+
+        var result = tools.readRuleEvidenceIds(versionId, Set.of(source.chunkId()));
+
+        assertThat(result).singleElement().satisfies(evidence -> {
+            assertThat(evidence.documentVersionId()).isEqualTo(versionId);
+            assertThat(evidence.chunkId()).isEqualTo(source.chunkId());
+            assertThat(evidence.excerpt()).isEqualTo(source.excerpt());
+        });
+        assertThatThrownBy(() -> tools.readRuleEvidenceIds(versionId, Set.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {
         return evidence(chunkId, versionId, "Place the board in the center.", 2);
     }

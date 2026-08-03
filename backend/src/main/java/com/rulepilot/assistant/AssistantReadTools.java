@@ -13,6 +13,10 @@ public interface AssistantReadTools {
         return List.of();
     }
 
+    default List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
+        return List.of();
+    }
+
     record SearchRuleEvidence(
             UUID documentVersionId,
             String query,

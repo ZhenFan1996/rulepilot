@@ -2,6 +2,8 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -39,8 +41,29 @@ public class GameSessionConversationService {
     }
 
     @Transactional(readOnly = true)
-    public Optional<String> previousQuestion(UUID sessionId, String username) {
+    public Optional<PriorTurnReference> priorTurnReference(UUID sessionId, String username, UUID documentVersionId) {
         List<GameSessionConversationTurn> history = turns.findRecent(sessionId, username, 1);
-        return history.isEmpty() ? Optional.empty() : Optional.of(history.getLast().question());
+        if (history.isEmpty()) return Optional.empty();
+        GameSessionConversationTurn turn = history.getLast();
+        StructuredRuleAnswer answer = turn.answer();
+        if (!documentVersionId.equals(answer.documentVersionId()) || !answer.status().publishesConclusion()) {
+            return Optional.empty();
+        }
+        return Optional.of(new PriorTurnReference(
+                documentVersionId,
+                turn.question(),
+                bounded(answer.shortVerdict(), 800),
+                answer.citations().stream()
+                        .filter(citation -> documentVersionId.equals(citation.documentVersionId()))
+                        .limit(8)
+                        .map(citation -> new PriorCitationReference(
+                                citation.chunkId(), citation.documentVersionId(), citation.pageFrom(), citation.pageTo()))
+                        .toList()));
+    }
+
+    private String bounded(String value, int maximum) {
+        if (value == null || value.isBlank()) return "No prior grounded verdict";
+        String normalized = value.replaceAll("\\s+", " ").strip();
+        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
     }
 }

@@ -9,9 +9,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /** Pure bounded selection of already-retrieved evidence for an answer-model request. */
 final class AnswerEvidenceSelectionPolicy {
+
+    private static final Pattern RELEVANCE_TERM = Pattern.compile("[\\p{L}\\p{N}]{3,}");
 
     private AnswerEvidenceSelectionPolicy() {}
 
@@ -20,6 +23,15 @@ final class AnswerEvidenceSelectionPolicy {
             Map<UUID, HybridEvidenceHit> evidenceById,
             Collection<HybridEvidenceHit> intentAnchors,
             Set<UUID> visualEvidenceIds) {
+        return select(normalizedQuestion, evidenceById, intentAnchors, visualEvidenceIds, List.of());
+    }
+
+    static List<HybridEvidenceHit> select(
+            String normalizedQuestion,
+            Map<UUID, HybridEvidenceHit> evidenceById,
+            Collection<HybridEvidenceHit> intentAnchors,
+            Set<UUID> visualEvidenceIds,
+            List<List<HybridEvidenceHit>> confirmedPageGroups) {
         Map<UUID, HybridEvidenceHit> selected = new LinkedHashMap<>();
         List<HybridEvidenceHit> selectedVisualEvidence = visualEvidenceIds.stream()
                 .map(evidenceById::get)
@@ -30,15 +42,29 @@ final class AnswerEvidenceSelectionPolicy {
                 .map(hit -> evidenceById.get(hit.evidence().chunkId()))
                 .filter(java.util.Objects::nonNull)
                 .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
+                .sorted(Comparator.comparingInt((HybridEvidenceHit hit) ->
+                                questionOverlap(normalizedQuestion, hit))
+                        .reversed())
+                .toList();
+        List<List<HybridEvidenceHit>> selectedPageGroups = confirmedPageGroups.stream()
+                .map(group -> group.stream()
+                        .map(hit -> evidenceById.get(hit.evidence().chunkId()))
+                        .filter(java.util.Objects::nonNull)
+                        .toList())
+                .filter(group -> !group.isEmpty())
+                .sorted(Comparator.comparingInt((List<HybridEvidenceHit> group) ->
+                                questionOverlap(normalizedQuestion, group))
+                        .reversed())
                 .toList();
         if (AnswerEvidencePolicy.visualEvidencePriority(normalizedQuestion)) {
             addAll(selected, selectedVisualEvidence);
-            addAll(selected, selectedIntentAnchors);
-        } else {
-            addAll(selected, selectedIntentAnchors);
-            addAll(selected, selectedVisualEvidence);
         }
-        int targetSize = AnswerEvidencePolicy.asksForCompleteList(normalizedQuestion) ? 8 : 3;
+        selectedPageGroups.forEach(group -> addAll(selected, group));
+        addAll(selected, selectedIntentAnchors);
+        if (!AnswerEvidencePolicy.visualEvidencePriority(normalizedQuestion)) addAll(selected, selectedVisualEvidence);
+        boolean expandedCoverage = AnswerEvidencePolicy.asksForCompleteList(normalizedQuestion)
+                || AnswerEvidenceRefinementPolicy.hasMultipleObligations(normalizedQuestion);
+        int targetSize = expandedCoverage ? 8 : 3;
         if (selected.size() < targetSize) {
             evidenceById.values().stream()
                     .filter(hit -> visualEvidenceIds.isEmpty() || !AnswerEvidencePolicy.isVisualPlaceholder(hit))
@@ -47,7 +73,7 @@ final class AnswerEvidenceSelectionPolicy {
                     .limit(targetSize - selected.size())
                     .forEach(hit -> selected.put(hit.evidence().chunkId(), hit));
         }
-        int evidenceLimit = AnswerEvidencePolicy.asksForCompleteList(normalizedQuestion) ? 8 : 5;
+        int evidenceLimit = expandedCoverage ? 8 : 5;
         List<HybridEvidenceHit> selectedEvidence = selected.values().stream().limit(evidenceLimit).toList();
         return AnswerEvidencePolicy.isEndgameResolutionQuestion(normalizedQuestion)
                 ? withComplementaryEndgameEvidence(normalizedQuestion, selectedEvidence)
@@ -80,7 +106,8 @@ final class AnswerEvidenceSelectionPolicy {
         if (AnswerEvidencePolicy.asksScoring(question)) {
             selectedEvidence.stream()
                     .filter(hit -> AnswerEvidencePolicy.hasEndgameScoring(hit.evidence().excerpt()))
-                    .findFirst()
+                    .max(Comparator.comparingInt(hit ->
+                            AnswerEvidencePolicy.endgameScoringDetailScore(hit.evidence().excerpt())))
                     .ifPresent(hit -> complementary.putIfAbsent(hit.evidence().chunkId(), hit));
         }
         if (AnswerEvidencePolicy.asksTie(question)) {
@@ -101,6 +128,27 @@ final class AnswerEvidenceSelectionPolicy {
         return Comparator.comparingDouble(HybridEvidenceHit::score)
                 .reversed()
                 .thenComparing(hit -> hit.evidence().chunkId());
+    }
+
+    private static int questionOverlap(String question, HybridEvidenceHit hit) {
+        if (question == null || question.isBlank() || hit == null) return 0;
+        String evidence = (hit.evidence().heading() + ' ' + hit.evidence().excerpt()).toLowerCase(Locale.ROOT);
+        java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
+        var matcher = RELEVANCE_TERM.matcher(question.toLowerCase(Locale.ROOT));
+        while (matcher.find() && terms.size() < 64) terms.add(matcher.group());
+        return (int) terms.stream().filter(evidence::contains).count();
+    }
+
+    private static int questionOverlap(String question, List<HybridEvidenceHit> group) {
+        if (question == null || question.isBlank() || group == null || group.isEmpty()) return 0;
+        String evidence = group.stream()
+                .map(hit -> hit.evidence().heading() + ' ' + hit.evidence().excerpt())
+                .collect(java.util.stream.Collectors.joining(" "))
+                .toLowerCase(Locale.ROOT);
+        java.util.LinkedHashSet<String> terms = new java.util.LinkedHashSet<>();
+        var matcher = RELEVANCE_TERM.matcher(question.toLowerCase(Locale.ROOT));
+        while (matcher.find() && terms.size() < 64) terms.add(matcher.group());
+        return (int) terms.stream().filter(evidence::contains).count();
     }
 
     private static void addAll(Map<UUID, HybridEvidenceHit> selected, List<HybridEvidenceHit> hits) {

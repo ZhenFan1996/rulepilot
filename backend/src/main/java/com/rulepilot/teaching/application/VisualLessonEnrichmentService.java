@@ -131,7 +131,7 @@ public class VisualLessonEnrichmentService {
             }
             UUID runId = current.id();
             VisualLessonEnricher.EnrichmentResult result = enrichWithReport(
-                    plan.documentVersionId(), lesson, plan.createdBy(), visualProgress(runId, plan.createdBy()));
+                    plan.documentVersionId(), lesson, plan.createdBy(), runId, visualProgress(runId, plan.createdBy()));
             if (!runIsActive(runId, plan.createdBy())) {
                 log.info("Stopped visual enrichment run {} after cancellation", runId);
                 return;
@@ -254,15 +254,24 @@ public class VisualLessonEnrichmentService {
             com.rulepilot.teaching.domain.IllustratedLesson lesson,
             String modelConfigurationOwner,
             VisualLessonEnricher.VisualProgressListener progress) {
+        return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner, null, progress);
+    }
+
+    private VisualLessonEnricher.EnrichmentResult enrichWithReport(
+            UUID documentVersionId,
+            com.rulepilot.teaching.domain.IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualLessonEnricher.VisualProgressListener progress) {
         try {
-            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, progress);
+            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, runId, progress);
         } catch (IllegalArgumentException missingUnderstanding) {
             if (!"rulebook understanding does not exist".equals(missingUnderstanding.getMessage())) {
                 throw missingUnderstanding;
             }
             log.info("Rebuilding layout evidence for legacy document {} before visual enrichment", documentVersionId);
             understandingRebuilder.rebuild(documentVersionId);
-            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, progress);
+            return enricher.enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, runId, progress);
         }
     }
 
