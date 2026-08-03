@@ -111,6 +111,13 @@ final class AnswerEvidencePolicy {
         return excerpt != null && EVIDENCED_ENDGAME_SCORING.matcher(excerpt).find();
     }
 
+    static int endgameScoringDetailScore(String excerpt) {
+        if (excerpt == null) return 0;
+        String normalized = excerpt.toLowerCase(Locale.ROOT);
+        if (containsAny(normalized, "score", "scoring", "point", "计分", "得分", "分数")) return 2;
+        return hasEndgameScoring(excerpt) ? 1 : 0;
+    }
+
     static boolean hasEndgameTie(String excerpt) {
         return excerpt != null && EVIDENCED_ENDGAME_TIE.matcher(excerpt).find();
     }

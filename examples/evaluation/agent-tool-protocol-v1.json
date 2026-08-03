@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "caseId": "protocol-required-tool",
+      "scenario": "REQUIRED_TOOL",
+      "expectedOutcome": "VALID_TOOL_CALL"
+    },
+    {
+      "caseId": "protocol-no-tool",
+      "scenario": "NO_TOOL",
+      "expectedOutcome": "DIRECT_RESPONSE"
+    },
+    {
+      "caseId": "protocol-invalid-argument",
+      "scenario": "INVALID_ARGUMENT",
+      "expectedOutcome": "REJECTED_BEFORE_EXECUTION"
+    },
+    {
+      "caseId": "protocol-timeout",
+      "scenario": "TIMEOUT",
+      "expectedOutcome": "BOUNDED_TERMINATION"
+    },
+    {
+      "caseId": "protocol-fallback",
+      "scenario": "PROVIDER_FAILURE",
+      "expectedOutcome": "DETERMINISTIC_FALLBACK"
+    },
+    {
+      "caseId": "protocol-selection",
+      "scenario": "TOOL_SELECTION",
+      "expectedOutcome": "ONLY_ALLOW_LISTED_TOOL"
+    },
+    {
+      "caseId": "protocol-irrelevance",
+      "scenario": "IRRELEVANT_TOOL",
+      "expectedOutcome": "ZERO_TOOL_CALLS"
+    },
+    {
+      "caseId": "protocol-missing-parameter",
+      "scenario": "MISSING_PARAMETER",
+      "expectedOutcome": "REJECTED_BEFORE_EXECUTION"
+    },
+    {
+      "caseId": "protocol-extra-parameter",
+      "scenario": "EXTRA_PARAMETER",
+      "expectedOutcome": "REJECTED_BEFORE_EXECUTION"
+    },
+    {
+      "caseId": "protocol-multiple-calls",
+      "scenario": "MULTIPLE_CALLS",
+      "expectedOutcome": "ORDERED_CORRELATED_RESULTS"
+    },
+    {
+      "caseId": "protocol-repeated-failure",
+      "scenario": "REPEATED_FAILURE",
+      "expectedOutcome": "CIRCUIT_OPEN"
+    }
+  ]
+}

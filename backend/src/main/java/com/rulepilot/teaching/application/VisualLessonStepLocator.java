@@ -47,6 +47,16 @@ final class VisualLessonStepLocator {
             LessonSection section,
             LessonStep step,
             String modelConfigurationOwner) {
+        return locate(understanding, documentVersionId, section, step, modelConfigurationOwner, null);
+    }
+
+    Result locate(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            LessonStep step,
+            String modelConfigurationOwner,
+            UUID runId) {
         Set<Integer> citedPages = new LinkedHashSet<>(step.sourcePages());
         List<VisualRegionCandidateSelector.Candidate> selected = candidates.select(
                 understanding, citedPages, terms(section, step), visualPageFacts.find(documentVersionId, citedPages));
@@ -73,7 +83,13 @@ final class VisualLessonStepLocator {
                 .toList();
         List<Claim> claims = claims(step);
         var guide = locator.locateGuideWithResult(new VisualRegionLocator.VisualLocationRequest(
-                section.title() + " · " + step.heading(), claims, attachedCandidates, pages, modelConfigurationOwner));
+                section.title() + " · " + step.heading(),
+                claims,
+                attachedCandidates,
+                pages,
+                modelConfigurationOwner,
+                runId == null ? null : documentVersionId,
+                runId));
         if (guide.regions().isEmpty()) return Result.rejected(outcomeFor(guide.diagnostic()));
         Set<UUID> evidenceIds = claims.stream().map(Claim::evidenceId).collect(Collectors.toSet());
         VisualLessonEnricher.Outcome rejected = null;

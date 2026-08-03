@@ -119,6 +119,25 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                         .toList())).toList();
     }
 
+    @Override
+    public List<RuleEvidence> readRuleEvidenceIds(UUID documentVersionId, Set<UUID> evidenceIds) {
+        if (documentVersionId == null || evidenceIds == null || evidenceIds.isEmpty() || evidenceIds.size() > 24
+                || evidenceIds.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("bounded rule evidence id read is invalid");
+        }
+        return evidenceLookup.findByChunkIds(documentVersionId, Set.copyOf(evidenceIds)).stream()
+                .filter(source -> documentVersionId.equals(source.documentVersionId()))
+                .map(source -> new RuleEvidence(
+                        source.chunkId(),
+                        source.documentVersionId(),
+                        source.sectionType(),
+                        source.heading(),
+                        source.excerpt(),
+                        source.pageFrom(),
+                        source.pageTo()))
+                .toList();
+    }
+
     private Map<Integer, RulePageImage> pageVisuals(
             SearchRuleEvidence request, List<RuleEvidenceHit> evidence) {
         if (!request.includePageImages()) {

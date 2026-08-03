@@ -67,13 +67,14 @@ class VisualLessonEnrichmentServiceTest {
         when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
                 cancelled, List.of(), null, List.of())));
         Mockito.doAnswer(invocation -> {
-                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(3);
+                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(4);
                     progress.targetStarted(new VisualLessonEnricher.VisualTarget(1, "开局设置", 2, "摆放组件"));
                     return new VisualLessonEnricher.EnrichmentResult(lesson, List.of());
                 })
                 .when(enricher)
                 .enrichWithProgress(
-                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"), Mockito.any());
+                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"),
+                        Mockito.eq(runId), Mockito.any());
 
         new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder, runs, activities)
                 .enrichLatest(planId, received);
@@ -121,14 +122,15 @@ class VisualLessonEnrichmentServiceTest {
         when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
                 retrieving, List.of(), null, List.of())));
         Mockito.doAnswer(invocation -> {
-                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(3);
+                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(4);
                     progress.sectionFinished(update);
                     progress.sectionUpdated(update, lesson);
                     return new VisualLessonEnricher.EnrichmentResult(lesson, List.of(update.outcome()));
                 })
                 .when(enricher)
                 .enrichWithProgress(
-                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"), Mockito.any());
+                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"),
+                        Mockito.eq(runId), Mockito.any());
 
         new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder, runs, activities)
                 .enrichLatest(planId, received);
@@ -173,7 +175,7 @@ class VisualLessonEnrichmentServiceTest {
         when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
                 retrieving, List.of(), null, List.of())));
         Mockito.doAnswer(invocation -> {
-                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(3);
+                    VisualLessonEnricher.VisualProgressListener progress = invocation.getArgument(4);
                     var target = new VisualLessonEnricher.VisualTarget(1, "开局设置", 2, "摆放组件");
                     progress.targetStarted(target);
                     progress.targetFinished(target, VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
@@ -181,7 +183,8 @@ class VisualLessonEnrichmentServiceTest {
                 })
                 .when(enricher)
                 .enrichWithProgress(
-                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"), Mockito.any());
+                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"),
+                        Mockito.eq(runId), Mockito.any());
 
         new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder, runs, activities)
                 .enrichLatest(planId, received);
@@ -219,7 +222,8 @@ class VisualLessonEnrichmentServiceTest {
         when(runs.findOwned(runId, "owner")).thenReturn(Optional.of(new AssistantRuns.RunDetails(
                 cancelled, List.of(), null, List.of())));
         when(enricher.enrichWithProgress(
-                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"), Mockito.any()))
+                        Mockito.eq(documentVersionId), Mockito.eq(lesson), Mockito.eq("owner"),
+                        Mockito.eq(runId), Mockito.any()))
                 .thenReturn(new VisualLessonEnricher.EnrichmentResult(lesson, List.of()));
 
         new VisualLessonEnrichmentService(plans, lessons, enricher, publisher, rebuilder, runs, activities)

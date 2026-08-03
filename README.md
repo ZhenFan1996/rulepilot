@@ -10,7 +10,8 @@ RulePilot 是一个证据优先的桌游规则讲解与答疑应用。它读取 
 - **图文证据定位**：结合页面文字、图片与局部区域展示出处，不把模型描述当作规则证据。
 - **规则内追问**：在当前章节或桌边场景中继续提问；证据不足时明确追问或拒答。
 - **可恢复的异步流程**：规则书解析、讲解生成与视觉增强支持进度展示、失败诊断和恢复。
-- **受控 AI 工作流**：限制模型工具、调用次数、Token 与超时，并在发布前校验结构和引用。
+- **原生工具调用 Agent**：模型可按角色选择只读证据工具并观察结果；应用限制范围、调用次数、Token
+  与超时，并在发布前校验结构、引用和证据。
 - **本地优先开发**：默认使用确定性的 Fake Provider，运行测试和演示无需真实模型或付费 API。
 
 ## 技术栈
@@ -87,13 +88,6 @@ flowchart LR
     AI --> Guard["Schema、引用与证据校验"]
 ```
 
-详细的产品边界、模块职责和 AI 证据策略见：
-
-- [项目蓝图](docs/PROJECT_BLUEPRINT.md)
-- [AI Agent 设计](docs/AI_AGENT_DESIGN.md)
-- [AI 泛化准则](docs/AI_GENERALIZATION_GUIDELINES.md)
-- [UX 设计系统](docs/UX_DESIGN_SYSTEM.md)
-
 ## 常用命令
 
 | 命令 | 用途 |
@@ -109,6 +103,14 @@ flowchart LR
 | `make integration-test` | 运行基础设施集成测试 |
 | `make e2e` | 运行 Playwright 端到端测试 |
 | `make product-eval` | 运行普通玩家产品评测 |
+| `make agent-baseline` | 校验五类私有真实规则书 Agent 基线 |
+| `make agent-tool-probe` | 对已启用的付费模型运行最小工具能力探针 |
+| `make agent-answer-real` | 用两本私有真实规则书验证答疑 Agent 的观察驱动证据补全 |
+| `make agent-teaching-real` | 用三本私有真实规则书验证教学 Agent 的覆盖缺口证据补全 |
+| `make agent-visual-real` | 用三类私有真实规则书验证视觉 Agent 的原页读取、精确裁剪、弃答和文本模型降级 |
+| `make agent-context-real` | 用两本私有真实规则书验证多轮指代、重新查证、恢复与降级边界 |
+| `make agent-security-real` | 验证对抗工具夹具与五类私有真实规则书的安全、延迟和调用预算 |
+| `make agent-release-real` | 重新生成并验证完整 Agent 的 12 项证据、双 provider、五类语料、五类玩家需求与桌面/移动端 |
 | `make verify` | 运行提交前完整质量门禁 |
 
 生产式 API/Worker 拆分、部署与性能/安全检查可通过 `make help` 查看对应命令。
@@ -121,12 +123,11 @@ frontend/   Vue 3 Web 应用
 infra/      Compose 与基础设施配置
 scripts/    开发、验证、评测和部署脚本
 examples/   自制演示与评测数据
-docs/       产品、架构、路线图和学习记录
 ```
 
 ## 开发约定
 
-开始修改前请阅读 [AGENTS.md](AGENTS.md) 和 [编码规范](docs/CODING_STANDARDS.md)。当前计划与执行证据记录在 [ROADMAP](docs/roadmap/ROADMAP.md) 和 [EXECUTION_STATE](docs/roadmap/EXECUTION_STATE.md)。
+修改代码时应遵守仓库既有的架构、测试和安全约束。
 
 提交代码前运行：
 

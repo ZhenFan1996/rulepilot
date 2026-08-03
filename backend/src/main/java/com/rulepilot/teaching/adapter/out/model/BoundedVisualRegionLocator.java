@@ -35,7 +35,7 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
     private final Duration timeout;
 
     public BoundedVisualRegionLocator(
-            @Qualifier("springAiVisualRegionLocator") VisualRegionLocator delegate,
+            @Qualifier("agenticVisualRegionLocator") VisualRegionLocator delegate,
             @Qualifier("visualLocationExecutor") AsyncTaskExecutor executor,
             @Value("${rulepilot.visual.location-timeout:PT45S}") Duration timeout) {
         this.delegate = delegate;

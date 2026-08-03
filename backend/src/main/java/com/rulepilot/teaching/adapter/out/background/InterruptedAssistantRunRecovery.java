@@ -10,25 +10,27 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+/** Fails orphaned work instead of replaying incomplete model/tool calls after a process restart. */
 @Component
 @Profile("!test")
 @ConditionalOnProperty(name = "rulepilot.runtime.api-enabled", havingValue = "true")
-class InterruptedTeachingRunRecovery {
+class InterruptedAssistantRunRecovery {
 
-    private static final Logger log = LoggerFactory.getLogger(InterruptedTeachingRunRecovery.class);
+    private static final Logger log = LoggerFactory.getLogger(InterruptedAssistantRunRecovery.class);
     private final AssistantRuns runs;
 
-    InterruptedTeachingRunRecovery(AssistantRuns runs) {
+    InterruptedAssistantRunRecovery(AssistantRuns runs) {
         this.runs = runs;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     void recover() {
-        int recovered = runs.failInterrupted(AssistantRunMode.TEACHING)
-                + runs.failInterrupted(AssistantRunMode.TEACHING_PREPARATION)
-                + runs.failInterrupted(AssistantRunMode.VISUAL_ENRICHMENT);
+        int recovered = 0;
+        for (AssistantRunMode mode : AssistantRunMode.values()) {
+            recovered += runs.failInterrupted(mode);
+        }
         if (recovered > 0) {
-            log.info("Marked {} interrupted lesson generation runs as retryable failures", recovered);
+            log.info("Marked {} interrupted Agent runs as retryable failures", recovered);
         }
     }
 }

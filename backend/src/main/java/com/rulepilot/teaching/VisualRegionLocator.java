@@ -102,7 +102,18 @@ public interface VisualRegionLocator {
             List<Claim> claims,
             List<Candidate> candidates,
             List<PageImage> pages,
-            String modelConfigurationOwner) {
+            String modelConfigurationOwner,
+            UUID documentVersionId,
+            UUID runId) {
+        public VisualLocationRequest(
+                String sectionTitle,
+                List<Claim> claims,
+                List<Candidate> candidates,
+                List<PageImage> pages,
+                String modelConfigurationOwner) {
+            this(sectionTitle, claims, candidates, pages, modelConfigurationOwner, null, null);
+        }
+
         public VisualLocationRequest {
             if (sectionTitle == null || sectionTitle.isBlank() || claims == null || claims.isEmpty()
                     || candidates == null || candidates.isEmpty() || candidates.size() > 4
@@ -115,11 +126,14 @@ public interface VisualRegionLocator {
             modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
                     ? null
                     : modelConfigurationOwner.strip();
+            if ((documentVersionId == null) != (runId == null)) {
+                throw new IllegalArgumentException("visual Agent context is incomplete");
+            }
         }
 
         public VisualLocationRequest(
                 String sectionTitle, List<Claim> claims, List<Candidate> candidates, List<PageImage> pages) {
-            this(sectionTitle, claims, candidates, pages, null);
+            this(sectionTitle, claims, candidates, pages, null, null, null);
         }
     }
 

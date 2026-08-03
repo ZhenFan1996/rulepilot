@@ -49,16 +49,18 @@ public class StructuredRuleAnswerController {
             @PathVariable UUID versionId, @RequestBody AnswerRequest request, Principal principal) {
         String username = principal.getName();
         var session = validateSession(request.gameSessionId(), versionId, username);
-        String previousQuestion = session == null
-                ? request.previousQuestion()
-                : conversations.previousQuestion(session.sessionId(), username).orElse(null);
+        var priorTurn = session == null
+                ? null
+                : conversations.priorTurnReference(session.sessionId(), username, versionId).orElse(null);
+        String previousQuestion = priorTurn == null ? request.previousQuestion() : priorTurn.question();
         AnswerCreation creation = answers.answerWithRun(
                 request.question(),
                 new QuestionContext(
                         versionId,
                         previousQuestion,
                         request.learningIntent(),
-                        PlayerLocale.fromRequest(request.language())),
+                        PlayerLocale.fromRequest(request.language()),
+                        priorTurn),
                 username,
                 request.gameSessionId());
         GameSessionConversationTurn turn = session == null

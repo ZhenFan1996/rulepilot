@@ -9,8 +9,11 @@ CORPUS_CRITIC ?= deepseek
 CORPUS_TIMEOUT_MINUTES ?= 20
 CORPUS_RESTART ?=
 CORPUS_REFRESH_PLAN ?=
+AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
+AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
+AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-visual-real agent-context-real agent-security-real agent-release-real format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -51,6 +54,34 @@ corpus-generate: ## Generate one resumable public lesson from the ignored corpus
 		--teaching "$(CORPUS_TEACHING)" --visual "$(CORPUS_VISUAL)" \
 		--answer "$(CORPUS_ANSWER)" --critic "$(CORPUS_CRITIC)"
 
+agent-baseline: ## Validate and summarize the ignored five-family real-rulebook Agent baseline
+	@node scripts/evaluate-agent-baseline.mjs --manifest "$(AGENT_BASELINE_MANIFEST)" --output "$(AGENT_BASELINE_OUTPUT)"
+
+agent-tool-probe: ## Probe enabled paid models with bounded synthetic required-tool/no-tool requests
+	@node scripts/probe-model-tool-capabilities.mjs --output "$(AGENT_TOOL_PROBE_OUTPUT)"
+
+agent-tool-loop-real: ## Run the bounded Spring AI tool loop against two ignored real rulebooks and paid models
+	@sh scripts/run-real-agent-tool-loop.sh
+
+agent-answer-real: ## Evaluate observation-driven answer evidence refinement on ignored real rulebooks
+	@sh scripts/run-real-answer-agent.sh
+
+agent-teaching-real: ## Evaluate coverage-led teaching evidence refinement on ignored real rulebooks
+	@sh scripts/run-real-teaching-agent.sh
+
+agent-visual-real: ## Evaluate capability-scoped multimodal tools on ignored real rulebooks
+	@sh scripts/run-real-visual-agent.sh
+
+agent-context-real: ## Evaluate multi-turn context, recovery, and fallback on ignored real rulebooks
+	@sh scripts/run-real-context-agent.sh
+
+agent-security-real: ## Validate adversarial tools and all five ignored real-rulebook families
+	@cd backend && ./mvnw -q -Dtest=NativeAgentSecurityEvaluationTest,NativeReadToolsTest,BoundedNativeToolAgentTest test
+	@node scripts/evaluate-agent-security.mjs --adversarial-verified
+
+agent-release-real: ## Regenerate and verify the complete Agent across providers, corpus, player needs, and viewports
+	@sh scripts/run-complete-agent-release.sh
+
 format: ## Format backend and frontend sources (planned)
 	@echo "format is not available yet; formatter configuration is pending."
 	@exit 2
@@ -90,12 +121,17 @@ e2e: ## Run Playwright end-to-end tests
 
 verify: ## Verify repository structure, Compose config, backend, and frontend
 	@sh scripts/verify-foundation.sh
+	@node --test scripts/verify-documentation.test.mjs
 	@sh scripts/verify-compose.sh config
 	@sh scripts/run-deployment.sh config
 	@sh scripts/verify-architecture.sh
 	@node --test scripts/evaluate-product.test.mjs
 	@node --test scripts/preflight-public-rulebook.test.mjs
 	@node --test scripts/generate-public-corpus-entry.test.mjs
+	@node --test scripts/evaluate-agent-baseline.test.mjs
+	@node --test scripts/evaluate-agent-security.test.mjs
+	@node --test scripts/verify-complete-agent-release.test.mjs
+	@node --test scripts/probe-model-tool-capabilities.test.mjs
 	@node --test scripts/smoke-production-ordinary-user.test.mjs
 	@node --test scripts/verify-ci-workflow.test.mjs
 	@sh scripts/verify-mockito-agent.sh

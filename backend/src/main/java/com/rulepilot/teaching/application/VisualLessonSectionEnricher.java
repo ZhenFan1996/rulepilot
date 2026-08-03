@@ -47,6 +47,18 @@ final class VisualLessonSectionEnricher {
             String modelConfigurationOwner,
             VisualLessonEnricher.VisualProgressListener progress,
             List<VisualFocus> acceptedVisuals) {
+        return enrich(
+                understanding, documentVersionId, section, modelConfigurationOwner, null, progress, acceptedVisuals);
+    }
+
+    Result enrich(
+            RulebookUnderstanding understanding,
+            UUID documentVersionId,
+            LessonSection section,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualLessonEnricher.VisualProgressListener progress,
+            List<VisualFocus> acceptedVisuals) {
         int existingVisualSteps = (int) section.steps().stream()
                 .filter(step -> step.kind() == TeachingMove.VISUAL && !cropPolicy.needsTighterReaderCrop(step.visualFocus()))
                 .count();
@@ -64,7 +76,7 @@ final class VisualLessonSectionEnricher {
         try (var executor = Executors.newFixedThreadPool(Math.min(requestParallelism, targets.size()))) {
             List<Future<VisualLessonStepLocator.Result>> attempts = targets.stream()
                     .map(step -> executor.submit(() -> locateWithProgress(
-                            understanding, documentVersionId, section, step, modelConfigurationOwner, progress)))
+                            understanding, documentVersionId, section, step, modelConfigurationOwner, runId, progress)))
                     .toList();
             for (Future<VisualLessonStepLocator.Result> attempt : attempts) {
                 VisualLessonStepLocator.Result location = awaitLocation(attempt);
@@ -98,12 +110,13 @@ final class VisualLessonSectionEnricher {
             LessonSection section,
             LessonStep step,
             String modelConfigurationOwner,
+            UUID runId,
             VisualLessonEnricher.VisualProgressListener progress) {
         VisualLessonEnricher.VisualTarget target = new VisualLessonEnricher.VisualTarget(
                 section.position(), section.title(), step.position(), step.heading());
         progress.targetStarted(target);
         VisualLessonStepLocator.Result location = stepLocator.locate(
-                understanding, documentVersionId, section, step, modelConfigurationOwner);
+                understanding, documentVersionId, section, step, modelConfigurationOwner, runId);
         progress.targetFinished(target, location.region() == null
                 ? location.rejection() == null
                         ? VisualLessonEnricher.Outcome.LOCATOR_RETURNED_NONE

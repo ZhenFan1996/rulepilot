@@ -132,6 +132,15 @@ public class VisualLessonEnricher {
             IllustratedLesson lesson,
             String modelConfigurationOwner,
             VisualProgressListener progress) {
+        return enrichWithProgress(documentVersionId, lesson, modelConfigurationOwner, null, progress);
+    }
+
+    public EnrichmentResult enrichWithProgress(
+            UUID documentVersionId,
+            IllustratedLesson lesson,
+            String modelConfigurationOwner,
+            UUID runId,
+            VisualProgressListener progress) {
         if (progress == null) throw new IllegalArgumentException("visual enrichment progress listener is required");
         var map = understanding.understanding(documentVersionId);
         IllustratedLesson readerReadyLesson = mergePolicy.discardOverlyBroadVisuals(lesson);
@@ -149,7 +158,7 @@ public class VisualLessonEnricher {
             LessonSection section = readerReadyLesson.sections().get(sectionIndex);
             if (!selectedPositions.contains(section.position())) continue;
             VisualLessonSectionEnricher.Result enriched = sectionEnricher.enrich(
-                    map, documentVersionId, section, modelConfigurationOwner, progress, acceptedVisuals);
+                    map, documentVersionId, section, modelConfigurationOwner, runId, progress, acceptedVisuals);
             SectionResult sectionResult = sectionResult(enriched);
             sectionResults.add(sectionResult);
             currentSections.set(sectionIndex, sectionResult.section());

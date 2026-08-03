@@ -47,6 +47,7 @@ public class GroundedTeachingAgent {
     private final TeachingLessonModel model;
     private final AuditedAgentInvocations invocations;
     private final TeachingSectionEvidenceRetriever evidenceRetriever;
+    private final TeachingEvidenceRefiner evidenceRefiner;
     private final TeachingSectionDraftComposer sectionDraftComposer;
     private final TeachingLessonAssemblyPolicy lessonAssembly = new TeachingLessonAssemblyPolicy();
     private final TeachingPublishedLessonReviewer publishedLessonReviewer;
@@ -66,7 +67,8 @@ public class GroundedTeachingAgent {
             @Value("${rulepilot.teaching.agent.max-tool-calls:72}") int maxToolCalls,
             @Value("${rulepilot.teaching.base-section-parallelism:3}") int baseSectionParallelism,
             @Value("${rulepilot.teaching.base-max-retrieval-queries-per-section:3}")
-                    int baseMaxRetrievalQueriesPerSection) {
+                    int baseMaxRetrievalQueriesPerSection,
+            TeachingEvidenceRefiner evidenceRefiner) {
         this.tools = tools;
         this.model = model;
         this.invocations = invocations;
@@ -74,6 +76,7 @@ public class GroundedTeachingAgent {
                 tools, invocations, visualFacts, visualCatalog);
         this.evidenceRetriever = new TeachingSectionEvidenceRetriever(
                 tools, evidenceVerifier, invocations, visualEvidenceResolver);
+        this.evidenceRefiner = evidenceRefiner;
         this.sectionDraftComposer = new TeachingSectionDraftComposer(
                 model, evidenceVerifier, invocations, visualFacts);
         this.publishedLessonReviewer = new TeachingPublishedLessonReviewer(
@@ -85,6 +88,31 @@ public class GroundedTeachingAgent {
         this.maxToolCalls = Math.max(1, maxToolCalls);
         this.baseSectionParallelism = Math.max(1, Math.min(6, baseSectionParallelism));
         this.baseMaxRetrievalQueriesPerSection = Math.max(1, baseMaxRetrievalQueriesPerSection);
+    }
+
+    public GroundedTeachingAgent(
+            AssistantReadTools tools,
+            TeachingLessonModel model,
+            EvidenceVerifier evidenceVerifier,
+            GeneratedContentCritic critic,
+            AuditedAgentInvocations invocations,
+            VisualRulebookPageFacts visualFacts,
+            VisualRulebookPageCatalogModel visualCatalog,
+            int maxToolCalls,
+            int baseSectionParallelism,
+            int baseMaxRetrievalQueriesPerSection) {
+        this(
+                tools,
+                model,
+                evidenceVerifier,
+                critic,
+                invocations,
+                visualFacts,
+                visualCatalog,
+                maxToolCalls,
+                baseSectionParallelism,
+                baseMaxRetrievalQueriesPerSection,
+                null);
     }
 
     public GroundedTeachingAgent(
@@ -313,6 +341,9 @@ public class GroundedTeachingAgent {
         }
         TeachingSectionEvidenceRetriever.Result resolution = evidenceRetriever.retrieve(
                 plan, planned, assistantRunId, queryBudget, mode.bindVisualPageEvidence());
+        if (evidenceRefiner != null) {
+            resolution = evidenceRefiner.refine(plan, planned, assistantRunId, resolution);
+        }
         if (!resolution.verified()) {
             recordPublication(
                     assistantRunId,
