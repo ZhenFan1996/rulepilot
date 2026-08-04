@@ -20,6 +20,14 @@ import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerWarning;
 import com.rulepilot.assistant.domain.AnswerWarning.Type;
+import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.RuleCalculation;
+import com.rulepilot.assistant.domain.RuleDecisionBranch;
+import com.rulepilot.assistant.domain.RuleExceptionClause;
+import com.rulepilot.assistant.domain.RuleSituationCheck;
+import com.rulepilot.assistant.domain.RuleTermDefinition;
+import com.rulepilot.assistant.domain.RuleWorkedExample;
+import com.rulepilot.assistant.domain.RuleWalkthroughStep;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.document.RuleDataVersion;
@@ -48,8 +56,8 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Dense complete-list evidence and coverage rules changed, so prior partial list answers are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v77-dense-list-evidence";
+    // Worked-example evidence and grammatical-relation rules changed, so prior example answers are stale.
+    private static final String ANSWER_POLICY_VERSION = "answer-v109-permission-ruling";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerEvidenceRetriever evidenceRetriever;
@@ -62,6 +70,21 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final AnswerPublicationValidator publicationValidator;
     private final AnswerEvidenceAdmissionGate evidenceAdmissionGate;
     private final AnswerDraftComposer draftComposer;
+    private final AnswerCalculationResolver calculationResolver;
+    private final AnswerSituationCheckResolver situationCheckResolver;
+    private final AnswerWalkthroughResolver walkthroughResolver;
+    private final AnswerDecisionTableResolver decisionTableResolver;
+    private final AnswerExceptionClauseResolver exceptionClauseResolver;
+    private final AnswerTermDefinitionResolver termDefinitionResolver;
+    private final AnswerWorkedExampleResolver workedExampleResolver;
+    private final AnswerRulePriorityResolver rulePriorityResolver;
+    private final AnswerTimingResolver timingResolver;
+    private final AnswerTieResolver tieResolver;
+    private final AnswerScopeResolver scopeResolver;
+    private final AnswerConceptComparisonResolver conceptComparisonResolver;
+    private final AnswerRuleOptionResolver ruleOptionResolver;
+    private final AnswerSourceEvidenceResolver sourceEvidenceResolver;
+    private final AnswerPermissionResolver permissionResolver;
     private final AnswerPostPublicationReviewer postPublicationReviewer;
     private final AnswerRunLifecycle runLifecycle;
     private final AuditedAgentInvocations invocations;
@@ -103,7 +126,23 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.publicationValidator = new AnswerPublicationValidator(evidenceVerifier);
         this.evidenceAdmissionGate = new AnswerEvidenceAdmissionGate(publicationValidator);
         this.draftComposer = new AnswerDraftComposer(modelGateway);
-        this.postPublicationReviewer = new AnswerPostPublicationReviewer(critic, modelGateway, publicationValidator);
+        this.calculationResolver = new AnswerCalculationResolver();
+        this.situationCheckResolver = new AnswerSituationCheckResolver();
+        this.walkthroughResolver = new AnswerWalkthroughResolver();
+        this.decisionTableResolver = new AnswerDecisionTableResolver();
+        this.exceptionClauseResolver = new AnswerExceptionClauseResolver();
+        this.termDefinitionResolver = new AnswerTermDefinitionResolver();
+        this.workedExampleResolver = new AnswerWorkedExampleResolver();
+        this.rulePriorityResolver = new AnswerRulePriorityResolver();
+        this.timingResolver = new AnswerTimingResolver();
+        this.tieResolver = new AnswerTieResolver();
+        this.scopeResolver = new AnswerScopeResolver();
+        this.conceptComparisonResolver = new AnswerConceptComparisonResolver();
+        this.ruleOptionResolver = new AnswerRuleOptionResolver();
+        this.sourceEvidenceResolver = new AnswerSourceEvidenceResolver();
+        this.permissionResolver = new AnswerPermissionResolver();
+        this.postPublicationReviewer = new AnswerPostPublicationReviewer(
+                critic, modelGateway, publicationValidator, calculationResolver, situationCheckResolver, invocations);
         this.runLifecycle = new AnswerRunLifecycle(runs);
         this.invocations = invocations;
         this.observations = observations;
@@ -205,12 +244,22 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             String question,
             String previousQuestion,
             PlayerLocale outputLanguage) {
+        return answerForPublicReader(documentVersionId, question, previousQuestion, outputLanguage, null);
+    }
+
+    @Override
+    public RuleAnswering.AnswerResult answerForPublicReader(
+            UUID documentVersionId,
+            String question,
+            String previousQuestion,
+            PlayerLocale outputLanguage,
+            RuleAnswering.PublicLearningIntent learningIntent) {
         AnswerCreation creation = answerWithRun(
                 question,
                 new QuestionContext(
                         documentVersionId,
                         previousQuestion,
-                        null,
+                        learningIntent == null ? null : LearningIntent.valueOf(learningIntent.name()),
                         outputLanguage),
                 "public-reader",
                 null);
@@ -286,7 +335,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             boolean useCache) {
         UnderstoodQuestion understood = understanding.understand(question, context);
         if (understood.needsClarification()) {
-            return AnswerOutcomePolicy.clarification(understood);
+            return AnswerOutcomePolicy.clarification(understood, context.outputLanguage());
         }
         var confirmed = invocations.invoke(
                 assistantRunId,
@@ -343,11 +392,375 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                     draftResult.failureMessage());
         }
         ModelDraft draft = draftResult.draft();
+        List<RuleWalkthroughStep> walkthroughSteps;
+        try {
+            walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedWalkthrough) {
+            draftResult = draftComposer.repairAfterWalkthroughFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedWalkthroughFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "分步讲解未通过顺序标记或引用校验。");
+            }
+        }
+        List<RuleSituationCheck> situationChecks;
+        List<RuleDecisionBranch> decisionBranches;
+        List<RuleExceptionClause> exceptionClauses;
+        List<RuleTermDefinition> termDefinitions;
+        List<RuleWorkedExample> workedExamples;
+        List<com.rulepilot.assistant.domain.RulePriorityResolution> priorityResolutions;
+        List<com.rulepilot.assistant.domain.RuleTimingResolution> timingResolutions;
+        List<com.rulepilot.assistant.domain.RuleTieResolution> tieResolutions;
+        List<com.rulepilot.assistant.domain.RuleScopeResolution> scopeResolutions;
+        List<com.rulepilot.assistant.domain.RuleConceptComparison> conceptComparisons;
+        List<com.rulepilot.assistant.domain.RuleOption> ruleOptions;
+        try {
+            decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedDecisionTable) {
+            draftResult = draftComposer.repairAfterDecisionTableFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedDecisionTableFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "条件分支未通过结果来源或引用校验。");
+            }
+        }
+        try {
+            exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedExceptionClauses) {
+            draftResult = draftComposer.repairAfterExceptionClauseFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedExceptionFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "例外和限制未通过条件、效果或引用校验。");
+            }
+        }
+        try {
+            termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedDefinitions) {
+            draftResult = draftComposer.repairAfterTermDefinitionFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedDefinitionFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "术语定义未通过定义边界或引用校验。");
+            }
+        }
+        try {
+            workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedExamples) {
+            draftResult = draftComposer.repairAfterWorkedExampleFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedExampleFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则示例未通过起始状态、动作、结果或引用校验。");
+            }
+        }
+        try {
+            priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedPriority) {
+            draftResult = draftComposer.repairAfterRulePriorityFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedPriorityFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则冲突检查未通过适用范围、优先级或引用校验。");
+            }
+        }
+        try {
+            timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedTiming) {
+            draftResult = draftComposer.repairAfterTimingFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedTimingFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "时序裁决未通过情境、顺序、来源或引用校验。");
+            }
+        }
+        try {
+            tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedTie) {
+            draftResult = draftComposer.repairAfterTieFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedTieFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "平局判定未通过步骤、最终结果或引用校验。");
+            }
+        }
+        try {
+            scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedScope) {
+            draftResult = draftComposer.repairAfterScopeFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedScopeFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则适用范围未通过条件、当前局面或引用校验。");
+            }
+        }
+        try {
+            conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedComparison) {
+            draftResult = draftComposer.repairAfterConceptComparisonFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedComparisonFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则概念对比未通过定义、边界或引用校验。");
+            }
+        }
+        try {
+            situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedSituationCheck) {
+            draftResult = draftComposer.repairAfterSituationCheckFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedSituationFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "局面条件未通过玩家输入或引用校验。");
+            }
+        }
+        List<RuleCalculation> calculations;
+        try {
+            calculations = resolveCalculations(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedCalculation) {
+            draftResult = draftComposer.repairAfterCalculationFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
+                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedCalculationFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则计算未通过输入来源或表达式校验。");
+            }
+        }
+        try {
+            ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
+        } catch (RuntimeException rejectedOptions) {
+            draftResult = draftComposer.repairAfterRuleOptionFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(context.documentVersionId(), draftResult.failureStatus(), draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
+                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
+                ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
+            } catch (RuntimeException repeatedOptionFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "规则选项清单未通过完整性、选择语义或引用校验。");
+            }
+        }
         StructuredRuleAnswer answer;
         try {
-            answer = publicationValidator.publish(context.documentVersionId(), draft, evidence);
+            verifyPermissionRuling(assistantRunId, modelRequest, draft);
+            verifySourceEvidence(assistantRunId, modelRequest, draft);
+            answer = publicationValidator.publish(
+                    context.documentVersionId(), draft, evidence, calculations, situationChecks, walkthroughSteps,
+                    decisionBranches, exceptionClauses, termDefinitions, workedExamples, priorityResolutions,
+                    timingResolutions, tieResolutions, scopeResolutions, conceptComparisons, ruleOptions);
         } catch (RuntimeException exception) {
-            return safe(context.documentVersionId(), AnswerStatus.INVALID_MODEL_OUTPUT, "回答生成结果未通过结构或引用校验。");
+            draftResult = draftComposer.repairAfterPublicationFailure(
+                    assistantRunId, username, gameSessionId, modelRequest, draft);
+            if (!draftResult.ready()) {
+                return safe(
+                        context.documentVersionId(),
+                        draftResult.failureStatus(),
+                        draftResult.failureMessage());
+            }
+            draft = draftResult.draft();
+            try {
+                walkthroughSteps = resolveWalkthrough(assistantRunId, modelRequest, draft);
+                decisionBranches = resolveDecisionTable(assistantRunId, modelRequest, draft);
+                exceptionClauses = resolveExceptionClauses(assistantRunId, modelRequest, draft);
+                termDefinitions = resolveTermDefinitions(assistantRunId, modelRequest, draft);
+                workedExamples = resolveWorkedExamples(assistantRunId, modelRequest, draft);
+                priorityResolutions = resolveRulePriority(assistantRunId, modelRequest, draft);
+                timingResolutions = resolveTiming(assistantRunId, modelRequest, draft);
+                tieResolutions = resolveTies(assistantRunId, modelRequest, draft);
+                scopeResolutions = resolveScope(assistantRunId, modelRequest, draft);
+                conceptComparisons = resolveConceptComparisons(assistantRunId, modelRequest, draft);
+                situationChecks = resolveSituationChecks(assistantRunId, modelRequest, draft);
+                calculations = resolveCalculations(assistantRunId, modelRequest, draft);
+                ruleOptions = resolveRuleOptions(assistantRunId, modelRequest, draft);
+                verifyPermissionRuling(assistantRunId, modelRequest, draft);
+                verifySourceEvidence(assistantRunId, modelRequest, draft);
+                answer = publicationValidator.publish(
+                        context.documentVersionId(), draft, evidence, calculations, situationChecks, walkthroughSteps,
+                        decisionBranches, exceptionClauses, termDefinitions, workedExamples, priorityResolutions,
+                        timingResolutions, tieResolutions, scopeResolutions, conceptComparisons, ruleOptions);
+            } catch (RuntimeException repairFailure) {
+                return safe(
+                        context.documentVersionId(),
+                        AnswerStatus.INVALID_MODEL_OUTPUT,
+                        "回答生成结果未通过结构或引用校验。");
+            }
         }
         List<AnswerWarning> publicationWarnings = new java.util.ArrayList<>(draftResult.warnings());
         if (answer.confidence() == AnswerConfidence.LOW) {
@@ -426,6 +839,266 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private int estimateTokens(String value) {
         return value == null ? 0 : Math.max(1, (value.length() + 3) / 4);
+    }
+
+    private List<RuleCalculation> resolveCalculations(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.calculations().isEmpty()) return List.of();
+        String expressions = draft.calculations().stream()
+                .map(calculation -> calculation == null ? "" : calculation.expression())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "calculateRuleMath",
+                estimateTokens(expressions),
+                "Grounded rule arithmetic calculated",
+                () -> calculationResolver.resolve(modelRequest, draft),
+                calculations -> calculations.size() * 8);
+    }
+
+    private List<RuleSituationCheck> resolveSituationChecks(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        return List.of();
+    }
+
+    private List<RuleWalkthroughStep> resolveWalkthrough(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.walkthroughSteps().isEmpty() && !walkthroughResolver.requiresWalkthrough(modelRequest)) {
+            return List.of();
+        }
+        String steps = draft.walkthroughSteps().stream()
+                .map(step -> step == null ? "" : step.orderBasis() + " " + step.instruction())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                walkthroughResolver.requiresDependencyTrace(modelRequest)
+                        ? "traceRuleDependencies"
+                        : "buildRuleWalkthrough",
+                estimateTokens(steps),
+                walkthroughResolver.requiresDependencyTrace(modelRequest)
+                        ? "Cited prerequisite-to-consequence rule chain validated"
+                        : "Cited rule walkthrough built with explicit ordering basis",
+                () -> walkthroughResolver.resolve(modelRequest, draft),
+                results -> results.size() * 16);
+    }
+
+    private List<RuleDecisionBranch> resolveDecisionTable(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.decisionBranches().isEmpty() && !decisionTableResolver.requiresDecisionTable(modelRequest)) {
+            return List.of();
+        }
+        String branches = draft.decisionBranches().stream()
+                .map(branch -> branch == null ? "" : branch.basis() + " " + branch.condition())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "buildRuleDecisionTable",
+                estimateTokens(branches),
+                "Cited rule condition and outcome branches validated",
+                () -> decisionTableResolver.resolve(modelRequest, draft),
+                results -> results.size() * 16);
+    }
+
+    private List<RuleExceptionClause> resolveExceptionClauses(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.exceptionClauses().isEmpty() && !exceptionClauseResolver.requiresExceptionClauses(modelRequest)) {
+            return List.of();
+        }
+        String clauses = draft.exceptionClauses().stream()
+                .map(clause -> clause == null ? "" : clause.condition() + " " + clause.effect())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "buildRuleExceptionList",
+                estimateTokens(clauses),
+                "Cited rule exceptions and restrictions validated",
+                () -> exceptionClauseResolver.resolve(modelRequest, draft),
+                results -> results.size() * 16);
+    }
+
+    private List<RuleTermDefinition> resolveTermDefinitions(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.termDefinitions().isEmpty() && !termDefinitionResolver.requiresTermDefinitions(modelRequest)) {
+            return List.of();
+        }
+        String definitions = draft.termDefinitions().stream()
+                .map(definition -> definition == null ? "" : definition.term() + " " + definition.definition())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "defineRuleTerms",
+                estimateTokens(definitions),
+                "Cited rulebook term definitions and boundaries validated",
+                () -> termDefinitionResolver.resolve(modelRequest, draft),
+                results -> results.size() * 16);
+    }
+
+    private List<RuleWorkedExample> resolveWorkedExamples(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.workedExamples().isEmpty() && !workedExampleResolver.requiresWorkedExamples(modelRequest)) {
+            return List.of();
+        }
+        String examples = draft.workedExamples().stream()
+                .map(example -> example == null ? "" : example.setup() + " " + example.action() + " " + example.outcome())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "illustrateRule",
+                estimateTokens(examples),
+                "Cited rule worked examples validated",
+                () -> workedExampleResolver.resolve(modelRequest, draft),
+                results -> results.size() * 20);
+    }
+
+    private List<com.rulepilot.assistant.domain.RulePriorityResolution> resolveRulePriority(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.priorityResolutions().isEmpty()
+                && !AnswerRulePriorityResolver.asksForPriority(modelRequest.question())) {
+            return List.of();
+        }
+        String resolutions = draft.priorityResolutions().stream()
+                .map(item -> item == null ? "" : item.baseRule() + " " + item.competingRule() + " " + item.resolution())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
+                        ? "checkRuleConflicts"
+                        : "resolveRulePriority",
+                estimateTokens(resolutions),
+                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
+                        ? "Cited priority or non-conflicting scope distinction validated"
+                        : "Cited rule priority relationships validated",
+                () -> rulePriorityResolver.resolve(modelRequest, draft),
+                results -> results.size() * 20);
+    }
+
+    private List<com.rulepilot.assistant.domain.RuleTimingResolution> resolveTiming(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.timingResolutions().isEmpty()
+                && !AnswerTimingResolver.asksForTimingOrder(modelRequest.question())) {
+            return List.of();
+        }
+        String resolutions = draft.timingResolutions().stream()
+                .map(item -> item == null ? "" : item.timingContext() + " " + item.resolutionOrder() + " "
+                        + item.orderSource())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "resolveRuleTiming",
+                estimateTokens(resolutions),
+                "Cited simultaneous-effect ordering validated",
+                () -> timingResolver.resolve(modelRequest, draft),
+                results -> results.size() * 20);
+    }
+
+    private List<com.rulepilot.assistant.domain.RuleTieResolution> resolveTies(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.tieResolutions().isEmpty()
+                && !AnswerTieResolver.asksForTieResolution(modelRequest.question())) {
+            return List.of();
+        }
+        String resolutions = draft.tieResolutions().stream()
+                .map(item -> item == null ? "" : item.tieContext() + " "
+                        + String.join(" ", item.resolutionSteps()) + " " + item.finalOutcome())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "resolveRuleTie",
+                estimateTokens(resolutions),
+                "Cited tie-resolution ladder validated",
+                () -> tieResolver.resolve(modelRequest, draft),
+                results -> results.size() * 20);
+    }
+
+    private List<com.rulepilot.assistant.domain.RuleScopeResolution> resolveScope(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.scopeResolutions().isEmpty() && !AnswerScopeResolver.asksForScope(modelRequest.question())) {
+            return List.of();
+        }
+        String resolutions = draft.scopeResolutions().stream()
+                .map(item -> item == null ? "" : item.ruleContext() + " " + item.governingCondition() + " "
+                        + item.currentSituation() + " " + item.effect())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "resolveRuleScope",
+                estimateTokens(resolutions),
+                "Cited rule applicability validated",
+                () -> scopeResolver.resolve(modelRequest, draft),
+                results -> results.size() * 20);
+    }
+
+    private List<com.rulepilot.assistant.domain.RuleConceptComparison> resolveConceptComparisons(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.conceptComparisons().isEmpty()
+                && !AnswerConceptComparisonResolver.asksForComparison(modelRequest.question())) {
+            return List.of();
+        }
+        String comparisons = draft.conceptComparisons().stream()
+                .map(item -> item == null ? "" : item.leftConcept() + " " + item.rightConcept() + " "
+                        + item.keyDifference() + " " + item.practicalBoundary())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "compareRuleConcepts",
+                estimateTokens(comparisons),
+                "Cited rule concept distinction validated",
+                () -> conceptComparisonResolver.resolve(modelRequest, draft),
+                results -> results.size() * 24);
+    }
+
+    private List<com.rulepilot.assistant.domain.RuleOption> resolveRuleOptions(
+            UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (draft.ruleOptions().isEmpty() && !AnswerRuleOptionResolver.asksForOptions(modelRequest.question())) {
+            return List.of();
+        }
+        String options = draft.ruleOptions().stream()
+                .map(item -> item == null ? "" : item.optionName() + " " + item.availabilityCondition() + " "
+                        + item.result())
+                .collect(java.util.stream.Collectors.joining(" "));
+        return invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "listRuleOptions",
+                estimateTokens(options),
+                "Complete cited rule option list validated",
+                () -> ruleOptionResolver.resolve(modelRequest, draft),
+                results -> results.size() * 18);
+    }
+
+    private void verifySourceEvidence(UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (!AnswerSourceEvidenceResolver.requiresSourceEvidence(modelRequest)) return;
+        invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "showRuleEvidence",
+                estimateTokens(draft.shortVerdict() + " " + draft.explanation()),
+                "Direct rulebook excerpt selected and its player-facing explanation validated",
+                () -> sourceEvidenceResolver.resolve(modelRequest, draft),
+                results -> results.size() * 8);
+    }
+
+    private void verifyPermissionRuling(UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
+        if (!AnswerPermissionResolver.asksForPermission(modelRequest.question())) return;
+        invocations.invoke(
+                assistantRunId,
+                ActivityType.TOOL,
+                "checkRulePermission",
+                estimateTokens(draft.shortVerdict() + " " + draft.explanation()),
+                "Cited permission or prohibition direction validated",
+                () -> permissionResolver.resolve(modelRequest, draft),
+                results -> results.size() * 8);
     }
 
     public record AnswerCreation(UUID assistantRunId, StructuredRuleAnswer answer) {}

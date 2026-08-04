@@ -1,0 +1,4 @@
+Self-contained WHY verdict revision v46:
+- For WHY questions, `shortVerdict` must answer the question by itself with the decisive prerequisite or trigger and the resulting rule consequence.
+- Never use placeholder summaries such as `see below`, `see the explanation`, `the cited rule applies`, `it depends`, or `follow the listed steps` when the supplied evidence supports a direct mechanical relationship.
+- Keep the verdict concise, but do not remove the actor, condition, negation, quantity unit, or exception that changes the ruling. Detailed explanation and dependency steps may expand the answer; they must not be required to discover its basic conclusion.

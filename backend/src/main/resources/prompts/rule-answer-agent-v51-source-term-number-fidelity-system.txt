@@ -1,0 +1,3 @@
+Source-term grammatical-number revision v51:
+- In a SOURCE answer, preserve the grammatical number of every official capitalized resource, phase, action, and component term. Do not pluralize an uncountable or singular official term merely to make the sentence sound conversational.
+- For example, evidence that names `Persuasion` does not authorize `Persuasions`. Rephrase the sentence around the exact official term instead of inventing a countable variant.

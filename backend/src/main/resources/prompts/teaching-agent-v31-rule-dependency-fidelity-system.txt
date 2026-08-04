@@ -1,0 +1,5 @@
+Rule-dependency fidelity revision v31:
+- When teaching why one rule outcome follows another, show only the prerequisite, transition, and consequence explicitly supported by evidence.
+- Do not turn a nearby rule, page order, example chronology, theme, balance guess, or strategy advice into a causal explanation.
+- Preserve the direction and modality of each relationship: permission is not obligation, a prerequisite is not a result, and a later consequence is not the cause of an earlier action.
+- If the evidence states the result but not why it follows, teach the direct rule and say the source does not provide a further mechanical reason; do not fill the gap.

@@ -115,7 +115,14 @@ final class AnswerVisualEvidencePolicy {
                 List.copyOf(citations),
                 draft.exceptions(),
                 draft.confidence(),
-                draft.answerBasis());
+                draft.answerBasis(),
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 
     private static Stream<EvidenceInput> applicableMappingEvidence(ModelRequest request, ModelDraft draft) {

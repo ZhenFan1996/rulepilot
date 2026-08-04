@@ -83,7 +83,11 @@ class AnswerEvidenceAgentTest {
         DocumentNativeToolScopeFactory scopes = scopes();
         RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
         Permit permit = mock(Permit.class);
-        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        when(limiter.acquireModel(
+                        org.mockito.ArgumentMatchers.eq("player"),
+                        org.mockito.ArgumentMatchers.isNull(),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(permit);
         RuleEvidenceLookup lookup = (documentVersionId, chunkIds) -> List.of(later);
         AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, lookup, scopes, limiter);
 
@@ -98,7 +102,46 @@ class AnswerEvidenceAgentTest {
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
                 .contains(later.chunkId(), initial.evidence().chunkId());
-        verify(limiter).acquireModel("player", null, "test-provider");
+        verify(limiter).acquireModel(
+                org.mockito.ArgumentMatchers.eq("player"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.anyString());
+        verify(permit).close();
+    }
+
+    @Test
+    void refinesASingleQuestionWhenSelectedEvidenceHasNoDirectQuestionAnchor() {
+        AtomicInteger calls = new AtomicInteger();
+        NativeToolAgent nativeAgent = request -> {
+            calls.incrementAndGet();
+            return new RunResult(RunStatus.COMPLETED, "EVIDENCE_READY", "MODEL_COMPLETED", 1, 1, List.of());
+        };
+        DocumentNativeToolScopeFactory scopes = scopes();
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel(
+                        org.mockito.ArgumentMatchers.eq("player"),
+                        org.mockito.ArgumentMatchers.isNull(),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, emptyLookup(), scopes, limiter);
+        AnswerEvidenceRetriever.Result weak = ready(hit(
+                UUID.randomUUID(), "Components", "Put every marker beside the board."));
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("How is the winner determined?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                weak);
+
+        assertThat(result).isSameAs(weak);
+        assertThat(calls).hasValue(1);
+        verify(limiter).acquireModel(
+                org.mockito.ArgumentMatchers.eq("player"),
+                org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.anyString());
         verify(permit).close();
     }
 
@@ -210,6 +253,64 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void replacesDerivedVisualExcerptWithCanonicalObservedEvidenceForTheSameChunk() {
+        UUID chunkId = UUID.randomUUID();
+        HybridEvidenceHit visuallyEnriched = hit(
+                chunkId,
+                "Game end",
+                "Visual facts: a marker reaches the end.\n\nCanonical text: End the game immediately.");
+        RuleEvidenceHit canonical = source(chunkId, "Game end", "End the game immediately.");
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(completed(chunkId)),
+                (documentVersionId, chunkIds) -> List.of(canonical),
+                scopes(),
+                limiter);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("When does the game end, and who wins?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(visuallyEnriched));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().excerpt())
+                .contains("End the game immediately.")
+                .doesNotContain(visuallyEnriched.evidence().excerpt());
+    }
+
+    @Test
+    void rejectsAnObservedChunkWhoseImmutableCoordinatesDisagreeWithTheExistingEvidence() {
+        UUID chunkId = UUID.randomUUID();
+        HybridEvidenceHit existing = hit(chunkId, "Game end", "End the game immediately.");
+        RuleEvidenceHit conflicting = new RuleEvidenceHit(
+                chunkId, versionId, "RULES", "Game end", "End the game immediately.", 3, 3, 0.9);
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(completed(chunkId)),
+                (documentVersionId, chunkIds) -> List.of(conflicting),
+                scopes(),
+                limiter);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("When does the game end, and who wins?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(existing));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.CONFLICTING);
+        assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
     void passesBoundedPriorProvenanceAsAReferenceHintAndRequiresFreshObservation() {
         HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "General turn overview.");
         RuleEvidenceHit priorSource = source(UUID.randomUUID(), "Exception", "The verified exception timing.");
@@ -250,8 +351,55 @@ class AnswerEvidenceAgentTest {
                 .contains("Prior grounded reference hint (not current evidence)")
                 .contains(priorSource.chunkId().toString())
                 .contains("re-read canonical current-version evidence");
-        assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
+        assertThat(captured.get().allowedTools())
+                .containsExactlyInAnyOrder("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+        assertThat(captured.get().requiredToolsBeforeCompletion())
+                .containsExactlyInAnyOrder("search_rule_evidence", "read_rule_pages");
+        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId()).contains(priorSource.chunkId());
+    }
+
+    @Test
+    void selectsTheRelationshipPortfolioInsteadOfAdvertisingEveryAnswerTool() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "General rule overview.");
+        java.util.concurrent.atomic.AtomicReference<NativeToolAgent.RunRequest> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        NativeToolAgent nativeAgent = new NativeToolAgent() {
+            @Override
+            public RunResult run(RunRequest request) {
+                captured.set(request);
+                return new RunResult(
+                        RunStatus.FALLBACK,
+                        "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                        "NO_NEW_EVIDENCE",
+                        1,
+                        0,
+                        List.of());
+            }
+
+            @Override
+            public String providerId(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+                return "test-provider";
+            }
+        };
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, emptyLookup(), scopes(), limiter);
+
+        agent.refine(
+                runId,
+                question("Does the special rule override the general rule?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(initial));
+
+        assertThat(captured.get().allowedTools()).containsExactlyInAnyOrder(
+                "search_rule_relationships", "expand_rule_evidence_context", "read_rule_pages");
+        assertThat(captured.get().requiredToolsBeforeCompletion())
+                .containsExactlyInAnyOrder("search_rule_relationships", "read_rule_pages");
+        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
     }
 
     @Test

@@ -36,6 +36,7 @@ function preferredAppearance(): Appearance {
 const appearance = ref<Appearance>(preferredAppearance())
 const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
+const roles = ref<string[]>([])
 const loginReminderVisible = ref(false)
 const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
@@ -61,6 +62,7 @@ const currentNavigationName = computed(() => {
   if (route.name === 'public-lesson') return 'public-library'
   return route.name
 })
+const isAdmin = computed(() => roles.value.includes('ADMIN') || roles.value.includes('ROLE_ADMIN'))
 const loginTarget = computed(() => ({
   name: 'login',
   query: route.name === 'login' ? undefined : { redirect: route.fullPath },
@@ -91,12 +93,15 @@ async function loadSession() {
   try {
     const response = await fetch('/api/auth/session', { credentials: 'include' })
     if (response.ok) {
-      username.value = ((await response.json()) as { username: string }).username
+      const session = await response.json() as { username: string; roles?: string[] }
+      username.value = session.username
+      roles.value = Array.isArray(session.roles) ? session.roles : []
       completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(COMPLETED_TEACHING_KEY))
       await refreshTeachingStatus()
     }
   } catch {
     username.value = ''
+    roles.value = []
   }
 }
 
@@ -165,6 +170,7 @@ function handleVisibilityChange() {
 
 function showLoginReminder() {
   username.value = ''
+  roles.value = []
   loginReminderVisible.value = true
 }
 
@@ -175,6 +181,7 @@ async function logout() {
   const response = await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { [csrf.headerName]: csrf.token } })
   if (!response.ok) return
   username.value = ''
+  roles.value = []
   activeTeaching.value = []
   completedTeaching.value = []
   sessionStorage.removeItem(ACTIVE_TEACHING_KEY)
@@ -212,6 +219,15 @@ onBeforeUnmount(() => {
           <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" />
           <span>{{ t(item.labelKey) }}</span>
           <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
+        </RouterLink>
+        <RouterLink
+          v-if="isAdmin"
+          :to="{ name: 'agent-audit' }"
+          class="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors"
+          :class="currentNavigationName === 'agent-audit' ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
+        >
+          <TabletopGlyph name="rulebook" :size="19" class="shrink-0" />
+          <span>{{ t('nav.agentAudit') }}</span>
         </RouterLink>
       </nav>
 

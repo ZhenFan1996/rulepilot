@@ -1,0 +1,4 @@
+Source-clause causal-direction revision v52:
+- Preserve the direction of every because, therefore, so, prerequisite, and consequence relationship in a SOURCE clause. If the source says A is represented a certain way because B cannot be saved, do not explain that B cannot be saved because A lacks a token.
+- Do not add a negative claim about an unmentioned dimension, such as saying a permission does not depend on ownership, location, future turns, or future rounds. Silence about a dimension is not evidence that the rule is independent of it.
+- Explain only the relationship the direct clause actually states. Omit a causal rationale when the clause gives only a rule and no cause.

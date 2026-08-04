@@ -3,11 +3,13 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setLocale } from '@/lib/locale'
+import { rememberLessonAnswerThread } from '@/lib/lessonAnswerThread'
 import LessonQuestionsView from './LessonQuestionsView.vue'
 
 describe('LessonQuestionsView', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     setLocale('zh-CN')
   })
 
@@ -88,15 +90,23 @@ describe('LessonQuestionsView', () => {
 
   it('keeps the complete Q&A workspace localized in English', async () => {
     setLocale('en')
-    let answerRequest: Record<string, unknown> | null = null
+    const answerRequests: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', 'Deep Space'))
       if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture('Setup', 'Scoring'))
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/answers') && init?.method === 'POST') {
-        answerRequest = JSON.parse(String(init.body)) as Record<string, unknown>
-        return new Response(null, { status: 503 })
+        answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({
+          assistantRunId: '11111111-1111-4111-8111-111111111111',
+          answer: {
+            status: 'ANSWERED', shortVerdict: 'Score after resolving the objective.',
+            explanation: 'The cited sequence resolves the objective before scoring.', citations: [], exceptions: [],
+            confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false, confirmedRulingId: null,
+            confirmedRulingVersion: null, clarification: null, warnings: [],
+          },
+        })
       }
       return new Response(null, { status: 404 })
     }))
@@ -107,14 +117,75 @@ describe('LessonQuestionsView', () => {
     expect(wrapper.text()).toContain('Ask the rulebook')
     expect(wrapper.text()).toContain('Read a card from a photo')
     expect(wrapper.text()).not.toMatch(/[\u3400-\u9fff]/)
+    expect(wrapper.findAll('button').some((button) => button.text() === 'Walk through an example')).toBe(false)
+    await wrapper.get('#lesson-question').setValue('When do I score the objective?')
+    await wrapper.get('#lesson-question-panel form').trigger('submit')
+    await flushPromises()
     await wrapper.findAll('button').find((button) => button.text() === 'Walk through an example')!.trigger('click')
     await flushPromises()
-    expect(answerRequest).toMatchObject({
-      question: 'Using the rulebook, walk through one concrete, legal table example.',
+    expect(answerRequests.at(-1)).toMatchObject({
+      question: expect.stringContaining('For the question “When do I score the objective?”'),
+      previousQuestion: 'When do I score the objective?',
       learningIntent: 'EXAMPLE',
       language: 'en',
     })
-    expect(answerRequest).not.toHaveProperty('currentLessonSection')
+    expect(answerRequests.at(-1)).not.toHaveProperty('currentLessonSection')
+
+    await wrapper.findAll('button').find((button) => button.text() === 'Explain the key term')!.trigger('click')
+    await flushPromises()
+    expect(answerRequests.at(-1)).toMatchObject({
+      question: expect.stringContaining('For the question “When do I score the objective?”'),
+      learningIntent: 'DEFINE',
+      language: 'en',
+    })
+    expect(String(answerRequests.at(-1)?.question)).not.toContain('one concrete, legal table example”')
+    wrapper.unmount()
+  })
+
+  it('restores and clears only the signed-in players matching lesson thread', async () => {
+    rememberLessonAnswerThread(sessionStorage, {
+      username: 'alice', planId: 'plan-1', documentVersionId: 'version-plan-1', locale: 'zh-CN',
+    }, [{
+      question: '刚才什么时候结算？',
+      learningIntent: null,
+      answer: {
+        status: 'ANSWERED', shortVerdict: '完成计分后结算。', explanation: '规则书给出了这个顺序。',
+        citations: [], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
+        confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+      },
+    }])
+    rememberLessonAnswerThread(sessionStorage, {
+      username: 'bob', planId: 'plan-1', documentVersionId: 'version-plan-1', locale: 'zh-CN',
+    }, [{
+      question: 'Bob 的私有问题',
+      learningIntent: null,
+      answer: {
+        status: 'ANSWERED', shortVerdict: 'Bob 的私有答案', explanation: '', citations: [], exceptions: [],
+        confidence: 'HIGH', official: false, confirmedRulingId: null, confirmedRulingVersion: null,
+        clarification: null, warnings: [],
+      },
+    }])
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '星际探索'))
+      if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture())
+      if (path === '/api/auth/session') return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+
+    expect(wrapper.text()).toContain('刚才什么时候结算？')
+    expect(wrapper.text()).toContain('完成计分后结算。')
+    expect(wrapper.text()).toContain('仅保留在当前账号的浏览器会话')
+    expect(wrapper.text()).not.toContain('Bob 的私有问题')
+
+    await wrapper.findAll('button').find(button => button.text() === '清空本次答疑')!.trigger('click')
+
+    expect(wrapper.text()).not.toContain('刚才什么时候结算？')
+    expect(sessionStorage.length).toBe(1)
+    expect(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)))
+      .toContain('rulepilot:lesson-answer-thread:v1:bob:plan-1:version-plan-1:zh-CN')
     wrapper.unmount()
   })
 })

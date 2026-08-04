@@ -32,7 +32,9 @@ public interface NativeToolAgent {
             String fallbackText,
             int maxIterations,
             int maxOutputTokens,
-            Set<String> requiredToolsBeforeCompletion) {
+            Set<String> allowedTools,
+            Set<String> requiredToolsBeforeCompletion,
+            int maxToolCalls) {
         public RunRequest(
                 Role role,
                 ToolScope scope,
@@ -41,17 +43,57 @@ public interface NativeToolAgent {
                 String fallbackText,
                 int maxIterations,
                 int maxOutputTokens) {
-            this(role, scope, systemPrompt, playerRequest, fallbackText, maxIterations, maxOutputTokens, Set.of());
+            this(
+                    role,
+                    scope,
+                    systemPrompt,
+                    playerRequest,
+                    fallbackText,
+                    maxIterations,
+                    maxOutputTokens,
+                    Set.of(),
+                    Set.of(),
+                    Math.min(24, maxIterations * 4));
+        }
+
+        /** Compatibility constructor: an empty allow-list means every tool registered for the role. */
+        public RunRequest(
+                Role role,
+                ToolScope scope,
+                String systemPrompt,
+                String playerRequest,
+                String fallbackText,
+                int maxIterations,
+                int maxOutputTokens,
+                Set<String> requiredToolsBeforeCompletion) {
+            this(
+                    role,
+                    scope,
+                    systemPrompt,
+                    playerRequest,
+                    fallbackText,
+                    maxIterations,
+                    maxOutputTokens,
+                    Set.of(),
+                    requiredToolsBeforeCompletion,
+                    Math.min(24, maxIterations * 4));
         }
 
         public RunRequest {
             if (role == null || scope == null || blank(systemPrompt) || blank(playerRequest) || blank(fallbackText)
                     || maxIterations < 1 || maxIterations > 12 || maxOutputTokens < 1 || maxOutputTokens > 8192
+                    || allowedTools == null
                     || requiredToolsBeforeCompletion == null
+                    || maxToolCalls < 1 || maxToolCalls > 24
+                    || allowedTools.stream().anyMatch(value -> value == null || value.isBlank())
                     || requiredToolsBeforeCompletion.stream().anyMatch(value -> value == null || value.isBlank())) {
                 throw new IllegalArgumentException("native tool Agent request is invalid");
             }
+            allowedTools = Set.copyOf(allowedTools);
             requiredToolsBeforeCompletion = Set.copyOf(requiredToolsBeforeCompletion);
+            if (!allowedTools.isEmpty() && !allowedTools.containsAll(requiredToolsBeforeCompletion)) {
+                throw new IllegalArgumentException("required native tools must be included in the allow-list");
+            }
         }
     }
 

@@ -155,7 +155,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             prompt = prompt.options(options);
         }
         return prompt
-                .system(prompts.answerSystem())
+                .system(prompts.answerSystem(request.question(), request.context().learningIntentForPrompt()))
                 .user(user -> user.text(prompts.answerUser())
                         .param("question", request.question())
                         .param("questionType", request.questionType().name())

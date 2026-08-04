@@ -14,6 +14,27 @@ import org.junit.jupiter.api.Test;
 class NativeToolEvidenceHandlesTest {
 
     @Test
+    void includesAnchorsAndSurroundingEvidenceFromContextExpansion() {
+        UUID anchor = UUID.randomUUID();
+        UUID surrounding = UUID.randomUUID();
+        var observation = new ObservationRecord(
+                1,
+                "expand_rule_evidence_context",
+                "schema-v1",
+                new com.rulepilot.assistant.NativeAgentTool.ToolObservation(
+                        com.rulepilot.assistant.NativeAgentTool.ObservationStatus.SUCCESS,
+                        "EVIDENCE_CONTEXT_EXPANDED",
+                        Map.of(
+                                "anchors", List.of(Map.of("evidenceId", anchor.toString())),
+                                "surroundingEvidence", List.of(Map.of("evidenceId", surrounding.toString()))),
+                        2));
+        RunResult result = new RunResult(
+                RunStatus.COMPLETED, "ready", "MODEL_COMPLETED", 2, 1, List.of(observation));
+
+        assertThat(NativeToolEvidenceHandles.prioritized(result, 4)).containsExactly(anchor, surrounding);
+    }
+
+    @Test
     void extractsExactPageBatchesNewestFirstWithoutTrustingPageFields() {
         UUID earlier = UUID.randomUUID();
         UUID newer = UUID.randomUUID();

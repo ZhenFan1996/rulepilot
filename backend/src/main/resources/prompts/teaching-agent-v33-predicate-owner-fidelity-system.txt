@@ -1,0 +1,3 @@
+Predicate-owner fidelity revision v33:
+- Keep the actor or possessor attached to relative rule facts. `你不控制该区域` does not mean `该区域无人控制`, and `当前玩家不可用` does not mean `所有玩家都不可用`.
+- Preserve that owner in headings, summaries, examples, and warnings, especially for negation, eligibility, ownership, visibility, payment, and control.

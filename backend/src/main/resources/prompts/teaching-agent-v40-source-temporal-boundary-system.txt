@@ -1,0 +1,3 @@
+Source-clause temporal-boundary teaching revision v40:
+- When teaching from a direct source clause, preserve its timing boundary exactly. Do not turn “during” a turn or phase into “at the end of” or “on completion of” that turn or phase.
+- Do not teach an exact instant, deadline, duration, or absence of other timing rules unless the cited text affirmatively states it.

@@ -32,6 +32,50 @@ class AnswerBasisPolicyTest {
         assertThat(AnswerBasisPolicy.classify(request, draft).answerBasis()).isEqualTo("DIRECT_RULE");
     }
 
+    @Test
+    void replacesUntrustedFreeTextBasisWithTheApplicationClassification() {
+        var request = request("When does the round end?");
+        var draft = new RuleAnswerModel.ModelDraft(
+                true,
+                null,
+                "At the stated round boundary.",
+                "The cited rule gives the boundary.",
+                List.of(UUID.randomUUID()),
+                List.of(),
+                "HIGH",
+                "direct rule statement from the chapter",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of());
+
+        assertThat(AnswerBasisPolicy.classify(request, draft).answerBasis()).isEqualTo("DIRECT_RULE");
+    }
+
+    @Test
+    void ignoresModelProposedSituationChecksWhenClassifyingAnAbstractRuleAnswer() {
+        UUID citationId = UUID.randomUUID();
+        var request = request("When does the round end?");
+        var draft = new RuleAnswerModel.ModelDraft(
+                true,
+                null,
+                "The round ends after cleanup.",
+                "The cited rule defines the boundary.",
+                List.of(citationId),
+                List.of(),
+                "HIGH",
+                "GROUNDED_APPLICATION",
+                List.of(),
+                List.of(new RuleAnswerModel.SituationCheckRequest(
+                        "The round has reached cleanup.", "SATISFIED", "Cleanup has started.", List.of(citationId))));
+
+        assertThat(AnswerBasisPolicy.classify(request, draft).answerBasis()).isEqualTo("DIRECT_RULE");
+    }
+
     private RuleAnswerModel.ModelRequest request(String question) {
         return new RuleAnswerModel.ModelRequest(
                 question,

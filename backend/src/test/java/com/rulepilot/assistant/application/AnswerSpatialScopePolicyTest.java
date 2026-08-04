@@ -38,6 +38,17 @@ class AnswerSpatialScopePolicyTest {
         assertThat(bounded.citationIds()).containsExactlyElementsOf(draft.citationIds());
     }
 
+    @Test
+    void doesNotTreatOutrightVictoryAsTheEnglishWordRight() {
+        var request = request("What happens if the sixth-round winner leads outright?");
+        var draft = draft(
+                "The sixth-round winner immediately wins.",
+                "If that player leads every other player in victory points, the game ends.");
+
+        assertThat(AnswerSpatialScopePolicy.needsRepair(request, draft)).isFalse();
+        assertThat(AnswerSpatialScopePolicy.boundRepeatedInference(request, draft)).isSameAs(draft);
+    }
+
     private RuleAnswerModel.ModelRequest request(String question) {
         return new RuleAnswerModel.ModelRequest(
                 question,

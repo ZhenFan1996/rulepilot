@@ -158,6 +158,11 @@ class AnswerRunLifecycleTest {
         }
 
         @Override
+        public Optional<RunDetails> findForAdministrativeAudit(UUID runId) {
+            return Optional.empty();
+        }
+
+        @Override
         public Optional<RunDetails> findLatestOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername) {
             return Optional.empty();
         }

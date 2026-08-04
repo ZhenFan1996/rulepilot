@@ -51,6 +51,11 @@ const router = createRouter({
       component: () => import('@/views/ModelSettingsView.vue'),
     },
     {
+      path: '/admin/agent-audit',
+      name: 'agent-audit',
+      component: () => import('@/views/AgentAuditView.vue'),
+    },
+    {
       path: '/lesson/:planId?',
       name: 'lesson',
       component: () => import('@/views/LessonView.vue'),

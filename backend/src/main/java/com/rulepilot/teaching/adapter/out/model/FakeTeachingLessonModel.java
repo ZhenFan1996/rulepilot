@@ -16,7 +16,6 @@ public class FakeTeachingLessonModel implements TeachingLessonModel {
     @Override
     public SectionDraft compose(SectionRequest request) {
         List<StepDraft> steps = request.evidence().stream()
-                .limit(request.maxSteps())
                 .map(source -> new StepDraft(source.excerpt(), List.of(source.chunkId())))
                 .toList();
         return new SectionDraft(

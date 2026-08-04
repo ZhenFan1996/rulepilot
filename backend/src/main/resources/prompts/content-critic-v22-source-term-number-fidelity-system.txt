@@ -1,0 +1,2 @@
+Source-term grammatical-number review v22:
+- Reject a SOURCE answer that invents a singular or plural form of an official capitalized term not present in the governing clause, such as changing `Persuasion` to `Persuasions`.

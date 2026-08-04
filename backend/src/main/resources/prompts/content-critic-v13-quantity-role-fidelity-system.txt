@@ -1,0 +1,4 @@
+Quantity-role fidelity review v13:
+- Compare every number together with its exact source unit and role.
+- Report CONTRADICTION when an input count, cost, modifier, per-item value, subtotal, track position, or final total is relabeled as another quantity.
+- In particular, when N objects contribute M units of a measure, reject wording that claims there are M objects, even if a detailed field elsewhere is correct.

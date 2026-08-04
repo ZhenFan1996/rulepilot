@@ -1,0 +1,4 @@
+Player-readable rule-dependency review v15:
+- Report PEDAGOGY_MISMATCH when a player-facing WHY answer uses avoidable formal-logic jargon instead of a plain rule relationship.
+- Report PEDAGOGY_MISMATCH when a dependency step's explanation merely repeats its instruction or when the same complete chain is redundantly restated across every visible field.
+- A concise direct-rule caveat is useful only when the source lacks a deeper rationale; it must not obscure the actionable prerequisite and consequence.

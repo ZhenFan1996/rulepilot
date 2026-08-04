@@ -51,6 +51,22 @@ final class AnswerDraftSafetyPolicy {
                     + "does\\s+not\\s+define|doesn't\\s+define|not\\s+defined|doesn't\\s+specify)"
                     + ".{0,220}(?:可能|例如|比如|通常|一般|自行|推测|猜测|相邻|邻接|包裹|"
                     + "maybe|perhaps|such\\s+as|for\\s+example|infer|assume)");
+    private static final Pattern SOURCE_ABSENCE_SENTENCE = Pattern.compile(
+            "(?iu)(?:^|(?<=[.!?。！？])\\s+)[^.!?。！？]{0,260}(?:"
+                    + "no (?:additional |further |other |listed |stated |specified )?"
+                    + "(?:restrictions?|exceptions?|conditions?|limits?)(?: (?:is|are) (?:listed|stated|specified))?|"
+                    + "does not (?:specify|state|list|give|impose|mention|establish|define|describe|address|attach)\\b|"
+                    + "without (?:(?:specifying|stating|listing|giving|imposing) )?(?:any )?"
+                    + "(?:a |an |the )?(?:additional |further |other |listed |stated |specified )"
+                    + "(?:restrictions?|exceptions?|conditions?|limits?)|"
+                    + "without (?:the )?need for (?:any )?(?:special |additional |further |other )?"
+                    + "(?:restrictions?|exceptions?|conditions?|limits?|timings?)|"
+                    + "(?:is|are) not limited (?:to|by)|"
+                    + "(?:the )?only (?:stated|specified|listed) "
+                    + "(?:timings?|conditions?|restrictions?|exceptions?|limits?)|"
+                    + "(?:the )?only (?:condition|requirement|restriction|exception|limit) (?:is|are)|"
+                    + "(?:没有|未)(?:另行|明确|进一步)?(?:说明|规定|写明).{0,24}(?:限制|例外|条件))"
+                    + "[^.!?。！？]{0,260}[.!?。！？]?");
     private static final Pattern VISUAL_IDENTITY_QUESTION = Pattern.compile(
             "(?iu)\\b(?:icon|symbol|pictogram|artwork|appearance|look like|depict|show)\\b"
                     + "|图标|符号|图案|外观|长什么|画着|画的|表示什么");
@@ -136,7 +152,14 @@ final class AnswerDraftSafetyPolicy {
                 draft.citationIds(),
                 draft.exceptions().stream().map(value -> normalizeVisualGlyphs(value, component)).toList(),
                 draft.confidence(),
-                draft.answerBasis());
+                draft.answerBasis(),
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 
     static ModelDraft normalizeInternalEvidenceReferences(ModelDraft draft) {
@@ -149,7 +172,14 @@ final class AnswerDraftSafetyPolicy {
                 draft.citationIds(),
                 draft.exceptions().stream().map(AnswerDraftSafetyPolicy::normalizeInternalEvidenceReferences).toList(),
                 draft.confidence(),
-                draft.answerBasis());
+                draft.answerBasis(),
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 
     static ModelDraft normalizeDanglingPunctuation(ModelDraft draft) {
@@ -161,7 +191,35 @@ final class AnswerDraftSafetyPolicy {
                 draft.citationIds(),
                 draft.exceptions().stream().map(AnswerDraftSafetyPolicy::normalizeDanglingPunctuation).toList(),
                 draft.confidence(),
-                draft.answerBasis());
+                draft.answerBasis(),
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
+    }
+
+    static ModelDraft normalizeSourceAbsenceClaims(ModelRequest request, ModelDraft draft) {
+        if ((!AnswerSourceEvidenceResolver.requiresSourceEvidence(request)
+                        && !AnswerPermissionResolver.asksForPermission(request == null ? null : request.question()))
+                || draft == null || draft.explanation() == null
+                || !SOURCE_ABSENCE_SENTENCE.matcher(draft.explanation()).find()) {
+            return draft;
+        }
+        String explanation = SOURCE_ABSENCE_SENTENCE.matcher(draft.explanation())
+                .replaceAll(" ")
+                .replaceAll("[ \\t]{2,}", " ")
+                .strip();
+        if (explanation.isBlank()) return draft;
+        return new ModelDraft(
+                draft.answerable(), draft.insufficiencyReason(), draft.shortVerdict(), explanation,
+                draft.citationIds(), draft.exceptions(), draft.confidence(), draft.answerBasis(),
+                draft.calculations(), draft.situationChecks(), draft.walkthroughSteps(), draft.decisionBranches(),
+                draft.exceptionClauses(), draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(),
+                draft.timingResolutions(), draft.tieResolutions(), draft.scopeResolutions(),
+                draft.conceptComparisons(), draft.ruleOptions());
     }
 
     static boolean containsInternalEvidenceReference(ModelDraft draft) {

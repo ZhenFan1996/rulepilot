@@ -21,7 +21,7 @@ class NativeVisualToolsTest {
     private final NativeVisualEvidence evidence = new StubVisualEvidence(evidenceId);
 
     @Test
-    void exposesVisualToolsOnlyToTheVisualRoleAndRejectsAnswerExecution() {
+    void exposesTextualVisualFactsToAnswersWhileKeepingPageMediaVisualOnly() {
         var registry = new NativeAgentToolRegistry(
                 List.of(
                         new ReadRulePageImageNativeTool(evidence, mapper),
@@ -32,7 +32,8 @@ class NativeVisualToolsTest {
 
         assertThat(registry.specifications(Role.VISUAL)).extracting(spec -> spec.name())
                 .containsExactly("crop_rule_page_image", "read_rule_page_image", "read_visual_page_facts");
-        assertThat(registry.specifications(Role.ANSWER)).isEmpty();
+        assertThat(registry.specifications(Role.ANSWER)).extracting(spec -> spec.name())
+                .containsExactly("read_visual_page_facts");
         assertThat(registry.specifications(Role.TEACHING)).isEmpty();
 
         var rejected = registry.execute(
@@ -42,6 +43,15 @@ class NativeVisualToolsTest {
                 scope());
         assertThat(rejected.observation().status()).isEqualTo(ObservationStatus.ERROR);
         assertThat(rejected.observation().code()).isEqualTo("TOOL_NOT_ALLOWED");
+
+        var facts = registry.execute(
+                Role.ANSWER,
+                "read_visual_page_facts",
+                "{\"evidenceId\":\"" + evidenceId + "\",\"pageNumber\":4}",
+                scope());
+        assertThat(facts.observation().status()).isEqualTo(ObservationStatus.SUCCESS);
+        assertThat(facts.observation().media()).isEmpty();
+        assertThat(facts.observation().data()).containsEntry("mechanicalRuleAuthority", false);
     }
 
     @Test

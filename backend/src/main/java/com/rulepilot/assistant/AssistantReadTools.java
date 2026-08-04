@@ -17,6 +17,11 @@ public interface AssistantReadTools {
         return List.of();
     }
 
+    default RuleEvidenceContext readRuleEvidenceContext(
+            UUID documentVersionId, Set<UUID> anchorEvidenceIds, int radius) {
+        return new RuleEvidenceContext(List.of(), List.of());
+    }
+
     record SearchRuleEvidence(
             UUID documentVersionId,
             String query,
@@ -69,6 +74,15 @@ public interface AssistantReadTools {
 
         public RuleEvidence {
             pageImages = pageImages == null ? List.of() : List.copyOf(pageImages);
+        }
+    }
+
+    record RuleEvidenceContext(
+            List<RuleEvidence> anchors,
+            List<RuleEvidence> surroundingEvidence) {
+        public RuleEvidenceContext {
+            anchors = anchors == null ? List.of() : List.copyOf(anchors);
+            surroundingEvidence = surroundingEvidence == null ? List.of() : List.copyOf(surroundingEvidence);
         }
     }
 

@@ -4,14 +4,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.AgentExecutionControl;
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.DecisionBranchRequest;
+import com.rulepilot.assistant.RuleAnswerModel.ExceptionClauseRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
+import com.rulepilot.assistant.RuleAnswerModel.SituationCheckRequest;
+import com.rulepilot.assistant.RuleAnswerModel.TermDefinitionRequest;
+import com.rulepilot.assistant.RuleAnswerModel.WalkthroughStepRequest;
+import com.rulepilot.assistant.RuleAnswerModel.WorkedExampleRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RulePriorityRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RuleTimingRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RuleTieRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RuleScopeRequest;
+import com.rulepilot.assistant.RuleAnswerModel.RuleConceptComparisonRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -42,6 +57,797 @@ class StructuredRuleAnswerServiceTest {
 
     private final UUID versionId = UUID.randomUUID();
     private final DeterministicQuestionUnderstanding understanding = new DeterministicQuestionUnderstanding();
+
+    @Test
+    void publishesARecomputedGroundedCalculationSeparateFromRuleEvidence() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "SCORING",
+                "Set scoring",
+                "Each complete set of 3 resources scores 5 points.",
+                8,
+                8,
+                0.9);
+        RuleAnswerModel model = request -> new ModelDraft(
+                true,
+                null,
+                "You score 10 points.",
+                "Eight resources contain two complete sets, so you score 10 points and have two resources left over.",
+                List.of(source.chunkId()),
+                List.of(),
+                "HIGH",
+                "GROUNDED_APPLICATION",
+                List.of(new CalculationRequest("floor(8 / 3) * 5")));
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "I have 8 resources. How many points do I score?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.answerBasis().name()).isEqualTo("GROUNDED_APPLICATION");
+        assertThat(answer.calculations()).singleElement().satisfies(calculation -> {
+            assertThat(calculation.expression()).isEqualTo("floor(8 / 3) * 5");
+            assertThat(calculation.result()).isEqualTo("10");
+        });
+        assertThat(answer.citations()).singleElement().satisfies(citation ->
+                assertThat(citation.excerpt()).doesNotContain("10"));
+    }
+
+    @Test
+    void repairsAnInventedCalculationOperandBeforePublishing() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SCORING", "Set scoring",
+                "Each complete set of 3 resources scores 5 points.", 8, 8, 0.9);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        true,
+                        null,
+                        "You score 10 points.",
+                        "The calculation gives 10 points.",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "GROUNDED_APPLICATION",
+                        List.of(new CalculationRequest("floor(8 / 4) * 5")));
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("numeric operand"));
+                return new ModelDraft(
+                        true,
+                        null,
+                        "Count only complete sets.",
+                        "The cited rule scores each complete set of three resources at five points.",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE",
+                        List.of());
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "I have 8 resources. How many points do I score?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.calculations()).isEmpty();
+        assertThat(answer.shortVerdict()).doesNotContain("10");
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAMissingProceduralWalkthroughAndPublishesSeparatelyCitedSteps() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "PROCEDURE", "Resolution procedure",
+                "First pay the cost. Then resolve the effect.", 4, 4, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Pay the cost, then resolve the effect.",
+                        "The rule gives these operations in sequence.",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("RULE_ORDER"));
+                return new ModelDraft(
+                        true, null, "Pay, then resolve.", "Follow the cited two-step procedure.",
+                        List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE", List.of(), List.of(),
+                        List.of(
+                                new WalkthroughStepRequest(
+                                        "Pay the cost.", "Complete the required payment first.",
+                                        "RULE_ORDER", List.of(source.chunkId())),
+                                new WalkthroughStepRequest(
+                                        "Resolve the effect.", "Apply the effect after payment.",
+                                        "RULE_ORDER", List.of(source.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "How do I resolve combat?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.walkthroughSteps()).extracting(step -> step.instruction())
+                .containsExactly("Pay the cost.", "Resolve the effect.");
+        assertThat(answer.walkthroughSteps()).allSatisfy(step ->
+                assertThat(step.citationIds()).containsExactly(source.chunkId()));
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void auditsWhyWalkthroughsAsRuleDependencyTracingRatherThanProceduralInstructions() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "RULE", "Dependency",
+                "Before entering, pay the required cost. After payment, enter the area.", 5, 5, 0.95);
+        RuleAnswerModel model = request -> new ModelDraft(
+                true, null,
+                "You may enter after paying the required cost.",
+                "Payment is the cited prerequisite for entry.",
+                List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE", List.of(), List.of(),
+                List.of(
+                        new WalkthroughStepRequest(
+                                "Pay the required cost.", "The rule requires payment before entry.",
+                                "RULE_ORDER", List.of(source.chunkId())),
+                        new WalkthroughStepRequest(
+                                "Enter the area.", "Entry follows after the required payment.",
+                                "RULE_ORDER", List.of(source.chunkId()))));
+        List<String> operations = new java.util.ArrayList<>();
+        AuditedAgentInvocations invocations = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    java.util.function.Supplier<T> invocation,
+                    java.util.function.ToIntFunction<T> outputTokenEstimator) {
+                operations.add(operation);
+                return invocation.get();
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.95, 1, null, false)),
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                invocations,
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+
+        StructuredRuleAnswer answer = service.answer(
+                "Why may I enter after paying?",
+                new QuestionContext(versionId, null, LearningIntent.WHY, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.walkthroughSteps()).hasSize(2);
+        assertThat(operations).contains("traceRuleDependencies").doesNotContain("buildRuleWalkthrough");
+    }
+
+    @Test
+    void auditsAnAllegedConflictWithoutInventingARulePriorityWinner() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SCOPE", "Entry timing",
+                "The archive entry rule applies only during Dawn. "
+                        + "The vault entry rule applies only during Dusk.",
+                7, 7, 0.95);
+        RuleAnswerModel model = request -> new ModelDraft(
+                true, null,
+                "The rules do not conflict: the archive rule applies during Dawn, while the vault rule applies during Dusk.",
+                "They govern the same kind of action under different cited timing conditions, so neither overrides the other.",
+                List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(new RuleConceptComparisonRequest(
+                        "archive entry rule",
+                        "It applies only during Dawn.",
+                        "vault entry rule",
+                        "It applies only during Dusk.",
+                        "Both rules govern entry into a named area.",
+                        "Their timing conditions are different.",
+                        "Use the archive entry rule only during Dawn and the vault entry rule only during Dusk; neither overrides the other.",
+                        "RULE_SCOPE",
+                        List.of(source.chunkId()))));
+        List<String> operations = new java.util.ArrayList<>();
+        AuditedAgentInvocations invocations = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    java.util.function.Supplier<T> invocation,
+                    java.util.function.ToIntFunction<T> outputTokenEstimator) {
+                operations.add(operation);
+                return invocation.get();
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.95, 1, null, false)),
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                invocations,
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+
+        StructuredRuleAnswer answer = service.answer(
+                "Do the archive entry rule and vault entry rule conflict?",
+                new QuestionContext(versionId, null, LearningIntent.VERIFY, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.priorityResolutions()).isEmpty();
+        assertThat(answer.conceptComparisons()).singleElement().satisfies(comparison -> {
+            assertThat(comparison.basis().name()).isEqualTo("RULE_SCOPE");
+            assertThat(comparison.practicalBoundary()).contains("Dawn", "Dusk");
+        });
+        assertThat(operations).contains("checkRuleConflicts").doesNotContain("resolveRulePriority");
+    }
+
+    @Test
+    void auditsAPlayerRequestForTheDirectRulebookSource() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Beacon",
+                "When the beacon is lit, each player may draw one card.", 9, 9, 0.97);
+        RuleAnswerModel model = request -> new ModelDraft(
+                true, null,
+                "Players may draw one card each when the beacon is lit.",
+                "The cited clause makes lighting the beacon the trigger and gives the draw permission to each player.",
+                List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        List<String> operations = new java.util.ArrayList<>();
+        AuditedAgentInvocations invocations = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    java.util.function.Supplier<T> invocation,
+                    java.util.function.ToIntFunction<T> outputTokenEstimator) {
+                operations.add(operation);
+                return invocation.get();
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.97, 1, null, false)),
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                invocations,
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+
+        StructuredRuleAnswer answer = service.answer(
+                "Where does the rulebook say when players draw from the beacon?",
+                new QuestionContext(versionId, null, LearningIntent.SOURCE, PlayerLocale.EN));
+
+        assertThat(answer.status()).as("operations: %s, verdict: %s", operations, answer.shortVerdict())
+                .isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).singleElement().satisfies(citation -> {
+            assertThat(citation.pageFrom()).isEqualTo(9);
+            assertThat(citation.excerpt()).isEqualTo(source.excerpt());
+        });
+        assertThat(operations).contains("showRuleEvidence");
+    }
+
+    @Test
+    void auditsAnExplicitCanQuestionAsAPermissionRuling() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "ACTIONS", "Beacon",
+                "Each player may draw one card after lighting the beacon.", 9, 9, 0.97);
+        RuleAnswerModel model = request -> new ModelDraft(
+                true, null,
+                "Yes, each player may draw one card after lighting the beacon.",
+                "Lighting the beacon satisfies the cited condition for that permission.",
+                List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of());
+        List<String> operations = new java.util.ArrayList<>();
+        AuditedAgentInvocations invocations = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    java.util.function.Supplier<T> invocation,
+                    java.util.function.ToIntFunction<T> outputTokenEstimator) {
+                operations.add(operation);
+                return invocation.get();
+            }
+        };
+        var service = new StructuredRuleAnswerService(
+                understanding,
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.97, 1, null, false)),
+                model,
+                new InMemoryAnswerCache(),
+                new RecordingRateLimiter(),
+                new MutableRuleDataVersion(),
+                noConfirmedRulings(),
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                null,
+                invocations,
+                io.micrometer.observation.ObservationRegistry.NOOP,
+                new SimpleMeterRegistry());
+
+        StructuredRuleAnswer answer = service.answer(
+                "Can players draw after lighting the beacon?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).startsWith("Yes");
+        assertThat(operations).contains("checkRulePermission");
+    }
+
+    @Test
+    void repairsAMissingBranchComparisonAndPublishesSeparatelyCitedOutcomes() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TIES", "Tie rewards",
+                "Players tied for first each receive the second reward. Players tied for second each receive the third reward.",
+                12, 12, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Tie rewards depend on the tied place.",
+                        "The rule states a different reward for each tie.",
+                        List.of(source.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("EXPLICIT_RULE"));
+                return new ModelDraft(
+                        true, null, "Compare the tied place.", "Each condition keeps its cited outcome.",
+                        List.of(source.chunkId()), List.of(), "HIGH", "DIRECT_RULE", List.of(), List.of(), List.of(),
+                        List.of(
+                                new DecisionBranchRequest(
+                                        "Players tie for first place.", "Each receives the second reward.",
+                                        "EXPLICIT_RULE", List.of(source.chunkId())),
+                                new DecisionBranchRequest(
+                                        "Players tie for second place.", "Each receives the third reward.",
+                                        "EXPLICIT_RULE", List.of(source.chunkId()))),
+                        List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(new RuleTieRequest(
+                                "Players tie for first or second place.",
+                                List.of(
+                                        "A tie for first receives the second reward.",
+                                        "A tie for second receives the third reward."),
+                                "Each tied rank receives the lower reward stated for that rank.",
+                                "RANK_REWARD_SHIFT",
+                                List.of(source.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "What happens in each case when players tie for first or second?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.decisionBranches()).extracting(branch -> branch.outcome())
+                .containsExactly("Each receives the second reward.", "Each receives the third reward.");
+        assertThat(answer.decisionBranches()).allSatisfy(branch ->
+                assertThat(branch.citationIds()).containsExactly(source.chunkId()));
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAnUnstructuredExceptionAnswerAndPublishesEachConditionWithItsOwnCitation() {
+        RuleEvidenceHit supply = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "CRAFTING", "Supply limit",
+                "If the matching item is not in the supply, the card cannot be crafted.", 7, 7, 0.95);
+        RuleEvidenceHit duplicate = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "CRAFTING", "Persistent limit",
+                "A persistent effect cannot be crafted if the player already has one with the same name.", 8, 8, 0.94);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Two limits apply.",
+                        "The supply and duplicate-name restrictions both matter.",
+                        List.of(supply.chunkId(), duplicate.chunkId()),
+                        List.of("Do not ignore the limits."),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("condition", "effect", "citationIds"));
+                return new ModelDraft(
+                        true, null, "Two cited limits apply.", "Check the matching item and existing persistent effect.",
+                        List.of(supply.chunkId(), duplicate.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(),
+                        List.of(
+                                new ExceptionClauseRequest(
+                                        "The matching item is unavailable in the supply.",
+                                        "The card cannot be crafted.",
+                                        List.of(supply.chunkId())),
+                                new ExceptionClauseRequest(
+                                        "The player already has a persistent effect with the same name.",
+                                        "Another copy cannot be crafted.",
+                                        List.of(duplicate.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(
+                        new HybridEvidenceHit(supply, 0.95, 1, null, false),
+                        new HybridEvidenceHit(duplicate, 0.94, 2, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "What exceptions or limits apply when crafting?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.exceptions()).isEmpty();
+        assertThat(answer.exceptionClauses()).extracting(clause -> clause.effect())
+                .containsExactly("The card cannot be crafted.", "Another copy cannot be crafted.");
+        assertThat(answer.exceptionClauses().get(0).citationIds()).containsExactly(supply.chunkId());
+        assertThat(answer.exceptionClauses().get(1).citationIds()).containsExactly(duplicate.chunkId());
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAnUnstructuredDefineAnswerAndPublishesEachTermWithItsOwnCitation() {
+        RuleEvidenceHit control = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TERMS", "Control",
+                "You control an area when you have more pieces there than every opponent. A tie is not control.",
+                9, 9, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Control means having more pieces.", "A tie does not count.",
+                        List.of(control.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item).contains("term", "definition", "citationIds"));
+                return new ModelDraft(
+                        true, null, "Control requires a strict majority.", "Use the cited definition and tie boundary.",
+                        List.of(control.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(new TermDefinitionRequest(
+                                "Control", "Having more pieces in the area than every opponent.",
+                                "A tie does not grant control.", List.of(control.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(control, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "What does control mean?",
+                new QuestionContext(versionId, null, LearningIntent.DEFINE, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.termDefinitions()).singleElement().satisfies(definition -> {
+            assertThat(definition.term()).isEqualTo("Control");
+            assertThat(definition.boundary()).isEqualTo("A tie does not grant control.");
+            assertThat(definition.citationIds()).containsExactly(control.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAProseOnlyExampleAndPublishesItsSetupActionOutcomeWithOwnCitation() {
+        RuleEvidenceHit example = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "EXAMPLE", "Negative modifier example",
+                "A card with base value 1 and a -4 modifier has final value -3.",
+                11, 11, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Apply the modifier to the base value.", "For example, 1 plus -4 becomes -3.",
+                        List.of(example.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item)
+                        .contains("setup", "action", "outcome", "basis", "citationIds"));
+                return new ModelDraft(
+                        true, null, "Apply the modifier to the base value.",
+                        "The cited example shows the arithmetic from starting value to result.",
+                        List.of(example.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(new WorkedExampleRequest(
+                                "A card has base value 1 and a -4 modifier.",
+                                "Apply the -4 modifier to the base value.",
+                                "The final value is -3.",
+                                "RULEBOOK_EXAMPLE",
+                                List.of(example.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(example, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "Give me the rulebook's example of a negative modifier.",
+                new QuestionContext(versionId, null, LearningIntent.EXAMPLE, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.workedExamples()).singleElement().satisfies(worked -> {
+            assertThat(worked.setup()).contains("base value 1", "-4 modifier");
+            assertThat(worked.outcome()).contains("-3");
+            assertThat(worked.basis().name()).isEqualTo("RULEBOOK_EXAMPLE");
+            assertThat(worked.citationIds()).containsExactly(example.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAProseOnlyPriorityRulingAndPublishesTheExplicitRelationship() {
+        RuleEvidenceHit priority = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "PRIORITY", "Fundamental rules",
+                "Effects of cards override rules. If one effect makes something possible and another makes it impossible, the impossible effect has priority.",
+                24, 24, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "The impossible effect has priority.",
+                        "The rulebook explicitly resolves the conflict.",
+                        List.of(priority.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item)
+                        .contains("baseRule", "competingRule", "resolution", "citationIds"));
+                return new ModelDraft(
+                        true, null, "The impossible effect has priority.",
+                        "The cited priority rule resolves this exact possible-versus-impossible conflict.",
+                        List.of(priority.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(new RulePriorityRequest(
+                                "One effect makes the action possible.",
+                                "Another effect makes the action impossible.",
+                                "The impossible effect has priority, so the action remains impossible.",
+                                "IMPOSSIBILITY_PRIORITY",
+                                List.of(priority.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(priority, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "If one effect allows an action and another forbids it, which rule takes priority?",
+                new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.priorityResolutions()).singleElement().satisfies(resolution -> {
+            assertThat(resolution.baseRule()).contains("possible");
+            assertThat(resolution.competingRule()).contains("impossible");
+            assertThat(resolution.resolution()).contains("remains impossible");
+            assertThat(resolution.basis().name()).isEqualTo("IMPOSSIBILITY_PRIORITY");
+            assertThat(resolution.citationIds()).containsExactly(priority.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAProseOnlyTimingRulingAndPublishesTheExplicitOrderSource() {
+        RuleEvidenceHit timing = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "TIMING", "Simultaneous timing",
+                "If two things happen at the same time, the player taking their turn chooses the order.",
+                22, 22, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "The player taking the turn chooses the order.",
+                        "The simultaneous-timing rule assigns the choice to the current player.",
+                        List.of(timing.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item)
+                        .contains("timingContext", "resolutionOrder", "orderSource", "citationIds"));
+                return new ModelDraft(
+                        true, null, "The player taking the turn chooses the order.",
+                        "The cited rule directly assigns the ordering choice to that player.",
+                        List.of(timing.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(new RuleTimingRequest(
+                                "Two things happen at the same time during a player's turn.",
+                                "Resolve them in the order selected by that player.",
+                                "The player taking the current turn.",
+                                "CURRENT_PLAYER_CHOOSES",
+                                List.of(timing.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(timing, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "If two things happen at the same time, who chooses the order?",
+                new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.timingResolutions()).singleElement().satisfies(resolution -> {
+            assertThat(resolution.timingContext()).contains("same time");
+            assertThat(resolution.resolutionOrder()).contains("selected by that player");
+            assertThat(resolution.orderSource()).contains("player taking the current turn");
+            assertThat(resolution.basis().name()).isEqualTo("CURRENT_PLAYER_CHOOSES");
+            assertThat(resolution.citationIds()).containsExactly(timing.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAProseOnlyTieRulingAndPublishesTheCompleteTieBreakLadder() {
+        RuleEvidenceHit ties = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SCORING", "Ties",
+                "If tied, compare treasure difficulty, then hero cost, then gold. If still tied, share the win.",
+                12, 12, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "Compare the listed values in order.",
+                        "The scoring rule gives several tie-breakers and then a shared win.",
+                        List.of(ties.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item)
+                        .contains("resolutionSteps", "finalOutcome", "citationIds"));
+                return new ModelDraft(
+                        true, null, "Compare difficulty, hero cost, then gold; share the win if still tied.",
+                        "Apply each cited tie-breaker without skipping the terminal shared result.",
+                        List.of(ties.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(),
+                        List.of(new RuleTieRequest(
+                                "Players are tied for the most treasure.",
+                                List.of(
+                                        "Compare total treasure difficulty.",
+                                        "If still tied, compare total hero cost.",
+                                        "If still tied, compare gold."),
+                                "If still tied after gold, the tied players share the win.",
+                                "ORDERED_TIEBREAKERS",
+                                List.of(ties.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(ties, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "If players tie for the most treasure, how is the tie broken?",
+                new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.tieResolutions()).singleElement().satisfies(resolution -> {
+            assertThat(resolution.resolutionSteps()).containsExactly(
+                    "Compare total treasure difficulty.",
+                    "If still tied, compare total hero cost.",
+                    "If still tied, compare gold.");
+            assertThat(resolution.finalOutcome()).contains("share the win");
+            assertThat(resolution.basis().name()).isEqualTo("ORDERED_TIEBREAKERS");
+            assertThat(resolution.citationIds()).containsExactly(ties.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
+
+    @Test
+    void repairsAProseOnlyScopeRulingAndPublishesTheCitedApplicabilityMatch() {
+        RuleEvidenceHit scope = new RuleEvidenceHit(
+                UUID.randomUUID(), versionId, "SETUP", "Two-player games",
+                "When playing with two players, do not use the dominance cards.",
+                22, 22, 0.95);
+        AtomicInteger revisions = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                return new ModelDraft(
+                        "No. Do not use dominance cards.",
+                        "The two-player setup restriction applies.",
+                        List.of(scope.chunkId()), List.of(), "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                revisions.incrementAndGet();
+                assertThat(feedback).anySatisfy(item -> assertThat(item)
+                        .contains("governingCondition", "currentSituation", "matchStatus", "citationIds"));
+                return new ModelDraft(
+                        true, null, "No. Do not use dominance cards.",
+                        "The stated two-player setup matches the cited component restriction.",
+                        List.of(scope.chunkId()), List.of(), "HIGH", "GROUNDED_APPLICATION",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(), List.of(),
+                        List.of(new RuleScopeRequest(
+                                "Dominance cards in a two-player game.",
+                                "When playing with two players, do not use the dominance cards.",
+                                "We are playing a two-player game.",
+                                "MATCHES_SCOPE",
+                                "Do not use dominance cards.",
+                                "PLAYER_COUNT",
+                                List.of(scope.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(scope, 0.95, 1, null, false)),
+                model);
+
+        StructuredRuleAnswer answer = service.answer(
+                "We are playing a two-player game. Can we use dominance cards?",
+                new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.scopeResolutions()).singleElement().satisfies(resolution -> {
+            assertThat(resolution.governingCondition()).contains("two players");
+            assertThat(resolution.currentSituation()).contains("two-player");
+            assertThat(resolution.matchStatus().name()).isEqualTo("MATCHES_SCOPE");
+            assertThat(resolution.effect()).contains("Do not use");
+            assertThat(resolution.basis().name()).isEqualTo("PLAYER_COUNT");
+            assertThat(resolution.citationIds()).containsExactly(scope.chunkId());
+        });
+        assertThat(revisions).hasValue(1);
+    }
 
     @Test
     void publishesOnlyAfterTheEvidenceAgentRefinementReachesTheProductOrchestrator() {
@@ -143,7 +949,13 @@ class StructuredRuleAnswerServiceTest {
                         List.of(source.chunkId()),
                         List.of(),
                         "MEDIUM",
-                        "GROUNDED_APPLICATION");
+                        "GROUNDED_APPLICATION",
+                        List.of(),
+                        List.of(new SituationCheckRequest(
+                                "The listed prerequisite is complete.",
+                                "CONFIRMED",
+                                "我已经完成前置条件",
+                                List.of(source.chunkId()))));
             }
         };
         var service = answerService(
@@ -1294,6 +2106,45 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void repairsOnceWhenTheFirstDraftCitesEvidenceOutsideTheRetrievedScope() {
+        RuleEvidenceHit source = evidence("SCORING");
+        AtomicInteger calls = new AtomicInteger();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                calls.incrementAndGet();
+                return new ModelDraft(
+                        "Coins score one point.",
+                        "Each coin scores one point.",
+                        List.of(UUID.randomUUID()),
+                        List.of(),
+                        "HIGH");
+            }
+
+            @Override
+            public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
+                calls.incrementAndGet();
+                assertThat(feedback).anyMatch(value -> value.contains("citationIds"));
+                return new ModelDraft(
+                        "Coins score one point.",
+                        "The cited scoring rule assigns one point to each coin.",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.03, 1, null, false)),
+                model);
+
+        var answer = service.answer("How is scoring resolved?", new QuestionContext(versionId));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.citations()).extracting(citation -> citation.chunkId()).containsExactly(source.chunkId());
+        assertThat(calls).hasValue(2);
+    }
+
+    @Test
     void missingContextStopsBeforeRetrievalAndModel() {
         AtomicBoolean called = new AtomicBoolean();
         var service = answerService(
@@ -1308,12 +2159,36 @@ class StructuredRuleAnswerServiceTest {
 
         var answer = service.answer(
                 "Can I play this card from my hand?",
-                new QuestionContext(versionId));
+                new QuestionContext(versionId, null, null, PlayerLocale.EN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
         assertThat(answer.clarification())
-                .contains("SITUATION_DETAILS")
-                .doesNotContain("GAME_PHASE");
+                .contains("object being resolved", "when it happens")
+                .doesNotContain("SITUATION_DETAILS");
+        assertThat(called).isFalse();
+    }
+
+    @Test
+    void unresolvedObjectStopsBeforeRetrievalWithAPlayerReadableQuestion() {
+        AtomicBoolean called = new AtomicBoolean();
+        var service = answerService(
+                (version, query, options) -> {
+                    called.set(true);
+                    return List.of();
+                },
+                request -> {
+                    called.set(true);
+                    return null;
+                });
+
+        var answer = service.answer(
+                "When does this trigger?",
+                new QuestionContext(versionId, null, null, PlayerLocale.EN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.CLARIFICATION_REQUIRED);
+        assertThat(answer.clarification())
+                .contains("What exactly", "rulebook name")
+                .doesNotContain("REFERENCED_OBJECT");
         assertThat(called).isFalse();
     }
 
@@ -1705,12 +2580,12 @@ class StructuredRuleAnswerServiceTest {
                 });
 
         var answer = service.answer(
-                "请讲简单一点。",
-                new QuestionContext(versionId, null, LearningIntent.SIMPLIFY, PlayerLocale.ZH_CN));
+                "请重新检索并核对上一条回答。",
+                new QuestionContext(versionId, "这个行动什么时候结算？", LearningIntent.VERIFY, PlayerLocale.ZH_CN));
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(modelRequest.get().context().learningIntent()).isEqualTo(LearningIntent.SIMPLIFY);
-        assertThat(criticRequest.get().taskContext().requiredCoverage()).contains("SIMPLIFY");
+        assertThat(modelRequest.get().context().learningIntent()).isEqualTo(LearningIntent.VERIFY);
+        assertThat(criticRequest.get().taskContext().requiredCoverage()).contains("VERIFY");
         assertThat(criticRisk.get()).isEqualTo(GeneratedContentCritic.ReviewRisk.HIGH_IMPACT);
     }
 
@@ -1783,8 +2658,20 @@ class StructuredRuleAnswerServiceTest {
             @Override
             public ModelDraft compose(ModelRequest request) {
                 return new ModelDraft(
-                        "穿过潮汐门固定支付3枚硬币。", "无需检查船帆状态。",
-                        List.of(source.chunkId()), List.of(), "HIGH");
+                        true,
+                        null,
+                        "能否通过取决于船帆状态；通过时固定支付3枚硬币。",
+                        "但无需实际检查船帆状态。",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "GROUNDED_APPLICATION",
+                        List.of(),
+                        List.of(new SituationCheckRequest(
+                                "The ship has raised its sail.",
+                                "NOT_PROVIDED",
+                                "",
+                                List.of(source.chunkId()))));
             }
 
             @Override
@@ -1792,9 +2679,20 @@ class StructuredRuleAnswerServiceTest {
                 revisions.incrementAndGet();
                 assertThat(feedback).anyMatch(message -> message.contains("prerequisite and relative cost"));
                 return new ModelDraft(
-                        "先升起船帆；费用与进入当前航道相同。",
-                        "潮汐门使用相对费用，不能脱离当前航道写成固定数字。",
-                        List.of(source.chunkId()), List.of(), "HIGH");
+                        true,
+                        null,
+                        "是否能通过取决于船帆是否升起；升起后费用与进入当前航道相同。",
+                        "问题尚未提供船帆状态；潮汐门使用相对费用，不能脱离当前航道写成固定数字。",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "GROUNDED_APPLICATION",
+                        List.of(),
+                        List.of(new SituationCheckRequest(
+                                "The ship has raised its sail.",
+                                "NOT_PROVIDED",
+                                "",
+                                List.of(source.chunkId()))));
             }
         };
         AtomicInteger reviews = new AtomicInteger();
@@ -1821,7 +2719,7 @@ class StructuredRuleAnswerServiceTest {
                 UUID.randomUUID());
 
         assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
-        assertThat(answer.shortVerdict()).contains("先升起船帆", "相同");
+        assertThat(answer.shortVerdict()).contains("取决于", "相同");
         assertThat(revisions).hasValue(1);
         assertThat(reviews).hasValue(2);
     }
@@ -1846,9 +2744,20 @@ class StructuredRuleAnswerServiceTest {
                 assertThat(feedback).singleElement().asString()
                         .contains("EVIDENCE_SUFFICIENCY", "conditional branch", "relative rules");
                 return new ModelDraft(
+                        true,
+                        null,
                         "未升起船帆前不能通过；升起后费用与进入当前航道相同。",
                         "先检查船帆条件，再沿用当前航道的进入费用。",
-                        List.of(source.chunkId()), List.of(), "HIGH");
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "GROUNDED_APPLICATION",
+                        List.of(),
+                        List.of(new SituationCheckRequest(
+                                "The ship has raised its sail.",
+                                "CONTRADICTED",
+                                "我还没有升起船帆",
+                                List.of(source.chunkId()))));
             }
         };
         var service = answerService(
@@ -2160,11 +3069,18 @@ class StructuredRuleAnswerServiceTest {
                 assertThat(feedback).anyMatch(item -> item.startsWith("ENDGAME_RESOLUTION_CITATION"));
                 revisions.incrementAndGet();
                 return new ModelDraft(
+                        true, null,
                         "在轮末清理时检查30名声；触发后由走私者计分承诺货物，再比较名声与金币。",
                         "清理的结束检查触发后，走私者先结算承诺货物；名声最高者获胜，平局时比较金币。",
-                        List.of(componentOnly.chunkId(), endgameProcedure.chunkId()),
+                        List.of(componentOnly.chunkId(), endgameProcedure.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
                         List.of(),
-                        "HIGH");
+                        List.of(new RuleTieRequest(
+                                "名声最高者出现平局。",
+                                List.of("比较平局玩家的金币。"),
+                                "金币最多的平局玩家获胜。",
+                                "SINGLE_TIEBREAKER",
+                                List.of(endgameProcedure.chunkId()))));
             }
         };
         var service = answerService(
@@ -2228,11 +3144,17 @@ class StructuredRuleAnswerServiceTest {
             assertThat(request.evidence()).extracting(evidence -> evidence.chunkId())
                     .contains(endgameProcedure.chunkId());
             return new ModelDraft(
+                    true, null,
                     "不是立刻结束；轮末区域计分后才检查30名声。",
                     "触发后先计分承诺货物，再比较名声；平局比较金币。",
-                    List.of(endgameProcedure.chunkId()),
-                    List.of(),
-                    "HIGH");
+                    List.of(endgameProcedure.chunkId()), List.of(), "HIGH", "DIRECT_RULE",
+                    List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                    List.of(new RuleTieRequest(
+                            "名声最高者出现平局。",
+                            List.of("比较平局玩家的金币。"),
+                            "金币最多的平局玩家获胜。",
+                            "SINGLE_TIEBREAKER",
+                            List.of(endgameProcedure.chunkId()))));
         };
         var service = answerService(
                 (version, query, options) -> {

@@ -29,13 +29,21 @@ final class AnswerDraftPublicationPolicy {
                 decisive,
                 draft.exceptions(),
                 draft.confidence(),
-                draft.answerBasis());
+                draft.answerBasis(),
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 
     static Preparation prepare(ModelRequest request, ModelDraft draft) {
         ModelDraft prepared = removePeripheralEndgameCitations(request, draft);
         prepared = AnswerSpatialScopePolicy.boundRepeatedInference(request, prepared);
         prepared = AnswerBasisPolicy.classify(request, prepared);
+        prepared = AnswerDraftSafetyPolicy.normalizeSourceAbsenceClaims(request, prepared);
         if (AnswerEvidencePolicy.requiresEndgameResolutionCitation(request.question(), request.evidence())
                 && !AnswerEvidencePolicy.citesEndgameResolution(
                         request.question(), request.evidence(), prepared.citationIds())) {

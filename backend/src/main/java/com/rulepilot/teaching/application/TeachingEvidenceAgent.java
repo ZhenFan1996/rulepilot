@@ -30,14 +30,18 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TeachingEvidenceAgent.class);
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
+    private static final int MAX_EVIDENCE_CHUNKS_PER_PAGE = 3;
     private static final int MAX_OBSERVED_EVIDENCE = 24;
     private static final String SYSTEM_PROMPT = """
             You refine evidence for one board-game teaching chapter. Never write the chapter and never use rule
             knowledge outside supplied evidence and tool observations. Use the read-only rulebook tools only when a
-            validated chapter objective, coverage tag, or source-page coordinate remains unsupported. Search one
-            missing teaching need at a time. Read exact pages when a search result or validated source-page hint needs
-            confirmation. Return exactly EVIDENCE_READY when the chapter evidence is sufficient. Never change scope,
-            invent a page, or treat your own prose as evidence.
+            validated chapter objective, coverage tag, or source-page coordinate remains unsupported. This agent is
+            invoked only after such a gap has been confirmed, so call search_rule_evidence on the first turn rather
+            than completing from the initial excerpt. Search one missing teaching need and retrieve the owning clause.
+            For a transition inside an exception or procedure, retrieve that owning procedure;
+            do not broaden into generic next-player flow unless the objective explicitly asks who plays next. Return
+            exactly EVIDENCE_READY after the search observation. Never change scope, invent a page, or treat your own
+            prose as evidence.
             """;
 
     private final NativeToolAgent nativeAgent;
@@ -75,8 +79,11 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
                     SYSTEM_PROMPT,
                     chapterRequest(planned, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    4,
-                    384));
+                    1,
+                    384,
+                    Set.of("search_rule_evidence"),
+                    Set.of("search_rule_evidence"),
+                    1));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Teaching evidence refinement failed for section {}; preserving deterministic evidence",
@@ -137,7 +144,7 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
         deterministic.evidence().stream()
                 .filter(source -> !observedIds.contains(source.chunkId()))
                 .forEach(prioritized::add);
-        List<RuleEvidence> selected = prioritized.stream().limit(MAX_EVIDENCE_PER_SECTION).toList();
+        List<RuleEvidence> selected = selectPageDiverseEvidence(prioritized);
         boolean verified = evidenceVerifier.verify(new VerificationRequest(
                         documentVersionId,
                         selected.stream().map(this::verifierEvidence).toList(),
@@ -148,6 +155,20 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
                         selected, totalToolCalls, TeachingSectionEvidenceRetriever.State.VERIFIED)
                 : new TeachingSectionEvidenceRetriever.Result(
                         List.of(), totalToolCalls, TeachingSectionEvidenceRetriever.State.INVALID);
+    }
+
+    private List<RuleEvidence> selectPageDiverseEvidence(List<RuleEvidence> prioritized) {
+        Map<String, Integer> chunksPerPage = new LinkedHashMap<>();
+        List<RuleEvidence> selected = new ArrayList<>();
+        for (RuleEvidence source : prioritized) {
+            String pageKey = source.pageFrom() + ":" + source.pageTo();
+            int pageCount = chunksPerPage.getOrDefault(pageKey, 0);
+            if (pageCount >= MAX_EVIDENCE_CHUNKS_PER_PAGE) continue;
+            selected.add(source);
+            chunksPerPage.put(pageKey, pageCount + 1);
+            if (selected.size() == MAX_EVIDENCE_PER_SECTION) break;
+        }
+        return List.copyOf(selected);
     }
 
     private String chapterRequest(TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {

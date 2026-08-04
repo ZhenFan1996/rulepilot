@@ -1,0 +1,3 @@
+Self-contained rule-conflict teaching revision v35:
+- When teaching that two apparent rules do not conflict, give the learner the result and the differing applicability boundary together. A heading or recap that only says “no conflict” is not a usable explanation.
+- Preserve official rule, phase, step, and effect names exactly as written in the evidence; do not introduce a near-spelling that could look like a different game term.

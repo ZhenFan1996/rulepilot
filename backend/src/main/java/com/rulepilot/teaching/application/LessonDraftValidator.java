@@ -22,7 +22,6 @@ import java.util.stream.IntStream;
 /** Deterministic structure, citation-scope, timing, and visual-focus validation for a lesson draft. */
 final class LessonDraftValidator {
 
-    private static final int MAX_STEPS_PER_SECTION = 6;
     private static final int MAX_VISUAL_FOCUS_AREA = 720_000;
     private static final Pattern END_OF_ROUND_SOURCE = Pattern.compile(
             "(?i)(?:\\bat\\s+the\\s+end\\s+of\\s+(?:a|the|this|that)\\s+round\\b|"
@@ -343,9 +342,8 @@ final class LessonDraftValidator {
             throw new IllegalArgumentException("The visual caption is longer than 240 characters.");
         if (draft.visualCitationIds().isEmpty())
             throw new IllegalArgumentException("The visual caption has no evidence citation.");
-        if (draft.steps().isEmpty() || draft.steps().size() > Math.min(MAX_STEPS_PER_SECTION, request.maxSteps()))
-            throw new IllegalArgumentException("The draft must contain between 1 and "
-                    + Math.min(MAX_STEPS_PER_SECTION, request.maxSteps()) + " steps.");
+        if (draft.steps().isEmpty())
+            throw new IllegalArgumentException("The draft must contain at least one teaching step.");
         if (draft.steps().stream().anyMatch(step -> step == null
                 || step.heading() == null || step.heading().isBlank() || step.heading().length() > 32
                 || step.kind() == null)) {

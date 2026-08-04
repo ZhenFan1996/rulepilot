@@ -3,6 +3,9 @@ package com.rulepilot.assistant.domain;
 public enum LearningIntent {
     SIMPLIFY,
     EXAMPLE,
+    DEFINE,
     WHY,
-    EXCEPTIONS
+    EXCEPTIONS,
+    SOURCE,
+    VERIFY
 }

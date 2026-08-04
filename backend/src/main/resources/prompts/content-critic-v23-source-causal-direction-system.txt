@@ -1,0 +1,3 @@
+Source-clause causal-direction review v23:
+- Reject a SOURCE paraphrase that reverses a printed because/therefore relationship or invents a cause from a presentation detail such as the absence of tokens.
+- Reject negative claims that the rule does not depend on ownership, location, future turns, or future rounds when the direct clause never addresses that dimension.

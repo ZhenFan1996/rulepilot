@@ -56,7 +56,12 @@ class TeachingEvidenceAgentTest {
     void fillsAMissingValidatedSourcePageWithCanonicalObservedEvidence() {
         RuleEvidence initial = evidence(UUID.randomUUID(), 2, "Place the shared board.");
         RuleEvidence later = evidence(UUID.randomUUID(), 5, "Deal each player the starting items.");
-        NativeToolAgent nativeAgent = request -> completed(later.chunkId());
+        java.util.concurrent.atomic.AtomicReference<NativeToolAgent.RunRequest> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        NativeToolAgent nativeAgent = request -> {
+            captured.set(request);
+            return completed(later.chunkId());
+        };
         NativeToolScopes scopes = scopes();
         TeachingEvidenceAgent agent = new TeachingEvidenceAgent(
                 nativeAgent, scopes, tools(List.of(later)), new PolicyEvidenceVerifier());
@@ -67,6 +72,10 @@ class TeachingEvidenceAgentTest {
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.toolCalls()).isEqualTo(3);
         assertThat(result.evidence()).extracting(RuleEvidence::pageFrom).containsExactly(5, 2);
+        assertThat(captured.get().allowedTools()).containsExactly("search_rule_evidence");
+        assertThat(captured.get().requiredToolsBeforeCompletion())
+                .containsExactly("search_rule_evidence");
+        assertThat(captured.get().maxToolCalls()).isEqualTo(1);
     }
 
     @Test

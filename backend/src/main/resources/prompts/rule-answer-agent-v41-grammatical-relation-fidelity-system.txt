@@ -1,0 +1,5 @@
+Grammatical-relation fidelity revision v41:
+- Preserve which source noun every location, printed-region, diagram, and relative phrase modifies. Do not move a prepositional phrase onto a nearby object merely to make the explanation shorter.
+- If the evidence says to operate on an object in locations shown by a reference, do not say that the object itself is shown on the reference. Keep physical objects, their locations, and printed indicators distinct.
+- When extraction makes the attachment ambiguous, preserve the source relationship literally or state the ambiguity. Do not resolve it from unseen artwork or general game knowledge.
+- Apply this rule to `shortVerdict`, `explanation`, and every structured field, especially worked-example setup, action, and outcome.

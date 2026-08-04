@@ -178,6 +178,41 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
+    void passesAnAnonymousLearningIntentThroughThePublicAssistantBoundary() {
+        UUID planId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID citedChunk = UUID.randomUUID();
+        when(lessons.find(planId)).thenReturn(Optional.of(publicLesson(planId, versionId, citedChunk)));
+        RuleAnswering.Answer answer = new RuleAnswering.Answer(
+                "ANSWERED", "里程碑是轨道上的指定位置。", "规则书在轨道说明中定义了它。",
+                List.of(new RuleAnswering.Citation("声望轨道", 4, 4)), List.of(), "HIGH", null);
+        when(answers.answerForPublicReader(
+                        eq(versionId),
+                        eq("请解释里程碑。"),
+                        eq("里程碑什么时候结算？"),
+                        eq(PlayerLocale.ZH_CN),
+                        eq(RuleAnswering.PublicLearningIntent.DEFINE)))
+                .thenReturn(new RuleAnswering.AnswerResult(UUID.randomUUID(), answer, Set.of(citedChunk)));
+
+        var result = service.answer(
+                planId,
+                new PublicLessonQuestionService.QuestionRequest(
+                        "请解释里程碑。",
+                        "里程碑什么时候结算？",
+                        "zh-CN",
+                        RuleAnswering.PublicLearningIntent.DEFINE));
+
+        assertThat(result).hasValueSatisfying(value ->
+                assertThat(value.answer().shortVerdict()).contains("里程碑"));
+        verify(answers).answerForPublicReader(
+                versionId,
+                "请解释里程碑。",
+                "里程碑什么时候结算？",
+                PlayerLocale.ZH_CN,
+                RuleAnswering.PublicLearningIntent.DEFINE);
+    }
+
+    @Test
     void doesNotAnswerForAPlanThatIsNotPubliclyReadable() {
         UUID planId = UUID.randomUUID();
         when(lessons.find(planId)).thenReturn(Optional.empty());

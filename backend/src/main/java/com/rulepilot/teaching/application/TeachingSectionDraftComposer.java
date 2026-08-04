@@ -96,7 +96,7 @@ final class TeachingSectionDraftComposer {
             }
             throw visualCompositionFailure;
         }
-        draft = normalizeDraft(draft, modelRequest);
+        draft = normalizeDraft(draft, modelRequest, evidence);
         boolean hasPageImages = !modelRequest.pageImages().isEmpty();
         boolean hasOnlyVisualPageEvidence = hasOnlyVisualPageEvidence(evidence);
         int maxRepairAttempts = draftRecoveryPolicy.maxRepairAttempts(hasPageImages);
@@ -212,7 +212,7 @@ final class TeachingSectionDraftComposer {
                     }
                     throw visualRepairFailure;
                 }
-                draft = normalizeDraft(draft, modelRequest);
+                draft = normalizeDraft(draft, modelRequest, evidence);
             }
         }
     }
@@ -234,7 +234,7 @@ final class TeachingSectionDraftComposer {
                 "Visual teaching section recomposed as complete grounded text",
                 () -> model.compose(textOnlyRequest),
                 result -> estimateTokens(result.toString()));
-        textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
+        textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
         for (int repair = 0; ; repair++) {
             try {
                 LessonSection accepted = validatedSection(
@@ -269,7 +269,7 @@ final class TeachingSectionDraftComposer {
                         "Text fallback revised from validation feedback",
                         () -> model.revise(textOnlyRequest, draftToRevise, repairFeedback),
                         result -> estimateTokens(result.toString()));
-                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest);
+                textOnlyDraft = normalizeDraft(textOnlyDraft, textOnlyRequest, evidence);
                 textOnlyDraft = draftRecoveryPolicy.preserveTextOnlyPresentationMetadata(draftToRevise, textOnlyDraft);
             }
         }
@@ -285,7 +285,14 @@ final class TeachingSectionDraftComposer {
     }
 
     SectionDraft normalizeDraft(SectionDraft draft, TeachingLessonModel.SectionRequest request) {
-        return presentationNormalizer.normalize(draft, request);
+        return normalizeDraft(draft, request, List.of());
+    }
+
+    SectionDraft normalizeDraft(
+            SectionDraft draft, TeachingLessonModel.SectionRequest request, List<RuleEvidence> evidence) {
+        SectionDraft normalized = presentationNormalizer.normalize(draft, request);
+        normalized = draftRecoveryPolicy.removeUnsupportedTurnHandoff(normalized, evidence);
+        return draftRecoveryPolicy.removeUnsupportedTerminalZoneClaim(normalized, evidence);
     }
 
     LessonSection validatedSection(
