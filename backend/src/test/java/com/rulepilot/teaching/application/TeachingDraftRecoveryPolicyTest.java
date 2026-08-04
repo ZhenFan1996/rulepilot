@@ -21,11 +21,11 @@ class TeachingDraftRecoveryPolicyTest {
     @Test
     void limits_visual_drafts_to_one_repair_and_falls_back_only_when_text_evidence_remains() {
         assertThat(policy.maxRepairAttempts(true)).isEqualTo(1);
-        assertThat(policy.maxRepairAttempts(false)).isEqualTo(3);
+        assertThat(policy.maxRepairAttempts(false)).isEqualTo(1);
         assertThat(policy.shouldFallbackToCitedText(true, false, 0)).isFalse();
         assertThat(policy.shouldFallbackToCitedText(true, false, 1)).isTrue();
         assertThat(policy.shouldFallbackToCitedText(true, true, 1)).isFalse();
-        assertThat(policy.shouldFallbackToCitedText(false, false, 3)).isFalse();
+        assertThat(policy.shouldFallbackToCitedText(false, false, 1)).isFalse();
     }
 
     @Test
@@ -137,6 +137,76 @@ class TeachingDraftRecoveryPolicyTest {
         assertThat(LessonDraftValidator.claimsImmediateEndingForEndOfRoundTrigger(
                         corrected.steps().getFirst().text(), List.of(endOfRound)))
                 .isFalse();
+    }
+
+    @Test
+    void keepsTurnHandoffsOnlyWhenTheCitedRuleExplicitlySupportsThem() {
+        UUID versionId = UUID.randomUUID();
+        UUID englishHandoffId = UUID.randomUUID();
+        UUID chineseHandoffId = UUID.randomUUID();
+        UUID englishPhaseId = UUID.randomUUID();
+        UUID chinesePhaseId = UUID.randomUUID();
+        List<RuleEvidence> evidence = List.of(
+                new RuleEvidence(englishHandoffId, versionId, "TURN", "Pass play",
+                        "Then the next player takes their turn.", 2, 2),
+                new RuleEvidence(chineseHandoffId, versionId, "ROUND", "传递标记",
+                        "结算后，将起始玩家标记传给下一位玩家。", 3, 3),
+                new RuleEvidence(englishPhaseId, versionId, "PHASE", "Phase transition",
+                        "End Daylight and begin Evening.", 4, 4),
+                new RuleEvidence(chinesePhaseId, versionId, "PHASE", "阶段转换",
+                        "结束行动阶段，进入清理阶段。", 5, 5));
+        SectionDraft draft = new SectionDraft(
+                "推进流程",
+                VisualKind.FLOW_DIAGRAM,
+                "按引用推进流程。",
+                List.of(englishHandoffId),
+                List.of(
+                        new StepDraft("英文交接", TeachingMove.FLOW,
+                                "Resolve cleanup. Then the next player begins.", List.of(englishHandoffId)),
+                        new StepDraft("中文交接", TeachingMove.FLOW,
+                                "完成结算。然后轮到下一位玩家。", List.of(chineseHandoffId)),
+                        new StepDraft("英文阶段", TeachingMove.FLOW,
+                                "End Daylight and begin Evening. Then the next player begins.", List.of(englishPhaseId)),
+                        new StepDraft("中文阶段", TeachingMove.FLOW,
+                                "结束行动阶段，进入清理阶段。之后轮到下一位玩家。", List.of(chinesePhaseId))));
+
+        SectionDraft corrected = policy.removeUnsupportedTurnHandoff(draft, evidence);
+
+        assertThat(corrected.steps().get(0).text()).contains("next player");
+        assertThat(corrected.steps().get(1).text()).contains("下一位玩家");
+        assertThat(corrected.steps().get(2).text())
+                .isEqualTo("End Daylight and begin Evening.")
+                .doesNotContain("next player");
+        assertThat(corrected.steps().get(3).text())
+                .isEqualTo("结束行动阶段，进入清理阶段。")
+                .doesNotContain("下一位玩家");
+    }
+
+    @Test
+    void removesAnUnsupportedRemoveFromGameEscalationButPreservesAnExplicitOne() {
+        UUID versionId = UUID.randomUUID();
+        UUID discardId = UUID.randomUUID();
+        UUID removedId = UUID.randomUUID();
+        List<RuleEvidence> evidence = List.of(
+                new RuleEvidence(discardId, versionId, "PROCEDURE", "Cleanup",
+                        "Discard all cards except the two marked cards. Set the leader aside.", 3, 3),
+                new RuleEvidence(removedId, versionId, "PROCEDURE", "Elimination",
+                        "Remove the selected card from the game.", 4, 4));
+        SectionDraft draft = new SectionDraft(
+                "处理卡牌",
+                VisualKind.REFERENCE_CARD,
+                "按引用处理卡牌。",
+                List.of(discardId),
+                List.of(
+                        new StepDraft("丢弃", TeachingMove.DO,
+                                "丢弃其余卡牌。其他卡牌全部移出游戏。", List.of(discardId)),
+                        new StepDraft("移除", TeachingMove.DO,
+                                "Remove the selected card from the game.", List.of(removedId))));
+
+        SectionDraft corrected = policy.removeUnsupportedTerminalZoneClaim(draft, evidence);
+
+        assertThat(corrected.steps().getFirst().text()).isEqualTo("丢弃其余卡牌。");
+        assertThat(corrected.steps().get(1).text()).contains("from the game");
     }
 
     @Test

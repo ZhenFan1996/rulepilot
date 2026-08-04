@@ -97,4 +97,46 @@ class DeterministicQuestionUnderstandingTest {
         assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
         assertThat(result.needsClarification()).isFalse();
     }
+
+    @Test
+    void asksWhatAnUnresolvedChinesePronounRefersToBeforeRetrieval() {
+        var result = understanding.understand(
+                "这个什么时候触发？",
+                new QuestionContext(versionId));
+
+        assertThat(result.type()).isEqualTo(QuestionType.SITUATION_QUERY);
+        assertThat(result.missingContext()).containsExactly(MissingQuestionContext.REFERENCED_OBJECT);
+    }
+
+    @Test
+    void keepsAnExplicitCardReferenceAnswerableWithoutStoredTableState() {
+        var result = understanding.understand(
+                "这张卡牌什么时候触发？",
+                new QuestionContext(versionId));
+
+        assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
+        assertThat(result.needsClarification()).isFalse();
+    }
+
+    @Test
+    void acceptsAConcreteChineseReplyAfterAskingWhatThePlayerMeant() {
+        var result = understanding.understand(
+                "我指的是：红色行动牌",
+                new QuestionContext(versionId, "这个什么时候触发？", null, PlayerLocale.ZH_CN));
+
+        assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
+        assertThat(result.terms()).contains("红色行动牌");
+        assertThat(result.needsClarification()).isFalse();
+    }
+
+    @Test
+    void acceptsAConcreteEnglishReplyAfterAskingWhatThePlayerMeant() {
+        var result = understanding.understand(
+                "I mean: the scoring token",
+                new QuestionContext(versionId, "When does this trigger?", null, PlayerLocale.EN));
+
+        assertThat(result.type()).isEqualTo(QuestionType.RULE_QUERY);
+        assertThat(result.terms()).contains("mean", "scoring", "token");
+        assertThat(result.needsClarification()).isFalse();
+    }
 }

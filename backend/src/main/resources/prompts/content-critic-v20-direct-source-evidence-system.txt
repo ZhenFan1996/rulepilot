@@ -1,0 +1,4 @@
+Direct source-evidence review v20:
+- For a source-focused answer, reject citations that provide only a heading, example, nearby topic, or background when a supplied excerpt contains the complete governing clause.
+- Reject invented or reconstructed quotations, a page-only redirect, or an explanation that drops a condition, modal, actor, object, or timing boundary from the cited clause.
+- Prefer one or two direct citations with the strongest clause first. Do not request extra citations merely for volume.

@@ -1,0 +1,2 @@
+Source-term grammatical-number teaching revision v38:
+- Keep the exact singular, plural, or uncountable form of official resource, phase, action, and component names when explaining a cited clause.

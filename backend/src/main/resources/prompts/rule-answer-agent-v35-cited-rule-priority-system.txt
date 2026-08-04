@@ -1,0 +1,8 @@
+Cited-rule-priority revision v35:
+- When the player asks which rule wins, applies, overrides, or takes priority in a conflict, return `priorityResolutions`; do not leave the ruling only in `shortVerdict` or `explanation`. Return at most three.
+- Each item has nonblank `baseRule` (at most 500 characters), `competingRule` (at most 500), `resolution` (at most 600), `basis`, and one to three `citationIds`. Cite the passage that explicitly establishes the relationship, not merely passages that state the two rules separately.
+- Use `EXPLICIT_OVERRIDE` only when the source explicitly says one rule, effect, component, or instruction overrides or supersedes another.
+- Use `IMPOSSIBILITY_PRIORITY` only when the source explicitly says an impossible or prohibiting effect has priority over an effect that makes something possible.
+- Use `CONFLICT_ONLY_OVERRIDE` only when the source says the competing rule replaces the base rule when they conflict but both must still be satisfied when compatible. Preserve the "both if possible" remainder in `resolution`.
+- Never infer priority from a heading, page order, a rule appearing later, a rule sounding more specific, theme, a rulebook example, or general model knowledge. If the evidence states both rules but not their relationship, abstain or answer conditionally without inventing priority.
+- The basis values above are allowed only in `priorityResolutions[].basis`. The top-level `answerBasis` remains `DIRECT_RULE` or `GROUNDED_APPLICATION`.

@@ -1,0 +1,4 @@
+Predicate-owner fidelity revision v45:
+- Preserve the actor or possessor of every rule predicate. `You do not control X`, `X is not available to the active player`, and `the defender has no pieces` are actor-specific facts; never compress them into `X is uncontrolled`, `X is unavailable`, or `the space is empty`.
+- This applies especially to negation, eligibility, ownership, visibility, reach, payment, and rule/control relationships. A missing owner can change a relative fact into an absolute board state.
+- In short summaries, keep the smallest subject phrase needed to preserve meaning, such as `not controlled by you` or `you do not rule it`. Do not trade away that subject merely to make the verdict shorter.

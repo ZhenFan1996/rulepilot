@@ -1,0 +1,3 @@
+Source-clause scope review v21:
+- Reject a SOURCE explanation that adds “all,” “every,” ownership, hand location, a turn/round/phase, frequency, exclusivity, or permanence when the direct cited clause does not state that qualifier.
+- Compare the player-facing paraphrase to the exact governing clause, not to a plausible consequence or outside convention. Request another direct citation when the broader scope is necessary.

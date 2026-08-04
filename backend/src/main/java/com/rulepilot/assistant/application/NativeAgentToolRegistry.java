@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -46,9 +47,16 @@ public class NativeAgentToolRegistry {
     }
 
     public List<ToolSpec> specifications(Role role) {
+        return specifications(role, Set.of());
+    }
+
+    /** An empty allow-list preserves the role-wide registry for compatibility callers. */
+    public List<ToolSpec> specifications(Role role, Set<String> allowedNames) {
         if (role == null) throw new IllegalArgumentException("native tool role is required");
+        if (allowedNames == null) throw new IllegalArgumentException("native tool allow-list is required");
         return tools.values().stream()
                 .filter(tool -> tool.tool().allowedRoles().contains(role))
+                .filter(tool -> allowedNames.isEmpty() || allowedNames.contains(tool.spec().name()))
                 .map(RegisteredTool::spec)
                 .sorted(Comparator.comparing(ToolSpec::name))
                 .toList();

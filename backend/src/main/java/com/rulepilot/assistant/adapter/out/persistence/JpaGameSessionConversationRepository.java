@@ -7,7 +7,31 @@ import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerWarning;
 import com.rulepilot.assistant.domain.GameSessionConversationTurn;
 import com.rulepilot.assistant.domain.RuleCitation;
+import com.rulepilot.assistant.domain.RuleCalculation;
+import com.rulepilot.assistant.domain.RuleDecisionBranch;
+import com.rulepilot.assistant.domain.RuleExceptionClause;
+import com.rulepilot.assistant.domain.RuleTermDefinition;
+import com.rulepilot.assistant.domain.RuleWorkedExample;
+import com.rulepilot.assistant.domain.WorkedExampleBasis;
+import com.rulepilot.assistant.domain.RulePriorityBasis;
+import com.rulepilot.assistant.domain.RulePriorityResolution;
+import com.rulepilot.assistant.domain.RuleTimingResolution;
+import com.rulepilot.assistant.domain.TimingOrderBasis;
+import com.rulepilot.assistant.domain.RuleTieResolution;
+import com.rulepilot.assistant.domain.TieResolutionBasis;
+import com.rulepilot.assistant.domain.RuleScopeResolution;
+import com.rulepilot.assistant.domain.ScopeBasis;
+import com.rulepilot.assistant.domain.ScopeMatchStatus;
+import com.rulepilot.assistant.domain.RuleConceptComparison;
+import com.rulepilot.assistant.domain.ConceptComparisonBasis;
+import com.rulepilot.assistant.domain.RuleOption;
+import com.rulepilot.assistant.domain.RuleOptionBasis;
+import com.rulepilot.assistant.domain.RuleSituationCheck;
+import com.rulepilot.assistant.domain.RuleWalkthroughStep;
+import com.rulepilot.assistant.domain.SituationCheckStatus;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
+import com.rulepilot.assistant.domain.WalkthroughOrderBasis;
+import com.rulepilot.assistant.domain.DecisionBranchBasis;
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
 import jakarta.persistence.ElementCollection;
@@ -122,6 +146,71 @@ class GameSessionConversationTurnEntity {
     @Column(name = "warning_type", nullable = false, length = 60)
     List<String> warnings = new ArrayList<>();
 
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_calculation", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleCalculation> calculations = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_situation_check", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleSituationCheck> situationChecks = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_walkthrough_step", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleWalkthroughStep> walkthroughSteps = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_decision_branch", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleDecisionBranch> decisionBranches = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_exception_clause", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleExceptionClause> exceptionClauses = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_term_definition", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleTermDefinition> termDefinitions = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_worked_example", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleWorkedExample> workedExamples = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_rule_priority", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRulePriorityResolution> priorityResolutions = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_rule_timing", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleTimingResolution> timingResolutions = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_rule_tie", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleTieResolution> tieResolutions = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_rule_scope", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleScopeResolution> scopeResolutions = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_concept_comparison", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleConceptComparison> conceptComparisons = new ArrayList<>();
+
+    @ElementCollection
+    @CollectionTable(name = "game_session_turn_rule_option", joinColumns = @JoinColumn(name = "turn_id"))
+    @OrderColumn(name = "position")
+    List<PersistedRuleOption> ruleOptions = new ArrayList<>();
+
     @Column(nullable = false)
     boolean official;
 
@@ -160,6 +249,45 @@ class GameSessionConversationTurnEntity {
         warnings = answer.warnings().stream()
                 .map(warning -> warning.type().name())
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        calculations = answer.calculations().stream()
+                .map(PersistedRuleCalculation::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        situationChecks = answer.situationChecks().stream()
+                .map(PersistedRuleSituationCheck::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        walkthroughSteps = answer.walkthroughSteps().stream()
+                .map(PersistedRuleWalkthroughStep::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        decisionBranches = answer.decisionBranches().stream()
+                .map(PersistedRuleDecisionBranch::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        exceptionClauses = answer.exceptionClauses().stream()
+                .map(PersistedRuleExceptionClause::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        termDefinitions = answer.termDefinitions().stream()
+                .map(PersistedRuleTermDefinition::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        workedExamples = answer.workedExamples().stream()
+                .map(PersistedRuleWorkedExample::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        priorityResolutions = answer.priorityResolutions().stream()
+                .map(PersistedRulePriorityResolution::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        timingResolutions = answer.timingResolutions().stream()
+                .map(PersistedRuleTimingResolution::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        tieResolutions = answer.tieResolutions().stream()
+                .map(PersistedRuleTieResolution::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        scopeResolutions = answer.scopeResolutions().stream()
+                .map(PersistedRuleScopeResolution::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        conceptComparisons = answer.conceptComparisons().stream()
+                .map(PersistedRuleConceptComparison::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+        ruleOptions = answer.ruleOptions().stream()
+                .map(PersistedRuleOption::new)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         official = answer.official();
         confirmedRulingId = answer.confirmedRulingId();
         confirmedRulingVersion = answer.confirmedRulingVersion();
@@ -185,8 +313,508 @@ class GameSessionConversationTurnEntity {
                 warnings.stream()
                         .map(AnswerWarning.Type::valueOf)
                         .map(AnswerWarning::new)
-                        .toList());
+                        .toList(),
+                calculations.stream().map(PersistedRuleCalculation::toDomain).toList(),
+                situationChecks.stream().map(PersistedRuleSituationCheck::toDomain).toList(),
+                walkthroughSteps.stream().map(PersistedRuleWalkthroughStep::toDomain).toList(),
+                decisionBranches.stream().map(PersistedRuleDecisionBranch::toDomain).toList(),
+                exceptionClauses.stream().map(PersistedRuleExceptionClause::toDomain).toList(),
+                termDefinitions.stream().map(PersistedRuleTermDefinition::toDomain).toList(),
+                workedExamples.stream().map(PersistedRuleWorkedExample::toDomain).toList(),
+                priorityResolutions.stream().map(PersistedRulePriorityResolution::toDomain).toList(),
+                timingResolutions.stream().map(PersistedRuleTimingResolution::toDomain).toList(),
+                tieResolutions.stream().map(PersistedRuleTieResolution::toDomain).toList(),
+                scopeResolutions.stream().map(PersistedRuleScopeResolution::toDomain).toList(),
+                conceptComparisons.stream().map(PersistedRuleConceptComparison::toDomain).toList(),
+                ruleOptions.stream().map(PersistedRuleOption::toDomain).toList());
         return new GameSessionConversationTurn(id, sessionId, question, answer, createdBy, createdAt);
+    }
+}
+
+@Embeddable
+class PersistedRuleDecisionBranch {
+
+    @Column(name = "condition_text", nullable = false, length = 300)
+    String condition;
+
+    @Column(name = "outcome_text", nullable = false, length = 500)
+    String outcome;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleDecisionBranch() {}
+
+    PersistedRuleDecisionBranch(RuleDecisionBranch branch) {
+        condition = branch.condition();
+        outcome = branch.outcome();
+        basis = branch.basis().name();
+        citationIds = branch.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleDecisionBranch toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleDecisionBranch(condition, outcome, DecisionBranchBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleExceptionClause {
+
+    @Column(name = "condition_text", nullable = false, length = 300)
+    String condition;
+
+    @Column(name = "effect_text", nullable = false, length = 500)
+    String effect;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleExceptionClause() {}
+
+    PersistedRuleExceptionClause(RuleExceptionClause clause) {
+        condition = clause.condition();
+        effect = clause.effect();
+        citationIds = clause.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleExceptionClause toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleExceptionClause(condition, effect, citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleTermDefinition {
+
+    @Column(name = "term_text", nullable = false, length = 120)
+    String term;
+
+    @Column(name = "definition_text", nullable = false, length = 600)
+    String definition;
+
+    @Column(name = "boundary_text", nullable = false, length = 400)
+    String boundary;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleTermDefinition() {}
+
+    PersistedRuleTermDefinition(RuleTermDefinition definition) {
+        term = definition.term();
+        this.definition = definition.definition();
+        boundary = definition.boundary();
+        citationIds = definition.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleTermDefinition toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleTermDefinition(term, definition, boundary, citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleWorkedExample {
+
+    @Column(name = "setup_text", nullable = false, length = 500)
+    String setup;
+
+    @Column(name = "action_text", nullable = false, length = 700)
+    String action;
+
+    @Column(name = "outcome_text", nullable = false, length = 500)
+    String outcome;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleWorkedExample() {}
+
+    PersistedRuleWorkedExample(RuleWorkedExample example) {
+        setup = example.setup();
+        action = example.action();
+        outcome = example.outcome();
+        basis = example.basis().name();
+        citationIds = example.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleWorkedExample toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleWorkedExample(setup, action, outcome, WorkedExampleBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRulePriorityResolution {
+
+    @Column(name = "base_rule", nullable = false, length = 500)
+    String baseRule;
+
+    @Column(name = "competing_rule", nullable = false, length = 500)
+    String competingRule;
+
+    @Column(name = "resolution_text", nullable = false, length = 600)
+    String resolution;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRulePriorityResolution() {}
+
+    PersistedRulePriorityResolution(RulePriorityResolution item) {
+        baseRule = item.baseRule();
+        competingRule = item.competingRule();
+        resolution = item.resolution();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RulePriorityResolution toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RulePriorityResolution(
+                baseRule, competingRule, resolution, RulePriorityBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleTimingResolution {
+
+    @Column(name = "timing_context", nullable = false, length = 500)
+    String timingContext;
+
+    @Column(name = "resolution_order", nullable = false, length = 700)
+    String resolutionOrder;
+
+    @Column(name = "order_source", nullable = false, length = 400)
+    String orderSource;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleTimingResolution() {}
+
+    PersistedRuleTimingResolution(RuleTimingResolution item) {
+        timingContext = item.timingContext();
+        resolutionOrder = item.resolutionOrder();
+        orderSource = item.orderSource();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleTimingResolution toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleTimingResolution(
+                timingContext, resolutionOrder, orderSource, TimingOrderBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleTieResolution {
+
+    @Column(name = "tie_context", nullable = false, length = 500)
+    String tieContext;
+
+    @Column(name = "resolution_steps", nullable = false, length = 3100)
+    String resolutionSteps;
+
+    @Column(name = "final_outcome", nullable = false, length = 500)
+    String finalOutcome;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleTieResolution() {}
+
+    PersistedRuleTieResolution(RuleTieResolution item) {
+        tieContext = item.tieContext();
+        resolutionSteps = String.join("\n", item.resolutionSteps());
+        finalOutcome = item.finalOutcome();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleTieResolution toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleTieResolution(
+                tieContext,
+                resolutionSteps.lines().toList(),
+                finalOutcome,
+                TieResolutionBasis.valueOf(basis),
+                citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleScopeResolution {
+
+    @Column(name = "rule_context", nullable = false, length = 500)
+    String ruleContext;
+
+    @Column(name = "governing_condition", nullable = false, length = 500)
+    String governingCondition;
+
+    @Column(name = "current_situation", nullable = false, length = 300)
+    String currentSituation;
+
+    @Column(name = "match_status", nullable = false, length = 40)
+    String matchStatus;
+
+    @Column(name = "effect_text", nullable = false, length = 600)
+    String effect;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleScopeResolution() {}
+
+    PersistedRuleScopeResolution(RuleScopeResolution item) {
+        ruleContext = item.ruleContext();
+        governingCondition = item.governingCondition();
+        currentSituation = item.currentSituation();
+        matchStatus = item.matchStatus().name();
+        effect = item.effect();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleScopeResolution toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleScopeResolution(
+                ruleContext, governingCondition, currentSituation, ScopeMatchStatus.valueOf(matchStatus),
+                effect, ScopeBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleConceptComparison {
+
+    @Column(name = "left_concept", nullable = false, length = 120)
+    String leftConcept;
+
+    @Column(name = "left_definition", nullable = false, length = 600)
+    String leftDefinition;
+
+    @Column(name = "right_concept", nullable = false, length = 120)
+    String rightConcept;
+
+    @Column(name = "right_definition", nullable = false, length = 600)
+    String rightDefinition;
+
+    @Column(name = "common_ground", nullable = false, length = 500)
+    String commonGround;
+
+    @Column(name = "key_difference", nullable = false, length = 700)
+    String keyDifference;
+
+    @Column(name = "practical_boundary", nullable = false, length = 600)
+    String practicalBoundary;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleConceptComparison() {}
+
+    PersistedRuleConceptComparison(RuleConceptComparison item) {
+        leftConcept = item.leftConcept();
+        leftDefinition = item.leftDefinition();
+        rightConcept = item.rightConcept();
+        rightDefinition = item.rightDefinition();
+        commonGround = item.commonGround();
+        keyDifference = item.keyDifference();
+        practicalBoundary = item.practicalBoundary();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleConceptComparison toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleConceptComparison(
+                leftConcept, leftDefinition, rightConcept, rightDefinition, commonGround, keyDifference,
+                practicalBoundary, ConceptComparisonBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleOption {
+
+    @Column(name = "decision_context", nullable = false, length = 240)
+    String decisionContext;
+
+    @Column(name = "selection_rule", nullable = false, length = 400)
+    String selectionRule;
+
+    @Column(name = "option_name", nullable = false, length = 160)
+    String optionName;
+
+    @Column(name = "availability_condition", nullable = false, length = 500)
+    String availabilityCondition;
+
+    @Column(name = "result_text", nullable = false, length = 700)
+    String result;
+
+    @Column(nullable = false, length = 40)
+    String basis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleOption() {}
+
+    PersistedRuleOption(RuleOption item) {
+        decisionContext = item.decisionContext();
+        selectionRule = item.selectionRule();
+        optionName = item.optionName();
+        availabilityCondition = item.availabilityCondition();
+        result = item.result();
+        basis = item.basis().name();
+        citationIds = item.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleOption toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleOption(
+                decisionContext, selectionRule, optionName, availabilityCondition, result,
+                RuleOptionBasis.valueOf(basis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleWalkthroughStep {
+
+    @Column(nullable = false, length = 240)
+    String instruction;
+
+    @Column(nullable = false, length = 500)
+    String explanation;
+
+    @Column(name = "order_basis", nullable = false, length = 40)
+    String orderBasis;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleWalkthroughStep() {}
+
+    PersistedRuleWalkthroughStep(RuleWalkthroughStep step) {
+        instruction = step.instruction();
+        explanation = step.explanation();
+        orderBasis = step.orderBasis().name();
+        citationIds = step.citationIds().stream().map(UUID::toString)
+                .collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleWalkthroughStep toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleWalkthroughStep(
+                instruction, explanation, WalkthroughOrderBasis.valueOf(orderBasis), citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleSituationCheck {
+
+    @Column(nullable = false, length = 240)
+    String requirement;
+
+    @Column(nullable = false, length = 40)
+    String status;
+
+    @Column(name = "player_fact", nullable = false, length = 240)
+    String playerFact;
+
+    @Column(name = "citation_ids", nullable = false, length = 110)
+    String citationIds;
+
+    protected PersistedRuleSituationCheck() {}
+
+    PersistedRuleSituationCheck(RuleSituationCheck check) {
+        requirement = check.requirement();
+        status = check.status().name();
+        playerFact = check.playerFact();
+        citationIds = check.citationIds().stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(","));
+    }
+
+    RuleSituationCheck toDomain() {
+        List<UUID> citations = java.util.Arrays.stream(citationIds.split(","))
+                .map(UUID::fromString)
+                .toList();
+        return new RuleSituationCheck(
+                requirement, SituationCheckStatus.valueOf(status), playerFact, citations);
+    }
+}
+
+@Embeddable
+class PersistedRuleCalculation {
+
+    @Column(nullable = false, length = 160)
+    String expression;
+
+    @Column(nullable = false, length = 80)
+    String result;
+
+    protected PersistedRuleCalculation() {}
+
+    PersistedRuleCalculation(RuleCalculation calculation) {
+        expression = calculation.expression();
+        result = calculation.result();
+    }
+
+    RuleCalculation toDomain() {
+        return new RuleCalculation(expression, result);
     }
 }
 

@@ -2,11 +2,13 @@ import type { Ref } from 'vue'
 
 import type { LearningIntent } from '@/composables/useLessonAnswers'
 import { buildCardQuestion } from '@/lib/cardOcr'
+import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { mergeVoiceQuestion } from '@/lib/voiceQuestion'
 
 interface UseLessonQuestionInputOptions {
   question: Ref<string>
+  learningAnchorQuestion: () => string
   submitQuestion: (text: string, learningIntent: LearningIntent | null) => Promise<void>
   clearAnswerFeedback: () => void
   closeCardOcr: () => void
@@ -15,25 +17,12 @@ interface UseLessonQuestionInputOptions {
 export function useLessonQuestionInput(options: UseLessonQuestionInputOptions) {
   const { t } = useLocale()
 
-  function learningPrompt(intent: LearningIntent) {
-    switch (intent) {
-      case 'SIMPLIFY':
-        return t('lesson.answer.prompt.simplify')
-      case 'EXAMPLE':
-        return t('lesson.answer.prompt.example')
-      case 'WHY':
-        return t('lesson.answer.prompt.why')
-      case 'EXCEPTIONS':
-        return t('lesson.answer.prompt.exceptions')
-    }
-  }
-
   async function askQuestion() {
     await options.submitQuestion(options.question.value.trim(), null)
   }
 
   async function requestLearningHelp(intent: LearningIntent) {
-    const prompt = learningPrompt(intent)
+    const prompt = groundedLearningPrompt(t, intent, options.learningAnchorQuestion())
     options.question.value = prompt
     await options.submitQuestion(prompt, intent)
   }

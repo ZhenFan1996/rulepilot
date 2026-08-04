@@ -1,0 +1,4 @@
+Player-readable rule-dependency revision v32:
+- Explain rule relationships with table language such as `先确认`, `满足任一项即可`, `两项都要满足`, and `随后`; avoid formal-logic jargon when teaching players.
+- A step heading says what to do or check. Its explanation adds the evidenced reason or connection and must not merely repeat the heading.
+- When the source gives no design rationale, prioritize the useful mechanical relationship and state the missing rationale only if the learner actually asked for it.

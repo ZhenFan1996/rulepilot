@@ -203,6 +203,53 @@ class ValidatedAssistantReadToolsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void expandsOnlyResolvedSameVersionAnchorsWithBoundedCanonicalNeighbors() {
+        UUID versionId = UUID.randomUUID();
+        UUID missingId = UUID.randomUUID();
+        RuleEvidenceHit anchor = evidence(UUID.randomUUID(), versionId, "Choose one action.", 6);
+        RuleEvidenceHit neighbor = evidence(UUID.randomUUID(), versionId, "Each action may be chosen once.", 7);
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(chunkIds).containsExactlyInAnyOrder(anchor.chunkId(), missingId);
+                return List.of(anchor);
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findAdjacent(
+                    UUID documentVersionId, Set<UUID> anchorChunkIds, int radius, Set<String> sectionTypes) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(anchorChunkIds).containsExactly(anchor.chunkId());
+                assertThat(radius).isEqualTo(2);
+                assertThat(sectionTypes).isEmpty();
+                return List.of(neighbor);
+            }
+        };
+        var tools = new ValidatedAssistantReadTools((requestedVersion, query, options) -> List.of(), lookup);
+
+        var result = tools.readRuleEvidenceContext(versionId, Set.of(anchor.chunkId(), missingId), 2);
+
+        assertThat(result.anchors()).extracting(evidence -> evidence.chunkId()).containsExactly(anchor.chunkId());
+        assertThat(result.surroundingEvidence()).extracting(evidence -> evidence.chunkId())
+                .containsExactly(neighbor.chunkId());
+        assertThatThrownBy(() -> tools.readRuleEvidenceContext(versionId, Set.of(anchor.chunkId()), 3))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsCrossVersionContextEvidenceInsteadOfLeakingIt() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidenceHit foreign = evidence(UUID.randomUUID(), UUID.randomUUID(), "Foreign text.", 9);
+        RuleEvidenceLookup lookup = (documentVersionId, chunkIds) -> List.of(foreign);
+        var tools = new ValidatedAssistantReadTools((requestedVersion, query, options) -> List.of(), lookup);
+
+        assertThatThrownBy(() -> tools.readRuleEvidenceContext(versionId, Set.of(foreign.chunkId()), 1))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("escaped document scope");
+    }
+
     private RuleEvidenceHit evidence(UUID chunkId, UUID versionId) {
         return evidence(chunkId, versionId, "Place the board in the center.", 2);
     }

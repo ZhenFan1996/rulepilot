@@ -27,6 +27,9 @@ public interface AssistantRuns {
 
     Optional<RunDetails> findOwned(UUID runId, String ownerUsername);
 
+    /** Administrative audit read; authorization is enforced by the /api/admin security boundary. */
+    Optional<RunDetails> findForAdministrativeAudit(UUID runId);
+
     Optional<RunDetails> findLatestOwned(AssistantRunMode mode, UUID subjectId, String ownerUsername);
 
     Optional<RunDetails> findLatestOwned(

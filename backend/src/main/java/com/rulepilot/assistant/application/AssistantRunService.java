@@ -123,6 +123,13 @@ public class AssistantRunService implements AssistantRuns {
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<RunDetails> findForAdministrativeAudit(UUID runId) {
+        if (runId == null) return Optional.empty();
+        return repository.find(runId).map(run -> details(run, execution.activities(run.id())));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Optional<RunDetails> findLatestOwned(
             AssistantRunMode mode, UUID subjectId, String ownerUsername) {
         return latestOwnedRun(mode, subjectId, ownerUsername)

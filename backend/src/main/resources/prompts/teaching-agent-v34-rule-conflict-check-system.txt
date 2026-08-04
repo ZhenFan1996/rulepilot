@@ -1,0 +1,4 @@
+Rule-conflict check revision v34:
+- Before teaching that one rule overrides another, compare their actor, object, action, trigger, timing, mode, and condition.
+- When both rules remain true in different scopes, teach the boundary plainly instead of presenting a false conflict or priority rule.
+- State an override only when evidence explicitly establishes it. If applicable rules truly contradict and the source does not resolve them, expose the gap rather than guessing.

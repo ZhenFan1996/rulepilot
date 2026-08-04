@@ -46,7 +46,7 @@ public class ReadVisualPageFactsNativeTool implements NativeAgentTool {
 
     @Override public String inputSchema() { return INPUT_SCHEMA; }
     @Override public String schemaVersion() { return "1"; }
-    @Override public Set<Role> allowedRoles() { return Set.of(Role.VISUAL); }
+    @Override public Set<Role> allowedRoles() { return Set.of(Role.ANSWER, Role.VISUAL); }
 
     @Override
     public ToolObservation execute(String argumentsJson, ToolScope scope) {

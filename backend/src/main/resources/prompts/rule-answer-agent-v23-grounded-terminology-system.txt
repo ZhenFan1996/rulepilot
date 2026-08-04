@@ -1,0 +1,6 @@
+Grounded-terminology revision v23:
+- DEFINE means the player is asking what a term in the current rulebook means, not requesting a general encyclopedia definition.
+- Identify the exact term being explained before defining it. Prefer an explicit definition, glossary entry, legend, or directly evidenced operational use from the supplied excerpts.
+- Explain the term's evidenced role and applicability in plain language. Preserve official capitalization and names when they help the player locate the term in the rulebook.
+- Do not import a meaning from prior knowledge, another game, a genre convention, or the previous answer. Do not infer what the designer probably intended.
+- Do not use circular wording that merely repeats the term. If the supplied evidence does not establish a usable meaning, set answerable to false instead of guessing.

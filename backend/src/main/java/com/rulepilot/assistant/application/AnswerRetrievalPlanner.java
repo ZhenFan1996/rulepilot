@@ -118,7 +118,14 @@ public final class AnswerRetrievalPlanner {
         append(query, facets(question.type()));
         append(query, AnswerRetrievalProcedureIntents.endgameResolutionTerms(question.normalizedQuestion()));
         append(query, learningFacets(context.learningIntent()));
+        append(query, permissionFacets(question.normalizedQuestion()));
         return bounded(query.toString());
+    }
+
+    private static String permissionFacets(String question) {
+        return AnswerPermissionResolver.asksForPermission(question)
+                ? "permission prohibition may may not cannot allowed prerequisite exception 允许 禁止 可以 不能 条件 例外"
+                : null;
     }
 
     private static String learningFacets(LearningIntent intent) {
@@ -128,8 +135,11 @@ public final class AnswerRetrievalPlanner {
         return switch (intent) {
             case SIMPLIFY -> "core rule sequence must remember 核心规则 顺序 必须记住";
             case EXAMPLE -> "worked example legal sequence cost result 具体示例 合法步骤 费用 结果";
+            case DEFINE -> "definition glossary terminology means refers to 定义 术语 名词 指的是 含义";
             case WHY -> "rule prerequisite consequence order 前置条件 规则后果 执行顺序";
             case EXCEPTIONS -> "restriction timing limit exception cannot 限制 时机 次数 例外 禁止";
+            case SOURCE -> "exact rule clause direct source wording page 原文 条款 直接依据 页码";
+            case VERIFY -> "direct rule condition timing exception contradiction 直接规则 条件 时机 例外 矛盾";
         };
     }
 

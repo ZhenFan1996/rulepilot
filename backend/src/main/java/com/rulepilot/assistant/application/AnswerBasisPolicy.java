@@ -15,12 +15,11 @@ final class AnswerBasisPolicy {
     private AnswerBasisPolicy() {}
 
     static ModelDraft classify(ModelRequest request, ModelDraft draft) {
-        if (draft == null || !draft.answerable() || !PLAYER_STATED_TABLE_STATE.matcher(request.question()).find()) {
-            return draft;
-        }
-        if ("GROUNDED_APPLICATION".equalsIgnoreCase(draft.answerBasis())) {
-            return draft;
-        }
+        if (draft == null || !draft.answerable()) return draft;
+        boolean groundedApplication = !draft.calculations().isEmpty()
+                || PLAYER_STATED_TABLE_STATE.matcher(request.question()).find();
+        String classified = groundedApplication ? "GROUNDED_APPLICATION" : "DIRECT_RULE";
+        if (classified.equalsIgnoreCase(draft.answerBasis())) return draft;
         return new ModelDraft(
                 draft.answerable(),
                 draft.insufficiencyReason(),
@@ -29,6 +28,13 @@ final class AnswerBasisPolicy {
                 draft.citationIds(),
                 draft.exceptions(),
                 draft.confidence(),
-                "GROUNDED_APPLICATION");
+                classified,
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 }

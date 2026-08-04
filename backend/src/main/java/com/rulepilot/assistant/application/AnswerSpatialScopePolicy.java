@@ -10,10 +10,12 @@ import java.util.regex.Pattern;
 final class AnswerSpatialScopePolicy {
 
     private static final Pattern POSITIONAL_QUESTION = Pattern.compile(
-            "(?iu)(?:左|右|上|下|行|列|位置|标记|相邻|left|right|top|bottom|row|column|marker|adjacent)");
+            "(?iu)(?:左|右|上|下|行|列|位置|标记|相邻)|"
+                    + "\\b(?:left|right|top|bottom|row|column|marker|adjacent)\\b");
     private static final Pattern EXTRA_COORDINATE = Pattern.compile(
-            "(?iu)(?:最上|最下|中间|最右|第[二三四][行列]|top(?:\s+row)?|bottom(?:\s+row)?|"
-                    + "middle(?:\s+row)?|right(?:\s+column)?|second\s+(?:row|column)|third\s+(?:row|column))");
+            "(?iu)(?:最上|最下|中间|最右|第[二三四][行列])|"
+                    + "\\b(?:top(?:\s+row)?|bottom(?:\s+row)?|middle(?:\s+row)?|right(?:\s+column)?|"
+                    + "second\s+(?:row|column)|third\s+(?:row|column))\\b");
 
     private AnswerSpatialScopePolicy() {}
 
@@ -53,7 +55,14 @@ final class AnswerSpatialScopePolicy {
                 draft.citationIds(),
                 draft.exceptions(),
                 "MEDIUM",
-                "GROUNDED_APPLICATION");
+                "GROUNDED_APPLICATION",
+                draft.calculations(),
+                draft.situationChecks(),
+                draft.walkthroughSteps(),
+                draft.decisionBranches(),
+                draft.exceptionClauses(),
+                draft.termDefinitions(), draft.workedExamples(), draft.priorityResolutions(), draft.timingResolutions(),
+                draft.tieResolutions(), draft.scopeResolutions(), draft.conceptComparisons(), draft.ruleOptions());
     }
 
     private static String safe(String value) {

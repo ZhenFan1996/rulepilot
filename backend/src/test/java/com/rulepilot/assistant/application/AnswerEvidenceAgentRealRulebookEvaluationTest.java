@@ -13,17 +13,29 @@ import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.NativeToolAgent;
+import com.rulepilot.assistant.NativeToolAgent.RunRequest;
+import com.rulepilot.assistant.NativeToolAgent.RunResult;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
+import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.VersionedAgentPrompts;
 import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
@@ -39,6 +51,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -53,6 +66,7 @@ import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 @Tag("real-answer-agent-evaluation")
 class AnswerEvidenceAgentRealRulebookEvaluationTest {
@@ -96,6 +110,172 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 "generatedAt", Instant.now().toString(),
                 "results", results,
                 "crossRulebookNegative", negative)) + "\n", StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void comparesCompletePlayerAnswersWithAndWithoutTheBoundedToolPortfolio() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_TOOL_VALUE_EVAL")));
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        JsonNode manifest = mapper.readTree(root.resolve(".local/agent-evaluation/manifest.json").toFile());
+        JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
+        JsonNode evaluation = mapper.readTree(root.resolve(
+                ".local/agent-evaluation/answer-agent-cases.json").toFile());
+        List<Map<String, Object>> results = new ArrayList<>();
+        Path output = root.resolve(".local/agent-evaluation/tool-value-generated-answers.json");
+        String selectedCase = System.getenv("RULEPILOT_TOOL_VALUE_CASE");
+
+        for (JsonNode caseNode : evaluation.path("cases")) {
+            if (selectedCase != null && !selectedCase.isBlank()
+                    && !selectedCase.equals(caseNode.path("caseId").asText())) continue;
+            ProviderConfiguration provider = provider("TEXT_LAYER".equals(caseNode.path("family").asText())
+                    ? "deepseek"
+                    : "qwen");
+            CaseConfiguration configured = caseFor(root, manifest, inventory, caseNode, provider);
+            results.add(compareAnswer(configured));
+            Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                    "schemaVersion", 1,
+                    "generatedAt", Instant.now().toString(),
+                    "results", List.copyOf(results))) + "\n", StandardCharsets.UTF_8);
+        }
+
+        assertThat(results).hasSize(selectedCase == null || selectedCase.isBlank() ? 2 : 1)
+                .allSatisfy(result -> assertThat(result)
+                .containsEntry("toolAnswerPublished", true)
+                .containsEntry("toolAnswerUsesExpectedPage", true)
+                .containsEntry("toolAnswerCoversRequiredDetails", true)
+                .containsEntry("boundedToolCalls", true)
+                .containsEntry("combinedSearchAndRead", true)
+                .containsEntry("playerAnswersRecordedForInspection", true));
+    }
+
+    private Map<String, Object> compareAnswer(CaseConfiguration case_) throws Exception {
+        UUID versionId = UUID.nameUUIDFromBytes(("tool-value:" + case_.caseId()).getBytes(StandardCharsets.UTF_8));
+        UUID runId = UUID.randomUUID();
+        PdfRulebookEvidence corpus = new PdfRulebookEvidence(case_.pdf(), versionId);
+        HybridEvidenceHit initial = corpus.hit(case_.initialPage());
+        SpringAiRuleAnswerModel answerModel = answerModel(case_.provider());
+
+        long baselineStarted = System.nanoTime();
+        ModelRequest baselineRequest = modelRequest(case_.question(), List.of(initial));
+        ModelDraft baselineDraft = answerModel.compose(baselineRequest);
+        long baselineLatencyMs = Duration.ofNanos(System.nanoTime() - baselineStarted).toMillis();
+        StructuredRuleAnswer baselineAnswer = publishIfReady(versionId, baselineRequest, baselineDraft, List.of(initial));
+
+        DirectAuditedInvocations audited = new DirectAuditedInvocations();
+        ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
+        AnswerEvidenceAgent evidenceAgent = answerAgent(case_.provider(), corpus, audited, scope);
+        long toolStarted = System.nanoTime();
+        AnswerEvidenceRetriever.Result refined = evidenceAgent.refine(
+                runId,
+                question(versionId, case_.question()),
+                new QuestionContext(versionId),
+                "agent-evaluation",
+                null,
+                ready(initial));
+        ModelRequest toolRequest = modelRequest(case_.question(), refined.evidence());
+        ModelDraft toolDraft = answerModel.compose(toolRequest);
+        StructuredRuleAnswer toolAnswer = publishIfReady(versionId, toolRequest, toolDraft, refined.evidence());
+        int repairs = 0;
+        if (!answerCovers(case_, toolAnswer) || !usesExpectedPage(case_, toolAnswer)) {
+            repairs++;
+            toolDraft = answerModel.revise(toolRequest, toolDraft, List.of(
+                    "Answer every requested part from the supplied direct rule evidence.",
+                    "Use the citation on the page that explicitly states the requested sequence and final outcome.",
+                    "Do not answer from prior knowledge or a merely related page."));
+            toolAnswer = publishIfReady(versionId, toolRequest, toolDraft, refined.evidence());
+        }
+        long toolLatencyMs = Duration.ofNanos(System.nanoTime() - toolStarted).toMillis();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("caseId", case_.caseId());
+        result.put("question", case_.question());
+        result.put("provider", case_.provider().provider());
+        result.put("expectedPage", case_.expectedPage());
+        result.put("withoutTools", visibleAnswer(baselineAnswer));
+        result.put("withoutToolsUsesExpectedPage", usesExpectedPage(case_, baselineAnswer));
+        result.put("withoutToolsCoversRequiredDetails", answerCovers(case_, baselineAnswer));
+        result.put("withoutToolsLatencyMs", baselineLatencyMs);
+        result.put("withTools", visibleAnswer(toolAnswer));
+        result.put("toolTrace", List.copyOf(audited.trace));
+        result.put("toolLoopReason", audited.lastRunReason);
+        result.put("requestedToolPortfolio", List.copyOf(audited.requestedToolPortfolio));
+        result.put("registeredToolPortfolio", List.copyOf(audited.registeredToolPortfolio));
+        result.put("toolCalls", audited.toolCalls);
+        result.put("modelCallsInsideToolLoop", audited.modelCalls);
+        result.put("answerRepairs", repairs);
+        result.put("withToolsLatencyMs", toolLatencyMs);
+        result.put("toolAnswerPublished", toolAnswer.status().publishesConclusion());
+        result.put("toolAnswerUsesExpectedPage", usesExpectedPage(case_, toolAnswer));
+        result.put("toolAnswerCoversRequiredDetails", answerCovers(case_, toolAnswer));
+        result.put("boundedToolCalls", audited.toolCalls >= 2 && audited.toolCalls <= 3);
+        result.put("combinedSearchAndRead", audited.trace.stream().anyMatch(trace -> trace.startsWith("tool:search_rule_evidence"))
+                && audited.trace.stream().anyMatch(trace -> trace.startsWith("tool:read_rule_pages")));
+        result.put("playerAnswersRecordedForInspection", !visibleText(baselineAnswer).isBlank()
+                && !visibleText(toolAnswer).isBlank());
+        return Map.copyOf(result);
+    }
+
+    private ModelRequest modelRequest(String question, List<HybridEvidenceHit> evidence) {
+        return new ModelRequest(
+                question,
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                evidence.stream().map(hit -> new EvidenceInput(
+                        hit.evidence().chunkId(),
+                        hit.evidence().sectionType(),
+                        hit.evidence().heading(),
+                        hit.evidence().excerpt(),
+                        hit.evidence().pageFrom(),
+                        hit.evidence().pageTo())).toList());
+    }
+
+    private StructuredRuleAnswer publishIfReady(
+            UUID versionId,
+            ModelRequest request,
+            ModelDraft draft,
+            List<HybridEvidenceHit> evidence) {
+        AnswerDraftPublicationPolicy.Preparation preparation = AnswerDraftPublicationPolicy.prepare(request, draft);
+        if (!preparation.ready()) {
+            return AnswerOutcomePolicy.safeFailure(
+                    versionId,
+                    com.rulepilot.assistant.domain.AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    draft.insufficiencyReason() == null ? "The supplied evidence is insufficient." : draft.insufficiencyReason());
+        }
+        try {
+            return new AnswerPublicationValidator(new PolicyEvidenceVerifier())
+                    .publish(versionId, preparation.draft(), evidence);
+        } catch (RuntimeException invalidDraft) {
+            return AnswerOutcomePolicy.safeFailure(
+                    versionId,
+                    com.rulepilot.assistant.domain.AnswerStatus.INVALID_MODEL_OUTPUT,
+                    "The generated answer did not satisfy the publication schema.");
+        }
+    }
+
+    private Map<String, Object> visibleAnswer(StructuredRuleAnswer answer) {
+        return Map.of(
+                "status", answer.status().name(),
+                "shortVerdict", answer.shortVerdict(),
+                "explanation", answer.explanation(),
+                "citationPages", answer.citations().stream().map(citation -> citation.pageFrom()).distinct().toList());
+    }
+
+    private String visibleText(StructuredRuleAnswer answer) {
+        return (answer.shortVerdict() + " " + answer.explanation()).replaceAll("\\s+", " ").strip();
+    }
+
+    private boolean answerCovers(CaseConfiguration case_, StructuredRuleAnswer answer) {
+        String visible = visibleText(answer).toLowerCase(Locale.ROOT).replaceAll("[-‐‑‒–—]", "");
+        return case_.expectedTerms().stream().allMatch(term -> switch (term) {
+            case "humiliated" -> visible.contains("humiliat");
+            case "purged" -> visible.contains("purg");
+            case "deposed" -> visible.contains("depos");
+            default -> visible.contains(term.replaceAll("[-‐‑‒–—]", ""));
+        });
+    }
+
+    private boolean usesExpectedPage(CaseConfiguration case_, StructuredRuleAnswer answer) {
+        return answer.citations().stream().anyMatch(citation -> citation.pageFrom() == case_.expectedPage());
     }
 
     @Test
@@ -299,6 +479,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             ToolScope scope) {
         var nativeTools = List.of(
                 new SearchRuleEvidenceNativeTool(corpus, mapper),
+                new ExpandRuleEvidenceContextNativeTool(corpus, mapper),
                 new ReadRulePagesNativeTool(corpus, mapper));
         NativeAgentToolRegistry registry = new NativeAgentToolRegistry(
                 nativeTools,
@@ -312,7 +493,29 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 .thenReturn(java.util.Optional.of(scope));
         RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
         when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
-        return new AnswerEvidenceAgent(loop, corpus, scopes, limiter);
+        NativeToolAgent observedLoop = new NativeToolAgent() {
+            @Override
+            public RunResult run(RunRequest request) {
+                audited.requestedToolPortfolio = request.allowedTools();
+                audited.registeredToolPortfolio = registry.specifications(request.role(), request.allowedTools()).stream()
+                        .map(NativeToolModel.ToolSpec::name)
+                        .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+                RunResult result = loop.run(request);
+                audited.lastRunReason = result.reason();
+                return result;
+            }
+
+            @Override
+            public String providerId(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+                return loop.providerId(role, ownerUsername);
+            }
+
+            @Override
+            public boolean supports(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+                return loop.supports(role, ownerUsername);
+            }
+        };
+        return new AnswerEvidenceAgent(observedLoop, corpus, scopes, limiter);
     }
 
     private NativeToolModel springModel(ProviderConfiguration provider) {
@@ -326,6 +529,24 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                         any(RuntimeModelConfiguration.Role.class), any(String.class)))
                 .thenReturn("deepseek".equals(provider.provider()));
         return new SpringAiNativeToolModel(configuration);
+    }
+
+    private SpringAiRuleAnswerModel answerModel(ProviderConfiguration provider) {
+        ChatModel chatModel = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(120))
+                .create(provider.provider(), provider.apiKey(), provider.baseUrl(), provider.model());
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(provider.provider());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(provider.model());
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.ANSWER))
+                .thenReturn("deepseek".equals(provider.provider()));
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.register(VersionedAgentPrompts.class);
+            context.refresh();
+            return new SpringAiRuleAnswerModel(
+                    configuration, new FakeRuleAnswerModel(), context.getBean(VersionedAgentPrompts.class));
+        }
     }
 
     private CaseConfiguration caseFor(
@@ -401,6 +622,9 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;
         private int toolCalls;
+        private String lastRunReason = "NOT_STARTED";
+        private Set<String> requestedToolPortfolio = Set.of();
+        private Set<String> registeredToolPortfolio = Set.of();
         private final List<String> trace = new ArrayList<>();
 
         @Override
@@ -469,6 +693,27 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                             .thenComparing(RuleEvidenceHit::chunkId))
                     .map(this::ruleEvidence)
                     .toList();
+        }
+
+        @Override
+        public RuleEvidenceContext readRuleEvidenceContext(
+                UUID documentVersionId, Set<UUID> anchorEvidenceIds, int radius) {
+            if (!versionId.equals(documentVersionId)) throw new IllegalArgumentException("scope mismatch");
+            List<RuleEvidenceHit> anchors = chunks.stream()
+                    .filter(source -> anchorEvidenceIds.contains(source.chunkId()))
+                    .toList();
+            LinkedHashSet<RuleEvidenceHit> surrounding = new LinkedHashSet<>();
+            for (RuleEvidenceHit anchor : anchors) {
+                int index = chunks.indexOf(anchor);
+                for (int candidate = Math.max(0, index - radius);
+                        candidate <= Math.min(chunks.size() - 1, index + radius);
+                        candidate++) {
+                    if (candidate != index) surrounding.add(chunks.get(candidate));
+                }
+            }
+            return new RuleEvidenceContext(
+                    anchors.stream().map(this::ruleEvidence).toList(),
+                    surrounding.stream().map(this::ruleEvidence).toList());
         }
 
         @Override

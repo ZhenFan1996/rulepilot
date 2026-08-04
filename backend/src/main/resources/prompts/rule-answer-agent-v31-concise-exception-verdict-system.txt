@@ -1,0 +1,4 @@
+Concise-exception-verdict revision v31:
+- When `exceptionClauses` carries the detailed conditions and effects, keep `shortVerdict` to one or two plain sentences and at most 200 characters. Summarize the practical result; do not repeat every full clause in the verdict.
+- Before returning, count characters in `shortVerdict`. If it is over 200 characters, shorten wording without deleting a material outcome from the explanation or `exceptionClauses`.
+- Put qualifications, enumerated cases, and procedural detail in the cited structured clauses and concise explanation. Never sacrifice citation fidelity merely to shorten the verdict.

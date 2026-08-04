@@ -10,6 +10,12 @@ import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
 import { notifyLoginRequired } from '@/lib/authSession'
+import {
+  forgetLessonAnswerThread,
+  readLessonAnswerThread,
+  rememberLessonAnswerThread,
+  type LessonAnswerThreadScope,
+} from '@/lib/lessonAnswerThread'
 import { useLocale } from '@/lib/locale'
 import {
   cacheOfflineAnswer,
@@ -39,6 +45,7 @@ const errorMessage = ref('')
 const online = ref(navigator.onLine)
 const cardOcrOpen = ref(false)
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
+const answerThreadUsername = ref('')
 let latestWorkspaceLoad = 0
 let disposed = false
 
@@ -58,8 +65,12 @@ const {
   activeLearningIntent,
   answerLoading,
   answerError,
+  agentTrace,
+  answerRunId,
+  cancelAnswer,
   clearAnswerFeedback,
   resetConversation,
+  restoreConversation,
   submitQuestion,
 } = useLessonAnswers({
   currentContext: () => {
@@ -74,6 +85,7 @@ const {
   isCurrentLessonLoad: isCurrentWorkspaceLoad,
   requestLogin: async () => notifyLoginRequired(),
   onReceived: (context, text, received) => {
+    rememberCurrentAnswerThread()
     if (received.status === 'ANSWERED') {
       cacheOfflineAnswer(context.planId, text, received)
       refreshOfflineKnowledge(context.planId)
@@ -95,6 +107,41 @@ const {
   },
 })
 
+function currentAnswerThreadScope(): LessonAnswerThreadScope | null {
+  if (!answerThreadUsername.value || !plan.value) return null
+  return {
+    username: answerThreadUsername.value,
+    planId: planId.value,
+    documentVersionId: plan.value.documentVersionId,
+    locale: locale.value,
+  }
+}
+
+function rememberCurrentAnswerThread() {
+  const scope = currentAnswerThreadScope()
+  if (scope) rememberLessonAnswerThread(sessionStorage, scope, answerTurns.value)
+}
+
+function restoreCurrentAnswerThread() {
+  const scope = currentAnswerThreadScope()
+  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [])
+}
+
+function clearCurrentAnswerThread() {
+  const scope = currentAnswerThreadScope()
+  if (scope) forgetLessonAnswerThread(sessionStorage, scope)
+  resetConversation(true)
+  resetRuling()
+}
+
+function learningAnchorQuestion() {
+  for (let index = answerTurns.value.length - 1; index >= 0; index--) {
+    const turn = answerTurns.value[index]
+    if (turn?.learningIntent === null) return turn.question
+  }
+  return answeredQuestion.value
+}
+
 const {
   askQuestion,
   requestLearningHelp,
@@ -102,6 +149,7 @@ const {
   useVoiceTranscript,
 } = useLessonQuestionInput({
   question,
+  learningAnchorQuestion,
   submitQuestion,
   clearAnswerFeedback,
   closeCardOcr: () => { cardOcrOpen.value = false },
@@ -156,6 +204,7 @@ async function loadWorkspace() {
   errorMessage.value = ''
   plan.value = null
   lesson.value = null
+  answerThreadUsername.value = ''
   resetConversation(true)
   resetRuling()
   cardOcrOpen.value = false
@@ -166,9 +215,10 @@ async function loadWorkspace() {
     return
   }
   try {
-    const [planResponse, lessonResponse] = await Promise.all([
+    const [planResponse, lessonResponse, sessionResponse] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+      fetch('/api/auth/session', { credentials: 'include' }),
     ])
     if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
     if (planResponse.status === 401 || lessonResponse.status === 401) {
@@ -179,7 +229,12 @@ async function loadWorkspace() {
     if (!planResponse.ok || !lessonResponse.ok) throw new Error(t('questions.error'))
     plan.value = await planResponse.json() as TeachingPlan
     lesson.value = await lessonResponse.json() as IllustratedLesson
+    if (sessionResponse.ok) {
+      const session = await sessionResponse.json() as { username?: unknown }
+      if (typeof session.username === 'string') answerThreadUsername.value = session.username.trim()
+    }
     if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
+    restoreCurrentAnswerThread()
   } catch (error) {
     if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
     errorMessage.value = error instanceof Error ? error.message : t('questions.error')
@@ -202,7 +257,7 @@ onMounted(() => {
 
 watch(planId, () => { void loadWorkspace() })
 watch(locale, () => {
-  resetConversation()
+  restoreCurrentAnswerThread()
   resetRuling()
 })
 
@@ -254,6 +309,8 @@ onUnmounted(() => {
             :active-learning-intent="activeLearningIntent"
             :answer-loading="answerLoading"
             :answer-error="answerError"
+            :agent-trace="agentTrace"
+            :answer-run-id="answerRunId"
             :online="online"
             :ruling="ruling"
             :ruling-saving="rulingSaving"
@@ -267,9 +324,11 @@ onUnmounted(() => {
             @update:edited-verdict="editedVerdict = $event"
             @update:edited-explanation="editedExplanation = $event"
             @ask="askQuestion"
+            @cancel-answer="cancelAnswer"
             @request-help="requestLearningHelp"
             @open-card-ocr="cardOcrOpen = true"
             @voice-transcript="useVoiceTranscript"
+            @clear-thread="clearCurrentAnswerThread"
             @confirm-ruling="confirmAnswer"
             @reload-ruling="reloadRuling"
             @save-ruling-revision="saveRulingRevision"

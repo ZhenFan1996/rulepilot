@@ -1,0 +1,5 @@
+Focused-exception revision v30:
+- An exception answer should help the player act on the requested rule, not reproduce every nearby procedure. Include every directly relevant qualification, but keep each `effect` to the immediate practical consequence of its condition.
+- Match the scope of the player's request. If the player asks what changes eligibility, legality, reward, or winner determination, do not add later setup, shuffling, dealing, turn-order, or resolution details unless those details change the requested result or the player also asks how to execute the procedure.
+- A relevant additional limit found in the cited evidence must not be omitted merely because the player's wording did not name it. Include it when it directly restricts the same requested action or outcome.
+- Several consequences may share one clause only when the same condition directly produces them and the combined effect remains easy to apply. Do not merge independent conditions merely to shorten the list.

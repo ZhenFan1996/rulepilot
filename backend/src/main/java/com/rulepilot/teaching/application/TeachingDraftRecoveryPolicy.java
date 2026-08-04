@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  */
 final class TeachingDraftRecoveryPolicy {
 
-    private static final int MAX_TEXT_REPAIR_ATTEMPTS = 3;
+    private static final int MAX_TEXT_REPAIR_ATTEMPTS = 1;
     private static final String VISUAL_REPAIR_GUIDANCE = "The attached page images are usable visual evidence. "
             + "Keep the grounded text, but repair one VISUAL step: cite an attached-page E-reference and return a "
             + "compact 0-1000 focus rectangle that contains the icon, component group, board area, flow, or worked "
@@ -33,6 +33,17 @@ final class TeachingDraftRecoveryPolicy {
                     + "\\(\\s*if\\s+playing\\s+with\\s+([^)]+?)\\s+players?\\s*\\)");
     private static final Pattern PLAYER_COUNT = Pattern.compile("(?<!\\d)(\\d{1,2})(?!\\d)");
     private static final Pattern PLAYER_COUNT_MENTION = Pattern.compile("(?i)(?<!\\d)(\\d{1,2})\\s*(?:players?|人)");
+    private static final Pattern TURN_HANDOFF_CLAIM = Pattern.compile(
+            "(?iu)(?:\\bnext\\s+player\\b|\\b(?:play|turn|control)\\s+passes?\\s+to\\b|"
+                    + "(?:轮到|交给|传给|移交给).{0,16}(?:下一|下一个)(?:位)?玩家)");
+    private static final Pattern TURN_HANDOFF_EVIDENCE = Pattern.compile(
+            "(?iu)(?:\\bnext\\s+player\\b|\\bplayer\\s+to\\s+(?:your|their)\\s+left\\b|"
+                    + "\\b(?:play|turn|control)\\s+passes?\\s+to\\b|\\bclockwise\\b|"
+                    + "(?:轮到|交给|传给|移交给).{0,16}(?:下一|下一个)(?:位)?玩家|顺时针)");
+    private static final Pattern TERMINAL_ZONE_CLAIM = Pattern.compile(
+            "(?iu)(?:\\b(?:remove|removed)\\s+from\\s+(?:the\\s+)?game\\b|\\bout\\s+of\\s+play\\b|移出游戏|移除出游戏)");
+    private static final Pattern TERMINAL_ZONE_EVIDENCE = Pattern.compile(
+            "(?iu)(?:\\b(?:remove|removed)\\s+from\\s+(?:the\\s+)?game\\b|\\bout\\s+of\\s+play\\b|移出游戏|移除出游戏)");
 
     int maxRepairAttempts(boolean hasPageImages) {
         return hasPageImages ? 1 : MAX_TEXT_REPAIR_ATTEMPTS;
@@ -183,6 +194,82 @@ final class TeachingDraftRecoveryPolicy {
             return new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps);
         }
         return draft;
+    }
+
+    /** Removes only an unsupported turn-handoff sentence; a phase transition does not itself pass play. */
+    SectionDraft removeUnsupportedTurnHandoff(SectionDraft draft, List<RuleEvidence> evidence) {
+        if (draft == null || evidence == null || evidence.isEmpty()) return draft;
+        Map<UUID, RuleEvidence> evidenceById = evidence.stream().collect(java.util.stream.Collectors.toMap(
+                RuleEvidence::chunkId, value -> value, (first, ignored) -> first));
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.text() == null || !TURN_HANDOFF_CLAIM.matcher(step.text()).find()) {
+                steps.add(step);
+                continue;
+            }
+            boolean supported = step.citationIds().stream()
+                    .map(evidenceById::get)
+                    .filter(Objects::nonNull)
+                    .map(RuleEvidence::excerpt)
+                    .anyMatch(excerpt -> TURN_HANDOFF_EVIDENCE.matcher(excerpt).find());
+            if (supported) {
+                steps.add(step);
+                continue;
+            }
+            String retained = java.util.Arrays.stream(step.text().split("(?<=[。！？.!?])"))
+                    .filter(sentence -> !TURN_HANDOFF_CLAIM.matcher(sentence).find())
+                    .collect(java.util.stream.Collectors.joining())
+                    .strip();
+            if (retained.isBlank()) {
+                steps.add(step);
+                continue;
+            }
+            steps.add(new StepDraft(
+                    step.heading(), step.kind(), retained, step.citationIds(), step.visualFocus()));
+            changed = true;
+        }
+        return changed
+                ? new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
+    }
+
+    /** Removes a stronger destination claim when cited evidence says only discard, return, flip, or set aside. */
+    SectionDraft removeUnsupportedTerminalZoneClaim(SectionDraft draft, List<RuleEvidence> evidence) {
+        if (draft == null || evidence == null || evidence.isEmpty()) return draft;
+        Map<UUID, RuleEvidence> evidenceById = evidence.stream().collect(java.util.stream.Collectors.toMap(
+                RuleEvidence::chunkId, value -> value, (first, ignored) -> first));
+        boolean changed = false;
+        List<StepDraft> steps = new ArrayList<>(draft.steps().size());
+        for (StepDraft step : draft.steps()) {
+            if (step == null || step.text() == null || !TERMINAL_ZONE_CLAIM.matcher(step.text()).find()) {
+                steps.add(step);
+                continue;
+            }
+            boolean supported = step.citationIds().stream()
+                    .map(evidenceById::get)
+                    .filter(Objects::nonNull)
+                    .map(RuleEvidence::excerpt)
+                    .anyMatch(excerpt -> TERMINAL_ZONE_EVIDENCE.matcher(excerpt).find());
+            if (supported) {
+                steps.add(step);
+                continue;
+            }
+            String retained = java.util.Arrays.stream(step.text().split("(?<=[。！？.!?])"))
+                    .filter(sentence -> !TERMINAL_ZONE_CLAIM.matcher(sentence).find())
+                    .collect(java.util.stream.Collectors.joining())
+                    .strip();
+            if (retained.isBlank()) {
+                steps.add(step);
+                continue;
+            }
+            steps.add(new StepDraft(
+                    step.heading(), step.kind(), retained, step.citationIds(), step.visualFocus()));
+            changed = true;
+        }
+        return changed
+                ? new SectionDraft(draft.title(), draft.visualKind(), draft.visualCaption(), draft.visualCitationIds(), steps)
+                : draft;
     }
 
     private List<PlayerRoundSchedule> schedules(String excerpt, UUID evidenceId) {

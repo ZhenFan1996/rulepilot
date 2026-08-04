@@ -7,6 +7,7 @@ import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
 import java.util.UUID;
@@ -105,6 +106,59 @@ class AnswerDraftSafetyPolicyTest {
                 .isTrue();
         assertThat(AnswerDraftSafetyPolicy.containsSpeculativeUndefinedTermDefinition(bounded))
                 .isFalse();
+    }
+
+    @Test
+    void removesUnsupportedAbsenceClaimsFromDirectSourceExplanations() {
+        UUID chunkId = UUID.randomUUID();
+        ModelRequest sourceQuestion = new ModelRequest(
+                "Show me the source rule.",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, LearningIntent.SOURCE, PlayerLocale.EN),
+                List.of(new EvidenceInput(
+                        chunkId,
+                        "RULES",
+                        "Bird cards",
+                        "Bird cards are wild: they count as any other suit.",
+                        6,
+                        6)));
+        ModelDraft draft = new ModelDraft(
+                "Yes, a bird card can count as a fox card.",
+                "Bird cards can count as fox cards. The word always makes this available without any listed "
+                        + "restriction or condition. There is no additional condition stated in this excerpt. "
+                        + "The clause does not specify an exact moment. The permission applies without imposing any "
+                        + "additional condition or limitation. It is not limited to a particular phase. The rule "
+                        + "does not mention a saving mechanism, nor does it establish another timing boundary. This "
+                        + "treatment is not limited by any specified condition. The rule does not specify an exact "
+                        + "instant or cleanup step. It does not impose any requirement or timing restriction. The "
+                        + "clause does not define the larger cycle. The only stated timing is during this turn. It "
+                        + "does not attach a condition or limit.",
+                List.of(chunkId),
+                List.of(),
+                "HIGH");
+
+        ModelDraft normalized = AnswerDraftSafetyPolicy.normalizeSourceAbsenceClaims(sourceQuestion, draft);
+
+        assertThat(normalized.shortVerdict()).isEqualTo(draft.shortVerdict());
+        assertThat(normalized.explanation()).isEqualTo("Bird cards can count as fox cards.");
+    }
+
+    @Test
+    void removesUnsupportedAbsenceClaimsFromPermissionExplanations() {
+        UUID chunkId = UUID.randomUUID();
+        ModelRequest permissionQuestion = request(
+                "Can I use this card?",
+                new EvidenceInput(chunkId, "RULES", "Permission", "You may use this card.", 4, 4));
+        ModelDraft draft = new ModelDraft(
+                "Yes, you may use this card.",
+                "The rule grants permission. It applies without the need for any special condition or timing. "
+                        + "Without a specified exception in the evidence, it always applies. The only condition is "
+                        + "that you passed.",
+                List.of(chunkId), List.of(), "HIGH");
+
+        ModelDraft normalized = AnswerDraftSafetyPolicy.normalizeSourceAbsenceClaims(permissionQuestion, draft);
+
+        assertThat(normalized.explanation()).isEqualTo("The rule grants permission.");
     }
 
     private ModelRequest request(String question, EvidenceInput evidence) {

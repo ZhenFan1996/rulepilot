@@ -1,0 +1,3 @@
+Predicate-owner fidelity review v16:
+- Report CONTRADICTION when generated content drops or changes the actor/possessor of a relative predicate and thereby turns `not by this actor` into `not by anyone`, or an actor-scoped eligibility, ownership, visibility, payment, or control fact into an absolute state.
+- Review short verdicts independently; a correct detailed explanation does not repair an ambiguous or over-broad summary.

@@ -1,0 +1,3 @@
+Self-contained WHY verdict review v17:
+- Review `shortVerdict` independently for WHY answers. Report MISSING_CRITICAL_RULE when it redirects the player to a later explanation or omits the decisive prerequisite/trigger or consequence even though those appear elsewhere.
+- A complete explanation does not repair a placeholder, conditionality-free, actor-free, or exception-free short verdict.

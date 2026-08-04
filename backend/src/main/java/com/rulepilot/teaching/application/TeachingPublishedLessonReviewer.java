@@ -203,7 +203,7 @@ final class TeachingPublishedLessonReviewer {
                 "Published teaching section corrected from whole-lesson review",
                 () -> model.revise(candidate.modelRequest(), candidate.draft(), feedback),
                 result -> estimateTokens(result.toString()));
-        corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
+        corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
         EvidenceStatus correctionStatus = corrected.equals(candidate.draft())
                 ? EvidenceStatus.CITED_DRAFT
                 : EvidenceStatus.SUPPORTED;
@@ -230,7 +230,7 @@ final class TeachingPublishedLessonReviewer {
                     "Published teaching correction repaired to the section contract",
                     () -> model.revise(candidate.modelRequest(), invalidDraft, structuralRepair),
                     result -> estimateTokens(result.toString()));
-            corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest());
+            corrected = sectionDraftComposer.normalizeDraft(corrected, candidate.modelRequest(), candidate.evidence());
             correctionStatus = corrected.equals(candidate.draft())
                     ? EvidenceStatus.CITED_DRAFT
                     : EvidenceStatus.SUPPORTED;

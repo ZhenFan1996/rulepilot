@@ -119,6 +119,16 @@ describe('PublicLessonView', () => {
           answer: {
             status: 'ANSWERED', shortVerdict: '先把玩家板放到自己面前。', explanation: '这是开局的第一步.', warnings: [],
             citations: [{ heading: '设置', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', answerBasis: 'GROUNDED_APPLICATION', clarification: null,
+            calculations: [{ expression: 'floor(8 / 3) * 5', result: '10' }],
+            situationChecks: [
+              { requirement: '玩家板必须尚未放置', status: 'NOT_PROVIDED', playerFact: '' },
+            ],
+            walkthroughSteps: [
+              { instruction: '取出玩家板。', explanation: '先找到自己的玩家板。', orderBasis: 'EXPLANATION_ORDER' },
+            ],
+            decisionBranches: [
+              { condition: '玩家板尚未放置。', outcome: '把玩家板放到自己面前。', basis: 'EXPLICIT_RULE' },
+            ],
           },
           visualAids: [{ visualFocus: lesson.lesson.sections[0]!.steps[0]!.visualFocus, relatedStep: '放置玩家板' }],
           examples: [{ heading: '开局示例', text: '每位玩家从自己的玩家板开始。', sourcePages: [2] }],
@@ -155,6 +165,14 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).toContain('先把玩家板放到自己面前。')
     expect(wrapper.text()).toContain('按规则回答当前问题')
     expect(wrapper.text()).toContain('这条答案如何得出')
+    expect(wrapper.text()).toContain('floor(8 / 3) * 5 = 10')
+    expect(wrapper.text()).toContain('确定性计算器复核')
+    expect(wrapper.text()).toContain('当前局面条件')
+    expect(wrapper.text()).toContain('尚未提供')
+    expect(wrapper.text()).toContain('照这个顺序做')
+    expect(wrapper.text()).toContain('讲解拆分')
+    expect(wrapper.text()).toContain('不同条件会发生什么')
+    expect(wrapper.text()).toContain('规则明示')
     expect(wrapper.text()).toContain('支持这段答案的规则图例')
     expect(wrapper.text()).toContain('蓝色玩家板旁放着三枚木制标记。')
     expect(wrapper.text()).toContain('照这个例子走：开局示例')
@@ -164,6 +182,19 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('#public-answer-0').element.compareDocumentPosition(wrapper.get('form').element) & Node.DOCUMENT_POSITION_FOLLOWING)
       .not.toBe(0)
 
+    await wrapper.findAll('button').find(button => button.text() === '解释关键词')!.trigger('click')
+    await flushPromises()
+    const learningRequest = fetchMock.mock.calls
+      .filter(([input, init]) => String(input).endsWith('/answers') && init?.method === 'POST')
+      .at(-1)
+    expect(JSON.parse(String(learningRequest?.[1]?.body))).toMatchObject({
+      question: expect.stringContaining('玩家板先放哪里？'),
+      previousQuestion: '玩家板先放哪里？',
+      language: 'zh-CN',
+      learningIntent: 'DEFINE',
+    })
+    expect(String(JSON.parse(String(learningRequest?.[1]?.body)).question)).toContain('证据不足')
+
     wrapper.unmount()
     const restored = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
@@ -171,6 +202,119 @@ describe('PublicLessonView', () => {
     expect(restored.text()).toContain('玩家板先放哪里？')
     expect(restored.text()).toContain('先把玩家板放到自己面前。')
     expect(restored.text()).toContain('支持这段答案的规则图例')
+  })
+
+  it('shows only truthful public-answer waiting state and lets the reader stop without losing the question', async () => {
+    const lesson = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules',
+      officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [] },
+    }
+    let answerSignal: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Promise.resolve(new Response(null, { status: 401 }))
+      if (path.endsWith('/icon-glossary')) return Promise.resolve(new Response(null, { status: 404 }))
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerSignal = init.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          answerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      return Promise.resolve(Response.json(lesson))
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('这个效果何时结算？')
+    await wrapper.get('form').trigger('submit')
+    await vi.waitFor(() => expect(answerSignal).toBeDefined())
+
+    expect(wrapper.text()).toContain('问题已收到，正在等待这次答疑结果')
+    expect(wrapper.text()).toContain('不会展示未经服务端确认的执行步骤')
+    expect(wrapper.text()).not.toContain('对齐问题')
+    expect(wrapper.text()).not.toContain('附上来源与图例')
+
+    await wrapper.findAll('button').find(button => button.text() === '停止等待')!.trigger('click')
+    await vi.waitFor(() => expect(answerSignal?.aborted).toBe(true))
+
+    expect(wrapper.text()).toContain('这次未完成的结果不会替换当前页面')
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('这个效果何时结算？')
+    expect(wrapper.findAll('button').some(button => button.text() === '停止等待')).toBe(false)
+  })
+
+  it('turns clarification and insufficient evidence into focused, editable next steps', async () => {
+    const lesson = {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Wingspan Rules',
+      officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections: [] },
+    }
+    let answerNumber = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return new Response(null, { status: 401 })
+      if (path.endsWith('/icon-glossary')) return new Response(null, { status: 404 })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerNumber += 1
+        const clarification = answerNumber === 1
+        return Response.json({
+          answer: {
+            status: clarification ? 'CLARIFICATION_REQUIRED' : 'INSUFFICIENT_EVIDENCE',
+            shortVerdict: clarification ? '需要确认你说的是哪个对象。' : '当前证据不足。',
+            explanation: null, citations: [], exceptions: [], confidence: 'LOW', answerBasis: null,
+            clarification: clarification ? '“这个”具体指规则书里的哪个对象？' : null, warnings: [],
+          },
+          visualAids: [], examples: [],
+        })
+      }
+      return Response.json(lesson)
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/library', name: 'public-library', component: { template: '<div />' } },
+        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...shellRoutes,
+      ],
+    })
+    await router.push('/read/plan-1')
+    await router.isReady()
+    const wrapper = mount(PublicLessonView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.get('#public-question').setValue('这个什么时候触发？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const confidence = wrapper.get('[data-confidence="LOW"]')
+    expect(confidence.classes()).toContain('bg-red-50')
+    expect(wrapper.text()).toContain('“这个”具体指规则书里的哪个对象')
+    await wrapper.findAll('button').find(button => button.text() === '补充这项信息')!.trigger('click')
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value).toBe('我指的是：')
+    expect(document.activeElement).toBe(wrapper.get('#public-question').element)
+
+    await wrapper.get('#public-question').setValue('我指的是：红色行动牌')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('具体对象、触发时机或前一步')
+    await wrapper.findAll('button').find(button => button.text() === '补充条件后重试')!.trigger('click')
+
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
+      .toBe('我指的是：红色行动牌\n补充条件：')
+    expect(document.activeElement).toBe(wrapper.get('#public-question').element)
+    wrapper.unmount()
   })
 
   it('isolates a public answer thread by signed-in reader and clears only that reader’s current guide', async () => {
@@ -256,7 +400,7 @@ describe('PublicLessonView', () => {
         return Response.json({
           answer: {
             status: 'ANSWERED', shortVerdict: 'Place the mat in front of you.', explanation: 'It starts your personal play area.', warnings: [],
-            citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'HIGH', clarification: null,
+            citations: [{ heading: 'Setup', pageFrom: 2, pageTo: 2 }], exceptions: [], confidence: 'MEDIUM', clarification: null,
           }, visualAids: [], examples: [],
         })
       }
@@ -293,6 +437,9 @@ describe('PublicLessonView', () => {
     })
     expect(JSON.parse(String(request?.[1]?.body))).not.toHaveProperty('sectionPosition')
     expect(wrapper.text()).toContain('Place the mat in front of you.')
+    const mediumConfidence = wrapper.get('[data-confidence="MEDIUM"]')
+    expect(mediumConfidence.classes()).toContain('bg-amber-50')
+    expect(mediumConfidence.classes()).not.toContain('bg-emerald-50')
   })
 
   it('keeps the latest public guide when an earlier navigation resolves late', async () => {

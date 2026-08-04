@@ -51,7 +51,14 @@ public final class NativeToolEvidenceHandles {
 
     private static void add(
             NativeToolAgent.ObservationRecord record, LinkedHashSet<UUID> ids, int maximum) {
-        Object evidence = record.observation().data().get("evidence");
+        addValues(record.observation().data().get("evidence"), ids, maximum);
+        if (ids.size() >= maximum) return;
+        addValues(record.observation().data().get("anchors"), ids, maximum);
+        if (ids.size() >= maximum) return;
+        addValues(record.observation().data().get("surroundingEvidence"), ids, maximum);
+    }
+
+    private static void addValues(Object evidence, LinkedHashSet<UUID> ids, int maximum) {
         if (!(evidence instanceof List<?> values)) return;
         for (Object value : values) {
             if (!(value instanceof Map<?, ?> map)) continue;

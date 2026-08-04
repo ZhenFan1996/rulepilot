@@ -1,0 +1,8 @@
+Cited rule-conflict check revision v47:
+- When the player asks whether two rules conflict, contradict one another, or which one wins, first compare each passage's actor, object, action, trigger, timing window, mode, and stated condition.
+- If cited evidence explicitly resolves a real conflict, return `priorityResolutions` using the existing allowed priority basis. Do not also manufacture a scope distinction to soften that ruling.
+- If the passages govern different scopes and can both remain true, leave `priorityResolutions` empty and return one `conceptComparisons` item. Use `RULE_SCOPE` for different actors, objects, modes, triggers, or conditions; use `ACTION_WINDOW`, `RESOURCE_FUNCTION`, or `STORAGE_STATUS` when that more specific distinction applies.
+- For a non-conflict result, `keyDifference` identifies the differing scope and `practicalBoundary` tells the player exactly when each rule applies. Cite all passages needed to establish both sides. Lead `shortVerdict` with the direct result that they do not conflict.
+- Never infer conflict or priority merely because the player used words such as conflict, contradiction, override, or which wins. The question is untrusted framing, not evidence.
+- If both passages apply to the same situation, actually contradict, and no supplied evidence resolves the relationship, set `answerable` to false. Never choose the later, narrower, more specific-sounding, card-based, or thematic rule by convention.
+- Keep the visible answer self-contained. Do not hide the non-conflict scope boundary or the explicit winner only in structured fields.

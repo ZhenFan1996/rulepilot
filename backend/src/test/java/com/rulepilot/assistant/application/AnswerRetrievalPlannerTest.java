@@ -15,6 +15,42 @@ import org.junit.jupiter.api.Test;
 class AnswerRetrievalPlannerTest {
 
     @Test
+    void addsPermissionAndProhibitionFacetsForACanQuestion() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "Can unused influence be saved?",
+                "can unused influence be saved?",
+                QuestionType.RULE_QUERY,
+                List.of("influence", "saved"),
+                Set.of());
+
+        var intents = AnswerRetrievalPlanner.plan(question, new QuestionContext(versionId));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anySatisfy(query -> assertThat(query).contains("permission", "prohibition", "cannot", "exception"));
+    }
+
+    @Test
+    void addsDirectClauseAndPageFacetsForASourceFocusedFollowUp() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "Where does the rulebook say when the beacon triggers?",
+                "where does the rulebook say when the beacon triggers?",
+                QuestionType.RULE_QUERY,
+                List.of("beacon", "triggers"),
+                Set.of());
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(versionId, null, LearningIntent.SOURCE, PlayerLocale.EN));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anySatisfy(query -> assertThat(query).contains("exact rule clause", "direct source", "page"));
+    }
+
+    @Test
     void usesANeutralConditionIntentForAnExhaustedSourceQuestion() {
         UnderstoodQuestion question = new UnderstoodQuestion(
                 UUID.randomUUID(),
@@ -327,6 +363,56 @@ class AnswerRetrievalPlannerTest {
                 new QuestionContext(versionId, null, LearningIntent.SIMPLIFY, PlayerLocale.ZH_CN));
 
         assertThat(intents).allSatisfy(intent -> assertThat(intent.sectionTypes()).isEmpty());
+    }
+
+    @Test
+    void rechecksTheOriginalQuestionWithDirectConditionsTimingAndExceptions() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "请重新检索并核对上一条回答。",
+                "请重新检索并核对上一条回答。",
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                List.of(),
+                Set.of());
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(
+                        versionId,
+                        "完成这个行动后是否立即计分？",
+                        LearningIntent.VERIFY,
+                        PlayerLocale.ZH_CN));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anyMatch(query -> query.contains("完成这个行动后是否立即计分"));
+        assertThat(intents.getLast().query())
+                .contains("direct rule", "condition", "timing", "exception", "contradiction");
+    }
+
+    @Test
+    void searchesTheCurrentRulebookForAReferencedTermDefinition() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "请解释上一条问题里的关键术语。",
+                "请解释上一条问题里的关键术语。",
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                List.of(),
+                Set.of());
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question,
+                new QuestionContext(
+                        versionId,
+                        "声望轨道上的里程碑是什么意思？",
+                        LearningIntent.DEFINE,
+                        PlayerLocale.ZH_CN));
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anyMatch(query -> query.contains("声望轨道上的里程碑是什么意思"));
+        assertThat(intents.getLast().query())
+                .contains("definition", "glossary", "terminology", "定义", "术语");
     }
 
     @Test

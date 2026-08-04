@@ -82,6 +82,96 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void advertisesOnlyTheRequestToolPortfolio() {
+        java.util.concurrent.atomic.AtomicReference<List<String>> advertised = new java.util.concurrent.atomic.AtomicReference<>();
+        NativeToolModel model = request -> {
+            advertised.set(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
+            return finalTurn("READY");
+        };
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use the smallest useful tool portfolio.",
+                "Find one missing rule.",
+                "Insufficient verified evidence.",
+                3,
+                256,
+                Set.of("search_rule_evidence"),
+                Set.of(),
+                2);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(advertised.get()).containsExactly("search_rule_evidence");
+    }
+
+    @Test
+    void stopsTheLoopAtTheRequestToolCallCap() {
+        QueueModel model = new QueueModel(
+                turn(call("call-1", "search_rule_evidence", "{\"query\":\"ending\"}")),
+                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[9]}")));
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use bounded read tools.",
+                "Find one missing rule.",
+                "Insufficient verified evidence.",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                1);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.FALLBACK);
+        assertThat(result.reason()).isEqualTo("TOOL_CALL_LIMIT");
+        assertThat(result.toolCalls()).isEqualTo(1);
+        assertThat(result.observations()).extracting(observation -> observation.toolName())
+                .containsExactly("search_rule_evidence");
+    }
+
+    @Test
+    void completesAtTheToolCapWhenEveryRequiredObservationWasCollected() {
+        QueueModel model = new QueueModel(
+                turn(call("call-1", "search_rule_evidence", "{\"query\":\"ending\"}")),
+                turn(call("call-2", "read_rule_pages", "{\"pageNumbers\":[9]}")));
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use bounded read tools.",
+                "Find and confirm one missing rule.",
+                "Insufficient verified evidence.",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                2);
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.reason()).isEqualTo("REQUIRED_EVIDENCE_COLLECTED");
+        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(result.observations()).extracting(observation -> observation.toolName())
+                .containsExactly("search_rule_evidence", "read_rule_pages");
+    }
+
+    @Test
     void rejectsPrematureCompletionUntilTheRequiredConfirmationToolIsObserved() {
         QueueModel model = new QueueModel(
                 turn(call("call-1", "search_rule_evidence", "{\"query\":\"end condition\"}")),
@@ -106,7 +196,7 @@ class BoundedNativeToolAgentTest {
         var result = agent.run(request);
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
-        assertThat(result.iterations()).isEqualTo(4);
+        assertThat(result.iterations()).isEqualTo(3);
         assertThat(result.observations()).extracting(observation -> observation.toolName())
                 .containsExactly("search_rule_evidence", "read_rule_pages");
         assertThat(audited.recordedOperations).contains("nativeCompletionRequirement");

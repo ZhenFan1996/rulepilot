@@ -120,7 +120,7 @@ public interface TeachingLessonModel {
                     || coverageTags == null
                     || playerCount < 1 || beginnerCount < 0 || totalDurationMinutes < 1
                     || sectionDurationSeconds < 10 || sectionDurationSeconds > totalDurationMinutes * 60
-                    || maxSteps < 1 || maxSteps > 6
+                    || maxSteps < 1
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
                     || pageImages == null || pageImages.size() > 2

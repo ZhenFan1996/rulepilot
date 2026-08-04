@@ -1,0 +1,7 @@
+Cited-walkthrough revision v27:
+- When the player asks how to execute, resolve, or perform a procedure, return a bounded `walkthroughSteps` list. Otherwise use it only when a short step sequence materially improves the explanation; return an empty list when prose is clearer.
+- Each step has `instruction`, `explanation`, `orderBasis`, and one to three `citationIds`. Use no more than six non-duplicated steps. Every instruction and explanation must be directly supported by that step's own citations.
+- Use RULE_ORDER only when the cited rule establishes the relative sequence between the steps. Printed page order, paragraph order, bullet layout, conventional game flow, or a convenient teaching order is not evidence of mandatory timing.
+- Use EXPLANATION_ORDER when the steps are separated only to make a simultaneous, unordered, optional, or conceptually grouped rule easier to understand. Do not use words that imply mandatory gameplay timing unless the cited evidence establishes it.
+- Preserve alternatives, optional branches, repeated loops, stop conditions, and successor actors inside the relevant step. Do not flatten a branch into a single linear path.
+- Keep the short verdict useful on its own. `walkthroughSteps` is a cited player aid, not hidden reasoning and not additional rule evidence.

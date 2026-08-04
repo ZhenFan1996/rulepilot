@@ -68,7 +68,11 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
 
             ModelTurn turn;
             List<com.rulepilot.assistant.NativeToolModel.ToolSpec> advertisedTools =
-                    tools.specifications(request.role());
+                    tools.specifications(request.role(), request.allowedTools());
+            if (!request.allowedTools().isEmpty()
+                    && advertisedTools.size() != request.allowedTools().size()) {
+                return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
+            }
             try {
                 List<ConversationMessage> messages = conversation.messages();
                 int estimatedInputTokens = estimateTokens(messages.stream()
@@ -132,6 +136,12 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
 
             conversation.appendAssistant(turn.text(), turn.toolCalls(), advertisedTools);
             for (ModelToolCall call : turn.toolCalls()) {
+                if (toolCalls >= request.maxToolCalls()) {
+                    if (completionRequirementsSatisfied(request, observations)) {
+                        return completedAtToolLimit(iteration, toolCalls, observations);
+                    }
+                    return fallback(request, "TOOL_CALL_LIMIT", iteration, toolCalls, observations);
+                }
                 String failureKey = call.name() + "\n" + call.argumentsJson();
                 if (failedCallCounts.getOrDefault(failureKey, 0) > 0) {
                     boolean recorded = recordDiagnostic(
@@ -193,8 +203,41 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                             toolExecution.observation().media());
                 }
             }
+            if (!request.requiredToolsBeforeCompletion().isEmpty()
+                    && completionRequirementsSatisfied(request, observations)) {
+                return completedAfterRequiredEvidence(iteration, toolCalls, observations);
+            }
         }
         return fallback(request, "ITERATION_LIMIT", request.maxIterations(), toolCalls, observations);
+    }
+
+    private boolean completionRequirementsSatisfied(
+            RunRequest request, List<ObservationRecord> observations) {
+        return request.requiredToolsBeforeCompletion().stream().allMatch(required -> observations.stream()
+                .anyMatch(observation -> required.equals(observation.toolName())
+                        && observation.observation().status() != ObservationStatus.ERROR));
+    }
+
+    private RunResult completedAtToolLimit(
+            int iteration, int toolCalls, List<ObservationRecord> observations) {
+        return new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_READY",
+                "REQUIRED_EVIDENCE_COLLECTED_AT_TOOL_LIMIT",
+                iteration,
+                toolCalls,
+                observations);
+    }
+
+    private RunResult completedAfterRequiredEvidence(
+            int iteration, int toolCalls, List<ObservationRecord> observations) {
+        return new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_READY",
+                "REQUIRED_EVIDENCE_COLLECTED",
+                iteration,
+                toolCalls,
+                observations);
     }
 
     @Override

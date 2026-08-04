@@ -34,8 +34,19 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             You are the evidence-refinement stage of a board-game rules assistant. Never answer the player and never
             rely on rule knowledge outside the supplied evidence and tool observations. The application has already
             run deterministic retrieval. Use the read-only rulebook tools only to fill an uncovered condition,
-            exception, list item, follow-up dependency, or empty-result gap. Search one bounded need at a time. Read
-            exact pages after search to confirm the passages that cover the missing need. For a compound question,
+            exception, list item, follow-up dependency, visual-reference dependency, or empty-result gap. Search one
+            bounded need at a time. When general and special rules may conflict, search_rule_relationships can locate
+            candidate exception, replacement, precedence, and conditional passages. Its cue labels are non-authoritative:
+            compare the canonical excerpts and their applicability. When one retrieved excerpt may omit an adjacent
+            condition, list continuation, or exception, expand_rule_evidence_context can read the nearby canonical
+            chunks around that evidence handle. Nearby text is not automatically applicable. After searching or
+            expanding context, read the exact pages before deciding. For a question about a
+            visible icon, label, table, diagram, arrow, or board layout,
+            read_visual_page_facts may help locate literal printed content, but those facts have no mechanical-rule
+            authority. Read exact pages after search or visual inspection to confirm the passages that cover the
+            missing need. When the player asks for an example, search for the player's topic together with neutral
+            source cues such as worked example, for example, 示例, or 例如. A cue is only a retrieval hint: acquire the
+            complete cited setup, action, and outcome, and do not turn that example into a general rule. For a compound question,
             check every requested condition, sequence, exception, and complete-list obligation separately. A result
             count does not prove coverage: if a broad search misses one obligation, search that obligation again with
             the player's distinctive wording before reading the best candidate page. Only after every obligation has
@@ -94,7 +105,9 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
                     4,
                     384,
-                    Set.of("read_rule_pages")));
+                    toolPortfolio(question, context),
+                    requiredEvidenceTools(question),
+                    3));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -110,6 +123,31 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 result, 8, MAX_OBSERVED_EVIDENCE);
         return mergeCanonicalEvidence(
                 context.documentVersionId(), question.normalizedQuestion(), deterministic, observedIds, exactPageGroups);
+    }
+
+    private Set<String> toolPortfolio(UnderstoodQuestion question, QuestionContext context) {
+        String playerQuestion = question.normalizedQuestion();
+        if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
+            return Set.of("search_rule_evidence", "read_rule_pages", "read_visual_page_facts");
+        }
+        if (AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(playerQuestion)) {
+            return Set.of("search_rule_relationships", "expand_rule_evidence_context", "read_rule_pages");
+        }
+        if (context.previousQuestion() != null && !context.previousQuestion().isBlank()) {
+            return Set.of("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+        }
+        return Set.of("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+    }
+
+    private Set<String> requiredEvidenceTools(UnderstoodQuestion question) {
+        String playerQuestion = question.normalizedQuestion();
+        if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
+            return Set.of("search_rule_evidence", "read_visual_page_facts");
+        }
+        if (AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(playerQuestion)) {
+            return Set.of("search_rule_relationships", "read_rule_pages");
+        }
+        return Set.of("search_rule_evidence", "read_rule_pages");
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(
@@ -142,7 +180,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             if (source == null) continue;
             HybridEvidenceHit candidate = new HybridEvidenceHit(source, source.score(), 1, null, false);
             HybridEvidenceHit existing = merged.get(source.chunkId());
-            if (existing != null && !AnswerEvidencePolicy.sameEvidenceSnapshot(existing, candidate)) {
+            if (existing != null && !sameCanonicalIdentity(existing.evidence(), source)) {
                 return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.CONFLICTING);
             }
             merged.put(source.chunkId(), candidate);
@@ -154,6 +192,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
                 normalizedQuestion, merged, observed, Set.of(), confirmedPageGroups);
         return new AnswerEvidenceRetriever.Result(selected, AnswerEvidenceRetriever.State.READY);
+    }
+
+    private static boolean sameCanonicalIdentity(RuleEvidenceHit existing, RuleEvidenceHit canonical) {
+        return existing.chunkId().equals(canonical.chunkId())
+                && existing.documentVersionId().equals(canonical.documentVersionId())
+                && existing.sectionType().equals(canonical.sectionType())
+                && existing.heading().equals(canonical.heading())
+                && existing.pageFrom() == canonical.pageFrom()
+                && existing.pageTo() == canonical.pageTo();
     }
 
     private List<List<HybridEvidenceHit>> canonicalPageGroups(

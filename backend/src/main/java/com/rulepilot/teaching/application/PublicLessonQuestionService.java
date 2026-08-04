@@ -45,11 +45,18 @@ public class PublicLessonQuestionService {
 
     private PublicAnswer answer(PublicLessonReader.PublicLesson lesson, QuestionRequest request) {
         PlayerLocale language = PlayerLocale.fromRequest(request.language());
-        var creation = answers.answerForPublicReader(
-                lesson.documentVersionId(),
-                request.question().strip(),
-                request.previousQuestion(),
-                language);
+        var creation = request.learningIntent() == null
+                ? answers.answerForPublicReader(
+                        lesson.documentVersionId(),
+                        request.question().strip(),
+                        request.previousQuestion(),
+                        language)
+                : answers.answerForPublicReader(
+                        lesson.documentVersionId(),
+                        request.question().strip(),
+                        request.previousQuestion(),
+                        language,
+                        request.learningIntent());
         Set<Integer> citedPages = citedPages(creation.answer());
         return new PublicAnswer(
                 creation.assistantRunId(),
@@ -191,9 +198,17 @@ public class PublicLessonQuestionService {
         }
     }
 
-    public record QuestionRequest(String question, String previousQuestion, String language) {
+    public record QuestionRequest(
+            String question,
+            String previousQuestion,
+            String language,
+            RuleAnswering.PublicLearningIntent learningIntent) {
         public QuestionRequest(String question, String previousQuestion) {
-            this(question, previousQuestion, "zh-CN");
+            this(question, previousQuestion, "zh-CN", null);
+        }
+
+        public QuestionRequest(String question, String previousQuestion, String language) {
+            this(question, previousQuestion, language, null);
         }
     }
 

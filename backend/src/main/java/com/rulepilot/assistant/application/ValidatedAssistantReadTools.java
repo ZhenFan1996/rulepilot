@@ -2,6 +2,8 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RulePageImage;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
+import com.rulepilot.assistant.AssistantReadTools.RuleEvidenceContext;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.retrieval.HybridRuleSearch;
 import com.rulepilot.retrieval.HybridRuleSearch.RetrievalOptions;
@@ -136,6 +138,53 @@ public class ValidatedAssistantReadTools implements AssistantReadTools {
                         source.pageFrom(),
                         source.pageTo()))
                 .toList();
+    }
+
+    @Override
+    public RuleEvidenceContext readRuleEvidenceContext(
+            UUID documentVersionId, Set<UUID> anchorEvidenceIds, int radius) {
+        if (documentVersionId == null || anchorEvidenceIds == null || anchorEvidenceIds.isEmpty()
+                || anchorEvidenceIds.size() > 3 || anchorEvidenceIds.stream().anyMatch(java.util.Objects::isNull)
+                || radius < 1 || radius > 2) {
+            throw new IllegalArgumentException("bounded rule evidence context read is invalid");
+        }
+        Set<UUID> anchors = Set.copyOf(anchorEvidenceIds);
+        List<RuleEvidence> canonicalAnchors = evidenceLookup.findByChunkIds(documentVersionId, anchors).stream()
+                .peek(source -> validateContextEvidence(documentVersionId, source))
+                .filter(source -> anchors.contains(source.chunkId()))
+                .map(this::ruleEvidence)
+                .toList();
+        Set<UUID> resolvedAnchorIds = canonicalAnchors.stream()
+                .map(RuleEvidence::chunkId)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (resolvedAnchorIds.isEmpty()) {
+            return new RuleEvidenceContext(List.of(), List.of());
+        }
+        List<RuleEvidence> surrounding = evidenceLookup.findAdjacent(
+                        documentVersionId, resolvedAnchorIds, radius, Set.of()).stream()
+                .peek(source -> validateContextEvidence(documentVersionId, source))
+                .filter(source -> !resolvedAnchorIds.contains(source.chunkId()))
+                .limit(8)
+                .map(this::ruleEvidence)
+                .toList();
+        return new RuleEvidenceContext(canonicalAnchors, surrounding);
+    }
+
+    private void validateContextEvidence(UUID documentVersionId, RuleEvidenceHit source) {
+        if (!documentVersionId.equals(source.documentVersionId())) {
+            throw new IllegalStateException("context evidence escaped document scope");
+        }
+    }
+
+    private RuleEvidence ruleEvidence(RuleEvidenceHit source) {
+        return new RuleEvidence(
+                source.chunkId(),
+                source.documentVersionId(),
+                source.sectionType(),
+                source.heading(),
+                source.excerpt(),
+                source.pageFrom(),
+                source.pageTo());
     }
 
     private Map<Integer, RulePageImage> pageVisuals(

@@ -1,9 +1,11 @@
 package com.rulepilot.teaching.adapter.in.web;
 
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -85,6 +88,29 @@ class PublicLessonControllerTest {
                 .andExpect(content().bytes(normalized));
 
         verify(crops).crop(stored, 0, 0, 1_000, 1_000, 0);
+    }
+
+    @Test
+    void accepts_a_bounded_public_learning_intent() throws Exception {
+        UUID planId = UUID.randomUUID();
+        when(questions.answer(eq(planId), org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/api/public/lessons/{planId}/answers", planId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "question": "Explain the milestone.",
+                                  "previousQuestion": "When does the milestone score?",
+                                  "language": "en",
+                                  "learningIntent": "DEFINE"
+                                }
+                                """))
+                .andExpect(status().isNotFound());
+
+        var request = ArgumentCaptor.forClass(PublicLessonQuestionService.QuestionRequest.class);
+        verify(questions).answer(eq(planId), request.capture());
+        org.assertj.core.api.Assertions.assertThat(request.getValue().learningIntent())
+                .isEqualTo(com.rulepilot.assistant.RuleAnswering.PublicLearningIntent.DEFINE);
     }
 
     private PublicLessonReader.PublicLesson lesson(UUID planId, UUID documentVersionId) {

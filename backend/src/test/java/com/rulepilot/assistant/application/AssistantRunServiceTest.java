@@ -176,6 +176,26 @@ class AssistantRunServiceTest {
     }
 
     @Test
+    void loadsACompleteAdministrativeAuditWithoutOwnerFiltering() {
+        AssistantRunRepository repository = mock(AssistantRunRepository.class);
+        AgentExecutionControl execution = mock(AgentExecutionControl.class);
+        AssistantRunService service = service(repository, execution);
+        AssistantRun run = AssistantRun.start(
+                AssistantRunMode.QUESTION_ANSWER, UUID.randomUUID(), "player", Instant.now());
+        when(repository.find(run.id())).thenReturn(java.util.Optional.of(run));
+        when(repository.steps(run.id())).thenReturn(List.of());
+        when(execution.activities(run.id())).thenReturn(List.of());
+
+        var audit = service.findForAdministrativeAudit(run.id());
+
+        assertThat(audit).isPresent();
+        assertThat(audit.orElseThrow().run().ownerUsername()).isEqualTo("player");
+        verify(repository).find(run.id());
+        verify(execution).budget(run.id());
+        verify(execution).activities(run.id());
+    }
+
+    @Test
     void returnsOnlyTheOwnersActiveRunsWithoutLoadingAuditDetails() {
         AssistantRunRepository repository = mock(AssistantRunRepository.class);
         AgentExecutionControl execution = mock(AgentExecutionControl.class);

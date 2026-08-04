@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -36,6 +37,67 @@ final class AnswerOutcomePolicy {
                         answer.clarification(),
                         answer.warnings().stream()
                                 .map(warning -> new RuleAnswering.Warning(warning.type().name()))
+                                .toList(),
+                        answer.calculations().stream()
+                                .map(calculation -> new RuleAnswering.Calculation(
+                                        calculation.expression(), calculation.result()))
+                                .toList(),
+                        answer.situationChecks().stream()
+                                .map(check -> new RuleAnswering.SituationCheck(
+                                        check.requirement(), check.status().name(), check.playerFact()))
+                                .toList(),
+                        answer.walkthroughSteps().stream()
+                                .map(step -> new RuleAnswering.WalkthroughStep(
+                                        step.instruction(), step.explanation(), step.orderBasis().name()))
+                                .toList(),
+                        answer.decisionBranches().stream()
+                                .map(branch -> new RuleAnswering.DecisionBranch(
+                                        branch.condition(), branch.outcome(), branch.basis().name()))
+                                .toList(),
+                        answer.exceptionClauses().stream()
+                                .map(clause -> new RuleAnswering.ExceptionClause(
+                                        clause.condition(), clause.effect()))
+                                .toList(),
+                        answer.termDefinitions().stream()
+                                .map(definition -> new RuleAnswering.TermDefinition(
+                                        definition.term(), definition.definition(), definition.boundary()))
+                                .toList(),
+                        answer.workedExamples().stream()
+                                .map(example -> new RuleAnswering.WorkedExample(
+                                        example.setup(), example.action(), example.outcome(), example.basis().name()))
+                                .toList(),
+                        answer.priorityResolutions().stream()
+                                .map(resolution -> new RuleAnswering.RulePriorityResolution(
+                                        resolution.baseRule(), resolution.competingRule(), resolution.resolution(),
+                                        resolution.basis().name()))
+                                .toList(),
+                        answer.timingResolutions().stream()
+                                .map(resolution -> new RuleAnswering.RuleTimingResolution(
+                                        resolution.timingContext(), resolution.resolutionOrder(),
+                                        resolution.orderSource(), resolution.basis().name()))
+                                .toList(),
+                        answer.tieResolutions().stream()
+                                .map(resolution -> new RuleAnswering.RuleTieResolution(
+                                        resolution.tieContext(), resolution.resolutionSteps(),
+                                        resolution.finalOutcome(), resolution.basis().name()))
+                                .toList(),
+                        answer.scopeResolutions().stream()
+                                .map(resolution -> new RuleAnswering.RuleScopeResolution(
+                                        resolution.ruleContext(), resolution.governingCondition(),
+                                        resolution.currentSituation(), resolution.matchStatus().name(),
+                                        resolution.effect(), resolution.basis().name()))
+                                .toList(),
+                        answer.conceptComparisons().stream()
+                                .map(comparison -> new RuleAnswering.RuleConceptComparison(
+                                        comparison.leftConcept(), comparison.leftDefinition(),
+                                        comparison.rightConcept(), comparison.rightDefinition(),
+                                        comparison.commonGround(), comparison.keyDifference(),
+                                        comparison.practicalBoundary(), comparison.basis().name()))
+                                .toList(),
+                        answer.ruleOptions().stream()
+                                .map(option -> new RuleAnswering.RuleOption(
+                                        option.decisionContext(), option.selectionRule(), option.optionName(),
+                                        option.availabilityCondition(), option.result(), option.basis().name()))
                                 .toList()),
                 answer.citations().stream()
                         .map(RuleCitation::chunkId)
@@ -65,23 +127,48 @@ final class AnswerOutcomePolicy {
                 null);
     }
 
-    static StructuredRuleAnswer clarification(UnderstoodQuestion question) {
-        String missing = question.missingContext().stream()
-                .map(Enum::name)
+    static StructuredRuleAnswer clarification(UnderstoodQuestion question, PlayerLocale locale) {
+        PlayerLocale outputLanguage = locale == null ? PlayerLocale.ZH_CN : locale;
+        List<String> requests = question.missingContext().stream()
                 .sorted()
-                .collect(Collectors.joining(", "));
+                .map(missing -> clarificationRequest(missing, outputLanguage))
+                .toList();
+        String detail = String.join(outputLanguage == PlayerLocale.EN ? " " : "；", requests);
         return new StructuredRuleAnswer(
                 question.documentVersionId(),
                 AnswerStatus.CLARIFICATION_REQUIRED,
-                "需要补充上下文后才能查证规则。",
-                "缺少信息：" + missing,
+                outputLanguage == PlayerLocale.EN
+                        ? "I need one more detail before I can verify the rule."
+                        : "需要补充一项信息后才能查证规则。",
+                outputLanguage == PlayerLocale.EN
+                        ? "The question contains a reference that cannot be resolved safely."
+                        : "问题中有无法安全确定的指代。",
                 List.of(),
                 List.of(),
                 AnswerConfidence.LOW,
                 false,
                 null,
                 null,
-                "请补充 " + missing + "。");
+                detail);
+    }
+
+    private static String clarificationRequest(
+            com.rulepilot.assistant.domain.MissingQuestionContext missing,
+            PlayerLocale locale) {
+        if (locale == PlayerLocale.EN) {
+            return switch (missing) {
+                case REFERENCED_OBJECT ->
+                    "What exactly does “this”, “that”, or “it” refer to? Include the rulebook name of the card, action, effect, or area.";
+                case SITUATION_DETAILS ->
+                    "Include the object being resolved, when it happens, and what occurred immediately before it.";
+            };
+        }
+        return switch (missing) {
+            case REFERENCED_OBJECT ->
+                "你说的“这个”“那个”或“它”具体指什么？请写出规则书里的卡牌、行动、效果或区域名称。";
+            case SITUATION_DETAILS ->
+                "请补充要判断的对象、发生时机，以及紧接着之前发生了什么。";
+        };
     }
 
     static StructuredRuleAnswer safeFailure(UUID documentVersionId, AnswerStatus status, String message) {
@@ -149,6 +236,19 @@ final class AnswerOutcomePolicy {
                 answer.confirmedRulingId(),
                 answer.confirmedRulingVersion(),
                 answer.clarification(),
-                List.copyOf(merged));
+                List.copyOf(merged),
+                answer.calculations(),
+                answer.situationChecks(),
+                answer.walkthroughSteps(),
+                answer.decisionBranches(),
+                answer.exceptionClauses(),
+                answer.termDefinitions(),
+                answer.workedExamples(),
+                answer.priorityResolutions(),
+                answer.timingResolutions(),
+                answer.tieResolutions(),
+                answer.scopeResolutions(),
+                answer.conceptComparisons(),
+                answer.ruleOptions());
     }
 }

@@ -7,6 +7,8 @@ import com.rulepilot.teaching.TeachingLessonModel;
 import com.rulepilot.teaching.TeachingLessonModel.VisualFocusDraft;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +17,7 @@ import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ByteArrayResource;
@@ -27,7 +30,6 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiTeachingLessonModel.class);
-
     private final RuntimeModelConfiguration models;
     private final FakeTeachingLessonModel fakeModel;
     private final VersionedAgentPrompts prompts;
@@ -135,12 +137,16 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             options.model(models.modelNameFor(role, owner));
             options.extraBody(providerOptions);
             if (usesQwen(role, owner)) {
-                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+                options.temperature(0.0);
+                options.responseFormat(ResponseFormat.builder()
+                        .type(ResponseFormat.Type.JSON_SCHEMA)
+                        .jsonSchema(qwenTeachingSchema())
+                        .build());
             }
             prompt = prompt.options(options);
         }
         ModelSectionDraft draft = prompt
-                .system(prompts.teachingSystem())
+                .system(prompts.teachingRuntimeSystem())
                 .user(user -> {
                     user.text(prompts.teachingUser())
                             .param("section", request.title())
@@ -149,7 +155,6 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                             .param("requiredRules", request.requiredRuleIntents())
                             .param("totalDuration", request.totalDurationMinutes())
                             .param("sectionDuration", request.sectionDurationSeconds())
-                            .param("maxSteps", request.maxSteps())
                             .param("continuity", request.priorSections())
                             .param("chapterScope", request.chapterScope())
                             .param("evidence", modelEvidence(request))
@@ -203,6 +208,23 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
 
     Map<String, Object> providerOptions(Role role) {
         return providerOptions(role, null);
+    }
+
+    static String qwenTeachingSchema() {
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            ObjectNode schema = (ObjectNode) mapper.readTree(
+                    new BeanOutputConverter<>(ModelSectionDraft.class).getJsonSchema());
+            ObjectNode properties = (ObjectNode) schema.path("properties");
+            ((ObjectNode) properties.path("visualCitationIds")).put("minItems", 1);
+            ObjectNode steps = (ObjectNode) properties.path("steps");
+            steps.put("minItems", 1);
+            ObjectNode stepProperties = (ObjectNode) steps.path("items").path("properties");
+            ((ObjectNode) stepProperties.path("citationIds")).put("minItems", 1);
+            return mapper.writeValueAsString(schema);
+        } catch (Exception exception) {
+            throw new IllegalStateException("cannot build the teaching response schema", exception);
+        }
     }
 
     private boolean usesQwen(Role role, String modelConfigurationOwner) {
@@ -292,7 +314,7 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                         .map(step -> new StepDraft(
                                 step.heading(), step.kind(), step.text(),
                                 resolveReferences(step.citationIds(), evidenceIds),
-                                step.visualFocus()))
+                                step.kind() == TeachingMove.VISUAL ? step.visualFocus() : null))
                         .toList());
     }
 

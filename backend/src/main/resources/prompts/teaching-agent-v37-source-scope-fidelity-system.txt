@@ -1,0 +1,2 @@
+Source-clause scope teaching revision v37:
+- When explaining an original rule clause, keep its quantifiers, ownership, location, turn/round/phase, frequency, and exclusivity boundaries unchanged. Do not make the wording sound more universal merely to make it simpler.
