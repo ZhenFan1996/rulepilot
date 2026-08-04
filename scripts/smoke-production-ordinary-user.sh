@@ -216,17 +216,54 @@ wait_for_document_ready() {
 wait_for_run() {
 	local run_id=$1
 	local label=$2
+	local lesson_plan_id=${3:-}
 	local deadline=$((SECONDS + timeout_seconds))
-	local response state
+	local response state lesson_response lesson_http lesson_body lesson_status lesson_rank
+	local lesson_seen=0
+	local previous_lesson_rank=0
 	while [ "$SECONDS" -lt "$deadline" ]; do
 		response=$(get_json "/api/v1/assistant-runs/$run_id")
+		if ! jq -e --arg run_id "$run_id" '.run.id == $run_id' >/dev/null <<<"$response"; then
+			echo "$label returned a different run identity" >&2
+			return 1
+		fi
 		state=$(jq -er '.run.state' <<<"$response")
+		if [ -n "$lesson_plan_id" ]; then
+			lesson_response=$(curl --silent --show-error --write-out $'\n%{http_code}' \
+				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+				"$base_url/api/v1/teaching-plans/$lesson_plan_id/illustrated-lessons/latest")
+			lesson_http=${lesson_response##*$'\n'}
+			lesson_body=${lesson_response%$'\n'*}
+			if [ "$lesson_http" = "200" ]; then
+				lesson_status=$(jq -er '.status' <<<"$lesson_body")
+				case "$lesson_status" in
+					INCOMPLETE) lesson_rank=1 ;;
+					DRAFT_READY) lesson_rank=2 ;;
+					COMPLETE) lesson_rank=3 ;;
+					*) echo "Unknown lesson status: $lesson_status" >&2; return 1 ;;
+				esac
+				if [ "$lesson_rank" -lt "$previous_lesson_rank" ]; then
+					echo "Lesson status regressed from rank $previous_lesson_rank to $lesson_status" >&2
+					return 1
+				fi
+				lesson_seen=1
+				previous_lesson_rank=$lesson_rank
+			elif [ "$lesson_http" = "404" ]; then
+				if [ "$lesson_seen" -eq 1 ]; then
+					echo "A visible lesson disappeared during generation" >&2
+					return 1
+				fi
+			else
+				echo "Lesson progress endpoint returned HTTP $lesson_http" >&2
+				return 1
+			fi
+		fi
 		case "$state" in
 			COMPLETED)
 				printf '%s' "$response"
 				return 0
 				;;
-			FAILED|DEGRADED|CANCELLED)
+			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
 				echo "$label ended in $state" >&2
 				return 1
 				;;
@@ -235,6 +272,29 @@ wait_for_run() {
 	done
 	echo "$label timed out after ${timeout_seconds}s" >&2
 	return 1
+}
+
+verify_launched_run() {
+	local run_id=$1
+	local label=$2
+	local response state active
+	response=$(get_json "/api/v1/assistant-runs/$run_id")
+	if ! jq -e --arg run_id "$run_id" '.run.id == $run_id' >/dev/null <<<"$response"; then
+		echo "$label launch did not resolve to its returned run identity" >&2
+		return 1
+	fi
+	state=$(jq -er '.run.state' <<<"$response")
+	case "$state" in
+		COMPLETED|FAILED|DEGRADED|INSUFFICIENT_EVIDENCE) ;;
+		*)
+			active=$(get_json "/api/v1/assistant-runs/active?mode=TEACHING")
+			if ! jq -e --arg run_id "$run_id" '.[] | select(.id == $run_id)' >/dev/null <<<"$active"; then
+				echo "$label was neither terminal nor visible in active background work" >&2
+				return 1
+			fi
+			;;
+	esac
+	log_stage "lesson-launch-visible run=$run_id state=$state"
 }
 
 refresh_csrf
@@ -316,7 +376,8 @@ lesson_launch=$(curl --fail-with-body --silent --show-error \
 	--request POST --header "$csrf_header: $csrf_token" \
 	"$base_url/api/v1/teaching-plans/$plan_id/illustrated-lessons")
 lesson_run_id=$(jq -er '.assistantRunId' <<<"$lesson_launch")
-lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson")
+verify_launched_run "$lesson_run_id" "Illustrated lesson"
+lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson" "$plan_id")
 lesson_state=$(jq -er '.run.state' <<<"$lesson_result")
 log_run_timing "lesson" "$lesson_result"
 verify_lesson_critical_path "$lesson_result" "$plan_section_count"

@@ -3,6 +3,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_CLEARED_EVENT, notifyLoginRequired } from '@/lib/authSession'
+import { notifyTeachingLaunched } from '@/lib/teachingLaunch'
 import AppShell from './AppShell.vue'
 
 describe('AppShell', () => {
@@ -25,6 +26,9 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/assistant-runs/active')) {
         activeReads += 1
         return response(activeReads === 1 ? [{ id: 'run-1', subjectId: 'plan-1' }] : [])
+      }
+      if (path.includes('/api/v1/assistant-runs/run-1')) {
+        return response({ run: { id: 'run-1', state: 'COMPLETED' } })
       }
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-1', gameTitle: '星际探索' }])
@@ -118,6 +122,65 @@ describe('AppShell', () => {
     remounted.unmount()
   })
 
+  it('does not announce completion from a transient empty active-run response', async () => {
+    vi.useFakeTimers()
+    sessionStorage.setItem('rulepilot:active-teaching-runs', JSON.stringify([
+      { runId: 'run-1', planId: 'plan-1', gameTitle: '星际探索' },
+    ]))
+    let exactReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.includes('/api/v1/assistant-runs/run-1')) {
+        exactReads += 1
+        return exactReads === 1
+          ? new Response(null, { status: 503 })
+          : response({ run: { id: 'run-1', state: 'COMPLETED' } })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('《星际探索》仍在后台准备')
+    expect(wrapper.text()).not.toContain('后台处理已经结束')
+
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('《星际探索》的后台处理已经结束')
+    wrapper.unmount()
+  })
+
+  it('starts background status tracking immediately when teaching is launched', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.includes('/api/v1/assistant-runs/run-2')) {
+        return response({ run: { id: 'run-2', state: 'RECEIVED' } })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('仍在后台准备')
+
+    notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('《卡坦岛》仍在后台准备')
+    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-2')
+    wrapper.unmount()
+  })
+
   it('keeps the current page and offers an explicit return-aware sign-in action', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
     const router = createRouter({
@@ -197,5 +260,20 @@ function response(body: unknown) {
   return new Response(JSON.stringify(body), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function createAppShellRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/', name: 'home', component: { template: '<div />' } },
+      { path: '/library', name: 'public-library', component: { template: '<div />' } },
+      { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+      { path: '/teach', name: 'teach', component: { template: '<div />' } },
+      { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+      { path: '/account', name: 'account', component: { template: '<div />' } },
+      { path: '/login', name: 'login', component: { template: '<div />' } },
+    ],
   })
 }

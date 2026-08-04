@@ -13,11 +13,16 @@ import {
 } from '@/lib/backgroundTeachingStatus'
 import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import {
+  TEACHING_LAUNCHED_EVENT,
+  teachingLaunchDetail,
+} from '@/lib/teachingLaunch'
 
 const props = withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
 
 interface TeachingPlanSummary { id: string; gameTitle: string }
 interface ActiveTeachingRun { id: string; subjectId: string }
+interface TeachingRunDetails { run: { id: string; state: string } }
 
 const route = useRoute()
 const { t } = useLocale()
@@ -46,6 +51,7 @@ const COMPLETED_TEACHING_KEY = 'rulepilot:completed-teaching-runs'
 let teachingTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 const teachingTitles = new Map<string, string>()
+const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
@@ -138,7 +144,25 @@ async function refreshTeachingStatus() {
       gameTitle: teachingTitles.get(run.subjectId) ?? t('shell.lesson.unavailable'),
     }))
     const previous = parseBackgroundTeachingItems(sessionStorage.getItem(ACTIVE_TEACHING_KEY))
-    const transition = reconcileBackgroundTeaching(previous, active)
+    const activePlanIds = new Set(active.map((item) => item.planId))
+    const missing = previous.filter((item) => !activePlanIds.has(item.planId))
+    let uncertainStatus = false
+    const confirmations = await Promise.all(missing.map(async (item) => {
+      try {
+        const response = await fetch(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`, { credentials: 'include' })
+        if (!response.ok) {
+          uncertainStatus = true
+          return item
+        }
+        const details = await response.json() as TeachingRunDetails
+        return terminalTeachingStates.has(details.run.state) ? null : item
+      } catch {
+        uncertainStatus = true
+        return item
+      }
+    }))
+    const retained = confirmations.filter((item): item is BackgroundTeachingItem => item !== null)
+    const transition = reconcileBackgroundTeaching(previous, [...active, ...retained])
     activeTeaching.value = transition.active
     sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(transition.active))
     if (transition.finished.length) {
@@ -147,7 +171,7 @@ async function refreshTeachingStatus() {
       completedTeaching.value = [...notices.values()]
       sessionStorage.setItem(COMPLETED_TEACHING_KEY, JSON.stringify(completedTeaching.value))
     }
-    teachingStatusUnavailable.value = false
+    teachingStatusUnavailable.value = uncertainStatus
   } catch {
     teachingStatusUnavailable.value = true
   } finally {
@@ -174,6 +198,21 @@ function showLoginReminder() {
   loginReminderVisible.value = true
 }
 
+function handleTeachingLaunched(event: Event) {
+  const detail = teachingLaunchDetail(event)
+  if (!detail || !username.value) return
+  const gameTitle = detail.gameTitle ?? teachingTitles.get(detail.planId) ?? t('shell.lesson.unavailable')
+  if (detail.gameTitle) teachingTitles.set(detail.planId, detail.gameTitle)
+  const items = new Map(activeTeaching.value.map((item) => [item.planId, item]))
+  items.set(detail.planId, { runId: detail.runId, planId: detail.planId, gameTitle })
+  activeTeaching.value = [...items.values()]
+  sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(activeTeaching.value))
+  completedTeaching.value = completedTeaching.value.filter((item) => item.planId !== detail.planId)
+  sessionStorage.setItem(COMPLETED_TEACHING_KEY, JSON.stringify(completedTeaching.value))
+  teachingStatusUnavailable.value = false
+  void refreshTeachingStatus()
+}
+
 async function logout() {
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
@@ -193,11 +232,13 @@ onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
 onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
 onMounted(() => window.addEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder))
+onMounted(() => window.addEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched))
 onBeforeUnmount(() => {
   disposed = true
   clearTeachingTimer()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder)
+  window.removeEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
 })
 </script>
 

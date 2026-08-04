@@ -13,6 +13,7 @@ describe('LessonsView', () => {
   it('opens a complete cited draft immediately while detail review continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
+    let lessonReads = 0
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') {
@@ -40,6 +41,8 @@ describe('LessonsView', () => {
         })
       }
       if (path.includes('/illustrated-lessons/latest')) {
+        lessonReads += 1
+        if (lessonReads > 1) return new Response(null, { status: 404 })
         return Response.json({
           id: 'lesson-1', status: 'DRAFT_READY',
           sections: [{ evidenceStatus: 'CITED_DRAFT' }],
@@ -78,6 +81,8 @@ describe('LessonsView', () => {
     expect(wrapper.text()).not.toContain('目录已生成')
     await vi.advanceTimersByTimeAsync(1500)
     await flushPromises()
+    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('立即阅读完整讲解')
     const progressPaths = fetchMock.mock.calls
       .map(([input]) => String(input))
       .filter((path) => path.includes('/api/v1/assistant-runs/latest'))
@@ -116,10 +121,12 @@ describe('LessonsView', () => {
           sections: [{ position: 1, required: true, topicKey: 'setup', title: '完成开局设置', visualEvidenceRecommended: true }],
         }])
       }
-      if (path.includes('/api/v1/assistant-runs/latest')) {
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/api/v1/assistant-runs/run-2')) {
         return Response.json(snapshots[Math.min(runReads++, snapshots.length - 1)]!)
       }
-      if (path.endsWith('/illustrated-lessons') && init?.method === 'POST') return new Response(null, { status: 202 })
+      if (path.endsWith('/illustrated-lessons') && init?.method === 'POST') {
+        return Response.json({ assistantRunId: 'run-2', state: 'RECEIVED', reused: false }, { status: 202 })
+      }
       if (path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })

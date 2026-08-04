@@ -104,7 +104,7 @@ public class JpaAssistantRunRepository implements AssistantRunRepository {
                                created_at, updated_at, completed_at, last_error_code
                         from assistant_run
                         where mode = :mode and subject_id = :subjectId and owner_username = :owner
-                        order by created_at desc
+                        order by created_at desc, id desc
                         fetch first 1 row only
                         """)
                 .setParameter("mode", mode.name())

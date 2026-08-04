@@ -12,6 +12,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let deleted = false
   let includeBlockingVisualCatalog = false
   let slowFirstLessonSection = false
+  let regressLessonStatus = false
+  let lessonRunReads = 0
+  let lessonReads = 0
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -60,7 +63,10 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/33333333-3333-3333-3333-333333333333') {
       return json(response, 200, {
-        run: { state: 'COMPLETED', createdAt: '2026-08-02T00:00:00Z', completedAt: '2026-08-02T00:00:12Z' },
+        run: {
+          id: '33333333-3333-3333-3333-333333333333', state: 'COMPLETED',
+          createdAt: '2026-08-02T00:00:00Z', completedAt: '2026-08-02T00:00:12Z',
+        },
         steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
         activities: [
           {
@@ -90,16 +96,23 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       })
     }
     if (request.method === 'POST' && request.url?.endsWith('/illustrated-lessons')) {
+      lessonRunReads = 0
+      lessonReads = 0
       return json(response, 202, {
         assistantRunId: '55555555-5555-5555-5555-555555555555', state: 'RECEIVED', reused: false,
       })
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
+      lessonRunReads += 1
+      const state = lessonRunReads === 1 ? 'RECEIVED' : lessonRunReads === 2 ? 'RETRIEVING' : 'COMPLETED'
       return json(response, 200, {
         run: {
-          state: 'COMPLETED',
+          id: '55555555-5555-5555-5555-555555555555',
+          state,
           createdAt: '2026-08-02T00:00:13Z',
-          completedAt: slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z',
+          completedAt: state === 'COMPLETED'
+            ? slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z'
+            : null,
         },
         steps: [],
         activities: [
@@ -117,8 +130,17 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         budget: { usedModelCalls: 1, usedToolCalls: 0, usedTokens: 1150 },
       })
     }
+    if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/active?mode=TEACHING') {
+      return json(response, 200, [{ id: '55555555-5555-5555-5555-555555555555', subjectId: '44444444-4444-4444-4444-444444444444' }])
+    }
     if (request.method === 'GET' && request.url?.endsWith('/illustrated-lessons/latest')) {
-      return json(response, 200, { status: 'COMPLETE', sections: [{ position: 1 }] })
+      lessonReads += 1
+      return json(response, 200, {
+        status: regressLessonStatus
+          ? lessonReads === 1 ? 'COMPLETE' : 'DRAFT_READY'
+          : lessonReads === 1 ? 'DRAFT_READY' : 'COMPLETE',
+        sections: [{ position: 1 }],
+      })
     }
     if (request.method === 'POST' && request.url?.endsWith('/cancellation')) {
       return json(response, 202, {})
@@ -161,6 +183,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_STAGE login-completed/)
     assert.match(result.stderr, /SMOKE_STAGE title-verified/)
     assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
+    assert.match(result.stderr, /SMOKE_STAGE lesson-launch-visible run=55555555-5555-5555-5555-555555555555 state=RECEIVED/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=organizeTeachingOutline .*latencyMs=11000/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=deferSelectedVisualPageCatalog .*outcome=SUCCEEDED/)
@@ -198,6 +221,22 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     )
     assert.equal(slowLesson.code, 0, slowLesson.stderr)
     assert.match(slowLesson.stderr, /SMOKE_WARNING First cited lesson section exceeded the 15-second target/)
+    assert.equal(deleted, true)
+
+    regressLessonStatus = true
+    slowFirstLessonSection = false
+    deleted = false
+    planStarted = false
+    const regressedLesson = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.notEqual(regressedLesson.code, 0)
+    assert.match(regressedLesson.stderr, /Lesson status regressed from rank 3 to DRAFT_READY/)
     assert.equal(deleted, true)
   } finally {
     server.closeAllConnections()

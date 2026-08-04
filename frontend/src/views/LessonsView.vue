@@ -4,8 +4,10 @@ import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 import {
   mergeTeachingRunProgress,
   processedTeachingChapterCount,
@@ -30,15 +32,9 @@ interface TeachingPlan {
   sections: Array<{ position: number; required: boolean; topicKey: string; title: string; visualEvidenceRecommended: boolean }>
 }
 
-interface LessonSummary {
-  id: string
-  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
-  sections: Array<{ evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' }>
-}
-
 interface PlanProgress {
   run: TeachingRunProgress | null
-  lesson: LessonSummary | null
+  lesson: LessonProgressSummary | null
 }
 
 interface CsrfResponse { headerName: string; token: string }
@@ -60,11 +56,15 @@ const planFilter = ref<PlanFilter>('READABLE')
 const now = ref(Date.now())
 const rememberedPlanId = localStorage.getItem('rulepilot:last-plan-id')
 const terminalStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
+const knownRunIds = new Map<string, string>()
+const requestVersions = new Map<string, number>()
+const terminalSettlingReads = new Map<string, number>()
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
+const startedRunId = computed(() => typeof route.query.run === 'string' ? route.query.run : '')
 
 function stateOf(planId: string) {
   const item = progress.value[planId]
@@ -73,6 +73,7 @@ function stateOf(planId: string) {
   if (item?.lesson?.status === 'DRAFT_READY') return 'DRAFT_READY'
   if (item?.lesson?.status === 'INCOMPLETE') return 'INCOMPLETE'
   if (item?.run?.run.state === 'FAILED') return 'FAILED'
+  if (item?.run && terminalStates.has(item.run.run.state)) return 'NEEDS_ATTENTION'
   return 'PLANNED'
 }
 
@@ -86,6 +87,7 @@ function stateLabel(planId: string) {
     DRAFT_READY: t('lessons.state.draftReady'),
     INCOMPLETE: t('lessons.state.incomplete'),
     FAILED: t('lessons.state.failed'),
+    NEEDS_ATTENTION: t('lessons.state.needsAttention'),
     PLANNED: t('lessons.state.planned'),
   } as const)[stateOf(planId)]
 }
@@ -97,7 +99,7 @@ function stateClass(planId: string) {
     return 'bg-emerald-50 text-emerald-800'
   }
   if (state === 'GENERATING') return 'bg-indigo/10 text-indigo'
-  if (state === 'FAILED') return 'bg-red-50 text-red-800'
+  if (state === 'FAILED' || state === 'NEEDS_ATTENTION') return 'bg-red-50 text-red-800'
   return 'bg-amber-50 text-amber-800'
 }
 
@@ -112,7 +114,7 @@ function continuationPriority(plan: TeachingPlan) {
   if (item?.lesson?.status === 'DRAFT_READY') return 500
   if (item?.lesson?.status === 'INCOMPLETE') return 400
   if (item?.run && !terminalStates.has(item.run.run.state)) return 300
-  if (item?.run?.run.state === 'FAILED') return 100
+  if (item?.run && terminalStates.has(item.run.run.state)) return 100
   return 200
 }
 
@@ -131,10 +133,10 @@ const selectedPlanFilter = computed<PlanFilter>(() => planFilter.value === 'READ
 const displayedPlans = computed(() => selectedPlans.value.filter((plan) => {
   if (selectedPlanFilter.value === 'ALL') return true
   return selectedPlanFilter.value === 'READABLE'
-    ? Boolean(progress.value[plan.id]?.lesson)
-    : !progress.value[plan.id]?.lesson
+    ? hasReadableLesson(progress.value[plan.id]?.lesson)
+    : !hasReadableLesson(progress.value[plan.id]?.lesson)
 }))
-const readableGroupCount = computed(() => planGroups.value.filter((group) => Boolean(progress.value[group.plan.id]?.lesson)).length)
+const readableGroupCount = computed(() => planGroups.value.filter((group) => hasReadableLesson(progress.value[group.plan.id]?.lesson)).length)
 const pendingGroupCount = computed(() => planGroups.value.length - readableGroupCount.value)
 
 function versionCount(planId: string) {
@@ -198,7 +200,8 @@ function progressText(plan: TeachingPlan) {
     const supported = item?.lesson?.sections.filter((section) => section.evidenceStatus === 'SUPPORTED').length ?? 0
     return t('lessons.progress.incomplete', { supported })
   }
-  if (state === 'FAILED') return t('lessons.progress.failed', { reason: item?.run?.run.lastErrorCode ?? t('lessons.unknownReason') })
+  if (state === 'FAILED') return t('lessons.progress.failed')
+  if (state === 'NEEDS_ATTENTION') return t('lessons.progress.needsAttention')
   if (state === 'COMPLETE') return t('lessons.progress.complete')
   return t('lessons.progress.planned')
 }
@@ -219,23 +222,41 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
 }
 
 async function loadProgress(plan: TeachingPlan) {
+  const requestVersion = (requestVersions.get(plan.id) ?? 0) + 1
+  requestVersions.set(plan.id, requestVersion)
   try {
     const previousRun = progress.value[plan.id]?.run
-    const activityCursor = teachingActivityCursor(previousRun ?? null)
+    const expectedRunId = knownRunIds.get(plan.id)
+    const activityCursor = expectedRunId ? '' : teachingActivityCursor(previousRun ?? null)
+    const runPath = expectedRunId
+      ? `/api/v1/assistant-runs/${encodeURIComponent(expectedRunId)}`
+      : `/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`
     const [runResponse, lessonResponse] = await Promise.all([
-      checkedFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(plan.id)}${activityCursor}`),
+      checkedFetch(runPath),
       checkedFetch(`/api/v1/teaching-plans/${plan.id}/illustrated-lessons/latest`),
     ])
     if (!runResponse.ok && runResponse.status !== 404) throw new Error(t('lessons.error.runProgress'))
     if (!lessonResponse.ok && lessonResponse.status !== 404) throw new Error(t('lessons.error.contentProgress'))
     const incomingRun = runResponse.ok ? await runResponse.json() as TeachingRunProgress : null
+    const incomingLesson = lessonResponse.ok ? await lessonResponse.json() as LessonProgressSummary : null
+    if (requestVersions.get(plan.id) !== requestVersion) return
     const run = mergeTeachingRunProgress(previousRun ?? null, incomingRun)
+    const lesson = mergeLessonProgress(progress.value[plan.id]?.lesson ?? null, incomingLesson)
     progress.value = {
       ...progress.value,
       [plan.id]: {
         run,
-        lesson: lessonResponse.ok ? await lessonResponse.json() as LessonSummary : null,
+        lesson,
       },
+    }
+    if (expectedRunId && run?.run.id === expectedRunId && terminalStates.has(run.run.state)) {
+      const settlingRead = terminalSettlingReads.get(plan.id) ?? 0
+      if (run.run.state !== 'COMPLETED' || lesson || settlingRead >= 3) {
+        knownRunIds.delete(plan.id)
+        terminalSettlingReads.delete(plan.id)
+      } else {
+        terminalSettlingReads.set(plan.id, settlingRead + 1)
+      }
     }
     if (progressErrors.value[plan.id]) {
       const next = { ...progressErrors.value }
@@ -252,7 +273,9 @@ async function loadProgress(plan: TeachingPlan) {
 }
 
 function plansNeedingRefresh() {
-  return plans.value.filter((plan) => stateOf(plan.id) === 'GENERATING' || Boolean(progressErrors.value[plan.id]))
+  return plans.value.filter((plan) => knownRunIds.has(plan.id)
+    || stateOf(plan.id) === 'GENERATING'
+    || Boolean(progressErrors.value[plan.id]))
 }
 
 function clearProgressTimer() {
@@ -281,6 +304,9 @@ async function loadPlans() {
     const response = await checkedFetch('/api/v1/teaching-plans')
     if (!response.ok) throw new Error(t('lessons.error.load'))
     plans.value = (await response.json()) as TeachingPlan[]
+    if (startedPlanId.value && startedRunId.value && plans.value.some((plan) => plan.id === startedPlanId.value)) {
+      knownRunIds.set(startedPlanId.value, startedRunId.value)
+    }
     await refreshProgress()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
@@ -302,8 +328,13 @@ async function launch(planId: string) {
       headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error(t('lessons.error.launch'))
+    const launch = await response.json() as TeachingLaunch
+    knownRunIds.set(planId, launch.assistantRunId)
+    terminalSettlingReads.delete(planId)
+    const plan = plans.value.find((candidate) => candidate.id === planId)!
+    notifyTeachingLaunched({ planId, runId: launch.assistantRunId, gameTitle: displayPlanTitle(plan) })
     localStorage.setItem('rulepilot:last-plan-id', planId)
-    await loadProgress(plans.value.find((plan) => plan.id === planId)!).catch(() => undefined)
+    await loadProgress(plan).catch(() => undefined)
     scheduleProgressRefresh(1000)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('lessons.error.launchShort')
@@ -471,8 +502,8 @@ onBeforeUnmount(() => {
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">{{ t('lessons.lastOpened') }}</span>
             <span v-else class="text-xs text-ink/35">{{ t('lessons.chapterCount', { count: plan.sections.length }) }}</span>
             <div class="flex items-center gap-2">
-              <RouterLink v-if="progress[plan.id]?.lesson" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
-              <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? t('lessons.action.launching') : stateOf(plan.id) === 'FAILED' ? t('lessons.action.regenerate') : t('lessons.action.generate') }}</button>
+              <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
+              <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? t('lessons.action.launching') : stateOf(plan.id) === 'FAILED' || stateOf(plan.id) === 'NEEDS_ATTENTION' ? t('lessons.action.regenerate') : t('lessons.action.generate') }}</button>
               <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
               <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
             </div>
