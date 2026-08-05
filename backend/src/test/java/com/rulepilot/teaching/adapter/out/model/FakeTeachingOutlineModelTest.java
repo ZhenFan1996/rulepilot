@@ -128,6 +128,43 @@ class FakeTeachingOutlineModelTest {
     }
 
     @Test
+    void excludesAnIdentityOnlyBackPageEvenWhenDecorativeArtIsMistakenForComponentTerms() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "SET UP", "Each player takes three cards."),
+                        visualPage(2, "HOW TO PLAY", "On your turn, choose one action."),
+                        visualPage(3, "END OF GAME", "When the deck is empty, the highest score wins."),
+                        visualPage(
+                                4,
+                                "POINT CARD; RESOURCE TOKEN; AWARD FINALIST",
+                                "装饰性背景图案位于整页；底部显示奖项、品牌标志与出版商徽标。")),
+                List.of()));
+
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).doesNotContain(4);
+    }
+
+    @Test
+    void retainsALaterRulesPageThatAlsoHasAPublisherFooter() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "SET UP", "Each player takes three cards."),
+                        visualPage(
+                                2,
+                                "YOUR TURN; PUBLISHER",
+                                "On your turn, choose one action. A publisher logo appears in the footer."),
+                        visualPage(3, "END OF GAME", "When the deck is empty, the highest score wins.")),
+                List.of()));
+
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).contains(2);
+    }
+
+    @Test
     void doesNotMistakeAFinishSpaceTargetForTheGameObjective() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
                 4,

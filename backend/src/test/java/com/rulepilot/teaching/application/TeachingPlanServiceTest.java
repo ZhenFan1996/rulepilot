@@ -745,7 +745,12 @@ class TeachingPlanServiceTest {
                 new PageInput(2, visualCatalogPage("COMPONENTS", "Component list and game objective.")),
                 new PageInput(3, visualCatalogPage("SET UP", "Each player takes starting resources.")),
                 new PageInput(4, visualCatalogPage("HOW TO PLAY", "Players take turns choosing an action.")),
-                new PageInput(5, visualCatalogPage("END OF GAME", "When the deck is empty, the highest score wins.")));
+                new PageInput(5, visualCatalogPage("END OF GAME", "When the deck is empty, the highest score wins.")),
+                new PageInput(
+                        6,
+                        visualCatalogPage(
+                                "POINT CARD; RESOURCE TOKEN; AWARD FINALIST",
+                                "Decorative background artwork, award marks, and publisher logos fill this page.")));
         OutlineDraft model = new OutlineDraft(
                 "Sky Port",
                 "Premise",
@@ -763,6 +768,23 @@ class TeachingPlanServiceTest {
         assertThat(augmented.topics()).hasSize(4);
         assertThat(augmented.topics()).extracting(TopicDraft::key)
                 .doesNotContain("source-coverage-5");
+    }
+
+    @Test
+    void ignoresIdentityOnlyBackMatterDespiteDecorativeComponentTerms() {
+        OutlineDraft gameplayCovered = new OutlineDraft(
+                "Game", "Premise", List.of(topic("play", false, List.of(1, 2, 3))));
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Each player takes three cards.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "On your turn, choose one action.")),
+                new PageInput(3, visualCatalogPage("END OF GAME", "When the deck is empty, the highest score wins.")),
+                new PageInput(
+                        4,
+                        visualCatalogPage(
+                                "POINT CARD; RESOURCE TOKEN; AWARD FINALIST",
+                                "Decorative background artwork, award marks, and publisher logos fill this page.")));
+
+        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(gameplayCovered, pages);
     }
 
     @Test
