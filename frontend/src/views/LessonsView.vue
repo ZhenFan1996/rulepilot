@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
@@ -460,11 +461,15 @@ onBeforeUnmount(() => {
       </div>
 
       <ol v-else class="mt-10 grid gap-5 md:grid-cols-2">
-        <li v-for="plan in displayedPlans" :key="plan.id" class="rounded-xl border border-ink/10 bg-paper p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
+        <li v-for="plan in displayedPlans" :key="plan.id" class="relative overflow-hidden rounded-3xl border border-ink/10 bg-paper p-6 shadow-[0_20px_55px_-48px_rgba(20,31,37,0.85)]" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
+          <div class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-copper via-[#d3a84f] to-indigo" aria-hidden="true" />
           <div class="flex items-start justify-between gap-4">
-            <div>
-              <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
-              <h2 class="mt-2 font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
+            <div class="flex min-w-0 items-start gap-3">
+              <span class="grid size-11 shrink-0 place-items-center rounded-2xl bg-ink text-canvas"><TabletopGlyph name="cards" :size="22" /></span>
+              <div class="min-w-0">
+                <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
+                <h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
+              </div>
             </div>
             <span :class="stateClass(plan.id)" class="rounded-full px-3 py-1.5 text-xs font-semibold">{{ stateLabel(plan.id) }}</span>
           </div>

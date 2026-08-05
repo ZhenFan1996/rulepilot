@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-canvas text-ink lg:pl-60">
+  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-60">
     <aside class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-ink/10 bg-paper px-5 py-6 lg:flex">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')">
         <ProductMark />

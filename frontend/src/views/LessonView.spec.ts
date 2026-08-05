@@ -22,7 +22,7 @@ describe('LessonView progressive reading', () => {
     let runReads = 0
     let lessonReads = 0
     let qualityReads = 0
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
@@ -33,12 +33,6 @@ describe('LessonView progressive reading', () => {
             { position: 2, title: '开始第一轮', visualEvidenceRecommended: false },
           ],
         })
-      }
-      if (path.endsWith('/illustrated-lessons/latest/icon-glossary')) {
-        if (init?.method === 'POST') {
-          return Response.json({ assistantRunId: 'visual-run-1', state: 'QUEUED', revision: 0, reused: false }, { status: 202 })
-        }
-        return Response.json(iconGlossaryFixture())
       }
       if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
@@ -120,10 +114,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
-    expect(wrapper.text()).toContain('图标速查表')
-    expect(wrapper.text()).toContain('执行一次行动。')
-    expect(wrapper.get('img[alt*="行动图标"]').attributes('src'))
-      .toContain('/illustrated-lessons/latest/icon-glossary/icons/icon-occurrence-1/image')
+    expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toBe('问规则书')
     expect(wrapper.find('a[href^="/lesson/plan-1/questions?section="]').exists()).toBe(false)
@@ -149,7 +140,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('讲解已经生成完成')
     expect(wrapper.text()).not.toContain('整本仍在后台生成')
-    expect(qualityReads).toBe(1)
+    expect(qualityReads).toBe(0)
     expect(wrapper.text()).toContain('逐张看看这些规则书裁剪图')
     expect(wrapper.text()).toContain('焦点图有帮助 1 / 1（100%）')
     expect(wrapper.find('img[alt*="行动区"]').attributes('src'))
@@ -163,11 +154,11 @@ describe('LessonView progressive reading', () => {
       .map(([input]) => String(input))
       .filter((path) => path.includes('mode=TEACHING'))
     expect(progressPaths[2]).toContain('activityRunId=run-1&afterActivitySequence=1')
-    await wrapper.findAll('button').find((button) => button.text() === '继续检查遗漏页面')!.trigger('click')
-    await flushPromises()
-    const iconGenerationRequest = fetchMock.mock.calls.find(([input, init]) =>
-      String(input).endsWith('/illustrated-lessons/latest/icon-glossary') && init?.method === 'POST')
-    expect(iconGenerationRequest?.[1]?.headers).toMatchObject({ 'X-CSRF-TOKEN': 'csrf' })
+    const supportingPaths = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(supportingPaths.some((path) => path.includes('icon-glossary'))).toBe(false)
+    expect(supportingPaths.some((path) => path.includes('/narration'))).toBe(false)
+    expect(supportingPaths.some((path) => path.endsWith('/video'))).toBe(false)
+    expect(supportingPaths.some((path) => path.includes('media-consistency'))).toBe(false)
     wrapper.unmount()
   })
 
@@ -228,8 +219,8 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
-  it('keeps a video chapter selected while an older audio timeupdate arrives', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+  it('does not request or display retired audio and video formats', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
@@ -269,7 +260,8 @@ describe('LessonView progressive reading', () => {
       if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const router = createMemoryRouter()
     await router.push('/lesson/plan-1')
     await router.isReady()
@@ -285,15 +277,11 @@ describe('LessonView progressive reading', () => {
     })
     await flushPromises()
 
-    await wrapper.findAll('button').find((button) => button.text() === '视频')!.trigger('click')
-    const videoPanel = wrapper.get('[aria-label="分章节视频"]')
-    await videoPanel.findAll('button').find((button) => button.text().includes('2. 第二节'))!.trigger('click')
-    await flushPromises()
-    Object.defineProperty(wrapper.get('audio').element, 'currentTime', { configurable: true, value: 0 })
-    await wrapper.get('audio').trigger('timeupdate')
-
-    expect(wrapper.text()).toContain('第 2 章 · 第二节')
-    expect(videoPanel.text()).toContain('第二节字幕')
+    expect(wrapper.find('audio').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('分章节视频')
+    const paths = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(paths.some((path) => path.includes('/narration'))).toBe(false)
+    expect(paths.some((path) => path.endsWith('/video'))).toBe(false)
     wrapper.unmount()
   })
 
@@ -373,7 +361,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('My illustrated guide')
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toBe('Ask the rulebook')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
-    expect(wrapper.text()).toContain('Rulebook pages 1')
+    expect(wrapper.text()).toContain('Source: page 1')
     wrapper.unmount()
   })
 
@@ -435,33 +423,6 @@ function section(position: number, title: string) {
         sourcePages: [position], visualFocus: null,
       },
     ],
-  }
-}
-
-function iconGlossaryFixture() {
-  return {
-    status: 'PARTIAL',
-    totalPages: 2,
-    inspectedPages: 2,
-    completePages: 1,
-    warnings: ['INCOMPLETE_PAGE_SCAN'],
-    icons: [{
-      id: 'icon-1',
-      name: '行动图标',
-      visualDescription: '蓝色圆形中的白色手掌',
-      explanation: '执行一次行动。',
-      evidenceText: '行动：执行一次行动',
-      meaningStatus: 'EXPLICIT',
-      representativeOccurrenceId: 'icon-occurrence-1',
-      occurrences: [{
-        id: 'icon-occurrence-1',
-        pageNumber: 2,
-        x: 100,
-        y: 100,
-        width: 80,
-        height: 80,
-      }],
-    }],
   }
 }
 

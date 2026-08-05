@@ -101,7 +101,6 @@ export default defineConfig({
           'assets/index-*.{js,css}',
           'assets/LessonView-*.js',
           'assets/offlineKnowledge-*.js',
-          'assets/rulebookIconGlossary-*.js',
           'assets/teachingProgress-*.js',
         ],
         globIgnores: ['ocr-assets/**'],
