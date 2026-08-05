@@ -345,6 +345,8 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.doesNotMatch(realRulebooks, /inputs\.ref/)
   assert.match(realRulebooks, /ref: main/)
   assert.match(realRulebooks, /Production is not running the checked-out main commit/)
+  assert.match(realRulebooks, /RULEPILOT_PUBLIC_URL: https:\/\/rulepilot\.cn/)
+  assert.doesNotMatch(realRulebooks, /RULEPILOT_PRODUCTION_BASE_URL=http:\/\/127\.0\.0\.1:18083/)
   assert.doesNotMatch(candidates, /inputs\.ref/)
   assert.match(candidates, /ref: main/)
   assert.match(candidates, /Production is not running the checked-out main commit/)
