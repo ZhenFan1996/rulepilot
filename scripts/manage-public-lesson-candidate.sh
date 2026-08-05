@@ -85,7 +85,9 @@ post_json() {
 }
 
 comparison_summary() {
-	jq '{
+	local run_state=${1:-STAGED}
+	jq --arg runState "$run_state" '{
+		candidateRunState: $runState,
 		active: {
 			lessonId: .active.lesson.id,
 			status: .active.lesson.status,
@@ -137,7 +139,7 @@ fi
 candidate_path="/api/admin/public-lessons/$plan_id/candidates"
 if [ "$operation" = "apply" ]; then
 	comparison=$(get_json "$candidate_path/latest")
-	comparison_summary <<<"$comparison" >&2
+	comparison_summary STAGED <<<"$comparison" >&2
 	refresh_csrf
 	post_json "$candidate_path/latest/apply-recommendation"
 	exit 0
@@ -147,24 +149,26 @@ refresh_csrf
 launch=$(post_json "$candidate_path")
 run_id=$(jq -er '.assistantRunId' <<<"$launch")
 deadline=$((SECONDS + timeout_seconds))
+state=RECEIVED
 while [ "$SECONDS" -lt "$deadline" ]; do
 	run=$(get_json "/api/v1/assistant-runs/$run_id")
 	state=$(jq -er '.run.state' <<<"$run")
 	case "$state" in
 		COMPLETED) break ;;
 		FAILED|DEGRADED|INSUFFICIENT_EVIDENCE)
-			jq -r '.activities[]? | "CANDIDATE_ACTIVITY operation=\(.operation) outcome=\(.outcome)"' \
+			jq -r '.activities[]?
+				| select(.outcome == "REJECTED")
+				| "CANDIDATE_ACTIVITY operation=\(.operation) outcome=\(.outcome) summary=\((.summary // "") | gsub("[\\r\\n]"; " ") | .[0:300])"' \
 				<<<"$run" >&2
-			echo "Public lesson candidate ended in $state" >&2
-			exit 1
+			break
 			;;
 	esac
 	sleep 2
 done
-if [ "$state" != "COMPLETED" ]; then
+if ! [[ "$state" =~ ^(COMPLETED|FAILED|DEGRADED|INSUFFICIENT_EVIDENCE)$ ]]; then
 	echo "Public lesson candidate timed out after ${timeout_seconds}s" >&2
 	exit 1
 fi
 
 comparison=$(get_json "$candidate_path/latest")
-comparison_summary <<<"$comparison"
+comparison_summary "$state" <<<"$comparison"

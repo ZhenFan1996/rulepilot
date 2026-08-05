@@ -9,6 +9,7 @@ const runId = '22222222-2222-2222-2222-222222222222'
 
 test('resolves an exact public title, stages, and compares before a separate apply invocation', async () => {
   const calls = []
+  let candidateState = 'COMPLETED'
   const comparison = {
     active: version('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'COMPLETE', 67),
     candidate: version('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'COMPLETE', 67),
@@ -34,7 +35,14 @@ test('resolves an exact public title, stages, and compares before a separate app
       return json(response, 202, { assistantRunId: runId, state: 'RECEIVED', reused: false })
     }
     if (request.method === 'GET' && request.url === `/api/v1/assistant-runs/${runId}`) {
-      return json(response, 200, { run: { id: runId, state: 'COMPLETED' }, activities: [] })
+      return json(response, 200, {
+        run: { id: runId, state: candidateState },
+        activities: candidateState === 'COMPLETED' ? [] : [{
+          operation: 'validateTeachingSection|7|2',
+          outcome: 'REJECTED',
+          summary: 'Required claims remained unsupported.',
+        }],
+      })
     }
     if (request.method === 'GET'
       && request.url === `/api/admin/public-lessons/${planId}/candidates/latest`) {
@@ -58,7 +66,22 @@ test('resolves an exact public title, stages, and compares before a separate app
     const base = `http://127.0.0.1:${address.port}`
     const stage = await runScript(base, 'stage', 'title')
     assert.equal(stage.code, 0, stage.stderr)
-    assert.equal(JSON.parse(stage.stdout).recommendation, 'KEEP_ACTIVE')
+    assert.deepEqual(
+      pick(JSON.parse(stage.stdout), ['candidateRunState', 'recommendation']),
+      { candidateRunState: 'COMPLETED', recommendation: 'KEEP_ACTIVE' },
+    )
+    assert.equal(calls.filter((call) => call.endsWith('/apply-recommendation')).length, 0)
+
+    candidateState = 'INSUFFICIENT_EVIDENCE'
+    comparison.candidate.lesson.status = 'INCOMPLETE'
+    comparison.candidate.quality.score = 17
+    const incomplete = await runScript(base, 'stage', 'plan')
+    assert.equal(incomplete.code, 0, incomplete.stderr)
+    assert.deepEqual(
+      pick(JSON.parse(incomplete.stdout), ['candidateRunState', 'recommendation']),
+      { candidateRunState: 'INSUFFICIENT_EVIDENCE', recommendation: 'KEEP_ACTIVE' },
+    )
+    assert.match(incomplete.stderr, /Required claims remained unsupported/)
     assert.equal(calls.filter((call) => call.endsWith('/apply-recommendation')).length, 0)
 
     const apply = await runScript(base, 'apply', 'plan')
@@ -81,6 +104,10 @@ function version(id, status, score) {
     },
     quality: { score, status: 'NEEDS_REVIEW', checks: [] },
   }
+}
+
+function pick(value, keys) {
+  return Object.fromEntries(keys.map((key) => [key, value[key]]))
 }
 
 async function runScript(baseUrl, operation, selector) {
