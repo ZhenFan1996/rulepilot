@@ -19,9 +19,9 @@ class TeachingDraftRecoveryPolicyTest {
     private final TeachingDraftRecoveryPolicy policy = new TeachingDraftRecoveryPolicy();
 
     @Test
-    void limits_visual_drafts_to_one_repair_and_falls_back_only_when_text_evidence_remains() {
+    void limits_visual_drafts_to_one_repair_and_allows_one_extra_text_repair() {
         assertThat(policy.maxRepairAttempts(true)).isEqualTo(1);
-        assertThat(policy.maxRepairAttempts(false)).isEqualTo(1);
+        assertThat(policy.maxRepairAttempts(false)).isEqualTo(2);
         assertThat(policy.shouldFallbackToCitedText(true, false, 0)).isFalse();
         assertThat(policy.shouldFallbackToCitedText(true, false, 1)).isTrue();
         assertThat(policy.shouldFallbackToCitedText(true, true, 1)).isFalse();

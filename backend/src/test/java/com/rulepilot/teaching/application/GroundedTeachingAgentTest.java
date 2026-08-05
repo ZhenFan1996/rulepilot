@@ -2152,6 +2152,42 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void acceptsAGroundedSectionWhenTheSecondBoundedTextRepairSucceeds() {
+        UUID versionId = UUID.randomUUID();
+        RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
+        AtomicInteger revisions = new AtomicInteger();
+        TeachingLessonModel model = new TeachingLessonModel() {
+            @Override
+            public SectionDraft compose(SectionRequest request) {
+                return oneStepDraft(UUID.randomUUID(), "不在检索范围内的初稿。");
+            }
+
+            @Override
+            public SectionDraft revise(SectionRequest request, SectionDraft previousDraft, List<String> feedback) {
+                if (revisions.incrementAndGet() == 1) {
+                    return oneStepDraft(UUID.randomUUID(), "第一次修复仍引用了范围外证据。");
+                }
+                return oneStepDraft(evidence.chunkId(), "把主棋盘放在桌面中央。");
+            }
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                4);
+
+        IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
+
+        assertThat(revisions).hasValue(2);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds())
+                .containsExactly(evidence.chunkId());
+    }
+
+    @Test
     void rejectsVisualCitationsOutsideTheRetrievedScope() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
