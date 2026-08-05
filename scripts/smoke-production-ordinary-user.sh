@@ -5,7 +5,9 @@ set -Eeuo pipefail
 usage() {
 	cat <<'EOF'
 Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
-  --base-url URL --pdf FILE [--username USER] [--timeout-seconds SECONDS]
+  --base-url URL --pdf FILE [--username USER] [--timeout-seconds SECONDS] \
+  [--expected-title TITLE] [--uploaded-title TITLE] [--official-source-url URL] \
+  [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated upload -> processing -> teaching plan -> illustrated lesson
 journey and removes the synthetic document before exiting.
@@ -18,6 +20,9 @@ username=player
 timeout_seconds=1500
 expected_title="lantern relay"
 uploaded_title="Lantern Relay rulebook EN v4 12pages"
+official_source_url=
+navigation_file=
+result_file=
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -35,6 +40,26 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--timeout-seconds)
 			timeout_seconds=${2:-}
+			shift 2
+			;;
+		--expected-title)
+			expected_title=${2:-}
+			shift 2
+			;;
+		--uploaded-title)
+			uploaded_title=${2:-}
+			shift 2
+			;;
+		--official-source-url)
+			official_source_url=${2:-}
+			shift 2
+			;;
+		--navigation-file)
+			navigation_file=${2:-}
+			shift 2
+			;;
+		--result-file)
+			result_file=${2:-}
 			shift 2
 			;;
 		--help|-h)
@@ -57,6 +82,14 @@ if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
 	echo "--timeout-seconds must be a positive integer" >&2
 	exit 2
 fi
+if [ -z "$expected_title" ] || [ -z "$uploaded_title" ]; then
+	echo "--expected-title and --uploaded-title must not be blank" >&2
+	exit 2
+fi
+if [ -n "$official_source_url" ] && [[ "$official_source_url" != https://* ]]; then
+	echo "--official-source-url must use HTTPS" >&2
+	exit 2
+fi
 if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
 	echo "RULEPILOT_SMOKE_PASSWORD is required" >&2
 	exit 2
@@ -76,6 +109,52 @@ preparation_run_id=
 lesson_run_id=
 csrf_header=
 csrf_token=
+probe_index=0
+
+probe_navigation() {
+	[ -n "$navigation_file" ] || return 0
+	local phase=$1
+	local paths=(
+		"/"
+		"/documents"
+		"/lessons"
+		"/catalog"
+		"/api/v1/documents"
+		"/api/v1/teaching-plans"
+		"/api/public/lessons"
+	)
+	local path=${paths[$((probe_index % ${#paths[@]}))]}
+	local measurement http_code elapsed_seconds
+	measurement=$(curl --location --silent --show-error --output /dev/null \
+		--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+		--write-out '%{http_code}\t%{time_total}' \
+		"$base_url$path" || printf '000\t0')
+	http_code=${measurement%%$'\t'*}
+	elapsed_seconds=${measurement#*$'\t'}
+	printf '%s\t%s\t%s\t%s\n' "$phase" "$path" "$http_code" "$elapsed_seconds" >> "$navigation_file"
+	probe_index=$((probe_index + 1))
+}
+
+navigation_summary() {
+	if [ -z "$navigation_file" ] || [ ! -s "$navigation_file" ]; then
+		printf '{"requestCount":0,"failureCount":0,"averageMs":0,"maxMs":0}'
+		return
+	fi
+	awk -F '\t' '
+		BEGIN { count = 0; failures = 0; total = 0; max = 0 }
+		{
+			count += 1
+			milliseconds = $4 * 1000
+			total += milliseconds
+			if (milliseconds > max) max = milliseconds
+			if ($3 !~ /^2[0-9][0-9]$/) failures += 1
+		}
+		END {
+			average = count == 0 ? 0 : total / count
+			printf "{\"requestCount\":%d,\"failureCount\":%d,\"averageMs\":%.1f,\"maxMs\":%.1f}", count, failures, average, max
+		}
+	' "$navigation_file"
+}
 
 get_json() {
 	curl --fail-with-body --silent --show-error \
@@ -222,6 +301,7 @@ wait_for_run() {
 	local lesson_seen=0
 	local previous_lesson_rank=0
 	while [ "$SECONDS" -lt "$deadline" ]; do
+		probe_navigation "$label"
 		response=$(get_json "/api/v1/assistant-runs/$run_id")
 		if ! jq -e --arg run_id "$run_id" '.run.id == $run_id' >/dev/null <<<"$response"; then
 			echo "$label returned a different run identity" >&2
@@ -316,12 +396,18 @@ fi
 log_stage "login-completed"
 
 refresh_csrf
+upload_form=(
+	--form "title=$uploaded_title"
+	--form "sourceType=BASE_RULEBOOK"
+	--form "file=@$pdf_file;type=application/pdf"
+)
+if [ -n "$official_source_url" ]; then
+	upload_form+=(--form "officialSourceUrl=$official_source_url")
+fi
 upload_response=$(curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "$csrf_header: $csrf_token" \
-	--form "title=$uploaded_title" \
-	--form "sourceType=BASE_RULEBOOK" \
-	--form "file=@$pdf_file;type=application/pdf" \
+	"${upload_form[@]}" \
 	"$base_url/api/v1/documents")
 
 document_id=$(jq -er '.document.id' <<<"$upload_response")
@@ -353,8 +439,10 @@ plan_id=$(jq -er '.id' <<<"$plan")
 plan_title=$(jq -er '.gameTitle' <<<"$plan")
 plan_section_count=$(jq -er '.sections | length' <<<"$plan")
 log_stage "teaching-plan-inspected title=$plan_title sections=$plan_section_count"
-if ! jq -e --arg expected "$expected_title" \
-	'(.gameTitle | ascii_downcase) == $expected and (.sections | length > 0)' >/dev/null <<<"$plan"; then
+if ! jq -e --arg expected "$expected_title" '
+	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
+	(.gameTitle | normalized) == ($expected | normalized) and (.sections | length > 0)
+' >/dev/null <<<"$plan"; then
 	echo "Teaching plan was unusable: title=$plan_title sections=$plan_section_count" >&2
 	exit 1
 fi
@@ -364,8 +452,10 @@ documents_response=$(get_json "/api/v1/documents")
 document_response=$(jq -er --arg document_id "$document_id" \
 	'.[] | select(.document.id == $document_id)' <<<"$documents_response")
 actual_title=$(jq -er '.document.title' <<<"$document_response")
-if ! jq -e --arg expected "$expected_title" \
-	'(.document.title | ascii_downcase) == $expected' >/dev/null <<<"$document_response"; then
+if ! jq -e --arg expected "$expected_title" '
+	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
+	(.document.title | normalized) == ($expected | normalized)
+' >/dev/null <<<"$document_response"; then
 	echo "Expected the source-grounded title Lantern Relay, got: $actual_title (plan: $plan_title)" >&2
 	exit 1
 fi
@@ -394,11 +484,40 @@ if ! jq -e '(.status == "COMPLETE" or .status == "DRAFT_READY") and (.sections |
 fi
 log_stage "lesson-verified"
 
-jq -n \
+navigation=$(navigation_summary)
+navigation_failures=$(jq -er '.failureCount' <<<"$navigation")
+log_stage "navigation-verified requests=$(jq -er '.requestCount' <<<"$navigation") averageMs=$(jq -er '.averageMs' <<<"$navigation") maxMs=$(jq -er '.maxMs' <<<"$navigation")"
+if [ "$navigation_failures" -gt 0 ]; then
+	echo "Concurrent navigation observed $navigation_failures non-successful responses" >&2
+	exit 1
+fi
+
+summary=$(jq -n \
 	--arg title "$actual_title" \
 	--arg preparationState "$preparation_state" \
 	--arg lessonState "$lesson_state" \
 	--arg lessonStatus "$lesson_status" \
 	--argjson sectionCount "$section_count" \
+	--argjson navigation "$navigation" \
 	'{title: $title, preparationState: $preparationState, lessonState: $lessonState,
-	  lessonStatus: $lessonStatus, sectionCount: $sectionCount, cleanup: "scheduled"}'
+	  lessonStatus: $lessonStatus, sectionCount: $sectionCount, navigation: $navigation,
+	  cleanup: "scheduled"}')
+
+if [ -n "$result_file" ]; then
+	mkdir -p "$(dirname "$result_file")"
+	jq -n \
+		--arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		--arg username "$username" \
+		--arg sourceUrl "$official_source_url" \
+		--argjson summary "$summary" \
+		--argjson preparationRun "$preparation_result" \
+		--argjson plan "$plan" \
+		--argjson lessonRun "$lesson_result" \
+		--argjson lesson "$lesson" \
+		'{generatedAt: $generatedAt, username: $username, sourceUrl: $sourceUrl,
+		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
+		  lessonRun: $lessonRun, lesson: $lesson}' > "$result_file"
+	chmod 600 "$result_file"
+fi
+
+printf '%s\n' "$summary"
