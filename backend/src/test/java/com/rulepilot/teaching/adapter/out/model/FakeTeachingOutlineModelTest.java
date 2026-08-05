@@ -96,6 +96,38 @@ class FakeTeachingOutlineModelTest {
     }
 
     @Test
+    void excludesAnIdentityOnlyFirstPageEvenWhenTheVisualModelDoesNotCallItACover() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                4,
+                4,
+                30,
+                List.of(
+                        visualPage(1, "HARBOR LIGHTS; NORTH STAR GAMES", "页面显示游戏标题、出版商标志与设计者姓名。"),
+                        visualPage(2, "COMPONENTS", "component list"),
+                        visualPage(3, "SET UP", "starting resources"),
+                        visualPage(4, "HOW TO PLAY", "players take turns choosing actions"),
+                        visualPage(5, "END OF GAME", "when the final tile is taken, the highest score wins")),
+                List.of()));
+
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).doesNotContain(1);
+    }
+
+    @Test
+    void retainsACompactRulesSheetOnTheFirstPage() {
+        var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
+                2,
+                2,
+                10,
+                List.of(visualPage(
+                        1,
+                        "POCKET RELAY; SET UP; YOUR TURN; SCORING",
+                        "每位玩家拿取三张牌；回合中选择一项行动；牌堆耗尽时游戏结束并比较分数。")),
+                List.of()));
+
+        assertThat(outline.topics()).flatExtracting(topic -> topic.sourcePageNumbers()).contains(1);
+    }
+
+    @Test
     void doesNotMistakeAFinishSpaceTargetForTheGameObjective() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
                 4,

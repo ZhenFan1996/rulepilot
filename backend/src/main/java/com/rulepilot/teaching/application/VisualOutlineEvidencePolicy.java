@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.VisualRulebookPageClassifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -82,7 +83,7 @@ final class VisualOutlineEvidencePolicy {
     static void validateVisualRulebookCoverage(
             TeachingOutlineModel.OutlineDraft outline, List<PageInput> visualCatalogPages) {
         Set<Integer> expected = visualCatalogPages.stream()
-                .filter(page -> TeachingOutlineRevisionPolicy.isSubstantiveVisualCatalogPage(page.text()))
+                .filter(page -> VisualRulebookPageClassifier.isSubstantive(page.pageNumber(), page.text()))
                 .map(PageInput::pageNumber)
                 .collect(Collectors.toSet());
         Set<Integer> covered = outline.topics().stream()

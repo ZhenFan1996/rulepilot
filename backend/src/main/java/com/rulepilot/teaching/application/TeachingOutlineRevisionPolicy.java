@@ -2,6 +2,7 @@ package com.rulepilot.teaching.application;
 
 import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
+import com.rulepilot.teaching.VisualRulebookPageClassifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -130,38 +131,6 @@ final class TeachingOutlineRevisionPolicy {
                 """ + String.join("\n", requiredRepairs));
     }
 
-    static boolean isSubstantiveVisualCatalogPage(String text) {
-        String normalized = text == null ? "" : text.toLowerCase(Locale.ROOT);
-        boolean credits = normalized.contains("credits") || normalized.contains("鸣谢");
-        boolean cover = (normalized.contains("cover") || normalized.contains("封面"))
-                && (normalized.contains("no game mechanism")
-                        || normalized.contains("no rule text")
-                        || normalized.contains("no gameplay rules")
-                        || normalized.contains("no operational instructions")
-                        || normalized.contains("visual cover")
-                        || normalized.contains("无游戏机制")
-                        || normalized.contains("无游戏规则")
-                        || normalized.contains("仅作为视觉封面"));
-        boolean storageOnlyInsert = normalized.contains("storage or assembly instructions")
-                && (normalized.contains("not gameplay")
-                        || normalized.contains("non-gameplay")
-                        || normalized.contains("this page is")
-                        || normalized.contains("only for storage")
-                        || normalized.contains("仅为收纳或组装说明"));
-        boolean nonGameplayInsert = normalized.contains("非游戏规则")
-                || normalized.contains("非游戏玩法")
-                || normalized.contains("non-gameplay material")
-                || normalized.contains("non-gameplay rule")
-                || normalized.contains("宣传页")
-                || normalized.contains("宣传广告")
-                || normalized.contains("广告页")
-                || normalized.contains("advertisement for another")
-                || normalized.contains("仅为收纳或组装说明")
-                || storageOnlyInsert
-                || normalized.contains("仅为封面设计");
-        return !credits && !cover && !nonGameplayInsert;
-    }
-
     static boolean isSubstantiveRulebookText(String text) {
         return text != null && !text.isBlank() && isSubstantiveRulebookPage(new PageInput(1, text));
     }
@@ -169,7 +138,7 @@ final class TeachingOutlineRevisionPolicy {
     private static boolean isSubstantiveRulebookPage(PageInput page) {
         String text = page.text() == null ? "" : page.text().toLowerCase(Locale.ROOT);
         if (text.contains(VISUAL_CATALOG_PREFIX.toLowerCase(Locale.ROOT))) {
-            return hasConcreteVisualGameplayEvidence(text);
+            return hasConcreteVisualGameplayEvidence(page);
         }
         return containsAny(text, List.of(
                         "end of game", "game end", "end condition", "final scoring", "victory point",
@@ -226,8 +195,9 @@ final class TeachingOutlineRevisionPolicy {
                 "游戏结束", "游戏终止", "游戏结束", "最终计分", "胜者", "获胜", "胜利", "失败", "平局", "共同获胜"));
     }
 
-    private static boolean hasConcreteVisualGameplayEvidence(String normalizedText) {
-        if (!isSubstantiveVisualCatalogPage(normalizedText)) return false;
+    private static boolean hasConcreteVisualGameplayEvidence(PageInput page) {
+        String normalizedText = page.text() == null ? "" : page.text().toLowerCase(Locale.ROOT);
+        if (!VisualRulebookPageClassifier.isSubstantive(page.pageNumber(), normalizedText)) return false;
         return !normalizedText.contains("no factual visual claim is available")
                 && !normalizedText.contains("unreadable")
                 && !normalizedText.contains("不可可靠转写")

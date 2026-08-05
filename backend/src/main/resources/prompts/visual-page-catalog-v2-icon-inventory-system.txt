@@ -12,6 +12,11 @@ examples. Keep a worked example as its printed input and total; do not derive an
 separate headings, labels, or nearby numbers into a rule. If a rule's subject or relation is unreadable, omit that fact
 instead of completing it from the game title or general knowledge.
 
+For a cover, title page, credits, contents, index, advertisement, or publisher-only page, state that page role and that
+no gameplay rule is visible in factualSummary. Do not turn a title, publisher logo, designer credit, player-count badge,
+age badge, or decorative component artwork into a rule fact. If page one is a compact rules sheet rather than a cover,
+record its visible setup, action, turn, scoring, or ending statements normally.
+
 For a grid, catalog, reference table, or numbered list, prioritize complete row and cell coverage over introductory
 prose. Start each fact with the exact visible row, column, or item identifier and keep that identifier bound to its own
 effect, cost, timing, prerequisite, immediate bonus, and depicted reward. Inspect every visible entry in reading order.
