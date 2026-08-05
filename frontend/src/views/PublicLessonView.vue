@@ -545,7 +545,7 @@ onUnmounted(() => abandonPublicAnswer())
         <button type="button" class="mt-6 rounded-lg bg-ink px-4 py-2.5 font-semibold text-paper" @click="load">{{ t('public.error.retry') }}</button>
       </section>
 
-      <article v-else-if="publicLesson" class="mx-auto max-w-4xl px-5 py-10 sm:px-8 lg:py-14">
+      <article v-else-if="publicLesson" class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:py-14">
         <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo hover:text-indigo/75">← {{ t('nav.library') }}</RouterLink>
         <LessonGuideHero
           :title="displayTitle"
@@ -566,7 +566,7 @@ onUnmounted(() => abandonPublicAnswer())
           </template>
         </LessonGuideHero>
 
-        <section class="agent-workspace mt-8 rounded-[2rem] border border-indigo/15 p-5 sm:p-7" aria-labelledby="public-question-title">
+        <section class="agent-workspace mx-auto mt-8 max-w-4xl rounded-[2rem] border border-indigo/15 p-5 sm:p-7" aria-labelledby="public-question-title">
           <AgentWorkspaceHeader
             :eyebrow="t('public.question.eyebrow')"
             :title="t('public.question.title')"
