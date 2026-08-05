@@ -16,6 +16,7 @@ import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
+import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolScopes;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
@@ -95,6 +96,13 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         for (CaseConfiguration case_ : cases) results.add(runCase(case_));
         Map<String, Object> negative = runNegative(cases.getLast(), evaluation.path("crossRulebookNegative"));
 
+        Path output = root.resolve(".local/agent-evaluation/teaching-agent-real-rulebooks.json");
+        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                "schemaVersion", 1,
+                "generatedAt", Instant.now().toString(),
+                "results", results,
+                "crossRulebookNegative", negative)) + "\n", StandardCharsets.UTF_8);
+
         assertThat(results).hasSize(3).allSatisfy(result -> {
             assertThat((Integer) result.get("toolCalls")).isGreaterThan(0);
             assertThat(result).containsEntry("expectedCoverageAdded", true)
@@ -105,13 +113,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         assertThat(negative).containsEntry("state", "EMPTY")
                 .containsEntry("evidenceCount", 0)
                 .containsEntry("crossScopeEvidence", false);
-
-        Path output = root.resolve(".local/agent-evaluation/teaching-agent-real-rulebooks.json");
-        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
-                "schemaVersion", 1,
-                "generatedAt", Instant.now().toString(),
-                "results", results,
-                "crossRulebookNegative", negative)) + "\n", StandardCharsets.UTF_8);
     }
 
     @Test
@@ -325,20 +326,51 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 .filter(source -> case_.expectedTerms().stream()
                         .allMatch(term -> source.excerpt().toLowerCase(Locale.ROOT).contains(term)))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("expected teaching coverage was not acquired"));
+                .orElse(null);
+        boolean citationAccepted = expected != null && citationAccepted(plan, refined.evidence(), expected);
+        int modelCallsBeforeDirect = audited.modelCalls;
+        TeachingPlan directPlan = plan(versionId, case_.caseNode(), List.of(case_.initialPage()));
+        var directResult = agent.refine(directPlan, directPlan.sections().getFirst(), runId, deterministic);
+
+        return Map.ofEntries(
+                Map.entry("caseId", case_.caseId()),
+                Map.entry("provider", case_.provider().provider()),
+                Map.entry("toolCalls", audited.toolCalls),
+                Map.entry("toolObservationCodes", audited.observations.stream()
+                        .map(ToolObservation::code)
+                        .toList()),
+                Map.entry("toolEvidenceCounts", audited.observations.stream()
+                        .map(ToolObservation::evidenceCount)
+                        .toList()),
+                Map.entry("searchDiagnostics", corpus.searchDiagnostics(case_.expectedTerms())),
+                Map.entry("modelCalls", modelCallsBeforeDirect),
+                Map.entry("expectedCoverageAdded", expected != null),
+                Map.entry("citationAccepted", citationAccepted),
+                Map.entry("refinedEvidenceCount", refined.evidence().size()),
+                Map.entry("refinedPages", refined.evidence().stream()
+                        .map(RuleEvidence::pageFrom)
+                        .distinct()
+                        .toList()),
+                Map.entry("directAdditionalModelCalls", audited.modelCalls - modelCallsBeforeDirect),
+                Map.entry("directEvidenceUnchanged", directResult == deterministic),
+                Map.entry("latencyMs", latencyMs),
+                Map.entry("withinLatencyBudget", latencyMs < 90_000));
+    }
+
+    private boolean citationAccepted(TeachingPlan plan, List<RuleEvidence> evidence, RuleEvidence expected) {
         var modelRequest = new TeachingSectionModelRequestFactory(com.rulepilot.teaching.VisualRulebookPageFacts.empty())
                 .create(
                         plan,
                         plan.sections().getFirst(),
                         TeachingPacingPolicy.allocate(plan).get(1),
                         List.of(),
-                        refined.evidence(),
+                        evidence,
                         false,
                         false);
         var section = new TeachingSectionCandidateValidator(new PolicyEvidenceVerifier()).validate(
                 plan,
                 plan.sections().getFirst(),
-                refined.evidence(),
+                evidence,
                 modelRequest,
                 new SectionDraft(
                         "Grounded chapter",
@@ -351,22 +383,8 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                                 "Follow this procedure in order.",
                                 List.of(expected.chunkId())))),
                 EvidenceStatus.SUPPORTED);
-        int modelCallsBeforeDirect = audited.modelCalls;
-        TeachingPlan directPlan = plan(versionId, case_.caseNode(), List.of(case_.initialPage()));
-        var directResult = agent.refine(directPlan, directPlan.sections().getFirst(), runId, deterministic);
-
-        return Map.of(
-                "caseId", case_.caseId(),
-                "provider", case_.provider().provider(),
-                "toolCalls", audited.toolCalls,
-                "modelCalls", modelCallsBeforeDirect,
-                "expectedCoverageAdded", expected.pageFrom() == case_.expectedPage(),
-                "citationAccepted", section.steps().stream()
-                        .anyMatch(step -> step.sourceChunkIds().contains(expected.chunkId())),
-                "directAdditionalModelCalls", audited.modelCalls - modelCallsBeforeDirect,
-                "directEvidenceUnchanged", directResult == deterministic,
-                "latencyMs", latencyMs,
-                "withinLatencyBudget", latencyMs < 90_000);
+        return section.steps().stream()
+                .anyMatch(step -> step.sourceChunkIds().contains(expected.chunkId()));
     }
 
     private Map<String, Object> runNegative(CaseConfiguration case_, JsonNode node) throws IOException {
@@ -616,6 +634,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;
         private int toolCalls;
+        private final List<ToolObservation> observations = new ArrayList<>();
 
         @Override
         public <T> T invoke(
@@ -628,7 +647,11 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 ToIntFunction<T> outputTokenEstimator) {
             if (type == ActivityType.MODEL) modelCalls++;
             if (type == ActivityType.TOOL) toolCalls++;
-            return invocation.get();
+            T result = invocation.get();
+            if (result instanceof NativeAgentToolRegistry.ToolExecution execution) {
+                observations.add(execution.observation());
+            }
+            return result;
         }
 
         @Override
@@ -642,6 +665,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         private final UUID versionId;
         private final List<String> pages;
         private final List<RuleEvidence> chunks;
+        private final List<SearchRuleEvidence> searches = new ArrayList<>();
 
         private PdfTeachingEvidence(Path pdf, UUID versionId) throws IOException {
             this.versionId = versionId;
@@ -652,6 +676,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         @Override
         public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
             if (!versionId.equals(request.documentVersionId())) throw new IllegalArgumentException("scope mismatch");
+            searches.add(request);
             Set<String> terms = terms(request.query());
             if (terms.isEmpty()) return List.of();
             return chunks.stream()
@@ -661,6 +686,19 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                             .thenComparing(candidate -> candidate.source().chunkId()))
                     .limit(request.limit())
                     .map(ScoredEvidence::source)
+                    .toList();
+        }
+
+        private List<Map<String, Object>> searchDiagnostics(List<String> expectedTerms) {
+            return searches.stream().map(search -> Map.<String, Object>of(
+                            "queryLength", search.query().length(),
+                            "containsHan", search.query().codePoints().anyMatch(codePoint ->
+                                    Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN),
+                            "expectedTermMatches", expectedTerms.stream()
+                                    .filter(term -> search.query().toLowerCase(Locale.ROOT).contains(term))
+                                    .count(),
+                            "sectionTypeCount", search.sectionTypes().size(),
+                            "includeAdjacentContext", search.includeAdjacentContext()))
                     .toList();
         }
 

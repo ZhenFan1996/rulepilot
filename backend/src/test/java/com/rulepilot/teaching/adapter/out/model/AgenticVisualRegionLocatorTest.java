@@ -53,13 +53,66 @@ class AgenticVisualRegionLocatorTest {
     }
 
     @Test
-    void rejectsAJsonRectangleThatWasNotReturnedByTheCropTool() {
+    void derivesTheOnlyCanonicalClaimWhenTheModelOmitsTheRedundantClaimReference() {
+        UUID evidenceId = UUID.randomUUID();
+        StubAgent agent = new StubAgent(completed(
+                """
+                {"regions":[{"pageNumber":4,"label":"棋盘区域","visibleDescription":"图中可见一组带边框的棋盘区域。","x":100,"y":120,"width":300,"height":240,"supportedClaimRefs":[]}]}
+                """,
+                cropObservation(evidenceId, 4, 100, 120, 300, 240)));
+
+        LocateGuideResult result = locator(agent, new RecordingFallback())
+                .locateGuideWithResult(request(evidenceId, true));
+
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
+        assertThat(result.regions()).singleElement().satisfies(region ->
+                assertThat(region.supportedEvidenceIds()).containsExactly(evidenceId));
+    }
+
+    @Test
+    void rejectsAnExplicitClaimReferenceThatDoesNotOwnTheObservedCrop() {
+        UUID evidenceId = UUID.randomUUID();
+        StubAgent agent = new StubAgent(completed(
+                """
+                {"regions":[{"pageNumber":4,"label":"棋盘区域","visibleDescription":"图中可见棋盘区域。","x":100,"y":120,"width":300,"height":240,"supportedClaimRefs":["C2"]}]}
+                """,
+                cropObservation(evidenceId, 4, 100, 120, 300, 240)));
+
+        LocateGuideResult result = locator(agent, new RecordingFallback())
+                .locateGuideWithResult(request(evidenceId, true));
+
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.UNSUPPORTED_SCOPE);
+    }
+
+    @Test
+    void usesTheOnlyAuthorizedCropWhenTheModelEchoesPreNormalizationGeometry() {
+        UUID evidenceId = UUID.randomUUID();
+        StubAgent agent = new StubAgent(completed(
+                """
+                {"regions":[{"pageNumber":4,"label":"棋盘区域","visibleDescription":"图中可见棋盘区域。","x":900,"y":120,"width":300,"height":240,"supportedClaimRefs":["C1"]}]}
+                """,
+                cropObservation(evidenceId, 4, 900, 120, 100, 240)));
+        RecordingFallback fallback = new RecordingFallback();
+
+        LocateGuideResult result = locator(agent, fallback).locateGuideWithResult(request(evidenceId, true));
+
+        assertThat(result.diagnostic()).isEqualTo(Diagnostic.FOUND);
+        assertThat(result.regions()).singleElement().satisfies(region -> {
+            assertThat(region.x()).isEqualTo(900);
+            assertThat(region.width()).isEqualTo(100);
+        });
+        assertThat(fallback.calls).isZero();
+    }
+
+    @Test
+    void rejectsMismatchedModelGeometryWhenMoreThanOneAuthorizedCropCouldMatch() {
         UUID evidenceId = UUID.randomUUID();
         StubAgent agent = new StubAgent(completed(
                 """
                 {"regions":[{"pageNumber":4,"label":"棋盘区域","visibleDescription":"图中可见棋盘区域。","x":101,"y":120,"width":300,"height":240,"supportedClaimRefs":["C1"]}]}
                 """,
-                cropObservation(evidenceId, 4, 100, 120, 300, 240)));
+                cropObservation(evidenceId, 4, 100, 120, 300, 240),
+                cropObservation(evidenceId, 4, 500, 120, 200, 240)));
         RecordingFallback fallback = new RecordingFallback();
 
         LocateGuideResult result = locator(agent, fallback).locateGuideWithResult(request(evidenceId, true));
