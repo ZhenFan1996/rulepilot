@@ -48,6 +48,8 @@ const completedTeaching = ref<BackgroundTeachingItem[]>([])
 const teachingStatusUnavailable = ref(false)
 const ACTIVE_TEACHING_KEY = 'rulepilot:active-teaching-runs'
 const COMPLETED_TEACHING_KEY = 'rulepilot:completed-teaching-runs'
+const ACTIVE_TEACHING_REFRESH_MS = 5000
+const IDLE_TEACHING_REFRESH_MS = 15_000
 let teachingTimer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
 const teachingTitles = new Map<string, string>()
@@ -116,14 +118,16 @@ function clearTeachingTimer() {
   teachingTimer = undefined
 }
 
-function scheduleTeachingRefresh(delay = 5000) {
+function scheduleTeachingRefresh(delay?: number) {
   clearTeachingTimer()
-  if (disposed || document.visibilityState === 'hidden') return
-  if (activeTeaching.value.length === 0 && !teachingStatusUnavailable.value) return
+  if (disposed || !username.value || document.visibilityState === 'hidden') return
+  const refreshDelay = delay ?? (activeTeaching.value.length || teachingStatusUnavailable.value
+    ? ACTIVE_TEACHING_REFRESH_MS
+    : IDLE_TEACHING_REFRESH_MS)
   teachingTimer = setTimeout(() => {
     teachingTimer = undefined
     void refreshTeachingStatus()
-  }, delay)
+  }, refreshDelay)
 }
 
 async function refreshTeachingStatus() {
@@ -195,6 +199,7 @@ function handleVisibilityChange() {
 function showLoginReminder() {
   username.value = ''
   roles.value = []
+  clearTeachingTimer()
   loginReminderVisible.value = true
 }
 

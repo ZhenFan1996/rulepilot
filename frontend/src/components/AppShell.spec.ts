@@ -181,6 +181,40 @@ describe('AppShell', () => {
     wrapper.unmount()
   })
 
+  it('discovers teaching launched in another tab while the signed-in shell is idle', async () => {
+    vi.useFakeTimers()
+    let activeReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) {
+        activeReads += 1
+        return response(activeReads === 1 ? [] : [{ id: 'run-other-tab', subjectId: 'plan-other-tab' }])
+      }
+      if (path.includes('/api/v1/teaching-plans')) {
+        return response([{ id: 'plan-other-tab', gameTitle: '跨标签页规则书' }])
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('跨标签页规则书')
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+    expect(activeReads).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await flushPromises()
+    expect(activeReads).toBe(2)
+    expect(wrapper.text()).toContain('《跨标签页规则书》仍在后台准备')
+    expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-other-tab')
+    wrapper.unmount()
+  })
+
   it('keeps the current page and offers an explicit return-aware sign-in action', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 401 })))
     const router = createRouter({

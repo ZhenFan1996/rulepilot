@@ -133,11 +133,12 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
-          printf '%s\n%s\n%s\n%s' \
+          printf '%s\n%s\n%s\n%s\n%s' \
             "$(read_value RULEPILOT_USER_USERNAME)" \
             "$(read_value RULEPILOT_USER_PASSWORD)" \
             "$(read_value RULEPILOT_ADMIN_USERNAME)" \
-            "$(read_value RULEPILOT_ADMIN_PASSWORD)"
+            "$(read_value RULEPILOT_ADMIN_PASSWORD)" \
+            "$(read_value RULEPILOT_HTTP_PORT)"
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
@@ -145,14 +146,19 @@ jobs:
           player_password=${credential_lines[1]:-}
           admin_username=${credential_lines[2]:-admin}
           admin_password=${credential_lines[3]:-}
+          frontend_port=${credential_lines[4]:-80}
           test -n "$player_password"
           test -n "$admin_password"
+          [[ "$frontend_port" =~ ^[1-9][0-9]{0,4}$ ]] || { echo "Production frontend port is invalid" >&2; exit 1; }
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
           echo "::add-mask::$admin_username"
           echo "::add-mask::$admin_password"
 
-          ssh "${ssh_options[@]}" -N -L 18082:127.0.0.1:8080 "${DEPLOY_USER}@${DEPLOY_HOST}" &
+          ssh "${ssh_options[@]}" -N \
+            -L 18082:127.0.0.1:8080 \
+            -L "18083:127.0.0.1:$frontend_port" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" &
           tunnel_pid=$!
           child_pids=()
           browser_pid=
@@ -172,24 +178,25 @@ jobs:
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
           mkdir -p "$artifact_dir"
           RULEPILOT_PRODUCTION_EXPERIENCE=true \
-          RULEPILOT_PRODUCTION_BASE_URL=http://127.0.0.1:18082 \
+          RULEPILOT_PRODUCTION_BASE_URL=http://127.0.0.1:18083 \
           RULEPILOT_EXPERIENCE_COMPLETION_FILE="$RUNNER_TEMP/concurrent-generation-finished" \
           RULEPILOT_EXPERIENCE_BROWSER_REPORT="$artifact_dir/browser-navigation.json" \
           RULEPILOT_EXPERIENCE_USER_A="$player_username" \
           RULEPILOT_EXPERIENCE_PASSWORD_A="$player_password" \
           RULEPILOT_EXPERIENCE_USER_B="$admin_username" \
           RULEPILOT_EXPERIENCE_PASSWORD_B="$admin_password" \
-            npx --prefix frontend playwright test --config frontend/playwright.production.config.ts &
+            npm --prefix frontend exec playwright test -- --config playwright.production.config.ts &
           browser_pid=$!
 
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url http://127.0.0.1:18082 \
+              --base-url http://127.0.0.1:18083 \
               --pdf "$RUNNER_TEMP/rulebook-a.pdf" \
               --username "$player_username" \
               --expected-title "${RULEBOOK_A_TITLE,,}" \
-              --uploaded-title "$RULEBOOK_A_TITLE production experience $GITHUB_RUN_ID" \
+              --uploaded-title "$RULEBOOK_A_TITLE" \
               --official-source-url "$RULEBOOK_A_URL" \
+              --preparation-mode visual \
               --navigation-file "$artifact_dir/user-a-navigation.tsv" \
               --result-file "$artifact_dir/user-a-result.json" \
               > "$artifact_dir/user-a-summary.json" 2> "$artifact_dir/user-a-diagnostics.log" &
@@ -197,11 +204,11 @@ jobs:
 
           RULEPILOT_SMOKE_PASSWORD="$admin_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url http://127.0.0.1:18082 \
+              --base-url http://127.0.0.1:18083 \
               --pdf "$RUNNER_TEMP/rulebook-b.pdf" \
               --username "$admin_username" \
               --expected-title "${RULEBOOK_B_TITLE,,}" \
-              --uploaded-title "$RULEBOOK_B_TITLE production experience $GITHUB_RUN_ID" \
+              --uploaded-title "$RULEBOOK_B_TITLE" \
               --official-source-url "$RULEBOOK_B_URL" \
               --navigation-file "$artifact_dir/user-b-navigation.tsv" \
               --result-file "$artifact_dir/user-b-result.json" \
@@ -213,9 +220,20 @@ jobs:
           wait "${child_pids[1]}"; user_b_status=$?
           set -e
           touch "$RUNNER_TEMP/concurrent-generation-finished"
-          set +e
-          wait "$browser_pid"; browser_status=$?
-          set -e
+          for attempt in {1..30}; do
+            if ! kill -0 "$browser_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if kill -0 "$browser_pid" 2>/dev/null; then
+            echo "Browser probe did not stop after the generation completion signal" >&2
+            kill "$browser_pid" 2>/dev/null || true
+            wait "$browser_pid" 2>/dev/null || true
+            browser_status=124
+          else
+            set +e
+            wait "$browser_pid"; browser_status=$?
+            set -e
+          fi
           if [[ -d frontend/test-results ]]; then
             cp -R frontend/test-results "$artifact_dir/playwright-test-results"
           fi

@@ -33,7 +33,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url === '/api/auth/session') {
       return json(response, 200, { username: 'player', roles: ['USER'] })
     }
-    if (request.method === 'GET' && ['/', '/documents', '/lessons', '/catalog'].includes(request.url)) {
+    if (request.method === 'GET' && ['/', '/teach', '/lessons', '/catalog', '/library', '/account'].includes(request.url)) {
       return json(response, 200, {})
     }
     if (request.method === 'GET' && ['/api/v1/teaching-plans', '/api/public/lessons'].includes(request.url)) {
@@ -169,6 +169,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   const pdf = join(directory, 'Lantern_Relay_rulebook_EN_v4_12pages.pdf')
   const navigation = join(directory, 'navigation.tsv')
   const retainedResult = join(directory, 'retained-result.json')
+  const retainedPlanCheckpoint = join(directory, 'retained-plan-checkpoint.json')
   await writeFile(pdf, '%PDF-1.4\n%%EOF\n')
 
   try {
@@ -201,6 +202,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.ok(summary.navigation.averageMs >= 0)
     assert.ok(summary.navigation.maxMs >= 0)
     const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
+    assert.equal(retained.stage, 'lesson')
     assert.equal(retained.sourceUrl, 'https://example.com/lantern-relay-rules.pdf')
     assert.equal(retained.plan.gameTitle, 'Lantern Relay')
     assert.equal(retained.lesson.status, 'COMPLETE')
@@ -223,6 +225,26 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
 
+    deleted = false
+    planStarted = false
+    const rejectedAfterPlan = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--expected-title', 'Different Game',
+        '--result-file', retainedPlanCheckpoint,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.notEqual(rejectedAfterPlan.code, 0)
+    assert.match(rejectedAfterPlan.stderr, /Teaching plan was unusable/)
+    const checkpoint = JSON.parse(await readFile(retainedPlanCheckpoint, 'utf8'))
+    assert.equal(checkpoint.stage, 'plan')
+    assert.equal(checkpoint.plan.gameTitle, 'Lantern Relay')
+    assert.equal(checkpoint.lesson, undefined)
+    assert.equal(deleted, true)
+
     includeBlockingVisualCatalog = true
     deleted = false
     planStarted = false
@@ -236,6 +258,22 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     )
     assert.equal(visualWarning.code, 0, visualWarning.stderr)
     assert.match(visualWarning.stderr, /SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan/)
+    assert.equal(deleted, true)
+
+    deleted = false
+    planStarted = false
+    const expectedVisualCatalog = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--preparation-mode', 'visual',
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(expectedVisualCatalog.code, 0, expectedVisualCatalog.stderr)
+    assert.doesNotMatch(expectedVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
+    assert.doesNotMatch(expectedVisualCatalog.stderr, /Visual-only rulebook preparation did not report visual catalog work/)
     assert.equal(deleted, true)
 
     includeBlockingVisualCatalog = false
