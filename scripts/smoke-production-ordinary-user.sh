@@ -7,7 +7,7 @@ usage() {
 Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
   --base-url URL --pdf FILE [--username USER] [--timeout-seconds SECONDS] \
   [--expected-title TITLE] [--uploaded-title TITLE] [--official-source-url URL] \
-  [--navigation-file FILE] [--result-file FILE]
+  [--preparation-mode text|visual] [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated upload -> processing -> teaching plan -> illustrated lesson
 journey and removes the synthetic document before exiting.
@@ -21,6 +21,7 @@ timeout_seconds=1500
 expected_title="lantern relay"
 uploaded_title="Lantern Relay rulebook EN v4 12pages"
 official_source_url=
+preparation_mode=text
 navigation_file=
 result_file=
 
@@ -52,6 +53,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--official-source-url)
 			official_source_url=${2:-}
+			shift 2
+			;;
+		--preparation-mode)
+			preparation_mode=${2:-}
 			shift 2
 			;;
 		--navigation-file)
@@ -90,6 +95,10 @@ if [ -n "$official_source_url" ] && [[ "$official_source_url" != https://* ]]; t
 	echo "--official-source-url must use HTTPS" >&2
 	exit 2
 fi
+if [ "$preparation_mode" != text ] && [ "$preparation_mode" != visual ]; then
+	echo "--preparation-mode must be text or visual" >&2
+	exit 2
+fi
 if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
 	echo "RULEPILOT_SMOKE_PASSWORD is required" >&2
 	exit 2
@@ -116,9 +125,11 @@ probe_navigation() {
 	local phase=$1
 	local paths=(
 		"/"
-		"/documents"
+		"/teach"
 		"/lessons"
 		"/catalog"
+		"/library"
+		"/account"
 		"/api/v1/documents"
 		"/api/v1/teaching-plans"
 		"/api/public/lessons"
@@ -179,6 +190,13 @@ log_run_timing() {
 
 verify_preparation_critical_path() {
 	local response=$1
+	if [ "$preparation_mode" = visual ]; then
+		if ! jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
+			>/dev/null <<<"$response"; then
+			echo "SMOKE_WARNING Visual-only rulebook preparation did not report visual catalog work" >&2
+		fi
+		return
+	fi
 	if jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
 		>/dev/null <<<"$response"; then
 		echo "SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan" >&2
@@ -255,6 +273,7 @@ cleanup() {
 		cancel_run "$preparation_run_id"
 		if [ -n "$document_id" ]; then
 			if curl --silent --show-error --output /dev/null \
+				--connect-timeout 5 --max-time 20 \
 				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 				--request DELETE --header "$csrf_header: $csrf_token" \
 				"$base_url/api/v1/documents/$document_id"; then
@@ -439,6 +458,18 @@ plan_id=$(jq -er '.id' <<<"$plan")
 plan_title=$(jq -er '.gameTitle' <<<"$plan")
 plan_section_count=$(jq -er '.sections | length' <<<"$plan")
 log_stage "teaching-plan-inspected title=$plan_title sections=$plan_section_count"
+if [ -n "$result_file" ]; then
+	mkdir -p "$(dirname "$result_file")"
+	jq -n \
+		--arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		--arg username "$username" \
+		--arg sourceUrl "$official_source_url" \
+		--argjson preparationRun "$preparation_result" \
+		--argjson plan "$plan" \
+		'{generatedAt: $generatedAt, stage: "plan", username: $username,
+		  sourceUrl: $sourceUrl, preparationRun: $preparationRun, plan: $plan}' > "$result_file"
+	chmod 600 "$result_file"
+fi
 if ! jq -e --arg expected "$expected_title" '
 	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
 	(.gameTitle | normalized) == ($expected | normalized) and (.sections | length > 0)
@@ -514,7 +545,7 @@ if [ -n "$result_file" ]; then
 		--argjson plan "$plan" \
 		--argjson lessonRun "$lesson_result" \
 		--argjson lesson "$lesson" \
-		'{generatedAt: $generatedAt, username: $username, sourceUrl: $sourceUrl,
+		'{generatedAt: $generatedAt, stage: "lesson", username: $username, sourceUrl: $sourceUrl,
 		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
 		  lessonRun: $lessonRun, lesson: $lesson}' > "$result_file"
 	chmod 600 "$result_file"

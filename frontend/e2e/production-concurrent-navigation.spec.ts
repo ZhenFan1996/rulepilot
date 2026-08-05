@@ -16,6 +16,14 @@ interface NavigationMeasurement {
   durationMs: number
 }
 
+interface BrowserReport {
+  generatedAt: string
+  completed: boolean
+  measurements: NavigationMeasurement[]
+  backgroundStatusSeen: { userA: boolean, userB: boolean }
+  pageErrors: string[]
+}
+
 async function login(browser: Browser, credentials: Credentials) {
   const context = await browser.newContext()
   const page = await context.newPage()
@@ -45,6 +53,16 @@ async function visit(page: Page, user: string, path: string): Promise<Navigation
   await expect(page, `${user} was signed out while visiting ${path}`).not.toHaveURL(/\/login$/)
   await expect(page.locator('body')).not.toBeEmpty()
   return { user, path, status: response!.status(), durationMs }
+}
+
+async function retainReport(path: string, report: BrowserReport) {
+  await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+}
+
+async function visibleWithin(page: Page) {
+  return page.locator('aside[aria-live]').waitFor({ state: 'visible', timeout: 1_500 })
+    .then(() => true)
+    .catch(() => false)
 }
 
 test.skip(!enabled, 'Runs only through the credentialed production experience workflow')
@@ -82,8 +100,15 @@ test('two signed-in users can browse while real lessons generate', async ({ brow
         visit(sessionB.page, 'B', routeB),
       ])
       measurements.push(measurementA, measurementB)
-      backgroundStatusSeenA ||= await sessionA.page.locator('aside[aria-live]').isVisible()
-      backgroundStatusSeenB ||= await sessionB.page.locator('aside[aria-live]').isVisible()
+      backgroundStatusSeenA ||= await visibleWithin(sessionA.page)
+      backgroundStatusSeenB ||= await visibleWithin(sessionB.page)
+      await retainReport(reportFile, {
+        generatedAt: new Date().toISOString(),
+        completed: false,
+        measurements,
+        backgroundStatusSeen: { userA: backgroundStatusSeenA, userB: backgroundStatusSeenB },
+        pageErrors,
+      })
       index += 1
       await sessionA.page.waitForTimeout(1_000)
     }
@@ -96,12 +121,13 @@ test('two signed-in users can browse while real lessons generate', async ({ brow
 
     await sessionA.page.screenshot({ path: testInfo.outputPath('user-a-final-page.png'), fullPage: true })
     await sessionB.page.screenshot({ path: testInfo.outputPath('user-b-final-page.png'), fullPage: true })
-    await writeFile(reportFile, `${JSON.stringify({
+    await retainReport(reportFile, {
       generatedAt: new Date().toISOString(),
+      completed: true,
       measurements,
       backgroundStatusSeen: { userA: backgroundStatusSeenA, userB: backgroundStatusSeenB },
       pageErrors,
-    }, null, 2)}\n`, { mode: 0o600 })
+    })
   } finally {
     await sessionA.context.close()
     await sessionB.context.close()
