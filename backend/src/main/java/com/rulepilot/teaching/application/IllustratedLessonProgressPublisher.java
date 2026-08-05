@@ -20,4 +20,9 @@ public class IllustratedLessonProgressPublisher {
     public IllustratedLesson publish(IllustratedLesson lesson) {
         return lessons.save(lesson);
     }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public IllustratedLesson publishCandidate(IllustratedLesson lesson) {
+        return lessons.saveCandidate(lesson);
+    }
 }

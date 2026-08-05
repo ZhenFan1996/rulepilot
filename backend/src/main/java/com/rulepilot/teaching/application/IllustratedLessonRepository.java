@@ -10,7 +10,16 @@ public interface IllustratedLessonRepository {
 
     IllustratedLesson save(IllustratedLesson lesson);
 
+    /** Stores a generated lesson without changing the lesson currently visible to players. */
+    IllustratedLesson saveCandidate(IllustratedLesson lesson);
+
     Optional<IllustratedLesson> findLatestByPlan(UUID teachingPlanId);
+
+    Optional<IllustratedLesson> findLatestCandidateByPlan(UUID teachingPlanId);
+
+    void promoteCandidate(UUID teachingPlanId, UUID candidateLessonId);
+
+    void archiveCandidate(UUID teachingPlanId, UUID candidateLessonId);
 
     /**
      * Summaries used by a catalog card. They deliberately avoid handing full lesson prose to the discovery

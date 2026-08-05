@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
@@ -19,6 +20,17 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class IllustratedLessonServiceTest {
+
+    @Test
+    void isolatesCandidateRunDiscoveryFromThePlayerVisiblePlanSubject() {
+        UUID planId = UUID.randomUUID();
+
+        UUID first = IllustratedLessonService.candidateSubjectId(planId);
+
+        assertThat(first).isEqualTo(IllustratedLessonService.candidateSubjectId(planId));
+        assertThat(first).isNotEqualTo(planId);
+        assertThat(first).isNotEqualTo(IllustratedLessonService.candidateSubjectId(UUID.randomUUID()));
+    }
 
     @Test
     void finalizesAPersistedLessonWithoutReopeningItsExecutionBudget() {
