@@ -114,6 +114,7 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
+    expect(wrapper.get('[data-testid="private-lesson-surface"]').classes()).not.toContain('overflow-x-hidden')
     expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toBe('问规则书')
