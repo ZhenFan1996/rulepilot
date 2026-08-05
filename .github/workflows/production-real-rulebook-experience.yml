@@ -182,18 +182,19 @@ jobs:
           RULEPILOT_EXPERIENCE_PASSWORD_A="$player_password" \
           RULEPILOT_EXPERIENCE_USER_B="$admin_username" \
           RULEPILOT_EXPERIENCE_PASSWORD_B="$admin_password" \
-            npm --prefix frontend exec playwright test -- --config playwright.production.config.ts &
+            npm --prefix frontend exec -- playwright test --config frontend/playwright.production.config.ts &
           browser_pid=$!
 
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url "$RULEPILOT_PUBLIC_URL" \
+              --base-url "http://127.0.0.1:18082" \
               --pdf "$RUNNER_TEMP/rulebook-a.pdf" \
               --username "$player_username" \
               --expected-title "${RULEBOOK_A_TITLE,,}" \
               --uploaded-title "$RULEBOOK_A_TITLE" \
               --official-source-url "$RULEBOOK_A_URL" \
               --preparation-mode visual \
+              --navigation-mode api \
               --navigation-file "$artifact_dir/user-a-navigation.tsv" \
               --result-file "$artifact_dir/user-a-result.json" \
               > "$artifact_dir/user-a-summary.json" 2> "$artifact_dir/user-a-diagnostics.log" &
@@ -201,12 +202,13 @@ jobs:
 
           RULEPILOT_SMOKE_PASSWORD="$admin_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url "$RULEPILOT_PUBLIC_URL" \
+              --base-url "http://127.0.0.1:18082" \
               --pdf "$RUNNER_TEMP/rulebook-b.pdf" \
               --username "$admin_username" \
               --expected-title "${RULEBOOK_B_TITLE,,}" \
               --uploaded-title "$RULEBOOK_B_TITLE" \
               --official-source-url "$RULEBOOK_B_URL" \
+              --navigation-mode api \
               --navigation-file "$artifact_dir/user-b-navigation.tsv" \
               --result-file "$artifact_dir/user-b-result.json" \
               > "$artifact_dir/user-b-summary.json" 2> "$artifact_dir/user-b-diagnostics.log" &

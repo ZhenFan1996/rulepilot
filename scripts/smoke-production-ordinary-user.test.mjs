@@ -181,6 +181,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--pdf', pdf,
         '--official-source-url', 'https://example.com/lantern-relay-rules.pdf',
+        '--navigation-mode', 'api',
         '--navigation-file', navigation,
         '--result-file', retainedResult,
         '--timeout-seconds', '10'],
@@ -208,6 +209,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(retained.lesson.status, 'COMPLETE')
     assert.equal((await readFile(navigation, 'utf8')).trim().split('\n').length,
       summary.navigation.requestCount)
+    assert.ok((await readFile(navigation, 'utf8')).trim().split('\n')
+      .every((line) => line.split('\t')[1].startsWith('/api/')))
     assert.equal(deleted, true)
     assert.ok(calls.some((call) => call.method === 'POST' && call.url === '/api/v1/documents'))
     assert.ok(calls.some((call) => call.method === 'POST'
@@ -346,7 +349,14 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.match(realRulebooks, /ref: main/)
   assert.match(realRulebooks, /Production is not running the checked-out main commit/)
   assert.match(realRulebooks, /RULEPILOT_PUBLIC_URL: https:\/\/rulepilot\.cn/)
-  assert.doesNotMatch(realRulebooks, /RULEPILOT_PRODUCTION_BASE_URL=http:\/\/127\.0\.0\.1:18083/)
+  assert.match(realRulebooks,
+    /npm --prefix frontend exec -- playwright test --config frontend\/playwright\.production\.config\.ts/)
+  assert.doesNotMatch(realRulebooks,
+    /npm --prefix frontend exec playwright test -- --config playwright\.production\.config\.ts/)
+  assert.match(realRulebooks, /--base-url "http:\/\/127\.0\.0\.1:18082"/)
+  assert.match(realRulebooks, /--navigation-mode api/)
+  assert.match(deployment, /name: Verify public browser and API path/)
+  assert.match(deployment, /fetch\(`\$\{process\.env\.RULEPILOT_PUBLIC_URL\}\/api\/auth\/csrf`/)
   assert.doesNotMatch(candidates, /inputs\.ref/)
   assert.match(candidates, /ref: main/)
   assert.match(candidates, /Production is not running the checked-out main commit/)

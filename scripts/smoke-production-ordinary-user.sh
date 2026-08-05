@@ -7,7 +7,8 @@ usage() {
 Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
   --base-url URL --pdf FILE [--username USER] [--timeout-seconds SECONDS] \
   [--expected-title TITLE] [--uploaded-title TITLE] [--official-source-url URL] \
-  [--preparation-mode text|visual] [--navigation-file FILE] [--result-file FILE]
+  [--preparation-mode text|visual] [--navigation-mode all|api] \
+  [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated upload -> processing -> teaching plan -> illustrated lesson
 journey and removes the synthetic document before exiting.
@@ -22,6 +23,7 @@ expected_title="lantern relay"
 uploaded_title="Lantern Relay rulebook EN v4 12pages"
 official_source_url=
 preparation_mode=text
+navigation_mode=all
 navigation_file=
 result_file=
 
@@ -57,6 +59,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--preparation-mode)
 			preparation_mode=${2:-}
+			shift 2
+			;;
+		--navigation-mode)
+			navigation_mode=${2:-}
 			shift 2
 			;;
 		--navigation-file)
@@ -99,6 +105,10 @@ if [ "$preparation_mode" != text ] && [ "$preparation_mode" != visual ]; then
 	echo "--preparation-mode must be text or visual" >&2
 	exit 2
 fi
+if [ "$navigation_mode" != all ] && [ "$navigation_mode" != api ]; then
+	echo "--navigation-mode must be all or api" >&2
+	exit 2
+fi
 if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
 	echo "RULEPILOT_SMOKE_PASSWORD is required" >&2
 	exit 2
@@ -123,17 +133,26 @@ probe_index=0
 probe_navigation() {
 	[ -n "$navigation_file" ] || return 0
 	local phase=$1
-	local paths=(
-		"/"
-		"/teach"
-		"/lessons"
-		"/catalog"
-		"/library"
-		"/account"
-		"/api/v1/documents"
-		"/api/v1/teaching-plans"
-		"/api/public/lessons"
-	)
+	local paths
+	if [ "$navigation_mode" = api ]; then
+		paths=(
+			"/api/v1/documents"
+			"/api/v1/teaching-plans"
+			"/api/public/lessons"
+		)
+	else
+		paths=(
+			"/"
+			"/teach"
+			"/lessons"
+			"/catalog"
+			"/library"
+			"/account"
+			"/api/v1/documents"
+			"/api/v1/teaching-plans"
+			"/api/public/lessons"
+		)
+	fi
 	local path=${paths[$((probe_index % ${#paths[@]}))]}
 	local measurement http_code elapsed_seconds
 	measurement=$(curl --location --silent --show-error --output /dev/null \
