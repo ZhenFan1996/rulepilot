@@ -135,3 +135,36 @@ jobs:
           rm -f "${archive}"
           printf 'Activated production release %s\n' "${release_id}"
           REMOTE
+
+      - name: Verify public browser and API path
+        env:
+          RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+        run: |
+          node --input-type=module <<'NODE'
+          const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+          let lastFailure = 'public verification did not run'
+          for (let attempt = 1; attempt <= 20; attempt += 1) {
+            try {
+              const page = await fetch(`${process.env.RULEPILOT_PUBLIC_URL}/`, {
+                signal: AbortSignal.timeout(10_000),
+              })
+              const html = await page.text()
+              if (!page.ok || !html.includes('<title>RulePilot')) {
+                throw new Error(`frontend returned HTTP ${page.status} without the RulePilot title`)
+              }
+              const csrf = await fetch(`${process.env.RULEPILOT_PUBLIC_URL}/api/auth/csrf`, {
+                signal: AbortSignal.timeout(10_000),
+              })
+              const payload = await csrf.json()
+              if (!csrf.ok || typeof payload.token !== 'string' || payload.token.length === 0) {
+                throw new Error(`CSRF endpoint returned an invalid HTTP ${csrf.status} response`)
+              }
+              console.log(`Verified public frontend and API on attempt ${attempt}`)
+              process.exit(0)
+            } catch (error) {
+              lastFailure = error instanceof Error ? error.message : String(error)
+              if (attempt < 20) await pause(3_000)
+            }
+          }
+          throw new Error(`Public production verification failed: ${lastFailure}`)
+          NODE
