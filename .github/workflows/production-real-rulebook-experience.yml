@@ -49,6 +49,7 @@ jobs:
       RULEBOOK_A_URL: ${{ inputs.rulebook_a_url }}
       RULEBOOK_B_TITLE: ${{ inputs.rulebook_b_title }}
       RULEBOOK_B_URL: ${{ inputs.rulebook_b_url }}
+      RULEPILOT_PUBLIC_URL: https://rulepilot.cn
     steps:
       - uses: actions/checkout@v6
         with:
@@ -105,6 +106,8 @@ jobs:
           set -Eeuo pipefail
           artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
           mkdir -p "$artifact_dir"
+          printf '{"stage":"preflight"}\n' > "$artifact_dir/status.json"
+          chmod 600 "$artifact_dir/status.json"
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -135,19 +138,11 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
-          read_numeric_value() {
-            local value
-            value=$(sed -n "s/^$1=//p" "$env_file" | head -n 1)
-            value=$(printf '%s' "$value" | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')
-            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
-            printf '%s' "$value"
-          }
-          printf '%s\n%s\n%s\n%s\n%s' \
+          printf '%s\n%s\n%s\n%s' \
             "$(read_value RULEPILOT_USER_USERNAME)" \
             "$(read_value RULEPILOT_USER_PASSWORD)" \
             "$(read_value RULEPILOT_ADMIN_USERNAME)" \
-            "$(read_value RULEPILOT_ADMIN_PASSWORD)" \
-            "$(read_numeric_value RULEPILOT_HTTP_PORT)"
+            "$(read_value RULEPILOT_ADMIN_PASSWORD)"
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
@@ -155,19 +150,14 @@ jobs:
           player_password=${credential_lines[1]:-}
           admin_username=${credential_lines[2]:-admin}
           admin_password=${credential_lines[3]:-}
-          frontend_port=${credential_lines[4]:-80}
           test -n "$player_password"
           test -n "$admin_password"
-          [[ "$frontend_port" =~ ^[1-9][0-9]{0,4}$ ]] || { echo "Production frontend port is invalid" >&2; exit 1; }
           echo "::add-mask::$player_username"
           echo "::add-mask::$player_password"
           echo "::add-mask::$admin_username"
           echo "::add-mask::$admin_password"
 
-          ssh "${ssh_options[@]}" -N \
-            -L 18082:127.0.0.1:8080 \
-            -L "18083:127.0.0.1:$frontend_port" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" &
+          ssh "${ssh_options[@]}" -N -L 18082:127.0.0.1:8080 "${DEPLOY_USER}@${DEPLOY_HOST}" &
           tunnel_pid=$!
           child_pids=()
           browser_pid=
@@ -185,7 +175,7 @@ jobs:
           done
 
           RULEPILOT_PRODUCTION_EXPERIENCE=true \
-          RULEPILOT_PRODUCTION_BASE_URL=http://127.0.0.1:18083 \
+          RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
           RULEPILOT_EXPERIENCE_COMPLETION_FILE="$RUNNER_TEMP/concurrent-generation-finished" \
           RULEPILOT_EXPERIENCE_BROWSER_REPORT="$artifact_dir/browser-navigation.json" \
           RULEPILOT_EXPERIENCE_USER_A="$player_username" \
@@ -197,7 +187,7 @@ jobs:
 
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url http://127.0.0.1:18083 \
+              --base-url "$RULEPILOT_PUBLIC_URL" \
               --pdf "$RUNNER_TEMP/rulebook-a.pdf" \
               --username "$player_username" \
               --expected-title "${RULEBOOK_A_TITLE,,}" \
@@ -211,7 +201,7 @@ jobs:
 
           RULEPILOT_SMOKE_PASSWORD="$admin_password" \
             bash scripts/smoke-production-ordinary-user.sh \
-              --base-url http://127.0.0.1:18083 \
+              --base-url "$RULEPILOT_PUBLIC_URL" \
               --pdf "$RUNNER_TEMP/rulebook-b.pdf" \
               --username "$admin_username" \
               --expected-title "${RULEBOOK_B_TITLE,,}" \
