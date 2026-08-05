@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 
+import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
 import VoiceQuestionCapture from '@/components/VoiceQuestionCapture.vue'
 import { useLocale } from '@/lib/locale'
 import type {
@@ -231,15 +232,14 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
 </script>
 
 <template>
-  <section id="lesson-question-panel" class="mt-8 scroll-mt-6 border-t border-ink/10 pt-7" aria-labelledby="lesson-question-title">
-    <div class="rounded-3xl border border-indigo/20 bg-indigo/[0.035] p-4 sm:p-6">
-      <div class="mt-2 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">{{ t('lesson.answer.eyebrow') }}</p>
-          <h3 id="lesson-question-title" class="mt-1 font-display text-2xl font-semibold">{{ t('lesson.answer.title') }}</h3>
-          <p class="mt-2 text-sm leading-6 text-ink/55">{{ t('lesson.answer.description') }}</p>
-        </div>
-      </div>
+  <section id="lesson-question-panel" class="mt-8 scroll-mt-6" aria-labelledby="lesson-question-title">
+    <div class="agent-workspace rounded-[2rem] border border-indigo/15 p-4 sm:p-7">
+      <AgentWorkspaceHeader
+        :eyebrow="t('lesson.answer.eyebrow')"
+        :title="t('lesson.answer.title')"
+        :description="t('lesson.answer.description')"
+        :status="online ? t('lesson.answer.agentReady') : ''"
+      />
 
       <div v-if="answerTurns.length" class="mt-5 flex flex-wrap items-center justify-between gap-2">
         <p class="text-xs leading-5 text-ink/45">{{ t('lesson.answer.threadPrivacy') }}</p>

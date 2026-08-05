@@ -69,7 +69,7 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
     public Optional<IllustratedLesson> findLatestByPlan(UUID teachingPlanId) {
         return entityManager
                 .createQuery(
-                        "select l from IllustratedLessonEntity l where l.teachingPlanId = :planId order by l.createdAt desc",
+                        "select l from IllustratedLessonEntity l where l.teachingPlanId = :planId order by l.createdAt desc, l.id desc",
                         IllustratedLessonEntity.class)
                 .setParameter("planId", teachingPlanId)
                 .setMaxResults(1)
@@ -86,7 +86,7 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
         entityManager
                 .createQuery(
                         "select l from IllustratedLessonEntity l where l.teachingPlanId in :planIds "
-                                + "order by l.teachingPlanId, l.createdAt desc",
+                                + "order by l.teachingPlanId, l.createdAt desc, l.id desc",
                         IllustratedLessonEntity.class)
                 .setParameter("planIds", teachingPlanIds)
                 .getResultList()

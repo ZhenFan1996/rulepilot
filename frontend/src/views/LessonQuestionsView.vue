@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import CardOcrCapture from '@/components/CardOcrCapture.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
+import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
@@ -33,6 +33,8 @@ interface TeachingPlan {
 interface IllustratedLesson {
   id: string
 }
+
+const CardOcrCapture = defineAsyncComponent(() => import('@/components/CardOcrCapture.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -295,11 +297,12 @@ onUnmounted(() => {
         </section>
 
         <template v-else>
-          <header class="border-b border-ink/10 pb-7">
-            <p class="text-xs font-semibold uppercase tracking-[0.14em] text-copper">{{ t('questions.eyebrow') }}</p>
-            <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('questions.title', { game: plan?.gameTitle ?? '' }) }}</h1>
-            <p class="mt-4 max-w-2xl leading-7 text-ink/60">{{ t('questions.description') }}</p>
-          </header>
+          <LessonGuideHero
+            :title="t('questions.title', { game: plan?.gameTitle ?? '' })"
+            :eyebrow="t('questions.eyebrow')"
+            :description="t('questions.description')"
+            compact
+          />
 
           <LessonAnswerPanel
             :question="question"

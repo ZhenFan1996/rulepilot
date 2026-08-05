@@ -3,16 +3,14 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import RulebookIconGlossaryPanel from '@/components/RulebookIconGlossaryPanel.vue'
+import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
+import LessonChapterList from '@/components/LessonChapterList.vue'
+import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import type { LearningIntent } from '@/composables/useLessonAnswers'
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
 import { publicLessonTitle } from '@/lib/lessonPresentation'
 import { publicCoverUrl } from '@/lib/publicCover'
-import {
-  parseRulebookIconGlossary,
-  type RulebookIconGlossary,
-} from '@/lib/rulebookIconGlossary'
 
 interface VisualFocus {
   pageNumber: number
@@ -96,9 +94,6 @@ const { locale, t } = useLocale()
 const loading = ref(true)
 const errorMessage = ref('')
 const publicLesson = ref<PublicLessonResponse | null>(null)
-const iconGlossary = ref<RulebookIconGlossary | null>(null)
-const iconGlossaryLoading = ref(true)
-const iconGlossaryError = ref('')
 const publicQuestion = ref('')
 const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
@@ -353,78 +348,26 @@ function cropUrl(focus: VisualFocus) {
   return `${sourcePageUrl(focus.pageNumber)}/crop?${query.toString()}`
 }
 
-function publicIconGlossaryEndpoint(targetPlanId = planId.value) {
-  return `/api/public/lessons/${encodeURIComponent(targetPlanId)}/icon-glossary`
-}
-
-function publicIconImageUrl(occurrenceId: string) {
-  return `${publicIconGlossaryEndpoint()}/icons/${encodeURIComponent(occurrenceId)}/image`
-}
-
-async function optionalPublicFetch(url: string) {
-  try {
-    return await fetch(url)
-  } catch {
-    return null
-  }
-}
-
-async function acceptPublicIconGlossary(response: Response | null, request: number) {
-  if (request !== latestLoadRequest) return
-  if (!response?.ok) {
-    iconGlossaryError.value = t('iconGlossary.error.load')
-    iconGlossaryLoading.value = false
-    return
-  }
-  try {
-    const received = parseRulebookIconGlossary(await response.json())
-    if (request !== latestLoadRequest) return
-    iconGlossary.value = received
-    iconGlossaryError.value = ''
-  } catch {
-    if (request === latestLoadRequest) iconGlossaryError.value = t('iconGlossary.error.load')
-  } finally {
-    if (request === latestLoadRequest) iconGlossaryLoading.value = false
-  }
-}
-
-async function reloadPublicIconGlossary() {
-  const request = latestLoadRequest
-  iconGlossaryLoading.value = iconGlossary.value === null
-  iconGlossaryError.value = ''
-  await acceptPublicIconGlossary(await optionalPublicFetch(publicIconGlossaryEndpoint()), request)
-}
-
 async function load() {
   const requestedPlanId = planId.value
   const requestedLocale = locale.value
   const request = ++latestLoadRequest
   loading.value = true
   errorMessage.value = ''
-  iconGlossary.value = null
-  iconGlossaryLoading.value = true
-  iconGlossaryError.value = ''
   try {
     if (!requestedPlanId) throw new Error(t('public.error.missing'))
-    const [response, glossaryResponse] = await Promise.all([
-      fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`),
-      optionalPublicFetch(publicIconGlossaryEndpoint(requestedPlanId)),
-    ])
+    const response = await fetch(`/api/public/lessons/${encodeURIComponent(requestedPlanId)}?language=${encodeURIComponent(requestedLocale)}`)
     if (response.status === 404) throw new Error(t('public.error.unpublished'))
     if (!response.ok) throw new Error(t('public.error.open'))
     const received = await response.json() as PublicLessonResponse
     if (request !== latestLoadRequest) return
     publicLesson.value = received
     coverUnavailable.value = false
-    await acceptPublicIconGlossary(glossaryResponse, request)
   } catch (error) {
     if (request !== latestLoadRequest) return
     errorMessage.value = error instanceof Error ? error.message : t('public.error.open')
   } finally {
-    if (request === latestLoadRequest) {
-      loading.value = false
-      iconGlossaryLoading.value = false
-    }
+    if (request === latestLoadRequest) loading.value = false
   }
 }
 
@@ -604,49 +547,35 @@ onUnmounted(() => abandonPublicAnswer())
 
       <article v-else-if="publicLesson" class="mx-auto max-w-4xl px-5 py-10 sm:px-8 lg:py-14">
         <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo hover:text-indigo/75">← {{ t('nav.library') }}</RouterLink>
-        <div class="border-b border-ink/10 pb-8">
-          <div class="flex items-start gap-5 sm:gap-7">
-            <a v-if="publicLesson.gameCover && !coverUnavailable" :href="publicLesson.gameCover.attributionUrl" target="_blank" rel="noopener noreferrer" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32" :aria-label="t('public.cover.open', { title: displayTitle, source: publicLesson.gameCover.attributionLabel })">
-              <img :src="publicCoverUrl(planId)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async" @error="coverUnavailable = true">
-            </a>
-            <div v-else-if="!coverUnavailable" class="w-24 shrink-0 overflow-hidden rounded-lg border border-ink/10 bg-paper shadow-sm sm:w-32">
-              <img :src="publicCoverUrl(planId)" :alt="t('public.cover.alt', { title: displayTitle })" class="aspect-[3/4] h-full w-full object-cover" decoding="async" @error="coverUnavailable = true">
-            </div>
-            <div>
-              <p class="text-sm font-semibold text-copper">{{ t('public.hero.eyebrow') }}</p>
-              <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ displayTitle }}</h1>
-              <p v-if="publicLesson.rulebookTitle !== displayTitle" class="mt-2 text-sm font-medium text-ink/50">{{ t('public.hero.rulebook', { title: publicLesson.rulebookTitle }) }}</p>
-              <p class="mt-4 max-w-2xl leading-7 text-ink/60">{{ t('public.hero.description') }}</p>
-            </div>
-          </div>
-          <a v-if="publicLesson.officialSourceUrl" :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="mt-5 inline-flex min-h-11 items-center rounded-lg border border-indigo/30 px-4 font-semibold text-indigo hover:bg-indigo/5">{{ t('public.hero.openRulebook') }}</a>
-          <p v-if="englishGuidePending" class="mt-5 rounded-2xl border border-indigo/15 bg-indigo/[0.045] px-4 py-3 text-sm leading-6 text-indigo" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
-        </div>
+        <LessonGuideHero
+          :title="displayTitle"
+          :eyebrow="t('public.hero.eyebrow')"
+          :description="t('public.hero.description')"
+          :rulebook-title="publicLesson.rulebookTitle !== displayTitle ? t('public.hero.rulebook', { title: publicLesson.rulebookTitle }) : ''"
+          :cover-url="publicCoverUrl(planId)"
+          :cover-alt="t('public.cover.alt', { title: displayTitle })"
+          :cover-href="publicLesson.gameCover?.attributionUrl ?? ''"
+          :cover-unavailable="coverUnavailable"
+          @cover-error="coverUnavailable = true"
+        >
+          <template v-if="publicLesson.officialSourceUrl" #actions>
+            <a :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] shadow-sm">{{ t('public.hero.openRulebook') }}</a>
+          </template>
+          <template v-if="englishGuidePending" #status>
+            <p class="rounded-xl border border-paper/15 bg-paper/10 px-4 py-3 text-sm leading-6 text-paper/80" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
+          </template>
+        </LessonGuideHero>
 
-        <RulebookIconGlossaryPanel
-          :glossary="iconGlossary"
-          :loading="iconGlossaryLoading"
-          :error-message="iconGlossaryError"
-          :can-generate="false"
-          :generating="iconGlossary?.status === 'GENERATING'"
-          :online="true"
-          :image-url="publicIconImageUrl"
-          @retry="reloadPublicIconGlossary"
-        />
-
-        <section class="mt-8 rounded-3xl border border-indigo/20 bg-indigo/[0.045] p-5 shadow-[0_18px_50px_-36px_rgba(40,57,128,0.75)] sm:p-7" aria-labelledby="public-question-title">
-          <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.14em] text-indigo">{{ t('public.question.eyebrow') }}</p>
-              <h2 id="public-question-title" class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ t('public.question.title') }}</h2>
-              <p class="mt-2 max-w-2xl leading-7 text-ink/60">{{ t('public.question.description') }}</p>
-              <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
-            </div>
-            <div class="flex w-fit shrink-0 flex-wrap gap-2">
-              <span class="rounded-full bg-paper px-3 py-1.5 text-xs font-semibold text-indigo">{{ t('public.question.noLogin') }}</span>
-              <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="clearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
-            </div>
-          </div>
+        <section class="agent-workspace mt-8 rounded-[2rem] border border-indigo/15 p-5 sm:p-7" aria-labelledby="public-question-title">
+          <AgentWorkspaceHeader
+            :eyebrow="t('public.question.eyebrow')"
+            :title="t('public.question.title')"
+            :description="t('public.question.description')"
+            :status="t('public.question.noLogin')"
+          >
+            <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="clearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
+          </AgentWorkspaceHeader>
+          <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
 
           <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
           <p v-else-if="publicAnswerNotice" class="mt-4 rounded-2xl bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ publicAnswerNotice }}</p>
@@ -737,34 +666,12 @@ onUnmounted(() => abandonPublicAnswer())
           </form>
         </section>
 
-        <section v-for="section in publicLesson.lesson.sections" :key="section.position" class="border-b border-ink/10 py-10">
-          <p class="text-sm font-semibold text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
-          <h2 class="mt-2 font-display text-3xl font-semibold tracking-tight">{{ section.title }}</h2>
-          <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
-
-          <ol class="mt-7 space-y-5">
-            <li v-for="step in section.steps" :key="step.position" class="rounded-xl border border-ink/10 bg-paper p-5 sm:p-6">
-              <div class="flex gap-4">
-                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ step.position }}</span>
-                <div class="min-w-0 flex-1">
-                  <h3 class="font-display text-xl font-semibold">{{ step.heading }}</h3>
-                  <p class="mt-2 leading-7 text-ink/75">{{ step.text }}</p>
-                  <figure v-if="step.visualFocus" class="mt-5 overflow-hidden rounded-2xl border border-indigo/15 bg-canvas">
-                    <figcaption class="border-b border-indigo/10 bg-indigo/[0.045] px-4 py-3">
-                      <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ t('lesson.chapter.visual.observationEyebrow') }}</p>
-                      <p class="mt-1 text-sm leading-6 text-ink/70">{{ step.visualFocus.visibleDescription || step.visualFocus.label }}</p>
-                    </figcaption>
-                    <a :href="sourcePageUrl(step.visualFocus.pageNumber)" target="_blank" rel="noopener noreferrer" class="block">
-                      <img :src="cropUrl(step.visualFocus)" :alt="t('public.step.openSource', { label: step.visualFocus.label })" class="max-h-96 w-full object-contain">
-                      <span class="block border-t border-ink/10 px-3 py-2 text-sm font-semibold text-indigo">{{ t('public.step.openSource', { label: step.visualFocus.label }) }}</span>
-                    </a>
-                  </figure>
-                  <p v-if="step.sourcePages.length" class="mt-4 text-sm text-ink/45">{{ t('public.step.source', { pages: step.sourcePages.join(locale === 'en' ? ', ' : '、') }) }}</p>
-                </div>
-              </div>
-            </li>
-          </ol>
-        </section>
+        <LessonChapterList
+          :sections="publicLesson.lesson.sections"
+          id-prefix="public-chapter"
+          :page-image-url="sourcePageUrl"
+          :focused-page-image-url="cropUrl"
+        />
       </article>
     </div>
   </AppShell>

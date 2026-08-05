@@ -30,6 +30,21 @@ describe('teaching progress', () => {
       .activities).toHaveLength(1)
   })
 
+  it('keeps the newer run metadata when an older snapshot arrives late', () => {
+    const current = run('run-1', [activity(2, 'publishTeachingSection|1', 'SUCCEEDED')])
+    current.run.state = 'COMPLETED'
+    current.run.updatedAt = '2026-07-21T00:03:00Z'
+    current.run.completedAt = '2026-07-21T00:03:00Z'
+    const stale = run('run-1', [activity(1, 'composeTeachingSection|1', 'RUNNING')])
+
+    const merged = mergeTeachingRunProgress(current, stale)!
+
+    expect(merged.run.state).toBe('COMPLETED')
+    expect(merged.run.updatedAt).toBe('2026-07-21T00:03:00Z')
+    expect(merged.activities.map((item) => item.sequence)).toEqual([1, 2])
+    expect(mergeTeachingRunProgress(current, null)).toEqual(current)
+  })
+
   it('uses safe player language and derives chapter outcomes from publication activities', () => {
     const activities = [
       activity(1, 'composeTeachingSection|1', 'RUNNING'),

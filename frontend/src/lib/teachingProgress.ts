@@ -41,9 +41,17 @@ export function mergeTeachingRunProgress(
   previous: TeachingRunProgress | null,
   incoming: TeachingRunProgress | null,
 ) {
-  if (!incoming || previous?.run.id !== incoming.run.id) return incoming
+  if (!incoming) return previous
+  if (previous?.run.id !== incoming.run.id) return incoming
+  const previousUpdatedAt = Date.parse(previous.run.updatedAt)
+  const incomingUpdatedAt = Date.parse(incoming.run.updatedAt)
+  const latest = !Number.isNaN(previousUpdatedAt)
+    && !Number.isNaN(incomingUpdatedAt)
+    && previousUpdatedAt > incomingUpdatedAt
+    ? previous
+    : incoming
   return {
-    ...incoming,
+    ...latest,
     activities: Array.from(new Map(
       [...previous.activities, ...incoming.activities]
         .map((activity) => [activity.sequence, activity]),

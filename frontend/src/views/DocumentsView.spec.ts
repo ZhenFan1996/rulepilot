@@ -34,6 +34,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     })
     expect(router.currentRoute.value.name).toBe('lessons')
     expect(router.currentRoute.value.query.started).toBe('plan-1')
+    expect(router.currentRoute.value.query.run).toBe('lesson-run-1')
     expect(fetchMock.mock.calls.some(([input, options]) =>
       String(input).endsWith('/teaching-plans/plan-1/illustrated-lessons') && options?.method === 'POST')).toBe(true)
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
@@ -98,6 +99,12 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('正在整理章节、规则和图例索引…')
+    FakeEventSource.instances[0]!.emitProgress({
+      stage: 'RENDERING', percentage: 52, processedPages: 14, totalPages: 28, complete: false,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在整理章节、规则和图例索引…')
+    expect(wrapper.text()).not.toContain('第 14 / 28 页')
     wrapper.unmount()
   })
 
@@ -230,7 +237,9 @@ function mockApplicationFetch(
     if (path.endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST') {
       return response({ assistantRunId: 'prep-run-1', state: 'RECEIVED', reused: false }, 202)
     }
-    if (path.includes('/teaching-plans/plan-1/illustrated-lessons')) return response({}, 202)
+    if (path.includes('/teaching-plans/plan-1/illustrated-lessons')) {
+      return response({ assistantRunId: 'lesson-run-1', state: 'RECEIVED', reused: false }, 202)
+    }
     return new Response(null, { status: 404 })
   })
 }

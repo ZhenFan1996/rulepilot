@@ -11,6 +11,8 @@
   --color-copper: #aa5b31;
   --color-copper-dark: #8d4524;
   --color-indigo: #4f5e9d;
+  --color-felt: #244b43;
+  --color-gold: #d3a84f;
   --color-border: rgba(26, 35, 42, 0.12);
 }
 
@@ -62,6 +64,26 @@ a {
 
 button {
   font: inherit;
+}
+
+.tabletop-hero {
+  background:
+    radial-gradient(circle at 15% 25%, rgb(255 255 255 / 7%) 0 1px, transparent 1.5px) 0 0 / 18px 18px,
+    linear-gradient(135deg, #183b36 0%, #244b43 55%, #1c3438 100%);
+}
+
+.agent-workspace {
+  background:
+    linear-gradient(135deg, rgb(79 94 157 / 7%), transparent 45%),
+    var(--color-paper);
+  box-shadow: 0 26px 70px -58px rgb(18 33 41 / 80%);
+}
+
+.tabletop-app {
+  background-image:
+    radial-gradient(circle at 12px 12px, rgb(170 91 49 / 3.5%) 0 1px, transparent 1.4px),
+    linear-gradient(115deg, rgb(79 94 157 / 2.5%), transparent 38%);
+  background-size: 24px 24px, 100% 100%;
 }
 
 .shelf-cover {

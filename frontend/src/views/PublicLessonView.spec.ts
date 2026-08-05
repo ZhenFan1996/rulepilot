@@ -24,7 +24,6 @@ describe('PublicLessonView', () => {
   it('renders a no-login lesson with cited visual crops and an official source link', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/auth/session')) return new Response(null, { status: 401 })
-      if (String(input).endsWith('/icon-glossary')) return Response.json(iconGlossaryFixture())
       return Response.json({
       teachingPlanId: 'plan-1',
       documentVersionId: 'version-1',
@@ -69,7 +68,7 @@ describe('PublicLessonView', () => {
 
     const sidebar = wrapper.get('aside.fixed')
     expect(sidebar.classes()).toContain('lg:flex')
-    expect(wrapper.findAll('header')).toHaveLength(1)
+    expect(wrapper.find('header.tabletop-hero').exists()).toBe(true)
     expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-ink'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
@@ -79,10 +78,7 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('a[href="/api/public/lessons/plan-1/rulebook"]').text()).toContain('官方原规则书')
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
-    expect(wrapper.text()).toContain('图标速查表')
-    expect(wrapper.text()).toContain('执行一次行动。')
-    expect(wrapper.get('img[alt*="行动图标"]').attributes('src'))
-      .toBe('/api/public/lessons/plan-1/icon-glossary/icons/icon-occurrence-1/image')
+    expect(wrapper.text()).not.toContain('图标速查表')
   })
 
   it('lets an anonymous reader ask and receive cited examples plus evidence-matched imagery', async () => {
@@ -482,30 +478,3 @@ describe('PublicLessonView', () => {
     expect(wrapper.text()).not.toContain('First Rules')
   })
 })
-
-function iconGlossaryFixture() {
-  return {
-    status: 'READY',
-    totalPages: 2,
-    inspectedPages: 2,
-    completePages: 2,
-    warnings: [],
-    icons: [{
-      id: 'icon-1',
-      name: '行动图标',
-      visualDescription: '蓝色圆形中的白色手掌',
-      explanation: '执行一次行动。',
-      evidenceText: '行动：执行一次行动',
-      meaningStatus: 'EXPLICIT',
-      representativeOccurrenceId: 'icon-occurrence-1',
-      occurrences: [{
-        id: 'icon-occurrence-1',
-        pageNumber: 2,
-        x: 100,
-        y: 100,
-        width: 80,
-        height: 80,
-      }],
-    }],
-  }
-}

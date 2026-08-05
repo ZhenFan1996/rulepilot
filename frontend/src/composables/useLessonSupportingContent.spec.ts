@@ -8,60 +8,42 @@ describe('useLessonSupportingContent', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps the readable lesson usable when optional content is unavailable', async () => {
-    localStorage.setItem('rulepilot:narration-position:lesson-1', '4200')
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path.endsWith('/quality')) return Response.json({ status: 'READY', score: 100, checks: [] })
-      if (path.endsWith('/comprehension')) return new Response(null, { status: 404 })
-      if (path.endsWith('/narration/playback')) {
-        return Response.json({
-          script: { id: 'script-1', status: 'READY', chapters: [] },
-          provider: 'fixture', durationMillis: 8_000, cues: [],
-        })
+  it('loads only the learning check and leaves retired media endpoints untouched', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith('/comprehension')) {
+        return Response.json({ lessonId: 'lesson-1', tasks: [], visualAids: [] })
       }
       return new Response(null, { status: 404 })
-    }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const content = useLessonSupportingContent()
 
     await content.loadSupportingContent({
       planId: 'plan-1',
       isCurrent: () => true,
-      narrationPositionKey: () => 'rulepilot:narration-position:lesson-1',
       requestLogin: vi.fn(),
     })
 
-    expect(content.quality.value?.status).toBe('READY')
-    expect(content.comprehension.value).toBeNull()
-    expect(content.comprehensionError.value).toContain('不影响继续看讲解')
-    expect(content.narration.value?.id).toBe('script-1')
-    expect(content.audioAvailable.value).toBe(true)
-    expect(content.narrationMillis.value).toBe(4_200)
-    expect(content.mediaWarningCodes.value).toEqual(['VIDEO_UNAVAILABLE'])
+    expect(content.comprehension.value?.lessonId).toBe('lesson-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/comprehension')
   })
 
-  it('drops optional content that returns after the selected lesson changed', async () => {
-    let resolveQuality: ((response: Response) => void) | undefined
+  it('drops a learning check that returns after the selected lesson changed', async () => {
+    let resolveComprehension: ((response: Response) => void) | undefined
     let current = true
-    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
-      if (String(input).endsWith('/quality')) {
-        return new Promise<Response>((resolve) => { resolveQuality = resolve })
-      }
-      return Promise.resolve(new Response(null, { status: 404 }))
-    }))
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { resolveComprehension = resolve })))
     const content = useLessonSupportingContent()
     const loading = content.loadSupportingContent({
       planId: 'plan-1',
       isCurrent: () => current,
-      narrationPositionKey: () => '',
       requestLogin: vi.fn(),
     })
 
     current = false
-    resolveQuality!(Response.json({ status: 'READY', score: 100, checks: [] }))
+    resolveComprehension!(Response.json({ lessonId: 'lesson-1', tasks: [], visualAids: [] }))
     await loading
 
-    expect(content.quality.value).toBeNull()
-    expect(content.mediaWarningCodes.value).toEqual([])
+    expect(content.comprehension.value).toBeNull()
   })
 })

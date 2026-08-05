@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
+import { mergeDocumentProgress, type DocumentProcessingSnapshot } from '@/lib/documentProgress'
 import {
   forgetPendingRulebookLesson,
   readPendingRulebookLessons,
@@ -11,6 +12,7 @@ import {
   type PendingRulebookLesson,
 } from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
+import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 
 interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
@@ -31,7 +33,7 @@ interface TeachingPreparationRun {
     outcome: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'REJECTED'
   }>
 }
-interface ProcessingSnapshot { stage: string; percentage: number; processedPages: number; totalPages: number; complete: boolean }
+type ProcessingSnapshot = DocumentProcessingSnapshot
 interface ModelConfigurationResponse {
   providers: Array<{ id: string; configured: boolean; visionCapable: boolean }>
   assignments: { teaching: string; visual: string }
@@ -68,11 +70,12 @@ const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
 const message = ref('')
 const errorMessage = ref('')
-const progress = ref<Record<string, { stage: string; percentage: number; processedPages: number; totalPages: number }>>({})
+const progress = ref<Record<string, ProcessingSnapshot>>({})
 const modelConfiguration = ref<ModelConfigurationResponse | null>(null)
 const progressConnections = new Map<string, EventSource>()
 const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
+const terminalHandoffs = new Set<string>()
 let disposed = false
 let preparationClock: ReturnType<typeof setInterval> | null = null
 let photographedPageSequence = 0
@@ -376,9 +379,11 @@ async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: Csrf
     method: 'POST', headers: { [csrf.headerName]: csrf.token },
   })
   if (!lessonResponse.ok) throw new Error(t('documents.error'))
+  const launch = await lessonResponse.json() as TeachingLaunch
+  notifyTeachingLaunched({ planId: plan.id, runId: launch.assistantRunId })
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, preferences.versionId)
   localStorage.setItem('rulepilot:last-plan-id', plan.id)
-  await router.push({ name: 'lessons', query: { started: plan.id } })
+  await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
 }
 
 async function resumeOrStartLesson(pending: PendingRulebookLesson) {
@@ -432,10 +437,11 @@ function watchProgress(pending: PendingRulebookLesson) {
       return
     }
     progressRetryAttempts.set(versionId, 0)
-    progress.value = { ...progress.value, [versionId]: snapshot }
-    message.value = progressMessage(snapshot)
-    if (snapshot.complete) {
-      void handleTerminalProgress(pending, snapshot.stage)
+    const mergedSnapshot = mergeDocumentProgress(progress.value[versionId], snapshot)
+    progress.value = { ...progress.value, [versionId]: mergedSnapshot }
+    message.value = progressMessage(mergedSnapshot)
+    if (mergedSnapshot.complete) {
+      void handleTerminalProgress(pending, mergedSnapshot.stage)
     }
   })
   events.onerror = () => {
@@ -446,6 +452,8 @@ function watchProgress(pending: PendingRulebookLesson) {
 }
 
 async function handleTerminalProgress(pending: PendingRulebookLesson, stage: string) {
+  if (terminalHandoffs.has(pending.versionId)) return
+  terminalHandoffs.add(pending.versionId)
   closeProgressConnection(pending.versionId)
   progressRetryAttempts.delete(pending.versionId)
   processingVersionId.value = ''
