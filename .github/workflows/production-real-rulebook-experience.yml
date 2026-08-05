@@ -161,10 +161,12 @@ jobs:
           tunnel_pid=$!
           child_pids=()
           browser_pid=
+          server_resource_pid=
           cleanup_processes() {
             touch "$RUNNER_TEMP/concurrent-generation-finished"
             for child_pid in "${child_pids[@]}"; do kill "$child_pid" 2>/dev/null || true; done
             if [[ -n "$browser_pid" ]]; then kill "$browser_pid" 2>/dev/null || true; fi
+            if [[ -n "$server_resource_pid" ]]; then kill "$server_resource_pid" 2>/dev/null || true; fi
             kill "$tunnel_pid" 2>/dev/null || true
           }
           trap cleanup_processes EXIT
@@ -173,6 +175,19 @@ jobs:
             [[ "$attempt" == 20 ]] && { echo "Production SSH tunnel did not become ready" >&2; exit 1; }
             sleep 1
           done
+
+          ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'trap "exit 0" HUP INT TERM; while true; do
+              measured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              docker stats --no-stream --format "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}" |
+                while IFS= read -r measurement; do
+                  printf "%s\t%s\n" "$measured_at" "$measurement"
+                done
+              sleep 5
+            done' \
+            > "$artifact_dir/server-resources.tsv" \
+            2> "$artifact_dir/server-resources-diagnostics.log" &
+          server_resource_pid=$!
 
           RULEPILOT_PRODUCTION_EXPERIENCE=true \
           RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
@@ -236,6 +251,9 @@ jobs:
           if [[ -d frontend/test-results ]]; then
             cp -R frontend/test-results "$artifact_dir/playwright-test-results"
           fi
+          kill "$server_resource_pid" 2>/dev/null || true
+          wait "$server_resource_pid" 2>/dev/null || true
+          server_resource_pid=
           printf '{"userA":%d,"userB":%d,"browser":%d}\n' \
             "$user_a_status" "$user_b_status" "$browser_status" > "$artifact_dir/status.json"
           chmod -R go-rwx "$artifact_dir"

@@ -29,10 +29,10 @@ services:
       # Let Serial GC return memory after an upload or a burst of generated lesson data. The default free-heap
       # ratio kept most of the 320 MiB maximum committed while idle and forced this 2 GiB host into swap.
       JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
-      # This host has one CPU and 1.6 GiB available to containers. A single bounded lesson run keeps reader
-      # requests responsive instead of allowing multiple large Agent contexts to contend with PDF uploads.
-      TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
-      TEACHING_BACKGROUND_MAX_POOL_SIZE: "1"
+      # Model calls are network-bound. Two bounded runs prevent one player's preparation or lesson from making a
+      # second player wait minutes for the first section, while the fixed heap and short queue protect this host.
+      TEACHING_BACKGROUND_CORE_POOL_SIZE: "2"
+      TEACHING_BACKGROUND_MAX_POOL_SIZE: "2"
       TEACHING_BACKGROUND_QUEUE_CAPACITY: "3"
       # On a single-core host, one section at a time avoids three concurrent model responses retaining large
       # evidence contexts in the web process. The reader-facing API stays responsive while the complete lesson
