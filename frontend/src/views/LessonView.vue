@@ -299,7 +299,12 @@ async function loadLesson() {
     if (visualEnrichmentActive.value) visualPolling.schedule()
   } catch {
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    errorMessage.value = t('lesson.reader.error.load')
+    if (offlineKnowledge.value.length) {
+      online.value = false
+    } else {
+      updateOnlineStatus()
+      errorMessage.value = t('lesson.reader.error.load')
+    }
   } finally {
     if (isCurrentLessonLoad(request, targetPlanId)) loading.value = false
   }

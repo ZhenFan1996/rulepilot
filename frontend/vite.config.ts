@@ -100,6 +100,8 @@ export default defineConfig({
           'rulepilot-icon.svg',
           'assets/index-*.{js,css}',
           'assets/LessonView-*.js',
+          'assets/LessonGuideHero-*.js',
+          'assets/LessonChapterList-*.js',
           'assets/offlineKnowledge-*.js',
           'assets/teachingProgress-*.js',
         ],
