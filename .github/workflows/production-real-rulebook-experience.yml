@@ -103,6 +103,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
+          mkdir -p "$artifact_dir"
           ssh_options=(
             -i "$HOME/.ssh/id_ed25519"
             -o BatchMode=yes
@@ -133,12 +135,19 @@ jobs:
             value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
             printf '%s' "$value"
           }
+          read_numeric_value() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$env_file" | head -n 1)
+            value=$(printf '%s' "$value" | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
           printf '%s\n%s\n%s\n%s\n%s' \
             "$(read_value RULEPILOT_USER_USERNAME)" \
             "$(read_value RULEPILOT_USER_PASSWORD)" \
             "$(read_value RULEPILOT_ADMIN_USERNAME)" \
             "$(read_value RULEPILOT_ADMIN_PASSWORD)" \
-            "$(read_value RULEPILOT_HTTP_PORT)"
+            "$(read_numeric_value RULEPILOT_HTTP_PORT)"
           REMOTE
           )
           mapfile -t credential_lines <<< "$credentials"
@@ -175,8 +184,6 @@ jobs:
             sleep 1
           done
 
-          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-real-rulebook-experience"
-          mkdir -p "$artifact_dir"
           RULEPILOT_PRODUCTION_EXPERIENCE=true \
           RULEPILOT_PRODUCTION_BASE_URL=http://127.0.0.1:18083 \
           RULEPILOT_EXPERIENCE_COMPLETION_FILE="$RUNNER_TEMP/concurrent-generation-finished" \
