@@ -9,6 +9,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
+import com.rulepilot.teaching.adapter.out.model.FakeTeachingOutlineModel;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.FutureTask;
@@ -717,6 +718,51 @@ class TeachingPlanServiceTest {
                         () -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(incomplete, pages))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("3");
+    }
+
+    @Test
+    void ignoresIdentityOnlyFrontMatterButStillRequiresFirstPageRulesCoverage() {
+        OutlineDraft laterPagesCovered = new OutlineDraft(
+                "Game", "Premise", List.of(topic("play", false, List.of(2))));
+        List<PageInput> identityFirst = List.of(
+                new PageInput(1, visualCatalogPage("MOON HARBOR; PUBLISHER", "游戏标题、出版商标志与设计者姓名。")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Players take turns choosing an action.")));
+        List<PageInput> rulesFirst = List.of(
+                new PageInput(1, visualCatalogPage("SET UP", "Each player takes three cards.")),
+                new PageInput(2, visualCatalogPage("HOW TO PLAY", "Players take turns choosing an action.")));
+
+        VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(laterPagesCovered, identityFirst);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> VisualOutlineEvidencePolicy.validateVisualRulebookCoverage(laterPagesCovered, rulesFirst))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1");
+    }
+
+    @Test
+    void doesNotAppendAFallbackChapterForIdentityOnlyFrontMatter() {
+        List<PageInput> pages = List.of(
+                new PageInput(1, visualCatalogPage("SKY PORT; PUBLISHER", "游戏标题、出版商标志与设计者姓名。")),
+                new PageInput(2, visualCatalogPage("COMPONENTS", "Component list and game objective.")),
+                new PageInput(3, visualCatalogPage("SET UP", "Each player takes starting resources.")),
+                new PageInput(4, visualCatalogPage("HOW TO PLAY", "Players take turns choosing an action.")),
+                new PageInput(5, visualCatalogPage("END OF GAME", "When the deck is empty, the highest score wins.")));
+        OutlineDraft model = new OutlineDraft(
+                "Sky Port",
+                "Premise",
+                List.of(
+                        detailedTopic("overview", "Overview", "Teach the goal", List.of(2)),
+                        detailedTopic("setup", "Setup", "Prepare to play", List.of(3)),
+                        detailedTopic("turn", "Your turn", "Choose an action", List.of(4)),
+                        detailedTopic("ending", "Game end", "Resolve the winner", List.of(5))));
+        OutlineDraft source = new FakeTeachingOutlineModel()
+                .organize(new com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest(
+                        4, 4, 30, pages, List.of()));
+
+        OutlineDraft augmented = VisualOutlineEvidencePolicy.augmentVisualCoverage(model, source);
+
+        assertThat(augmented.topics()).hasSize(4);
+        assertThat(augmented.topics()).extracting(TopicDraft::key)
+                .doesNotContain("source-coverage-5");
     }
 
     @Test

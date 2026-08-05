@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import com.rulepilot.teaching.TeachingOutlineModel;
+import com.rulepilot.teaching.VisualRulebookPageClassifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -35,7 +36,9 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
     }
 
     private OutlineDraft visualCatalogOutline(OutlineRequest request) {
-        List<PageInput> substantive = request.pages().stream().filter(this::isSubstantiveVisualPage).toList();
+        List<PageInput> substantive = request.pages().stream()
+                .filter(page -> VisualRulebookPageClassifier.isSubstantive(page.pageNumber(), page.text()))
+                .toList();
         List<PageInput> available = substantive.isEmpty() ? request.pages() : substantive;
         List<List<PageInput>> pagesByTopic = new ArrayList<>();
         for (int index = 0; index < 7; index++) pagesByTopic.add(new ArrayList<>());
@@ -99,35 +102,6 @@ public class FakeTeachingOutlineModel implements TeachingOutlineModel {
 
     private boolean isVisualCatalog(OutlineRequest request) {
         return request.pages().stream().allMatch(page -> page.text().startsWith("[Visual page catalog;"));
-    }
-
-    private boolean isSubstantiveVisualPage(PageInput page) {
-        String text = page.text().toLowerCase(Locale.ROOT);
-        boolean credits = text.contains("credits") || text.contains("鸣谢");
-        boolean cover = (text.contains("cover") || text.contains("封面"))
-                && containsAny(text, List.of(
-                        "no game mechanism",
-                        "no rule text",
-                        "no gameplay rules",
-                        "no operational instructions",
-                        "visual cover",
-                        "无游戏机制",
-                        "无游戏规则",
-                        "仅作为视觉封面"));
-        boolean storageOnlyInsert = text.contains("storage or assembly instructions")
-                && containsAny(text, List.of("not gameplay", "non-gameplay", "this page is", "only for storage", "仅为收纳或组装说明"));
-        boolean nonGameplayInsert = containsAny(text, List.of(
-                "非游戏规则",
-                "非游戏玩法",
-                "non-gameplay material",
-                "non-gameplay rule",
-                "宣传页",
-                "宣传广告",
-                "广告页",
-                "advertisement for another",
-                "仅为收纳或组装说明",
-                "仅为封面设计")) || storageOnlyInsert;
-        return !credits && !cover && !nonGameplayInsert;
     }
 
     private int visualTopicIndex(String pageText) {
