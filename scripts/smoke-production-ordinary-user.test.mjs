@@ -270,12 +270,16 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
 test('production workflows never execute an operator-supplied Git ref with production credentials', async () => {
   const deployment = await readFile(resolve('.github/workflows/deploy-production.yml'), 'utf8')
   const smoke = await readFile(resolve('.github/workflows/production-ordinary-user-smoke.yml'), 'utf8')
+  const candidates = await readFile(resolve('.github/workflows/public-lesson-candidate.yml'), 'utf8')
 
   assert.doesNotMatch(deployment, /inputs\.ref/)
   assert.match(deployment, /workflow_run\.head_sha \|\| 'main'/)
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)
   assert.match(smoke, /Production is not running the checked-out main commit/)
+  assert.doesNotMatch(candidates, /inputs\.ref/)
+  assert.match(candidates, /ref: main/)
+  assert.match(candidates, /Production is not running the checked-out main commit/)
 })
 
 function json(response, status, value) {

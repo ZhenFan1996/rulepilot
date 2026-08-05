@@ -13,6 +13,7 @@ import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import java.util.Optional;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -56,13 +57,29 @@ public class IllustratedLessonService {
         return runs.start(AssistantRunMode.TEACHING, plan.id(), ownerUsername);
     }
 
+    @Transactional
+    public RunSnapshot beginCandidate(UUID teachingPlanId, String ownerUsername) {
+        requireReadyPlan(teachingPlanId, ownerUsername);
+        return runs.start(AssistantRunMode.TEACHING, candidateSubjectId(teachingPlanId), ownerUsername);
+    }
+
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
         return Observation.createNotStarted("rulepilot.teaching.workflow", observations)
                 .contextualName("teaching-workflow")
-                .observe(() -> generateObserved(teachingPlanId, ownerUsername, run));
+                .observe(() -> generateObserved(teachingPlanId, ownerUsername, run, GenerationTarget.ACTIVE));
     }
 
-    private GenerationOutcome generateObserved(UUID teachingPlanId, String ownerUsername, RunSnapshot initialRun) {
+    public GenerationOutcome generateCandidate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
+        return Observation.createNotStarted("rulepilot.teaching.candidate.workflow", observations)
+                .contextualName("teaching-candidate-workflow")
+                .observe(() -> generateObserved(teachingPlanId, ownerUsername, run, GenerationTarget.CANDIDATE));
+    }
+
+    private GenerationOutcome generateObserved(
+            UUID teachingPlanId,
+            String ownerUsername,
+            RunSnapshot initialRun,
+            GenerationTarget target) {
         RunSnapshot run = initialRun;
         try {
             var plan = requireReadyPlan(teachingPlanId, ownerUsername);
@@ -70,9 +87,16 @@ public class IllustratedLessonService {
             run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
             run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
             run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
-            IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
+            IllustratedLesson previousLesson = target == GenerationTarget.ACTIVE
+                    ? repository.findLatestByPlan(teachingPlanId).orElse(null)
+                    : null;
             IllustratedLesson lesson = agent.createBase(
-                    plan, run.id(), previousLesson, progressPublisher::publish);
+                    plan,
+                    run.id(),
+                    previousLesson,
+                    target == GenerationTarget.ACTIVE
+                            ? progressPublisher::publish
+                            : progressPublisher::publishCandidate);
             run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
             return new GenerationOutcome(run, lesson.status());
         } catch (AgentExecutionStoppedException stopped) {
@@ -124,6 +148,12 @@ public class IllustratedLessonService {
         return repository.findLatestByPlan(teachingPlanId);
     }
 
+    static UUID candidateSubjectId(UUID teachingPlanId) {
+        if (teachingPlanId == null) throw new IllegalArgumentException("teaching plan is required");
+        return UUID.nameUUIDFromBytes(("lesson-candidate:" + teachingPlanId)
+                .getBytes(StandardCharsets.UTF_8));
+    }
+
     private RunSnapshot advance(RunSnapshot run, AssistantRunState state, String summary) {
         return runs.advance(run.id(), run.revision(), state, summary);
     }
@@ -147,4 +177,9 @@ public class IllustratedLessonService {
     }
 
     public record GenerationOutcome(RunSnapshot run, LessonStatus lessonStatus) {}
+
+    private enum GenerationTarget {
+        ACTIVE,
+        CANDIDATE
+    }
 }

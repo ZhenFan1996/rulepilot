@@ -133,6 +133,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/verify-complete-agent-release.test.mjs
 	@node --test scripts/probe-model-tool-capabilities.test.mjs
 	@node --test scripts/smoke-production-ordinary-user.test.mjs
+	@node --test scripts/manage-public-lesson-candidate.test.mjs
 	@node --test scripts/verify-ci-workflow.test.mjs
 	@sh scripts/verify-mockito-agent.sh
 	@sh scripts/verify-archunit-imports.sh

@@ -37,10 +37,29 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
 
     @Override
     public IllustratedLesson save(IllustratedLesson lesson) {
+        return save(lesson, PublicationState.ACTIVE);
+    }
+
+    @Override
+    public IllustratedLesson saveCandidate(IllustratedLesson lesson) {
+        return save(lesson, PublicationState.CANDIDATE);
+    }
+
+    private IllustratedLesson save(IllustratedLesson lesson, PublicationState publicationState) {
         IllustratedLessonEntity existing = entityManager.find(IllustratedLessonEntity.class, lesson.id());
         if (existing == null) {
-            entityManager.persist(new IllustratedLessonEntity(lesson));
+            if (publicationState == PublicationState.CANDIDATE) {
+                entityManager.createQuery(
+                                "update IllustratedLessonEntity l set l.publicationState = 'ARCHIVED' "
+                                        + "where l.teachingPlanId = :planId and l.publicationState = 'CANDIDATE'")
+                        .setParameter("planId", lesson.teachingPlanId())
+                        .executeUpdate();
+            }
+            entityManager.persist(new IllustratedLessonEntity(lesson, publicationState));
         } else {
+            if (!existing.publicationState.equals(publicationState.name())) {
+                throw new IllegalStateException("lesson publication state cannot change through progress updates");
+            }
             existing.update(lesson);
             entityManager.createNativeQuery("""
                             delete from illustrated_lesson_step
@@ -67,11 +86,24 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
     @Override
     @Transactional(readOnly = true)
     public Optional<IllustratedLesson> findLatestByPlan(UUID teachingPlanId) {
+        return findLatestByPlanAndState(teachingPlanId, PublicationState.ACTIVE);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<IllustratedLesson> findLatestCandidateByPlan(UUID teachingPlanId) {
+        return findLatestByPlanAndState(teachingPlanId, PublicationState.CANDIDATE);
+    }
+
+    private Optional<IllustratedLesson> findLatestByPlanAndState(
+            UUID teachingPlanId, PublicationState publicationState) {
         return entityManager
                 .createQuery(
-                        "select l from IllustratedLessonEntity l where l.teachingPlanId = :planId order by l.createdAt desc, l.id desc",
+                        "select l from IllustratedLessonEntity l where l.teachingPlanId = :planId "
+                                + "and l.publicationState = :publicationState order by l.createdAt desc, l.id desc",
                         IllustratedLessonEntity.class)
                 .setParameter("planId", teachingPlanId)
+                .setParameter("publicationState", publicationState.name())
                 .setMaxResults(1)
                 .getResultStream()
                 .findFirst()
@@ -86,6 +118,7 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
         entityManager
                 .createQuery(
                         "select l from IllustratedLessonEntity l where l.teachingPlanId in :planIds "
+                                + "and l.publicationState = 'ACTIVE' "
                                 + "order by l.teachingPlanId, l.createdAt desc, l.id desc",
                         IllustratedLessonEntity.class)
                 .setParameter("planIds", teachingPlanIds)
@@ -108,6 +141,44 @@ public class JpaIllustratedLessonRepository implements IllustratedLessonReposito
         return latestByPlan.values().stream()
                 .map(lesson -> summary(lesson, sectionsByLesson.getOrDefault(lesson.id, List.of()), stepsBySection))
                 .toList();
+    }
+
+    @Override
+    @Transactional
+    public void promoteCandidate(UUID teachingPlanId, UUID candidateLessonId) {
+        int candidateCount = entityManager.createQuery(
+                        "select count(l) from IllustratedLessonEntity l where l.id = :lessonId "
+                                + "and l.teachingPlanId = :planId and l.publicationState = 'CANDIDATE'",
+                        Long.class)
+                .setParameter("lessonId", candidateLessonId)
+                .setParameter("planId", teachingPlanId)
+                .getSingleResult()
+                .intValue();
+        if (candidateCount != 1) throw new IllegalArgumentException("lesson candidate does not exist");
+        entityManager.createQuery(
+                        "update IllustratedLessonEntity l set l.publicationState = 'ARCHIVED' "
+                                + "where l.teachingPlanId = :planId and l.publicationState = 'ACTIVE'")
+                .setParameter("planId", teachingPlanId)
+                .executeUpdate();
+        entityManager.createQuery(
+                        "update IllustratedLessonEntity l set l.publicationState = 'ACTIVE' where l.id = :lessonId")
+                .setParameter("lessonId", candidateLessonId)
+                .executeUpdate();
+        entityManager.flush();
+    }
+
+    @Override
+    @Transactional
+    public void archiveCandidate(UUID teachingPlanId, UUID candidateLessonId) {
+        int changed = entityManager.createQuery(
+                        "update IllustratedLessonEntity l set l.publicationState = 'ARCHIVED' "
+                                + "where l.id = :lessonId and l.teachingPlanId = :planId "
+                                + "and l.publicationState = 'CANDIDATE'")
+                .setParameter("lessonId", candidateLessonId)
+                .setParameter("planId", teachingPlanId)
+                .executeUpdate();
+        if (changed != 1) throw new IllegalArgumentException("lesson candidate does not exist");
+        entityManager.flush();
     }
 
     private List<LessonSection> findSections(UUID lessonId) {
@@ -183,15 +254,17 @@ class IllustratedLessonEntity {
     @Column(name = "teaching_plan_id", nullable = false) UUID teachingPlanId;
     @Column(nullable = false) String status;
     @Column(name = "generator_version", nullable = false) String generatorVersion;
+    @Column(name = "publication_state", nullable = false) String publicationState;
     @Column(name = "created_at", nullable = false) Instant createdAt;
 
     protected IllustratedLessonEntity() {}
 
-    IllustratedLessonEntity(IllustratedLesson lesson) {
+    IllustratedLessonEntity(IllustratedLesson lesson, PublicationState publicationState) {
         id = lesson.id();
         teachingPlanId = lesson.teachingPlanId();
         status = lesson.status().name();
         generatorVersion = lesson.generatorVersion();
+        this.publicationState = publicationState.name();
         createdAt = lesson.createdAt();
     }
 
@@ -207,6 +280,12 @@ class IllustratedLessonEntity {
         return new IllustratedLesson(
                 id, teachingPlanId, LessonStatus.valueOf(status), sections, generatorVersion, createdAt);
     }
+}
+
+enum PublicationState {
+    ACTIVE,
+    CANDIDATE,
+    ARCHIVED
 }
 
 @Entity(name = "IllustratedLessonSectionEntity")
