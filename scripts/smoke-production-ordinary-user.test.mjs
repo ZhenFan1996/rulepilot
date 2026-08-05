@@ -33,6 +33,12 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url === '/api/auth/session') {
       return json(response, 200, { username: 'player', roles: ['USER'] })
     }
+    if (request.method === 'GET' && ['/', '/documents', '/lessons', '/catalog'].includes(request.url)) {
+      return json(response, 200, {})
+    }
+    if (request.method === 'GET' && ['/api/v1/teaching-plans', '/api/public/lessons'].includes(request.url)) {
+      return json(response, 200, [])
+    }
     if (request.method === 'POST' && request.url === '/api/v1/documents') {
       const multipart = body.toString('latin1')
       assert.match(multipart, /Lantern Relay rulebook EN v4 12pages/)
@@ -161,6 +167,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   await new Promise((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise))
   const directory = await mkdtemp(join(tmpdir(), 'rulepilot-production-smoke-'))
   const pdf = join(directory, 'Lantern_Relay_rulebook_EN_v4_12pages.pdf')
+  const navigation = join(directory, 'navigation.tsv')
+  const retainedResult = join(directory, 'retained-result.json')
   await writeFile(pdf, '%PDF-1.4\n%%EOF\n')
 
   try {
@@ -171,20 +179,38 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--pdf', pdf,
+        '--official-source-url', 'https://example.com/lantern-relay-rules.pdf',
+        '--navigation-file', navigation,
+        '--result-file', retainedResult,
         '--timeout-seconds', '10'],
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
     assert.equal(result.code, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), {
+    const summary = JSON.parse(result.stdout)
+    assert.deepEqual({ ...summary, navigation: undefined }, {
       title: 'Lantern Relay',
       preparationState: 'COMPLETED',
       lessonState: 'COMPLETED',
       lessonStatus: 'COMPLETE',
       sectionCount: 1,
+      navigation: undefined,
       cleanup: 'scheduled',
     })
+    assert.ok(summary.navigation.requestCount >= 3)
+    assert.equal(summary.navigation.failureCount, 0)
+    assert.ok(summary.navigation.averageMs >= 0)
+    assert.ok(summary.navigation.maxMs >= 0)
+    const retained = JSON.parse(await readFile(retainedResult, 'utf8'))
+    assert.equal(retained.sourceUrl, 'https://example.com/lantern-relay-rules.pdf')
+    assert.equal(retained.plan.gameTitle, 'Lantern Relay')
+    assert.equal(retained.lesson.status, 'COMPLETE')
+    assert.equal((await readFile(navigation, 'utf8')).trim().split('\n').length,
+      summary.navigation.requestCount)
     assert.equal(deleted, true)
     assert.ok(calls.some((call) => call.method === 'POST' && call.url === '/api/v1/documents'))
+    assert.ok(calls.some((call) => call.method === 'POST'
+      && call.url === '/api/v1/documents'
+      && call.body.toString('latin1').includes('https://example.com/lantern-relay-rules.pdf')))
     assert.match(result.stderr, /SMOKE_STAGE login-completed/)
     assert.match(result.stderr, /SMOKE_STAGE title-verified/)
     assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
@@ -270,6 +296,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
 test('production workflows never execute an operator-supplied Git ref with production credentials', async () => {
   const deployment = await readFile(resolve('.github/workflows/deploy-production.yml'), 'utf8')
   const smoke = await readFile(resolve('.github/workflows/production-ordinary-user-smoke.yml'), 'utf8')
+  const realRulebooks = await readFile(resolve('.github/workflows/production-real-rulebook-experience.yml'), 'utf8')
   const candidates = await readFile(resolve('.github/workflows/public-lesson-candidate.yml'), 'utf8')
 
   assert.doesNotMatch(deployment, /inputs\.ref/)
@@ -277,6 +304,9 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)
   assert.match(smoke, /Production is not running the checked-out main commit/)
+  assert.doesNotMatch(realRulebooks, /inputs\.ref/)
+  assert.match(realRulebooks, /ref: main/)
+  assert.match(realRulebooks, /Production is not running the checked-out main commit/)
   assert.doesNotMatch(candidates, /inputs\.ref/)
   assert.match(candidates, /ref: main/)
   assert.match(candidates, /Production is not running the checked-out main commit/)
