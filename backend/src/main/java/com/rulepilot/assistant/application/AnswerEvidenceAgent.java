@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,10 +31,16 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceAgent.class);
     private static final int MAX_OBSERVED_EVIDENCE = 24;
+    private static final Pattern PRIOR_TURN_REFERENCE = Pattern.compile(
+            "(?iu)\\b(?:this|that|it|these|those|then|there|former|latter|such)\\b|"
+                    + "这个|那个|这样|那样|它|上述|前述|刚才|上面|这里|那里");
     private static final String SYSTEM_PROMPT = """
             You are the evidence-refinement stage of a board-game rules assistant. Never answer the player and never
             rely on rule knowledge outside the supplied evidence and tool observations. The application has already
-            run deterministic retrieval. Use the read-only rulebook tools only to fill an uncovered condition,
+            run deterministic retrieval. When the request lists prior cited pages to re-read, call read_rule_pages
+            once for exactly those pages; do not search again because the prior answer is only a provenance hint and
+            the fresh page observation is the current-turn evidence. Otherwise use the read-only rulebook tools only
+            to fill an uncovered condition,
             exception, list item, follow-up dependency, visual-reference dependency, or empty-result gap. Search one
             bounded need at a time. When general and special rules may conflict, search_rule_relationships can locate
             candidate exception, replacement, precedence, and conditional passages. Its cue labels are non-authoritative:
@@ -103,11 +110,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     SYSTEM_PROMPT,
                     playerRequest(question, context, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    4,
+                    usesPriorPages(question, context) ? 2 : 4,
                     384,
                     toolPortfolio(question, context),
-                    requiredEvidenceTools(question),
-                    3));
+                    requiredEvidenceTools(question, context),
+                    usesPriorPages(question, context) ? 1 : 3));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -126,6 +133,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
     }
 
     private Set<String> toolPortfolio(UnderstoodQuestion question, QuestionContext context) {
+        if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
         String playerQuestion = question.normalizedQuestion();
         if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
             return Set.of("search_rule_evidence", "read_rule_pages", "read_visual_page_facts");
@@ -139,7 +147,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         return Set.of("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
     }
 
-    private Set<String> requiredEvidenceTools(UnderstoodQuestion question) {
+    private Set<String> requiredEvidenceTools(UnderstoodQuestion question, QuestionContext context) {
+        if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
         String playerQuestion = question.normalizedQuestion();
         if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
             return Set.of("search_rule_evidence", "read_visual_page_facts");
@@ -244,6 +253,12 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                         .append(citation.pageTo());
             }
             request.append("\nResolve the player's reference, then re-read canonical current-version evidence before declaring ready.");
+            List<Integer> priorPages = priorPages(context);
+            if (usesPriorPages(question, context)) {
+                request.append("\nPrior cited pages to re-read: ")
+                        .append(priorPages)
+                        .append(". Call read_rule_pages once with exactly these pageNumbers; do not search.");
+            }
         }
         request.append("\nCurrent verified retrieval:");
         if (evidence.isEmpty()) request.append(" none");
@@ -266,5 +281,23 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         if (value == null) return "";
         String normalized = value.replaceAll("\\s+", " ").strip();
         return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    }
+
+    private boolean usesPriorPages(UnderstoodQuestion question, QuestionContext context) {
+        return question != null
+                && PRIOR_TURN_REFERENCE.matcher(question.normalizedQuestion()).find()
+                && !priorPages(context).isEmpty();
+    }
+
+    private List<Integer> priorPages(QuestionContext context) {
+        if (context == null || context.priorTurnReference() == null) return List.of();
+        return context.priorTurnReference().citations().stream()
+                .flatMapToInt(citation -> java.util.stream.IntStream.rangeClosed(
+                        citation.pageFrom(),
+                        (int) Math.min((long) citation.pageTo(), (long) citation.pageFrom() + 4)))
+                .distinct()
+                .limit(5)
+                .boxed()
+                .toList();
     }
 }

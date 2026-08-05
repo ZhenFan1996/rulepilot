@@ -34,14 +34,11 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
     private static final int MAX_OBSERVED_EVIDENCE = 24;
     private static final String SYSTEM_PROMPT = """
             You refine evidence for one board-game teaching chapter. Never write the chapter and never use rule
-            knowledge outside supplied evidence and tool observations. Use the read-only rulebook tools only when a
-            validated chapter objective, coverage tag, or source-page coordinate remains unsupported. This agent is
-            invoked only after such a gap has been confirmed, so call search_rule_evidence on the first turn rather
-            than completing from the initial excerpt. Search one missing teaching need and retrieve the owning clause.
-            For a transition inside an exception or procedure, retrieve that owning procedure;
-            do not broaden into generic next-player flow unless the objective explicitly asks who plays next. Return
-            exactly EVIDENCE_READY after the search observation. Never change scope, invent a page, or treat your own
-            prose as evidence.
+            knowledge outside supplied evidence and tool observations. The validated lesson plan already identifies
+            source pages that are missing from the current chapter evidence. On the first turn, call read_rule_pages
+            with only the listed missing validated source pages (at most five). Do not translate the teaching objective
+            into a new search query, broaden the topic, change scope, or invent a page. Return exactly EVIDENCE_READY
+            after the page observation. Your prose is never evidence.
             """;
 
     private final NativeToolAgent nativeAgent;
@@ -69,6 +66,8 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
         if (!TeachingEvidenceRefinementPolicy.requiresRefinement(planned, deterministic)) return deterministic;
         var scope = scopes.create(plan.createdBy(), plan.documentVersionId(), assistantRunId);
         if (scope.isEmpty()) return deterministic;
+        List<Integer> missingSourcePages = missingSourcePages(planned, deterministic.evidence());
+        if (missingSourcePages.isEmpty()) return deterministic;
 
         NativeToolAgent.RunResult result;
         if (!nativeAgent.supports(Role.TEACHING, plan.createdBy())) return deterministic;
@@ -77,12 +76,12 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
                     Role.TEACHING,
                     scope.get(),
                     SYSTEM_PROMPT,
-                    chapterRequest(planned, deterministic.evidence()),
+                    chapterRequest(planned, deterministic.evidence(), missingSourcePages),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
                     1,
                     384,
-                    Set.of("search_rule_evidence"),
-                    Set.of("search_rule_evidence"),
+                    Set.of("read_rule_pages"),
+                    Set.of("read_rule_pages"),
                     1));
         } catch (RuntimeException failure) {
             LOGGER.warn(
@@ -100,13 +99,15 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
             return new TeachingSectionEvidenceRetriever.Result(
                     deterministic.evidence(), totalToolCalls, deterministic.state());
         }
-        return mergeCanonicalEvidence(plan.documentVersionId(), deterministic, observedIds, totalToolCalls);
+        return mergeCanonicalEvidence(
+                plan.documentVersionId(), deterministic, observedIds, Set.copyOf(missingSourcePages), totalToolCalls);
     }
 
     private TeachingSectionEvidenceRetriever.Result mergeCanonicalEvidence(
             UUID documentVersionId,
             TeachingSectionEvidenceRetriever.Result deterministic,
             Set<UUID> observedIds,
+            Set<Integer> allowedPages,
             int totalToolCalls) {
         List<RuleEvidence> hydrated;
         try {
@@ -119,6 +120,8 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
         Map<UUID, RuleEvidence> hydratedById = hydrated.stream()
                 .filter(source -> documentVersionId.equals(source.documentVersionId()))
                 .filter(source -> observedIds.contains(source.chunkId()))
+                .filter(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo())
+                        .anyMatch(allowedPages::contains))
                 .collect(java.util.stream.Collectors.toMap(
                         RuleEvidence::chunkId,
                         source -> source,
@@ -171,15 +174,30 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
         return List.copyOf(selected);
     }
 
-    private String chapterRequest(TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
+    private List<Integer> missingSourcePages(
+            TeachingPlan.PlannedSection planned, List<RuleEvidence> evidence) {
+        Set<Integer> evidencedPages = evidence.stream()
+                .flatMap(source -> java.util.stream.IntStream.rangeClosed(source.pageFrom(), source.pageTo()).boxed())
+                .collect(java.util.stream.Collectors.toSet());
+        return planned.sourcePageNumbers().stream()
+                .filter(page -> !evidencedPages.contains(page))
+                .distinct()
+                .limit(5)
+                .toList();
+    }
+
+    private String chapterRequest(
+            TeachingPlan.PlannedSection planned,
+            List<RuleEvidence> evidence,
+            List<Integer> missingSourcePages) {
         StringBuilder request = new StringBuilder("Chapter title: ")
                 .append(bounded(planned.title(), 240))
                 .append("\nObjective: ")
                 .append(bounded(planned.objective(), 700))
                 .append("\nCoverage tags: ")
                 .append(bounded(String.join(", ", planned.coverageTags()), 400))
-                .append("\nValidated source pages: ")
-                .append(planned.sourcePageNumbers())
+                .append("\nMissing validated source pages: ")
+                .append(missingSourcePages)
                 .append("\nCurrent verified evidence:");
         if (evidence.isEmpty()) request.append(" none");
         for (RuleEvidence source : evidence.stream().limit(8).toList()) {

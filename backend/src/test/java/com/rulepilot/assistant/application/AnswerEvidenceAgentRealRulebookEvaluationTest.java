@@ -305,14 +305,6 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             results.add(runFollowUpCase(configured, contextCase));
         }
 
-        assertThat(results).hasSize(2).allSatisfy(result -> {
-            assertThat((Integer) result.get("addedEvidence")).isGreaterThan(0);
-            assertThat((Integer) result.get("toolCalls")).isGreaterThan(0);
-            assertThat(result).containsEntry("freshCanonicalExpectedPage", true)
-                    .containsEntry("sameVersionOnly", true)
-                    .containsEntry("withinLatencyBudget", true);
-        });
-
         Path output = root.resolve(".local/agent-evaluation/context-agent-real-rulebooks.json");
         Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
                 "schemaVersion", 1,
@@ -323,6 +315,16 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                         "orphanedRunsReplayIncompleteCalls", false,
                         "providerDowngradeKeepsDeterministicEvidence", true,
                         "staleSchemaRejectedBeforeToolExecution", true))) + "\n", StandardCharsets.UTF_8);
+
+        assertThat(results).hasSize(2).allSatisfy(result -> {
+            assertThat((Integer) result.get("addedEvidence")).isGreaterThan(0);
+            assertThat((Integer) result.get("toolCalls")).isGreaterThan(0);
+            assertThat(result).containsEntry("freshCanonicalExpectedPage", true)
+                    .containsEntry("sameVersionOnly", true)
+                    .containsEntry("toolPortfolioRegistered", true)
+                    .containsEntry("withinLatencyBudget", true);
+        });
+
     }
 
     private Map<String, Object> runFollowUpCase(CaseConfiguration case_, JsonNode contextCase) throws IOException {
@@ -343,6 +345,10 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
         AnswerEvidenceAgent agent = answerAgent(case_.provider(), corpus, audited, scope);
         AnswerEvidenceRetriever.Result deterministic = ready(corpus.hit(case_.initialPage()));
+        boolean refinementRequired = AnswerEvidenceRefinementPolicy.requiresRefinement(
+                question(versionId, contextCase.path("followUp").asText()),
+                new QuestionContext(versionId, prior.question(), null, null, prior),
+                deterministic);
         long started = System.nanoTime();
 
         AnswerEvidenceRetriever.Result refined = agent.refine(
@@ -367,6 +373,11 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         result.put("addedEvidence", refined.evidence().size() - deterministic.evidence().size());
         result.put("toolCalls", audited.toolCalls);
         result.put("modelCalls", audited.modelCalls);
+        result.put("nativeRuns", audited.nativeRuns);
+        result.put("nativeRunReason", audited.lastRunReason);
+        result.put("refinementRequired", refinementRequired);
+        result.put("toolPortfolioRegistered",
+                audited.registeredToolPortfolio.equals(audited.requestedToolPortfolio));
         result.put("freshCanonicalExpectedPage", expectedPage);
         result.put("sameVersionOnly", refined.evidence().stream()
                 .allMatch(hit -> versionId.equals(hit.evidence().documentVersionId())));
@@ -479,6 +490,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             ToolScope scope) {
         var nativeTools = List.of(
                 new SearchRuleEvidenceNativeTool(corpus, mapper),
+                new SearchRuleRelationshipsNativeTool(corpus, mapper),
                 new ExpandRuleEvidenceContextNativeTool(corpus, mapper),
                 new ReadRulePagesNativeTool(corpus, mapper));
         NativeAgentToolRegistry registry = new NativeAgentToolRegistry(
@@ -496,6 +508,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         NativeToolAgent observedLoop = new NativeToolAgent() {
             @Override
             public RunResult run(RunRequest request) {
+                audited.nativeRuns++;
                 audited.requestedToolPortfolio = request.allowedTools();
                 audited.registeredToolPortfolio = registry.specifications(request.role(), request.allowedTools()).stream()
                         .map(NativeToolModel.ToolSpec::name)
@@ -622,6 +635,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;
         private int toolCalls;
+        private int nativeRuns;
         private String lastRunReason = "NOT_STARTED";
         private Set<String> requestedToolPortfolio = Set.of();
         private Set<String> registeredToolPortfolio = Set.of();

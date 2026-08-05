@@ -117,7 +117,7 @@ class NativeVisualAgentRealRulebookEvaluationTest {
         int pageNumber = node.path("pageNumber").asInt();
         PdfVisualEvidence evidence = new PdfVisualEvidence(pdf, versionId, evidenceId, pageNumber);
         DirectAuditedInvocations audited = new DirectAuditedInvocations();
-        NativeToolAgent loop = loop(provider, evidence, audited);
+        RecordingNativeToolAgent loop = new RecordingNativeToolAgent(loop(provider, evidence, audited));
         ToolScope scope = new ToolScope("agent-evaluation", versionId, runId, Instant.now().plusSeconds(90));
         NativeToolScopes scopes = (owner, document, run) -> owner.equals(scope.ownerUsername())
                         && document.equals(scope.documentVersionId())
@@ -160,12 +160,32 @@ class NativeVisualAgentRealRulebookEvaluationTest {
                 Map.entry("toolCalls", audited.toolCalls),
                 Map.entry("modelCalls", audited.modelCalls),
                 Map.entry("toolCodes", audited.observations.stream().map(ToolObservation::code).toList()),
+                Map.entry("finalResponse", finalResponseDiagnostics(loop.result)),
                 Map.entry("targetIntersected", targetIntersected),
                 Map.entry("compactCrop", compact),
                 Map.entry("mechanicalRuleAuthority", authority),
                 Map.entry("fallbackCalls", fallback.calls),
                 Map.entry("latencyMs", latencyMs),
                 Map.entry("withinLatencyBudget", latencyMs < 90_000));
+    }
+
+    private Map<String, Object> finalResponseDiagnostics(RunResult result) {
+        if (result == null) return Map.of("status", "MISSING");
+        var parsed = VisualLocatorResponsePolicy.parseModelGuide(result.text());
+        if (parsed.isEmpty()) return Map.of("status", "MALFORMED");
+        return Map.of(
+                "status", "PARSED",
+                "regionCount", parsed.get().regions().size(),
+                "regions", parsed.get().regions().stream()
+                        .map(region -> Map.<String, Object>of(
+                                "pageNumber", region.pageNumber(),
+                                "labelIsChinese", VisualLocatorResponsePolicy.containsChinese(region.label()),
+                                "descriptionIsChinese",
+                                        VisualLocatorResponsePolicy.containsChinese(region.visibleDescription()),
+                                "supportedClaimRefs", region.supportedClaimRefs(),
+                                "rectangle", List.of(
+                                        region.x(), region.y(), region.width(), region.height())))
+                        .toList());
     }
 
     private Map<String, Object> controls(ProviderConfiguration provider) throws IOException {
@@ -259,6 +279,26 @@ class NativeVisualAgentRealRulebookEvaluationTest {
     }
 
     private record ProviderConfiguration(String provider, String apiKey, String baseUrl, String model) {}
+
+    private static final class RecordingNativeToolAgent implements NativeToolAgent {
+        private final NativeToolAgent delegate;
+        private RunResult result;
+
+        private RecordingNativeToolAgent(NativeToolAgent delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public RunResult run(RunRequest request) {
+            result = delegate.run(request);
+            return result;
+        }
+
+        @Override
+        public boolean supports(Role role, String ownerUsername) {
+            return delegate.supports(role, ownerUsername);
+        }
+    }
 
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;

@@ -140,19 +140,18 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 || !VisualLocatorResponsePolicy.containsChinese(region.visibleDescription())) {
             return Optional.empty();
         }
-        ObservedCrop crop = observedCrops.stream()
-                .filter(candidate -> candidate.matches(region))
-                .findFirst()
-                .orElse(null);
-        if (crop == null) return Optional.empty();
-        List<VisualRegionLocator.Claim> claims = region.supportedClaimRefs().stream()
-                .map(reference -> claim(reference, request))
-                .filter(java.util.Objects::nonNull)
-                .filter(claim -> claim.evidenceId().equals(crop.evidenceId()))
-                .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
-                .distinct()
+        List<CropBinding> bindings = observedCrops.stream()
+                .filter(crop -> crop.pageNumber() == region.pageNumber())
+                .map(crop -> new CropBinding(crop, supportedClaims(region, request, crop)))
+                .filter(binding -> !binding.claims().isEmpty())
                 .toList();
-        if (claims.isEmpty()) return Optional.empty();
+        CropBinding binding = bindings.stream()
+                .filter(candidate -> candidate.crop().sameRectangle(region))
+                .findFirst()
+                .orElseGet(() -> bindings.size() == 1 ? bindings.getFirst() : null);
+        if (binding == null) return Optional.empty();
+        ObservedCrop crop = binding.crop();
+        List<VisualRegionLocator.Claim> claims = binding.claims();
         try {
             return Optional.of(new LocatedRegion(
                     crop.pageNumber(),
@@ -171,6 +170,23 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
         } catch (IllegalArgumentException invalid) {
             return Optional.empty();
         }
+    }
+
+    private List<VisualRegionLocator.Claim> supportedClaims(
+            ModelRegion region, VisualLocationRequest request, ObservedCrop crop) {
+        List<VisualRegionLocator.Claim> claims = region.supportedClaimRefs().stream()
+                .map(reference -> claim(reference, request))
+                .filter(java.util.Objects::nonNull)
+                .filter(claim -> claim.evidenceId().equals(crop.evidenceId()))
+                .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
+                .distinct()
+                .toList();
+        if (!claims.isEmpty() || !region.supportedClaimRefs().isEmpty()) return claims;
+        List<VisualRegionLocator.Claim> canonicalClaims = request.claims().stream()
+                .filter(claim -> claim.evidenceId().equals(crop.evidenceId()))
+                .filter(claim -> claim.sourcePages().contains(crop.pageNumber()))
+                .toList();
+        return canonicalClaims.size() == 1 ? canonicalClaims : List.of();
     }
 
     private VisualRegionLocator.Claim claim(String reference, VisualLocationRequest request) {
@@ -218,12 +234,13 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
     }
 
     private record ObservedCrop(UUID evidenceId, int pageNumber, int x, int y, int width, int height) {
-        private boolean matches(ModelRegion region) {
-            return pageNumber == region.pageNumber()
-                    && x == region.x()
+        private boolean sameRectangle(ModelRegion region) {
+            return x == region.x()
                     && y == region.y()
                     && width == region.width()
                     && height == region.height();
         }
     }
+
+    private record CropBinding(ObservedCrop crop, List<VisualRegionLocator.Claim> claims) {}
 }

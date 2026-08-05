@@ -350,13 +350,62 @@ class AnswerEvidenceAgentTest {
         assertThat(captured.get().playerRequest())
                 .contains("Prior grounded reference hint (not current evidence)")
                 .contains(priorSource.chunkId().toString())
-                .contains("re-read canonical current-version evidence");
+                .contains("Prior cited pages to re-read: [2]")
+                .contains("read_rule_pages once");
         assertThat(captured.get().allowedTools())
-                .containsExactlyInAnyOrder("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+                .containsExactly("read_rule_pages");
         assertThat(captured.get().requiredToolsBeforeCompletion())
-                .containsExactlyInAnyOrder("search_rule_evidence", "read_rule_pages");
-        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
+                .containsExactly("read_rule_pages");
+        assertThat(captured.get().maxIterations()).isEqualTo(2);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(1);
         assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId()).contains(priorSource.chunkId());
+    }
+
+    @Test
+    void keepsTheSearchPortfolioWhenASessionQuestionDoesNotReferToThePriorTurn() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "General turn overview.");
+        java.util.concurrent.atomic.AtomicReference<NativeToolAgent.RunRequest> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        NativeToolAgent nativeAgent = new NativeToolAgent() {
+            @Override
+            public RunResult run(RunRequest request) {
+                captured.set(request);
+                return new RunResult(
+                        RunStatus.FALLBACK,
+                        "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                        "NO_NEW_EVIDENCE",
+                        1,
+                        0,
+                        List.of());
+            }
+
+            @Override
+            public String providerId(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+                return "test-provider";
+            }
+        };
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        var reference = new PriorTurnReference(
+                versionId,
+                "When does the phase end?",
+                "It ends after resolving the exception.",
+                List.of(new PriorCitationReference(UUID.randomUUID(), versionId, 2, 2)));
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, emptyLookup(), scopes(), limiter);
+
+        agent.refine(
+                runId,
+                question("How many cards do players draw during setup?"),
+                new QuestionContext(versionId, reference.question(), null, null, reference),
+                "player",
+                null,
+                ready(initial));
+
+        assertThat(captured.get().allowedTools()).containsExactlyInAnyOrder(
+                "search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
+        assertThat(captured.get().playerRequest()).doesNotContain("Prior cited pages to re-read");
     }
 
     @Test

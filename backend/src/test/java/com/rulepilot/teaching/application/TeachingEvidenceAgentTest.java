@@ -72,10 +72,11 @@ class TeachingEvidenceAgentTest {
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
         assertThat(result.toolCalls()).isEqualTo(3);
         assertThat(result.evidence()).extracting(RuleEvidence::pageFrom).containsExactly(5, 2);
-        assertThat(captured.get().allowedTools()).containsExactly("search_rule_evidence");
+        assertThat(captured.get().allowedTools()).containsExactly("read_rule_pages");
         assertThat(captured.get().requiredToolsBeforeCompletion())
-                .containsExactly("search_rule_evidence");
+                .containsExactly("read_rule_pages");
         assertThat(captured.get().maxToolCalls()).isEqualTo(1);
+        assertThat(captured.get().playerRequest()).contains("Missing validated source pages: [5]");
     }
 
     @Test
@@ -151,7 +152,7 @@ class TeachingEvidenceAgentTest {
     void rejectsAConflictingCanonicalSnapshotBeforeComposition() {
         UUID evidenceId = UUID.randomUUID();
         RuleEvidence initial = evidence(evidenceId, 2, "Place the shared board.");
-        RuleEvidence conflicting = evidence(evidenceId, 2, "Place it somewhere else.");
+        RuleEvidence conflicting = evidence(evidenceId, 5, "Place it somewhere else.");
         TeachingEvidenceAgent agent = new TeachingEvidenceAgent(
                 request -> completed(evidenceId), scopes(), tools(List.of(conflicting)), new PolicyEvidenceVerifier());
         TeachingPlan plan = plan(List.of(2, 5));
@@ -160,6 +161,23 @@ class TeachingEvidenceAgentTest {
 
         assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.INVALID);
         assertThat(result.evidence()).isEmpty();
+    }
+
+    @Test
+    void ignoresObservedEvidenceOutsideTheMissingValidatedSourcePages() {
+        RuleEvidence initial = evidence(UUID.randomUUID(), 2, "Place the shared board.");
+        RuleEvidence unrelated = evidence(UUID.randomUUID(), 9, "An unrelated appendix entry.");
+        TeachingEvidenceAgent agent = new TeachingEvidenceAgent(
+                request -> completed(unrelated.chunkId()),
+                scopes(),
+                tools(List.of(unrelated)),
+                new PolicyEvidenceVerifier());
+        TeachingPlan plan = plan(List.of(2, 5));
+
+        var result = agent.refine(plan, plan.sections().getFirst(), runId, verified(1, initial));
+
+        assertThat(result.state()).isEqualTo(TeachingSectionEvidenceRetriever.State.VERIFIED);
+        assertThat(result.evidence()).containsExactly(initial);
     }
 
     private TeachingPlan plan(List<Integer> sourcePages) {
@@ -226,7 +244,7 @@ class TeachingEvidenceAgentTest {
                 "EVIDENCE_FOUND",
                 Map.of("evidence", List.of(Map.of("evidenceId", evidenceId.toString()))),
                 1);
-        return new ObservationRecord(1, "search_rule_evidence", "schema", observation);
+        return new ObservationRecord(1, "read_rule_pages", "schema", observation);
     }
 
     private RuleEvidence evidence(UUID id, int page, String excerpt) {
