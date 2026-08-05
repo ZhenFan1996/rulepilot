@@ -13,6 +13,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let includeBlockingVisualCatalog = false
   let slowFirstLessonSection = false
   let regressLessonStatus = false
+  let insufficientLesson = false
   let lessonRunReads = 0
   let lessonReads = 0
   const server = createServer(async (request, response) => {
@@ -104,13 +105,17 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     }
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/55555555-5555-5555-5555-555555555555') {
       lessonRunReads += 1
-      const state = lessonRunReads === 1 ? 'RECEIVED' : lessonRunReads === 2 ? 'RETRIEVING' : 'COMPLETED'
+      const state = lessonRunReads === 1
+        ? 'RECEIVED'
+        : lessonRunReads === 2
+          ? 'RETRIEVING'
+          : insufficientLesson ? 'INSUFFICIENT_EVIDENCE' : 'COMPLETED'
       return json(response, 200, {
         run: {
           id: '55555555-5555-5555-5555-555555555555',
           state,
           createdAt: '2026-08-02T00:00:13Z',
-          completedAt: state === 'COMPLETED'
+          completedAt: ['COMPLETED', 'INSUFFICIENT_EVIDENCE'].includes(state)
             ? slowFirstLessonSection ? '2026-08-02T00:00:36Z' : '2026-08-02T00:00:20Z'
             : null,
         },
@@ -237,6 +242,23 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     )
     assert.notEqual(regressedLesson.code, 0)
     assert.match(regressedLesson.stderr, /Lesson status regressed from rank 3 to DRAFT_READY/)
+    assert.equal(deleted, true)
+
+    regressLessonStatus = false
+    insufficientLesson = true
+    deleted = false
+    planStarted = false
+    const insufficient = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.notEqual(insufficient.code, 0)
+    assert.match(insufficient.stderr, /SMOKE_TIMING phase=Illustrated-lesson-failure kind=activity/)
+    assert.match(insufficient.stderr, /Illustrated lesson ended in INSUFFICIENT_EVIDENCE/)
     assert.equal(deleted, true)
   } finally {
     server.closeAllConnections()

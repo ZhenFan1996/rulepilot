@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
  */
 final class TeachingDraftRecoveryPolicy {
 
-    private static final int MAX_TEXT_REPAIR_ATTEMPTS = 1;
+    private static final int MAX_TEXT_REPAIR_ATTEMPTS = 2;
     private static final String VISUAL_REPAIR_GUIDANCE = "The attached page images are usable visual evidence. "
             + "Keep the grounded text, but repair one VISUAL step: cite an attached-page E-reference and return a "
             + "compact 0-1000 focus rectangle that contains the icon, component group, board area, flow, or worked "

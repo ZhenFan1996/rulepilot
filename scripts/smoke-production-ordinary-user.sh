@@ -264,6 +264,7 @@ wait_for_run() {
 				return 0
 				;;
 			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
+				log_run_timing "${label// /-}-failure" "$response"
 				echo "$label ended in $state" >&2
 				return 1
 				;;
