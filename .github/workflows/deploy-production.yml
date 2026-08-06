@@ -126,7 +126,25 @@ jobs:
             status=$?
             echo "Production activation failed; collecting safe diagnostics." >&2
             cd "${release_dir}" 2>/dev/null || cd "${application_root}/current"
-            sh scripts/run-production.sh diagnose || true
+            echo "Production filesystem usage:"
+            df -h "${application_root}" || true
+            echo "Production Docker usage:"
+            docker system df || true
+            echo "Production container status:"
+            docker compose --env-file .env \
+              -f infra/compose.yml \
+              -f infra/compose.deployment.yml \
+              -f infra/compose.production.yml ps --all || true
+            postgres_container=$(docker compose --env-file .env \
+              -f infra/compose.yml \
+              -f infra/compose.deployment.yml \
+              -f infra/compose.production.yml ps -q postgres 2>/dev/null || true)
+            if [[ -n "$postgres_container" ]]; then
+              echo "PostgreSQL runtime state:"
+              docker inspect --format '{{json .State}}' "$postgres_container" || true
+              echo "Recent PostgreSQL logs:"
+              docker logs --tail 120 "$postgres_container" || true
+            fi
             exit "$status"
           }
           trap diagnose_failure ERR
