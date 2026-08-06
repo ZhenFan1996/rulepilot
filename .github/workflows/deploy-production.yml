@@ -128,6 +128,8 @@ jobs:
             cd "${release_dir}" 2>/dev/null || cd "${application_root}/current"
             echo "Production filesystem usage:"
             df -h "${application_root}" || true
+            echo "Production directory usage:"
+            du -x -h --max-depth=1 "${application_root}" /var/lib/docker /var/log 2>/dev/null | sort -h || true
             echo "Production Docker usage:"
             docker system df || true
             echo "Production container status:"
@@ -145,14 +147,40 @@ jobs:
               echo "Recent PostgreSQL logs:"
               docker logs --tail 120 "$postgres_container" || true
             fi
+            api_container=$(docker compose --env-file .env \
+              -f infra/compose.yml \
+              -f infra/compose.deployment.yml \
+              -f infra/compose.production.yml ps -q api 2>/dev/null || true)
+            if [[ -n "$api_container" ]]; then
+              echo "API runtime state:"
+              docker inspect --format '{{json .State}}' "$api_container" || true
+              echo "Recent API logs:"
+              docker logs --tail 160 "$api_container" || true
+            fi
             exit "$status"
           }
           trap diagnose_failure ERR
 
           test -f "${application_root}/.env"
+          deploy_sha=${release_id%%-*}
+          current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
+          find /tmp -maxdepth 1 -type f -name "rulepilot-${deploy_sha}-*.tar.gz" \
+            ! -path "$archive" -delete
+          for candidate in "${application_root}"/releases/"${deploy_sha}"-*; do
+            [[ -d "$candidate" ]] || continue
+            [[ "$(readlink -f "$candidate")" == "$current_release" ]] && continue
+            rm -rf -- "$candidate"
+          done
           echo "Reclaiming unused Docker build cache and images before activation."
           docker builder prune --all --force
           docker image prune --all --force
+          if [[ -d "${application_root}/current" ]]; then
+            cd "${application_root}/current"
+            docker compose --env-file .env \
+              -f infra/compose.yml \
+              -f infra/compose.deployment.yml \
+              -f infra/compose.production.yml stop worker api || true
+          fi
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
           ln -s "${application_root}/.env" "${release_dir}/.env"
