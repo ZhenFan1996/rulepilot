@@ -38,10 +38,16 @@ class BggXmlApiClientTest {
         var game = client.parseGame("""
                 <items><item type="boardgame" id="266192">
                   <thumbnail>https://cf.geekdo-images.com/example.jpg</thumbnail>
+                  <image>https://cf.geekdo-images.com/example-large.jpg</image>
                   <name type="primary" value="Wingspan"/>
                   <description>A game about birds &amp; habitats.</description>
                   <yearpublished value="2019"/><minplayers value="1"/><maxplayers value="5"/>
                   <playingtime value="70"/><minage value="10"/>
+                  <link type="boardgamecategory" value="Animals"/>
+                  <link type="boardgamemechanic" value="Card Drafting"/>
+                  <link type="boardgamedesigner" value="Elizabeth Hargrave"/>
+                  <link type="boardgamepublisher" value="Stonemaier Games"/>
+                  <statistics><ratings><average value="8.1"/><averageweight value="2.5"/></ratings></statistics>
                 </item></items>
                 """, 266192);
 
@@ -50,6 +56,13 @@ class BggXmlApiClientTest {
         assertThat(game.minPlayers()).isEqualTo(1);
         assertThat(game.maxPlayers()).isEqualTo(5);
         assertThat(game.playingTimeMinutes()).isEqualTo(70);
+        assertThat(game.imageUrl()).endsWith("example-large.jpg");
+        assertThat(game.averageRating()).isEqualByComparingTo("8.1");
+        assertThat(game.averageWeight()).isEqualByComparingTo("2.5");
+        assertThat(game.categories()).containsExactly("Animals");
+        assertThat(game.mechanics()).containsExactly("Card Drafting");
+        assertThat(game.designers()).containsExactly("Elizabeth Hargrave");
+        assertThat(game.publishers()).containsExactly("Stonemaier Games");
     }
 
     @Test

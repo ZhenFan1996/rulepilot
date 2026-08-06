@@ -29,6 +29,13 @@ const status = computed(() => ({
   READING: { label: t('shelf.card.status.reading'), className: 'bg-amber-50 text-amber-900' },
   NEEDS_ATTENTION: { label: t('shelf.card.status.attention'), className: 'bg-red-50 text-red-800' },
 }[props.item.documentStatus]))
+const detailTarget = computed(() => props.item.gameId
+  ? { name: 'game-workspace', params: { gameId: props.item.gameId } }
+  : null)
+const rulebookTarget = computed(() => ({
+  name: 'teach',
+  query: props.item.editionId ? { editionId: props.item.editionId } : undefined,
+}))
 </script>
 
 <template>
@@ -48,7 +55,10 @@ const status = computed(() => ({
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">{{ t('shelf.card.eyebrow') }}</p>
-          <h2 class="mt-2 truncate font-display text-2xl font-semibold tracking-tight">{{ item.title }}</h2>
+          <h2 class="mt-2 truncate font-display text-2xl font-semibold tracking-tight">
+            <RouterLink v-if="detailTarget" :to="detailTarget" class="hover:text-indigo">{{ item.title }}</RouterLink>
+            <template v-else>{{ item.title }}</template>
+          </h2>
           <p v-if="item.editionLabel" class="mt-1 truncate text-sm text-ink/50">{{ item.editionLabel }}</p>
           <p v-else class="mt-1 text-sm text-ink/45">{{ t('shelf.card.standalone') }}</p>
         </div>
@@ -83,10 +93,10 @@ const status = computed(() => ({
         <RouterLink v-if="item.latestPlanId" :to="{ name: 'lesson', params: { planId: item.latestPlanId } }" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-ink px-4 text-sm font-semibold text-canvas transition hover:bg-ink/90">
           {{ t('shelf.card.continue') }} <TabletopGlyph name="arrow" :size="17" />
         </RouterLink>
-        <RouterLink v-else :to="{ name: 'teach' }" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-copper px-4 text-sm font-semibold text-white transition hover:bg-copper-dark">
+        <RouterLink v-else :to="rulebookTarget" class="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-copper px-4 text-sm font-semibold text-white transition hover:bg-copper-dark">
           <TabletopGlyph name="rulebook" :size="17" /> {{ item.documentStatus === 'READY' ? t('shelf.card.start') : t('shelf.card.viewRulebook') }}
         </RouterLink>
-        <RouterLink :to="{ name: 'teach' }" class="grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/12 text-ink/55 transition hover:border-indigo hover:text-indigo" :aria-label="t('shelf.card.manageRulebooks')">
+        <RouterLink :to="rulebookTarget" class="grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/12 text-ink/55 transition hover:border-indigo hover:text-indigo" :aria-label="t('shelf.card.manageRulebooks')">
           <TabletopGlyph name="library" :size="20" />
         </RouterLink>
       </div>

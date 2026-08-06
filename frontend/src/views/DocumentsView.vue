@@ -18,6 +18,7 @@ interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
   game: { id: string; name: string }
   editions: Array<{ id: string; name: string; language: string }>
+  bggMetadata?: null | { thumbnailUrl: string; bggUrl: string }
 }
 interface DocumentResponse {
   document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
@@ -43,6 +44,16 @@ interface BggSuggestionState {
   linkAlreadyImported: boolean
 }
 interface BggLinkResponse { alreadyImported: boolean }
+interface RulebookCandidate {
+  title: string
+  url: string
+  publisher: string
+  language: string
+  edition: string
+  sourceDomain: string
+  officialDomainVerified: boolean
+}
+interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
 interface TeachingPlanResponse { id: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -68,12 +79,15 @@ class PreparationFailedError extends Error {}
 
 const router = useRouter()
 const route = useRoute()
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const username = ref('')
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
 const bggSuggestionStates = ref<Record<string, BggSuggestionState>>({})
+const rulebookCandidates = ref<RulebookCandidate[]>([])
+const rulebookDiscoveryStatus = ref<'idle' | 'loading' | 'success' | 'unavailable' | 'error'>('idle')
+const officialDetails = ref<HTMLDetailsElement | null>(null)
 const file = ref<File | null>(null)
 const photographedPages = ref<PhotographedPage[]>([])
 const preparingPhotos = ref(false)
@@ -107,6 +121,28 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
   id: edition.id,
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
+const selectedEditionContext = computed(() => {
+  for (const entry of games.value) {
+    const edition = entry.editions.find(candidate => candidate.id === editionId.value)
+    if (edition) return { game: entry.game, edition, bggMetadata: entry.bggMetadata ?? null }
+  }
+  return null
+})
+const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
+  action: 'Agent 寻找官方规则书', loading: '正在检索出版社来源…', title: '可审阅的官方规则书候选',
+  detail: '候选来自联网搜索；URL 与来源仍需你核对。只有确认后才会下载，规则内容也要等解析后才能成为证据。',
+  unavailable: '当前模型未开启联网搜索。你仍可粘贴官方 PDF 链接或上传本地文件。',
+  empty: '没有找到可信的官方 PDF 候选。请改用官方链接或本地上传。',
+  error: '官方规则书搜索暂时不可用，手动入口仍可使用。', verified: '域名匹配出版社', review: '需要人工核对域名',
+  use: '选择并继续核对', publisher: '出版社', language: '语言', edition: '版本',
+} : {
+  action: 'Agent: find official rulebook', loading: 'Searching publisher sources…', title: 'Reviewable official rulebook candidates',
+  detail: 'Candidates come from web search; you must still review the URL and source. Download starts only after confirmation, and content becomes evidence only after processing.',
+  unavailable: 'Web search is not enabled for the current model. You can still paste an official PDF URL or upload a local file.',
+  empty: 'No credible official PDF candidate was found. Use an official URL or local upload instead.',
+  error: 'Official rulebook search is temporarily unavailable. Manual options still work.', verified: 'Domain matches publisher', review: 'Review domain manually',
+  use: 'Choose and review', publisher: 'Publisher', language: 'Language', edition: 'Edition',
+})
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
@@ -258,6 +294,33 @@ async function loadDocuments() {
   documents.value = await response.json() as DocumentResponse[]
 }
 
+async function discoverOfficialRulebooks() {
+  if (!editionId.value) return
+  rulebookDiscoveryStatus.value = 'loading'
+  rulebookCandidates.value = []
+  try {
+    const parameters = new URLSearchParams({ editionId: editionId.value, language: locale.value })
+    const response = await checkedFetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`)
+    if (!response.ok) throw new Error(rulebookDiscoveryCopy.value.error)
+    const result = await response.json() as RulebookCandidateResponse
+    rulebookCandidates.value = result.candidates
+    rulebookDiscoveryStatus.value = result.configured ? 'success' : 'unavailable'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : rulebookDiscoveryCopy.value.error
+    rulebookDiscoveryStatus.value = 'error'
+  }
+}
+
+function chooseRulebookCandidate(candidate: RulebookCandidate) {
+  officialSourceUrl.value = candidate.url
+  if (!title.value.trim()) title.value = candidate.title
+  officialImportRightsConfirmed.value = false
+  if (officialDetails.value) officialDetails.value.open = true
+  if (typeof officialDetails.value?.scrollIntoView === 'function') {
+    officialDetails.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
 async function load() {
   loading.value = true
   errorMessage.value = ''
@@ -389,6 +452,7 @@ function titleFromFile(selected: File) {
 function currentPreferences(versionId: string): PendingRulebookLesson {
   return {
     versionId,
+    ...(editionId.value ? { editionId: editionId.value } : {}),
     playerCount: playerCount.value,
     beginnerCount: beginnerCount.value,
     durationMinutes: durationMinutes.value,
@@ -647,6 +711,9 @@ function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
 async function recoverPendingHandoff() {
   if (!username.value || preparingVersionId.value) return
   for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
+    if (!editionId.value && pending.editionId && editionOptions.value.some(item => item.id === pending.editionId)) {
+      editionId.value = pending.editionId
+    }
     const entry = documents.value.find((candidate) => candidate.latestVersion.id === pending.versionId)
     if (!entry) {
       forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -802,6 +869,41 @@ onBeforeUnmount(() => {
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('documents.heading.title') }}</h1>
         <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">{{ t('documents.heading.description') }}</p>
 
+        <div v-if="selectedEditionContext" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
+          <img v-if="selectedEditionContext.bggMetadata?.thumbnailUrl" :src="selectedEditionContext.bggMetadata.thumbnailUrl" :alt="t('documents.game.selectedCover', { game: selectedEditionContext.game.name })" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
+            <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEditionContext.game.name }}</h2>
+            <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEditionContext.edition.name }) }}</p>
+            <a v-if="selectedEditionContext.bggMetadata?.bggUrl" :href="selectedEditionContext.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-xs font-semibold text-indigo">{{ t('documents.game.selectedSource') }} ↗</a>
+          </div>
+        </div>
+
+        <div v-if="selectedEditionContext" class="mt-4 text-left">
+          <button type="button" :disabled="rulebookDiscoveryStatus === 'loading'" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50" @click="discoverOfficialRulebooks">
+            {{ rulebookDiscoveryStatus === 'loading' ? rulebookDiscoveryCopy.loading : rulebookDiscoveryCopy.action }}
+          </button>
+          <section v-if="rulebookDiscoveryStatus === 'success'" class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5" aria-live="polite">
+            <h2 class="font-display text-xl font-semibold">{{ rulebookDiscoveryCopy.title }}</h2>
+            <p class="mt-1 text-xs leading-5 text-ink/50">{{ rulebookDiscoveryCopy.detail }}</p>
+            <ul v-if="rulebookCandidates.length" class="mt-4 space-y-3">
+              <li v-for="candidate in rulebookCandidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div class="min-w-0">
+                    <p class="font-semibold">{{ candidate.title }}</p>
+                    <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
+                    <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidate.language || '—' }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
+                    <p class="mt-1 text-xs font-semibold" :class="candidate.officialDomainVerified ? 'text-emerald-700' : 'text-amber-700'">{{ candidate.officialDomainVerified ? rulebookDiscoveryCopy.verified : rulebookDiscoveryCopy.review }}</p>
+                  </div>
+                  <button type="button" class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo" @click="chooseRulebookCandidate(candidate)">{{ rulebookDiscoveryCopy.use }}</button>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="mt-4 text-sm text-ink/55">{{ rulebookDiscoveryCopy.empty }}</p>
+          </section>
+          <p v-else-if="rulebookDiscoveryStatus === 'unavailable'" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ rulebookDiscoveryCopy.unavailable }}</p>
+        </div>
+
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
           <div class="mt-3 grid gap-3 sm:grid-cols-3">
@@ -852,7 +954,7 @@ onBeforeUnmount(() => {
             <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
           </label>
 
-          <details class="mt-4 border-t border-ink/10 pt-4">
+          <details ref="officialDetails" class="mt-4 border-t border-ink/10 pt-4">
             <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
             <div class="mt-4 space-y-4">
               <label class="block text-sm font-semibold">{{ t('documents.source.label') }}

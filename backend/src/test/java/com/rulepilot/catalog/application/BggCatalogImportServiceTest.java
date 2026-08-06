@@ -57,6 +57,23 @@ class BggCatalogImportServiceTest {
     }
 
     @Test
+    void readsSelectionDetailsWithoutCreatingCatalogState() {
+        FakeBgg bgg = new FakeBgg();
+        MemoryCatalogRepository repository = new MemoryCatalogRepository();
+        BggCatalogImportService service = new BggCatalogImportService(
+                bgg,
+                repository,
+                Clock.fixed(Instant.parse("2026-07-19T00:00:00Z"), ZoneOffset.UTC));
+
+        var details = service.gameDetails(266192);
+
+        assertThat(details.name()).isEqualTo("Wingspan");
+        assertThat(bgg.detailCalls).isEqualTo(1);
+        assertThat(repository.games).isEmpty();
+        assertThat(repository.editions).isEmpty();
+    }
+
+    @Test
     void rejectsOutOfRangeRecommendationFiltersBeforeCallingBgg() {
         FakeBgg bgg = new FakeBgg();
         BggCatalogImportService service = new BggCatalogImportService(

@@ -443,6 +443,8 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.match(realRulebooks, /server-resources\.tsv/)
   assert.match(deployment, /name: Verify public browser and API path/)
   assert.match(deployment, /fetch\(`\$\{process\.env\.RULEPILOT_PUBLIC_URL\}\/api\/auth\/csrf`/)
+  assert.match(deployment, /\/api\/v1\/bgg\/recommendations/)
+  assert.match(deployment, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}/)
   assert.match(productionCompose, /TEACHING_BACKGROUND_CORE_POOL_SIZE: "2"/)
   assert.match(productionCompose, /TEACHING_BACKGROUND_MAX_POOL_SIZE: "2"/)
   assert.match(productionCompose, /TEACHING_BACKGROUND_QUEUE_CAPACITY: "3"/)

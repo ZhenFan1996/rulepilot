@@ -1,5 +1,6 @@
 export interface PendingRulebookLesson {
   versionId: string
+  editionId?: string
   playerCount: number
   beginnerCount: number
   durationMinutes: number
@@ -13,6 +14,7 @@ export function readPendingRulebookLessons(storage: Storage, username: string) {
       if (!item || typeof item !== 'object') return false
       const candidate = item as Partial<PendingRulebookLesson>
       if (!boundedId(candidate.versionId) || !integerBetween(candidate.playerCount, 1, 20)) return false
+      if (candidate.editionId !== undefined && !boundedId(candidate.editionId)) return false
       return integerBetween(candidate.beginnerCount, 0, candidate.playerCount)
         && integerBetween(candidate.durationMinutes, 2, 180)
     })

@@ -3,6 +3,7 @@ export interface ShelfCatalogEntry {
   editions: Array<{ id: string; gameId: string; name: string; language: string; publicationYear: number | null }>
   expansions: Array<{ id: string; gameId: string; name: string }>
   bggMetadata: {
+    bggId?: number
     thumbnailUrl: string
     bggUrl?: string
     minPlayers: number | null
@@ -28,6 +29,8 @@ export interface ShelfPlan {
 
 export interface ShelfItem {
   id: string
+  gameId: string | null
+  editionId: string | null
   title: string
   coverUrl: string | null
   coverAttributionUrl: string | null
@@ -67,6 +70,8 @@ export function buildPersonalShelf(
     const metadata = assignment?.entry.bggMetadata ?? null
     const next: ShelfItem = existing ?? {
       id: key,
+      gameId: assignment?.entry.game.id ?? null,
+      editionId: assignment?.edition.id ?? null,
       title,
       coverUrl: metadata?.thumbnailUrl ?? document.document.officialCoverUrl ?? null,
       coverAttributionUrl: metadata?.bggUrl ?? null,
@@ -92,6 +97,8 @@ export function buildPersonalShelf(
     const key = `plan:${plan.id}`
     items.set(key, {
       id: key,
+      gameId: null,
+      editionId: null,
       title: playerFacingTitle(plan.gameTitle),
       coverUrl: null,
       coverAttributionUrl: null,

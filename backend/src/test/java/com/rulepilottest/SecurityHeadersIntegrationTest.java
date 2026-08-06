@@ -47,4 +47,12 @@ class SecurityHeadersIntegrationTest {
                         .content("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void permitsAnonymousBggSelectionReadsButProtectsImports() throws Exception {
+        mockMvc.perform(get("/api/v1/bgg/games/42"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/bgg/games/42/import"))
+                .andExpect(status().isForbidden());
+    }
 }

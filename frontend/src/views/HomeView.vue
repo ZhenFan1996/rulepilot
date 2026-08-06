@@ -266,16 +266,19 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
           </div>
         </div>
         <div v-else-if="hotGames.length" class="-mx-5 mt-6 flex snap-x gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-4 sm:overflow-visible sm:px-0 lg:grid-cols-6">
-          <a v-for="game in hotGames.slice(0, 6)" :key="game.bggId" :href="game.bggUrl" target="_blank" rel="noreferrer" class="group w-36 shrink-0 snap-start sm:w-auto">
-            <div class="relative aspect-[4/5] overflow-hidden rounded-xl border border-ink/10 bg-paper p-2 shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
-              <img :src="game.thumbnailUrl" :alt="t('home.coverShort', { title: game.name })" loading="lazy" class="h-full w-full rounded-lg object-contain" @error="hideBrokenImage">
-              <span v-if="!showingPersonalShelf" class="absolute left-2 top-2 grid h-7 min-w-7 place-items-center rounded-full bg-ink px-2 text-xs font-bold text-canvas">{{ game.rank }}</span>
-            </div>
-            <h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-5">{{ game.name }}</h3>
+          <article v-for="game in hotGames.slice(0, 6)" :key="game.bggId" class="group w-36 shrink-0 snap-start sm:w-auto">
+            <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" :aria-label="t('home.hotInspect', { game: game.name })">
+              <div class="relative aspect-[4/5] overflow-hidden rounded-xl border border-ink/10 bg-paper p-2 shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
+                <img :src="game.thumbnailUrl" :alt="t('home.coverShort', { title: game.name })" loading="lazy" class="h-full w-full rounded-lg object-contain" @error="hideBrokenImage">
+                <span v-if="!showingPersonalShelf" class="absolute left-2 top-2 grid h-7 min-w-7 place-items-center rounded-full bg-ink px-2 text-xs font-bold text-canvas">{{ game.rank }}</span>
+              </div>
+              <h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-5">{{ game.name }}</h3>
+            </RouterLink>
             <p class="mt-1 text-xs text-ink/40">{{ game.publicationYear ?? t('home.unknownYear') }}</p>
             <p v-if="playerTimeLabel(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTimeLabel(game) }}</p>
             <p v-if="ratingWeightLabel(game)" class="text-xs leading-5 text-ink/45">{{ ratingWeightLabel(game) }}</p>
-          </a>
+            <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">{{ t('home.hotSource') }} ↗</a>
+          </article>
         </div>
         <div v-else-if="filtersActive && !hotGamesUnavailable" class="mt-6 rounded-xl border border-dashed border-ink/15 bg-paper px-5 py-6">
           <p class="text-sm leading-6 text-ink/55">{{ t('home.hotNoMatch') }}</p>

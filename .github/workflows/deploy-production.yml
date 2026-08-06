@@ -78,6 +78,81 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           chmod 644 "$HOME/.ssh/known_hosts"
 
+      - name: Synchronize protected BGG credential
+        shell: bash
+        env:
+          BGG_API_TOKEN: ${{ secrets.BGG_API_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "$BGG_API_TOKEN" ]]; then
+            echo "Missing required production integration secret: BGG_API_TOKEN" >&2
+            exit 1
+          fi
+          if (( ${#BGG_API_TOKEN} > 4096 )) || [[ ! "$BGG_API_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "BGG_API_TOKEN has an invalid format" >&2
+            exit 1
+          fi
+
+          local_token_file="$RUNNER_TEMP/rulepilot-bgg-token-${GITHUB_RUN_ID}"
+          remote_token_file="/tmp/rulepilot-bgg-token-${GITHUB_RUN_ID}"
+          cleanup_local() {
+            rm -f "$local_token_file"
+          }
+          trap cleanup_local EXIT
+          umask 077
+          printf '%s' "$BGG_API_TOKEN" > "$local_token_file"
+          scp \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -P "$DEPLOY_SSH_PORT" \
+            "$local_token_file" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:${remote_token_file}"
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" "$remote_token_file" <<'REMOTE'
+          set -Eeuo pipefail
+          application_root=$1
+          token_file=$2
+          env_file="${application_root}/.env"
+          temporary_env="${application_root}/.env.${GITHUB_RUN_ID:-sync}.tmp"
+          cleanup_remote() {
+            rm -f "$token_file" "$temporary_env"
+          }
+          trap cleanup_remote EXIT
+
+          test -f "$env_file"
+          test -f "$token_file"
+          chmod 600 "$token_file"
+          token=$(<"$token_file")
+          if [[ -z "$token" ]] || (( ${#token} > 4096 )) || [[ ! "$token" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Uploaded BGG credential has an invalid format" >&2
+            exit 1
+          fi
+
+          umask 077
+          found=false
+          while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == BGG_API_TOKEN=* ]]; then
+              printf 'BGG_API_TOKEN=%s\n' "$token"
+              found=true
+            else
+              printf '%s\n' "$line"
+            fi
+          done < "$env_file" > "$temporary_env"
+          if [[ "$found" == false ]]; then
+            printf 'BGG_API_TOKEN=%s\n' "$token" >> "$temporary_env"
+          fi
+          chmod 600 "$temporary_env"
+          mv "$temporary_env" "$env_file"
+          unset token
+          echo "Synchronized managed production integration configuration."
+          REMOTE
+
       - name: Package release
         shell: bash
         run: |
@@ -217,7 +292,30 @@ jobs:
               if (!csrf.ok || typeof payload.token !== 'string' || payload.token.length === 0) {
                 throw new Error(`CSRF endpoint returned an invalid HTTP ${csrf.status} response`)
               }
-              console.log(`Verified public frontend and API on attempt ${attempt}`)
+              const recommendations = await fetch(
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendations`,
+                { signal: AbortSignal.timeout(45_000) },
+              )
+              const games = await recommendations.json()
+              if (!recommendations.ok || !Array.isArray(games) || games.length === 0) {
+                throw new Error(`BGG recommendations returned an invalid HTTP ${recommendations.status} response`)
+              }
+              const firstGame = games[0]
+              if (!Number.isInteger(firstGame.bggId) || typeof firstGame.name !== 'string') {
+                throw new Error('BGG recommendations did not contain a valid game identity')
+              }
+              const details = await fetch(
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/games/${firstGame.bggId}`,
+                { signal: AbortSignal.timeout(30_000) },
+              )
+              const game = await details.json()
+              if (!details.ok || game.bggId !== firstGame.bggId || typeof game.description !== 'string'
+                  || !Array.isArray(game.categories) || !Array.isArray(game.mechanics)) {
+                throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
+              }
+              console.log(
+                `Verified public frontend, API, BGG recommendations, and game detail on attempt ${attempt}`,
+              )
               process.exit(0)
             } catch (error) {
               lastFailure = error instanceof Error ? error.message : String(error)
