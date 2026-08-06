@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const readyDocument = {
-  document: { id: 'document-1', gameEditionId: null, title: 'Example Rulebook' },
+  document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Example Rulebook' },
   latestVersion: {
     id: 'version-1', originalFilename: 'example-rules.pdf', size: 4096, status: 'READY',
   },
@@ -37,7 +37,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
 
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '看看热门桌游' })).toBeVisible()
-  await expect(page.getByText('Catalog Game', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' })).toBeVisible()
   await expect(page.getByText('1–5 人 · 约 60 分钟')).toBeVisible()
   await expect(page.getByRole('link', { name: /Powered by BGG/ })).toHaveAttribute(
     'href', 'https://boardgamegeek.com/hotness',
@@ -81,6 +81,13 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByText('已关联桌游资料，并保留原规则书作为唯一规则证据。')).toBeVisible()
   await expect(page.getByRole('button', { name: '开始讲解' })).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
+
+  await page.goto('/games/game-1')
+  await expect(page.getByRole('heading', { name: 'Catalog Game' })).toBeVisible()
+  await expect(page.getByText('Example Rulebook')).toBeVisible()
+  await expect(page.getByRole('link', { name: '打开讲解' })).toHaveAttribute('href', '/lesson/plan-1')
+  await page.getByRole('link', { name: '规则答疑' }).click()
+  await expect(page).toHaveURL('/lesson/plan-1/questions')
 })
 
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
@@ -114,7 +121,9 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/auth/session') return route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     if (path === '/api/auth/csrf') return route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } })
     if (path === '/api/v1/assistant-runs/active') return route.fulfill({ json: [] })
-    if (path === '/api/v1/teaching-plans') return route.fulfill({ json: [] })
+    if (path === '/api/v1/teaching-plans') return route.fulfill({ json: options.recommendations === null ? [] : [{
+      id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Catalog Game', createdAt: '2026-08-06T00:00:00Z',
+    }] })
     if (path === '/api/public/lessons') return route.fulfill({ json: [] })
     if (path === '/api/v1/bgg/recommendations') {
       return options.recommendations === null

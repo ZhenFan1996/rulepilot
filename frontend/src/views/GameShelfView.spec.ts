@@ -91,6 +91,7 @@ function appRouter() {
       { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
       { path: '/catalog', name: 'catalog', component: GameShelfView },
       { path: '/catalog/manage', name: 'catalog-manage', component: { template: '<div />' } },
+      { path: '/games/:gameId', name: 'game-workspace', component: { template: '<div />' } },
       { path: '/account', name: 'account', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
       { path: '/lesson/:planId', name: 'lesson', component: { template: '<div />' } },
