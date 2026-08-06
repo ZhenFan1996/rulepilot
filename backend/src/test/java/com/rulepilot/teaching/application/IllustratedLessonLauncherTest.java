@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
@@ -58,6 +57,7 @@ class IllustratedLessonLauncherTest {
         when(lessons.begin(planId, "alice")).thenReturn(run);
         var outcome = new GenerationOutcome(run, LessonStatus.DRAFT_READY);
         when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        when(visuals.supportsVisualEvidence("alice")).thenReturn(true);
         when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
                 UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
         var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
@@ -65,9 +65,9 @@ class IllustratedLessonLauncherTest {
         launcher.launch(planId, "alice");
 
         verify(lessons).finish(outcome);
-        verify(visuals, times(2)).launch(planId, "alice");
+        verify(visuals).launch(planId, "alice");
         verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
-        verify(visuals).extractIconGlossaryOnly(
+        verify(visuals, never()).extractIconGlossaryOnly(
                 org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }
 
@@ -82,6 +82,7 @@ class IllustratedLessonLauncherTest {
         when(lessons.begin(planId, "alice")).thenReturn(run);
         var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
         when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        when(visuals.supportsVisualEvidence("alice")).thenReturn(true);
         when(visuals.launch(planId, "alice")).thenReturn(new VisualLessonEnrichmentService.VisualEnrichmentLaunch(
                 UUID.randomUUID(), AssistantRunState.RECEIVED, 1, false));
         var launcher = new IllustratedLessonLauncher(lessons, runs, lessonExecutor, visualExecutor, visuals);
@@ -96,6 +97,25 @@ class IllustratedLessonLauncherTest {
         queuedVisualWork.get().run();
 
         verify(visuals).enrichLatest(org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
+    }
+
+    @Test
+    void skipsOptionalVisualWorkWhenTheOwnerHasOnlyTextModels() {
+        RunSnapshot run = run(AssistantRunState.RECEIVED);
+        var visuals = mock(VisualLessonEnrichmentService.class);
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING, planId, "alice")).thenReturn(Optional.empty());
+        when(lessons.begin(planId, "alice")).thenReturn(run);
+        var outcome = new GenerationOutcome(run, LessonStatus.COMPLETE);
+        when(lessons.generate(planId, "alice", run)).thenReturn(outcome);
+        when(visuals.supportsVisualEvidence("alice")).thenReturn(false);
+        var launcher = new IllustratedLessonLauncher(lessons, runs, new SyncTaskExecutor(), visuals);
+
+        launcher.launch(planId, "alice");
+
+        verify(lessons).finish(outcome);
+        verify(visuals, never()).launch(planId, "alice");
+        verify(visuals, never()).enrichLatest(
+                org.mockito.ArgumentMatchers.eq(planId), any(RunSnapshot.class));
     }
 
     @Test

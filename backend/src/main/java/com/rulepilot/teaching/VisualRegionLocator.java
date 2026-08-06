@@ -10,6 +10,11 @@ public interface VisualRegionLocator {
 
     Optional<LocatedRegion> locate(VisualLocationRequest request);
 
+    /** Lets orchestration omit visual-only work when an owner has no image-capable model configured. */
+    default boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return true;
+    }
+
     /**
      * Keeps optional visual work observable without asking the lesson writer to infer why no crop was attached.
      * Existing lightweight adapters only need to implement {@link #locate(VisualLocationRequest)}.

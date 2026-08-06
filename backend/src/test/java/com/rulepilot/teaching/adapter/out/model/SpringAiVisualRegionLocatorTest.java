@@ -1,8 +1,12 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.DocumentPageImages.PageImage;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.VisualRegionLocator.Claim;
 import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
 import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
@@ -22,6 +26,18 @@ import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
 import org.junit.jupiter.api.Test;
 
 class SpringAiVisualRegionLocatorTest {
+
+    @Test
+    void reportsTheOwnersConfiguredVisualCapability() {
+        var models = mock(RuntimeModelConfiguration.class);
+        when(models.usesFake(Role.VISUAL, "text-player")).thenReturn(true);
+        when(models.usesFake(Role.VISUAL, "visual-player")).thenReturn(false);
+        when(models.supportsVision(Role.VISUAL, "visual-player")).thenReturn(true);
+        var locator = new SpringAiVisualRegionLocator(models);
+
+        assertThat(locator.supportsVisualEvidence("text-player")).isFalse();
+        assertThat(locator.supportsVisualEvidence("visual-player")).isTrue();
+    }
 
     @Test
     void accepts_json_wrapped_in_a_model_code_fence() {

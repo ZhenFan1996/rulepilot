@@ -52,6 +52,11 @@ public class BoundedVisualRegionLocator implements VisualRegionLocator {
     }
 
     @Override
+    public boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return delegate.supportsVisualEvidence(modelConfigurationOwner);
+    }
+
+    @Override
     public LocateResult locateWithResult(VisualLocationRequest request) {
         LocateGuideResult guide = locateGuideWithResult(request);
         return guide.regions().stream()

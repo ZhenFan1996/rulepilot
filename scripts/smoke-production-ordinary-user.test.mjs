@@ -16,6 +16,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let insufficientLesson = false
   let lessonRunReads = 0
   let lessonReads = 0
+  let visualRunEnabled = false
+  let visualRunReads = 0
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -144,13 +146,45 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/active?mode=TEACHING') {
       return json(response, 200, [{ id: '55555555-5555-5555-5555-555555555555', subjectId: '44444444-4444-4444-4444-444444444444' }])
     }
+    if (request.method === 'GET'
+      && request.url === '/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=44444444-4444-4444-4444-444444444444') {
+      if (!visualRunEnabled) return json(response, 404, { error: 'not started' })
+      visualRunReads += 1
+      const state = visualRunReads > 1 ? 'COMPLETED' : 'RETRIEVING'
+      return json(response, 200, {
+        run: {
+          id: '66666666-6666-6666-6666-666666666666', state,
+          createdAt: '2026-08-02T00:00:20Z', completedAt: state === 'COMPLETED' ? '2026-08-02T00:00:22Z' : null,
+        },
+        steps: [],
+        activities: state === 'COMPLETED' ? [{
+          sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', outcome: 'SUCCEEDED',
+          latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
+          occurredAt: '2026-08-02T00:00:22Z',
+        }] : [],
+        budget: { usedModelCalls: state === 'COMPLETED' ? 1 : 0, usedToolCalls: 1, usedTokens: 800 },
+      })
+    }
+    if (request.method === 'GET' && request.url === '/api/v1/assistant-runs/66666666-6666-6666-6666-666666666666') {
+      return json(response, 200, {
+        run: { id: '66666666-6666-6666-6666-666666666666', state: 'COMPLETED' },
+        steps: [], activities: [], budget: {},
+      })
+    }
     if (request.method === 'GET' && request.url?.endsWith('/illustrated-lessons/latest')) {
       lessonReads += 1
       return json(response, 200, {
         status: regressLessonStatus
           ? lessonReads === 1 ? 'COMPLETE' : 'DRAFT_READY'
           : lessonReads === 1 ? 'DRAFT_READY' : 'COMPLETE',
-        sections: [{ position: 1 }],
+        sections: [{
+          position: 1,
+          steps: visualRunEnabled && visualRunReads > 1 ? [{
+            position: 1, kind: 'VISUAL', visualFocus: {
+              pageNumber: 1, label: 'board', x: 100, y: 100, width: 400, height: 300,
+            },
+          }] : [],
+        }],
       })
     }
     if (request.method === 'POST' && request.url?.endsWith('/cancellation')) {
@@ -195,6 +229,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       lessonState: 'COMPLETED',
       lessonStatus: 'COMPLETE',
       sectionCount: 1,
+      visualStepCount: 0,
+      focusedVisualStepCount: 0,
+      visualEnrichmentState: 'NOT_STARTED',
       navigation: undefined,
       cleanup: 'scheduled',
     })
@@ -207,6 +244,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(retained.sourceUrl, 'https://example.com/lantern-relay-rules.pdf')
     assert.equal(retained.plan.gameTitle, 'Lantern Relay')
     assert.equal(retained.lesson.status, 'COMPLETE')
+    assert.equal(retained.visualRun, null)
     assert.equal((await readFile(navigation, 'utf8')).trim().split('\n').length,
       summary.navigation.requestCount)
     assert.ok((await readFile(navigation, 'utf8')).trim().split('\n')
@@ -277,6 +315,45 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.equal(expectedVisualCatalog.code, 0, expectedVisualCatalog.stderr)
     assert.doesNotMatch(expectedVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
     assert.doesNotMatch(expectedVisualCatalog.stderr, /Visual-only rulebook preparation did not report visual catalog work/)
+    assert.equal(deleted, true)
+
+    visualRunEnabled = true
+    visualRunReads = 0
+    deleted = false
+    planStarted = false
+    const requiredVisual = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--visual-expectation', 'required',
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(requiredVisual.code, 0, requiredVisual.stderr)
+    assert.equal(JSON.parse(requiredVisual.stdout).visualStepCount, 1)
+    assert.equal(JSON.parse(requiredVisual.stdout).focusedVisualStepCount, 1)
+    assert.equal(JSON.parse(requiredVisual.stdout).visualEnrichmentState, 'COMPLETED')
+    assert.match(requiredVisual.stderr, /SMOKE_STAGE visual-enrichment-completed/)
+    assert.match(requiredVisual.stderr, /SMOKE_STAGE visual-expectation-verified expectation=required visualSteps=1 focusedVisualSteps=1/)
+    assert.equal(deleted, true)
+    visualRunEnabled = false
+
+    deleted = false
+    planStarted = false
+    const textOnly = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--visual-expectation', 'forbidden',
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.equal(textOnly.code, 0, textOnly.stderr)
+    assert.equal(JSON.parse(textOnly.stdout).visualStepCount, 0)
+    assert.equal(JSON.parse(textOnly.stdout).visualEnrichmentState, 'NOT_STARTED')
+    assert.match(textOnly.stderr, /SMOKE_STAGE visual-expectation-verified expectation=forbidden visualSteps=0 focusedVisualSteps=0/)
     assert.equal(deleted, true)
 
     includeBlockingVisualCatalog = false
@@ -356,6 +433,7 @@ test('production workflows never execute an operator-supplied Git ref with produ
     /npm --prefix frontend exec playwright test -- --config playwright\.production\.config\.ts/)
   assert.match(realRulebooks, /--base-url "http:\/\/127\.0\.0\.1:18082"/)
   assert.match(realRulebooks, /--navigation-mode api/)
+  assert.equal((realRulebooks.match(/--visual-expectation required/g) ?? []).length, 2)
   assert.match(realRulebooks, /server-resources\.tsv/)
   assert.match(deployment, /name: Verify public browser and API path/)
   assert.match(deployment, /fetch\(`\$\{process\.env\.RULEPILOT_PUBLIC_URL\}\/api\/auth\/csrf`/)

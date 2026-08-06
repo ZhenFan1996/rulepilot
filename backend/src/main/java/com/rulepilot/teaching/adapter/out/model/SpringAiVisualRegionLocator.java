@@ -33,6 +33,12 @@ public class SpringAiVisualRegionLocator implements VisualRegionLocator {
 
     private static final Logger log = LoggerFactory.getLogger(SpringAiVisualRegionLocator.class);
 
+    @Override
+    public boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return !models.usesFake(Role.VISUAL, modelConfigurationOwner)
+                && models.supportsVision(Role.VISUAL, modelConfigurationOwner);
+    }
+
     private static final String SYSTEM = """
             You are a rulebook visual locator. Inspect only the supplied page images and candidate rectangles.
             Return one or two compact regions only when each gives a player a direct visual handle on this section or

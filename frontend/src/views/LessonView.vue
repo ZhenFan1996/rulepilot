@@ -316,12 +316,22 @@ async function refreshVisualEnrichment() {
   const request = latestLessonLoad
   let retryDelay = 2500
   try {
-    const response = await optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`)
+    const [response, lessonResponse] = await Promise.all([
+      optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
+      fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
+    ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
-    if (response?.status === 401) {
+    if (response?.status === 401 || lessonResponse.status === 401) {
       notifyLoginRequired()
       return
     }
+    if (!lessonResponse.ok) throw new Error(t('lesson.generation.refreshFailed'))
+    const incomingLesson = await lessonResponse.json() as IllustratedLesson
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
+    sourceLesson.value = acceptProgressiveLesson(sourceLesson.value, incomingLesson)
+    lesson.value = sourceLesson.value
+    await applySelectedLocale(targetPlanId, request)
+    if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (response?.ok) {
       const incomingRun = await response.json() as TeachingRunProgress
       if (!isCurrentLessonLoad(request, targetPlanId)) return

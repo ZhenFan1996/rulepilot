@@ -85,6 +85,10 @@ public class VisualLessonEnrichmentService {
         return new VisualEnrichmentLaunch(run.id(), run.state(), run.revision(), false);
     }
 
+    boolean supportsVisualEvidence(String ownerUsername) {
+        return enricher.supportsVisualEvidence(ownerUsername);
+    }
+
     public void enrichLatest(UUID teachingPlanId) {
         log.info("Starting visual enrichment for teaching plan {}", teachingPlanId);
         try {

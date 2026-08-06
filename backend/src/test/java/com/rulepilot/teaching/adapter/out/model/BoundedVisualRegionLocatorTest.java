@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.ingestion.layout.RulebookUnderstanding;
 import com.rulepilot.teaching.VisualRegionLocator;
+import com.rulepilot.teaching.VisualRegionLocator.LocatedRegion;
+import com.rulepilot.teaching.VisualRegionLocator.VisualLocationRequest;
 import com.rulepilot.teaching.application.VisualRegionCandidateSelector.Candidate;
 import java.time.Duration;
 import java.util.List;
@@ -45,6 +47,29 @@ class BoundedVisualRegionLocatorTest {
             long started = System.nanoTime();
             assertThat(bounded.locate(request(UUID.randomUUID()))).isEmpty();
             assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(250));
+        } finally {
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void preservesTheOwnersVisualCapabilityBoundary() {
+        VisualRegionLocator textOnly = new VisualRegionLocator() {
+            @Override
+            public Optional<LocatedRegion> locate(VisualLocationRequest request) {
+                return Optional.empty();
+            }
+
+            @Override
+            public boolean supportsVisualEvidence(String modelConfigurationOwner) {
+                return false;
+            }
+        };
+        var executor = executor();
+        try {
+            var bounded = new BoundedVisualRegionLocator(textOnly, executor, Duration.ofSeconds(1));
+
+            assertThat(bounded.supportsVisualEvidence("text-only-player")).isFalse();
         } finally {
             executor.shutdown();
         }

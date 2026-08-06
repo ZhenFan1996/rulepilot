@@ -95,6 +95,10 @@ public class VisualLessonEnricher {
         return enrich(documentVersionId, lesson, null);
     }
 
+    boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return sectionEnricher.supportsVisualEvidence(modelConfigurationOwner);
+    }
+
     public IllustratedLesson enrich(UUID documentVersionId, IllustratedLesson lesson, String modelConfigurationOwner) {
         return enrichWithReport(documentVersionId, lesson, modelConfigurationOwner).lesson();
     }

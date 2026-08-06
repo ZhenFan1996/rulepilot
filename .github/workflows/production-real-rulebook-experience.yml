@@ -209,6 +209,7 @@ jobs:
               --uploaded-title "$RULEBOOK_A_TITLE" \
               --official-source-url "$RULEBOOK_A_URL" \
               --preparation-mode visual \
+              --visual-expectation required \
               --navigation-mode api \
               --navigation-file "$artifact_dir/user-a-navigation.tsv" \
               --result-file "$artifact_dir/user-a-result.json" \
@@ -223,6 +224,7 @@ jobs:
               --expected-title "${RULEBOOK_B_TITLE,,}" \
               --uploaded-title "$RULEBOOK_B_TITLE" \
               --official-source-url "$RULEBOOK_B_URL" \
+              --visual-expectation required \
               --navigation-mode api \
               --navigation-file "$artifact_dir/user-b-navigation.tsv" \
               --result-file "$artifact_dir/user-b-result.json" \
