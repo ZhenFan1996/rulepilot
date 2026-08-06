@@ -195,7 +195,9 @@ jobs:
           application_root=$1
           release_id=$2
           archive="/tmp/rulepilot-${release_id}.tar.gz"
+          releases_root="${application_root}/releases"
           release_dir="${application_root}/releases/${release_id}"
+          current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
 
           diagnose_failure() {
             status=$?
@@ -232,20 +234,37 @@ jobs:
               echo "Recent API logs:"
               docker logs --tail 160 "$api_container" || true
             fi
+            if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
+              echo "Restoring API and worker from the current release after failed activation."
+              (cd "$current_release" && docker compose --env-file .env \
+                -f infra/compose.yml \
+                -f infra/compose.deployment.yml \
+                -f infra/compose.production.yml up -d api worker) || \
+                echo "Automatic current-release service restoration failed." >&2
+            fi
             exit "$status"
           }
           trap diagnose_failure ERR
 
           test -f "${application_root}/.env"
           deploy_sha=${release_id%%-*}
-          current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
           find /tmp -maxdepth 1 -type f -name "rulepilot-${deploy_sha}-*.tar.gz" \
             ! -path "$archive" -delete
-          for candidate in "${application_root}"/releases/"${deploy_sha}"-*; do
+          install -d -m 0755 "$releases_root"
+          removed_releases=0
+          for candidate in "${releases_root}"/*; do
             [[ -d "$candidate" ]] || continue
-            [[ "$(readlink -f "$candidate")" == "$current_release" ]] && continue
-            rm -rf -- "$candidate"
+            candidate_path=$(readlink -f "$candidate")
+            [[ "$candidate_path" == "$current_release" ]] && continue
+            [[ "$candidate_path" == "$release_dir" ]] && continue
+            if [[ "$candidate_path" != "${releases_root}/"* ]]; then
+              echo "Refusing to remove release outside ${releases_root}: ${candidate_path}" >&2
+              exit 1
+            fi
+            rm -rf -- "$candidate_path"
+            removed_releases=$((removed_releases + 1))
           done
+          printf 'Reclaimed %d inactive release artifact(s); current release retained.\n' "$removed_releases"
           echo "Reclaiming unused Docker build cache and images before activation."
           docker builder prune --all --force
           docker image prune --all --force

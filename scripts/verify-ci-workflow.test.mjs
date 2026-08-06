@@ -37,3 +37,14 @@ test('production deployment verifies live BGG recommendations and detail enrichm
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.categories\)/)
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.mechanics\)/)
 })
+
+test('production deployment reclaims only inactive releases and restores current services on failure', () => {
+  assert.match(deploymentWorkflow, /current_release=\$\(readlink -f "\$\{application_root\}\/current"/)
+  assert.match(deploymentWorkflow, /\[\[ "\$candidate_path" == "\$current_release" \]\] && continue/)
+  assert.match(deploymentWorkflow, /\[\[ "\$candidate_path" == "\$release_dir" \]\] && continue/)
+  assert.match(deploymentWorkflow, /"\$candidate_path" != "\$\{releases_root\}\/"\*/)
+  assert.match(deploymentWorkflow, /rm -rf -- "\$candidate_path"/)
+  assert.match(deploymentWorkflow, /Restoring API and worker from the current release after failed activation/)
+  assert.match(deploymentWorkflow, /\.yml up -d api worker/)
+  assert.doesNotMatch(deploymentWorkflow, /docker volume (?:prune|rm)/)
+})
