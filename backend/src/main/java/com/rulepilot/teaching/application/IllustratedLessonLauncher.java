@@ -64,7 +64,9 @@ public class IllustratedLessonLauncher {
             lessonExecutor.execute(() -> {
                 var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
                 lessons.finish(outcome);
-                if (visuals != null && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
+                if (visuals != null
+                        && visuals.supportsVisualEvidence(ownerUsername)
+                        && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
                     enrichLatest(teachingPlanId, ownerUsername);
                 }
             });
@@ -92,7 +94,6 @@ public class IllustratedLessonLauncher {
                         java.time.Instant.now(),
                         null,
                         null));
-                prepareIconGlossary(teachingPlanId, ownerUsername);
             });
         } catch (RuntimeException schedulingFailure) {
             visuals.failScheduling(launch);

@@ -70,6 +70,12 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
     }
 
     @Override
+    public boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return agent.supports(Role.VISUAL, modelConfigurationOwner)
+                || fallback.supportsVisualEvidence(modelConfigurationOwner);
+    }
+
+    @Override
     public LocateGuideResult locateGuideWithResult(VisualLocationRequest request) {
         if (!hasAgentContext(request)
                 || !agent.supports(Role.VISUAL, request.modelConfigurationOwner())) {

@@ -8,6 +8,7 @@ Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
   --base-url URL --pdf FILE [--username USER] [--timeout-seconds SECONDS] \
   [--expected-title TITLE] [--uploaded-title TITLE] [--official-source-url URL] \
   [--preparation-mode text|visual] [--navigation-mode all|api] \
+  [--visual-expectation any|required|forbidden] \
   [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated upload -> processing -> teaching plan -> illustrated lesson
@@ -24,6 +25,7 @@ uploaded_title="Lantern Relay rulebook EN v4 12pages"
 official_source_url=
 preparation_mode=text
 navigation_mode=all
+visual_expectation=any
 navigation_file=
 result_file=
 
@@ -63,6 +65,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--navigation-mode)
 			navigation_mode=${2:-}
+			shift 2
+			;;
+		--visual-expectation)
+			visual_expectation=${2:-}
 			shift 2
 			;;
 		--navigation-file)
@@ -109,6 +115,10 @@ if [ "$navigation_mode" != all ] && [ "$navigation_mode" != api ]; then
 	echo "--navigation-mode must be all or api" >&2
 	exit 2
 fi
+if [ "$visual_expectation" != any ] && [ "$visual_expectation" != required ] && [ "$visual_expectation" != forbidden ]; then
+	echo "--visual-expectation must be any, required, or forbidden" >&2
+	exit 2
+fi
 if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
 	echo "RULEPILOT_SMOKE_PASSWORD is required" >&2
 	exit 2
@@ -126,6 +136,8 @@ cookie_jar="$work_dir/cookies.txt"
 document_id=
 preparation_run_id=
 lesson_run_id=
+visual_run_id=
+visual_result=null
 csrf_header=
 csrf_token=
 probe_index=0
@@ -284,15 +296,31 @@ cancel_run() {
 		"$base_url/api/v1/assistant-runs/$run_id/cancellation" || true
 }
 
+wait_for_cancelled_run() {
+	local run_id=$1
+	[ -n "$run_id" ] || return 0
+	local attempt response state
+	for attempt in {1..15}; do
+		response=$(get_json "/api/v1/assistant-runs/$run_id" 2>/dev/null) || return 0
+		state=$(jq -r '.run.state // ""' <<<"$response")
+		case "$state" in
+			COMPLETED|FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED) return 0 ;;
+		esac
+		sleep 2
+	done
+}
+
 cleanup() {
 	local exit_status=$?
 	set +e
 	if [ -n "$csrf_header" ] && [ -n "$csrf_token" ]; then
+		cancel_run "$visual_run_id"
 		cancel_run "$lesson_run_id"
 		cancel_run "$preparation_run_id"
+		wait_for_cancelled_run "$visual_run_id"
 		if [ -n "$document_id" ]; then
 			if curl --silent --show-error --output /dev/null \
-				--connect-timeout 5 --max-time 20 \
+				--connect-timeout 5 --max-time 60 \
 				--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 				--request DELETE --header "$csrf_header: $csrf_token" \
 				"$base_url/api/v1/documents/$document_id"; then
@@ -391,6 +419,59 @@ wait_for_run() {
 	done
 	echo "$label timed out after ${timeout_seconds}s" >&2
 	return 1
+}
+
+wait_for_visual_enrichment() {
+	local plan_id=$1
+	local deadline=$((SECONDS + timeout_seconds))
+	local appearance_deadline=$((SECONDS + 30))
+	if [ "$appearance_deadline" -gt "$deadline" ]; then appearance_deadline=$deadline; fi
+	local response http_code body state
+	while [ "$SECONDS" -lt "$deadline" ]; do
+		response=$(curl --silent --show-error --write-out $'\n%{http_code}' \
+			--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+			"$base_url/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=$plan_id")
+		http_code=${response##*$'\n'}
+		body=${response%$'\n'*}
+		if [ "$http_code" = 404 ]; then
+			if [ "$visual_expectation" != required ]; then return 0; fi
+			if [ "$SECONDS" -ge "$appearance_deadline" ]; then
+				echo "A vision-capable lesson did not launch visual enrichment within 30 seconds" >&2
+				return 1
+			fi
+			sleep 1
+			continue
+		fi
+		if [ "$http_code" != 200 ]; then
+			echo "Visual enrichment progress endpoint returned HTTP $http_code" >&2
+			return 1
+		fi
+		visual_run_id=$(jq -er '.run.id' <<<"$body")
+		state=$(jq -er '.run.state' <<<"$body")
+		case "$state" in
+			COMPLETED)
+				visual_result=$body
+				log_run_timing "visual-enrichment" "$body"
+				log_stage "visual-enrichment-completed run=$visual_run_id"
+				return 0
+				;;
+			FAILED|DEGRADED|INSUFFICIENT_EVIDENCE|CANCELLED)
+				visual_result=$body
+				log_run_timing "visual-enrichment-failure" "$body"
+				if [ "$visual_expectation" = required ]; then
+					echo "Visual enrichment ended in $state" >&2
+					return 1
+				fi
+				return 0
+				;;
+		esac
+		sleep 2
+	done
+	if [ "$visual_expectation" = required ]; then
+		echo "Visual enrichment timed out after ${timeout_seconds}s" >&2
+		return 1
+	fi
+	return 0
 }
 
 verify_launched_run() {
@@ -524,14 +605,27 @@ log_run_timing "lesson" "$lesson_result"
 verify_lesson_critical_path "$lesson_result" "$plan_section_count"
 log_stage "lesson-generation-completed"
 
+wait_for_visual_enrichment "$plan_id"
+
 lesson=$(get_json "/api/v1/teaching-plans/$plan_id/illustrated-lessons/latest")
 lesson_status=$(jq -er '.status' <<<"$lesson")
 section_count=$(jq -er '.sections | length' <<<"$lesson")
+visual_step_count=$(jq -er '[.sections[].steps[]? | select(.kind == "VISUAL")] | length' <<<"$lesson")
+focused_visual_step_count=$(jq -er '[.sections[].steps[]? | select(.kind == "VISUAL" and .visualFocus != null)] | length' <<<"$lesson")
 if ! jq -e '(.status == "COMPLETE" or .status == "DRAFT_READY") and (.sections | length > 0)' \
 	>/dev/null <<<"$lesson"; then
 	echo "Illustrated lesson was unusable: status=$lesson_status sections=$section_count" >&2
 	exit 1
 fi
+if [ "$visual_expectation" = required ] && [ "$focused_visual_step_count" -lt 1 ]; then
+	echo "A vision-capable lesson finished without a grounded visual crop" >&2
+	exit 1
+fi
+if [ "$visual_expectation" = forbidden ] && [ "$visual_step_count" -gt 0 ]; then
+	echo "A text-only lesson unexpectedly published visual steps" >&2
+	exit 1
+fi
+log_stage "visual-expectation-verified expectation=$visual_expectation visualSteps=$visual_step_count focusedVisualSteps=$focused_visual_step_count"
 log_stage "lesson-verified"
 
 navigation=$(navigation_summary)
@@ -548,9 +642,14 @@ summary=$(jq -n \
 	--arg lessonState "$lesson_state" \
 	--arg lessonStatus "$lesson_status" \
 	--argjson sectionCount "$section_count" \
+	--argjson visualStepCount "$visual_step_count" \
+	--argjson focusedVisualStepCount "$focused_visual_step_count" \
+	--arg visualEnrichmentState "$(jq -r '.run.state // "NOT_STARTED"' <<<"$visual_result")" \
 	--argjson navigation "$navigation" \
 	'{title: $title, preparationState: $preparationState, lessonState: $lessonState,
-	  lessonStatus: $lessonStatus, sectionCount: $sectionCount, navigation: $navigation,
+	  lessonStatus: $lessonStatus, sectionCount: $sectionCount,
+	  visualStepCount: $visualStepCount, focusedVisualStepCount: $focusedVisualStepCount,
+	  visualEnrichmentState: $visualEnrichmentState, navigation: $navigation,
 	  cleanup: "scheduled"}')
 
 if [ -n "$result_file" ]; then
@@ -563,10 +662,11 @@ if [ -n "$result_file" ]; then
 		--argjson preparationRun "$preparation_result" \
 		--argjson plan "$plan" \
 		--argjson lessonRun "$lesson_result" \
+		--argjson visualRun "$visual_result" \
 		--argjson lesson "$lesson" \
 		'{generatedAt: $generatedAt, stage: "lesson", username: $username, sourceUrl: $sourceUrl,
 		  summary: $summary, preparationRun: $preparationRun, plan: $plan,
-		  lessonRun: $lessonRun, lesson: $lesson}' > "$result_file"
+		  lessonRun: $lessonRun, visualRun: $visualRun, lesson: $lesson}' > "$result_file"
 	chmod 600 "$result_file"
 fi
 

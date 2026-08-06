@@ -40,6 +40,10 @@ final class VisualLessonSectionEnricher {
         this.requestParallelism = requestParallelism;
     }
 
+    boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return stepLocator.supportsVisualEvidence(modelConfigurationOwner);
+    }
+
     Result enrich(
             RulebookUnderstanding understanding,
             UUID documentVersionId,

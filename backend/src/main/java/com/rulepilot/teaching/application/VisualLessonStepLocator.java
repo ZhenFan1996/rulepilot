@@ -41,6 +41,10 @@ final class VisualLessonStepLocator {
         this.stepRelevancePolicy = stepRelevancePolicy;
     }
 
+    boolean supportsVisualEvidence(String modelConfigurationOwner) {
+        return locator.supportsVisualEvidence(modelConfigurationOwner);
+    }
+
     Result locate(
             RulebookUnderstanding understanding,
             UUID documentVersionId,

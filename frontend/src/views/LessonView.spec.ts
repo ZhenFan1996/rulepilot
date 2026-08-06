@@ -366,6 +366,72 @@ describe('LessonView progressive reading', () => {
     wrapper.unmount()
   })
 
+  it('shows visual crops that finish while the player keeps reading the lesson', async () => {
+    let visualRunReads = 0
+    let lessonReads = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') {
+        return Response.json(planFixture('plan-1', 'Live Visuals'))
+      }
+      if (path.includes('mode=TEACHING')) {
+        return Response.json({
+          run: { id: 'teaching-run', state: 'COMPLETED', createdAt: '2026-07-21T00:00:00Z', completedAt: '2026-07-21T00:00:10Z' },
+          budget: { usedModelCalls: 1, maxModelCalls: 48 }, activities: [],
+        })
+      }
+      if (path.includes('mode=VISUAL_ENRICHMENT')) {
+        visualRunReads++
+        const completed = visualRunReads > 1
+        return Response.json({
+          run: {
+            id: 'visual-run', state: completed ? 'COMPLETED' : 'RETRIEVING',
+            createdAt: '2026-07-21T00:00:10Z', completedAt: completed ? '2026-07-21T00:00:20Z' : null,
+          },
+          budget: { usedModelCalls: completed ? 1 : 0, maxModelCalls: 48 },
+          activities: completed ? [{
+            sequence: 1, type: 'VALIDATION', operation: 'visualSection|1', summary: '已加入局部规则书截图',
+            outcome: 'SUCCEEDED', latencyMs: 0, occurredAt: '2026-07-21T00:00:20Z',
+          }] : [],
+        })
+      }
+      if (path.endsWith('/illustrated-lessons/latest')) {
+        lessonReads++
+        const enriched = section(1, '第一节')
+        return Response.json({
+          id: 'lesson-1', status: 'COMPLETE',
+          sections: lessonReads === 1
+            ? [{ ...enriched, steps: enriched.steps.filter((step) => step.kind !== 'VISUAL') }]
+            : [enriched],
+        })
+      }
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createMemoryRouter()
+    await router.push('/lesson/plan-1')
+    await router.isReady()
+    const wrapper = mount(LessonView, {
+      global: {
+        plugins: [router],
+        stubs: { AppShell: { template: '<div><slot /></div>' } },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('img[alt*="主棋盘区域"]').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(2500)
+    await flushPromises()
+
+    expect(wrapper.find('img[alt*="主棋盘区域"]').attributes('src'))
+      .toContain('/pages/1/image/crop?x=100&y=200&width=500&height=400')
+    expect(fetchMock.mock.calls.map(([input]) => String(input))
+      .filter((path) => path.endsWith('/illustrated-lessons/latest'))).toHaveLength(2)
+    wrapper.unmount()
+  })
+
 })
 
 function planFixture(id: string, gameTitle: string) {
