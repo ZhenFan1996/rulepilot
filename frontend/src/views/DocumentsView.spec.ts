@@ -42,7 +42,10 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('shows the selected game and edition handed off from discovery', async () => {
-    const fetchMock = mockApplicationFetch(() => 'READY')
+    const fetchMock = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined,
+      () => response({ duplicate: false, version: { id: 'selected-version', status: 'EXTRACTING' } }, 201),
+    )
     fetchMock.mockImplementationOnce(async () => response({ username: 'player' }))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       if (String(input).includes('/api/v1/documents/rulebook-candidates')) return response({
@@ -75,6 +78,12 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await wrapper.findAll('button').find(button => button.text() === '选择并继续核对')!.trigger('click')
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载并生成讲解')!.trigger('click')
+    await flushPromises()
+    expect(readPendingRulebookLessons(localStorage, 'player')).toContainEqual({
+      versionId: 'selected-version', editionId: 'edition-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+    })
     wrapper.unmount()
   })
 

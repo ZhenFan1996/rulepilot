@@ -452,6 +452,7 @@ function titleFromFile(selected: File) {
 function currentPreferences(versionId: string): PendingRulebookLesson {
   return {
     versionId,
+    ...(editionId.value ? { editionId: editionId.value } : {}),
     playerCount: playerCount.value,
     beginnerCount: beginnerCount.value,
     durationMinutes: durationMinutes.value,
@@ -710,6 +711,9 @@ function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
 async function recoverPendingHandoff() {
   if (!username.value || preparingVersionId.value) return
   for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
+    if (!editionId.value && pending.editionId && editionOptions.value.some(item => item.id === pending.editionId)) {
+      editionId.value = pending.editionId
+    }
     const entry = documents.value.find((candidate) => candidate.latestVersion.id === pending.versionId)
     if (!entry) {
       forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
