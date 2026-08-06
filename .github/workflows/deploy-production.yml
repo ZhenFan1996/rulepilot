@@ -150,6 +150,9 @@ jobs:
           trap diagnose_failure ERR
 
           test -f "${application_root}/.env"
+          echo "Reclaiming unused Docker build cache and images before activation."
+          docker builder prune --all --force
+          docker image prune --all --force
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
           ln -s "${application_root}/.env" "${release_dir}/.env"
