@@ -38,6 +38,14 @@ test('production deployment verifies live BGG recommendations and detail enrichm
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.mechanics\)/)
 })
 
+test('production deployment captures bounded API diagnostics without reading protected environment values', () => {
+  assert.match(deploymentWorkflow, /name: Collect bounded production diagnostics after a failed verification/)
+  assert.match(deploymentWorkflow, /if: failure\(\)/)
+  assert.match(deploymentWorkflow, /logs --since 10m --tail 250 --no-color api/)
+  assert.match(deploymentWorkflow, /Refusing to inspect an active release outside/)
+  assert.doesNotMatch(deploymentWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+})
+
 test('production deployment reclaims only inactive releases and restores current services on failure', () => {
   assert.match(deploymentWorkflow, /current_release=\$\(readlink -f "\$\{application_root\}\/current"/)
   assert.match(deploymentWorkflow, /\[\[ "\$candidate_path" == "\$current_release" \]\] && continue/)
