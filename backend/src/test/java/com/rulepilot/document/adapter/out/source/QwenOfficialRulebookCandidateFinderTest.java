@@ -12,8 +12,23 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.convert.ApplicationConversionService;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class QwenOfficialRulebookCandidateFinderTest {
+
+    @Test
+    void productionComponentHasAnUnambiguousSpringInjectionPoint() {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.getBeanFactory().setConversionService(ApplicationConversionService.getSharedInstance());
+            context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
+            context.register(QwenOfficialRulebookCandidateFinder.class);
+
+            context.refresh();
+
+            assertThat(context.getBean(QwenOfficialRulebookCandidateFinder.class).configured()).isFalse();
+        }
+    }
 
     @Test
     void enablesWebSearchWithoutLeakingCredentialsIntoTheResult() throws Exception {
