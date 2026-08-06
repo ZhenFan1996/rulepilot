@@ -54,16 +54,18 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 
-  await page.getByText('可选：关联游戏、官方链接和讲解偏好').click()
+  await page.getByRole('button', { name: 'Agent 寻找官方规则书' }).click()
+  await expect(page.getByText('publisher.example')).toBeVisible()
+  await page.getByRole('button', { name: '选择并继续核对' }).click()
   const officialButton = page.getByRole('button', { name: '下载并生成讲解' })
   await expect(officialButton).toBeDisabled()
-  await page.getByRole('textbox', { name: /官方原文链接/ }).fill('https://publisher.example/rules.pdf')
+  await expect(page.getByRole('textbox', { name: /官方原文链接/ })).toHaveValue('https://publisher.example/rules.pdf')
   await page.getByRole('checkbox', { name: /我确认这是官方来源/ }).check()
   await expect(officialButton).toBeEnabled()
   await officialButton.click()
   await expect.poll(() => officialImport).toEqual({
     editionId: 'edition-1',
-    title: 'rules',
+    title: 'Catalog Game Rules',
     sourceType: 'BASE_RULEBOOK',
     officialSourceUrl: 'https://publisher.example/rules.pdf',
     rightsConfirmed: true,
@@ -149,6 +151,15 @@ async function mockOnboardingApis(page: Page, options: {
       return route.fulfill({ json: {
         providers: [{ id: 'qwen', configured: true, visionCapable: true }],
         assignments: { teaching: 'qwen', visual: 'qwen' },
+      } })
+    }
+    if (path === '/api/v1/documents/rulebook-candidates') {
+      return route.fulfill({ json: {
+        configured: true,
+        candidates: [{
+          title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
+          language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+        }],
       } })
     }
     if (path === '/api/v1/documents' && request.method() === 'GET') {

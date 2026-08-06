@@ -60,5 +60,48 @@ public interface BoardGameGeekCatalog {
             Integer minPlayers,
             Integer maxPlayers,
             Integer playingTimeMinutes,
-            Integer minimumAge) {}
+            Integer minimumAge,
+            String imageUrl,
+            BigDecimal averageRating,
+            BigDecimal averageWeight,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            List<String> publishers) {
+        public GameDetails {
+            categories = List.copyOf(categories);
+            mechanics = List.copyOf(mechanics);
+            designers = List.copyOf(designers);
+            publishers = List.copyOf(publishers);
+        }
+
+        public GameDetails(
+                int bggId,
+                String name,
+                String description,
+                String thumbnailUrl,
+                Integer publicationYear,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                Integer minimumAge) {
+            this(
+                    bggId,
+                    name,
+                    description,
+                    thumbnailUrl,
+                    publicationYear,
+                    minPlayers,
+                    maxPlayers,
+                    playingTimeMinutes,
+                    minimumAge,
+                    "",
+                    null,
+                    null,
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of());
+        }
+    }
 }

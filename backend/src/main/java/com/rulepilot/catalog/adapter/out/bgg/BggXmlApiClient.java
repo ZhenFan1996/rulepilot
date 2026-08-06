@@ -146,7 +146,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         requireConfigured();
         CacheEntry<GameDetails> cached = gameCache.get(bggId);
         if (cached != null && cached.valid()) return cached.value();
-        GameDetails details = parseGame(get(baseUrl + "/xmlapi2/thing?id=" + bggId + "&type=boardgame"), bggId);
+        GameDetails details = parseGame(get(baseUrl + "/xmlapi2/thing?id=" + bggId + "&type=boardgame&stats=1"), bggId);
         gameCache.put(bggId, new CacheEntry<>(details, Instant.now().plus(CACHE_TTL)));
         return details;
     }
@@ -396,11 +396,18 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             String name = null;
             String description = "";
             String thumbnail = "";
+            String image = "";
             Integer year = null;
             Integer minPlayers = null;
             Integer maxPlayers = null;
             Integer playingTime = null;
             Integer minimumAge = null;
+            BigDecimal averageRating = null;
+            BigDecimal averageWeight = null;
+            List<String> categories = new ArrayList<>();
+            List<String> mechanics = new ArrayList<>();
+            List<String> designers = new ArrayList<>();
+            List<String> publishers = new ArrayList<>();
             while (reader.hasNext()) {
                 int event = reader.next();
                 if (event != XMLStreamConstants.START_ELEMENT) continue;
@@ -411,6 +418,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     description = reader.getElementText();
                 } else if ("thumbnail".equals(element)) {
                     thumbnail = reader.getElementText();
+                } else if ("image".equals(element)) {
+                    image = reader.getElementText();
                 } else if ("yearpublished".equals(element)) {
                     year = integer(reader.getAttributeValue(null, "value"));
                 } else if ("minplayers".equals(element)) {
@@ -421,12 +430,38 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     playingTime = integer(reader.getAttributeValue(null, "value"));
                 } else if ("minage".equals(element)) {
                     minimumAge = integer(reader.getAttributeValue(null, "value"));
+                } else if ("average".equals(element)) {
+                    averageRating = positiveDecimal(reader.getAttributeValue(null, "value"));
+                } else if ("averageweight".equals(element)) {
+                    averageWeight = positiveDecimal(reader.getAttributeValue(null, "value"));
+                } else if ("link".equals(element)) {
+                    String type = reader.getAttributeValue(null, "type");
+                    String value = reader.getAttributeValue(null, "value");
+                    if (value != null && "boardgamecategory".equals(type)) categories.add(value);
+                    if (value != null && "boardgamemechanic".equals(type)) mechanics.add(value);
+                    if (value != null && "boardgamedesigner".equals(type)) designers.add(value);
+                    if (value != null && "boardgamepublisher".equals(type)) publishers.add(value);
                 }
             }
             reader.close();
             if (name == null) throw new IllegalArgumentException("BGG game does not exist: " + expectedId);
             return new GameDetails(
-                    expectedId, name, description, thumbnail, year, minPlayers, maxPlayers, playingTime, minimumAge);
+                    expectedId,
+                    name,
+                    description,
+                    thumbnail,
+                    year,
+                    minPlayers,
+                    maxPlayers,
+                    playingTime,
+                    minimumAge,
+                    image,
+                    averageRating,
+                    averageWeight,
+                    categories,
+                    mechanics,
+                    designers,
+                    publishers);
         } catch (XMLStreamException exception) {
             throw new IllegalStateException("BGG returned invalid XML", exception);
         }

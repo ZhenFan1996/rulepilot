@@ -16,6 +16,13 @@ interface BggGameDetails {
   maxPlayers: number | null
   playingTimeMinutes: number | null
   minimumAge: number | null
+  imageUrl: string
+  averageRating: number | null
+  averageWeight: number | null
+  categories: string[]
+  mechanics: string[]
+  designers: string[]
+  publishers: string[]
   bggUrl: string
 }
 
@@ -38,6 +45,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
+  rating: (rating: number) => `BGG 评分 ${rating.toFixed(1)}`, weight: (weight: number) => `复杂度 ${weight.toFixed(1)} / 5`,
+  designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别',
 } : {
   back: 'Back to recommendations', loading: 'Loading game details', error: 'This game is unavailable right now. You can still go back and add a rulebook directly.',
   login: 'Sign in to keep this game and continue to its rulebook. Your selection is preserved.', selectError: 'This game could not be saved. Please try again shortly.',
@@ -46,6 +55,8 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
+  rating: (rating: number) => `BGG rating ${rating.toFixed(1)}`, weight: (weight: number) => `Weight ${weight.toFixed(1)} / 5`,
+  designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories',
 })
 const game = ref<BggGameDetails | null>(null)
 const loading = ref(true)
@@ -61,6 +72,8 @@ const stats = computed(() => {
   }
   if (game.value.playingTimeMinutes !== null) values.push(copy.value.minutes(game.value.playingTimeMinutes))
   if (game.value.minimumAge !== null) values.push(copy.value.age(game.value.minimumAge))
+  if (game.value.averageRating !== null) values.push(copy.value.rating(game.value.averageRating))
+  if (game.value.averageWeight !== null) values.push(copy.value.weight(game.value.averageWeight))
   return values
 })
 
@@ -71,7 +84,17 @@ async function load() {
     if (!Number.isInteger(bggId.value) || bggId.value <= 0) throw new Error(copy.value.error)
     const response = await fetch(`/api/v1/bgg/games/${bggId.value}`, { credentials: 'include' })
     if (!response.ok) throw new Error(copy.value.error)
-    game.value = await response.json() as BggGameDetails
+    const parsed = await response.json() as BggGameDetails
+    game.value = {
+      ...parsed,
+      imageUrl: parsed.imageUrl ?? '',
+      averageRating: parsed.averageRating ?? null,
+      averageWeight: parsed.averageWeight ?? null,
+      categories: parsed.categories ?? [],
+      mechanics: parsed.mechanics ?? [],
+      designers: parsed.designers ?? [],
+      publishers: parsed.publishers ?? [],
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : copy.value.error
   } finally {
@@ -123,7 +146,7 @@ onMounted(load)
 
       <section v-else-if="game" class="mt-8 grid gap-8 rounded-2xl border border-ink/10 bg-paper p-5 shadow-sm sm:p-8 lg:grid-cols-[18rem_1fr]">
         <div class="rounded-xl bg-canvas p-4">
-          <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
+          <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
         </div>
         <div class="min-w-0 self-center">
           <p class="text-sm font-semibold text-copper">{{ copy.eyebrow }}</p>
@@ -133,6 +156,12 @@ onMounted(load)
             <li v-for="stat in stats" :key="stat" class="rounded-full bg-canvas px-3 py-1.5 text-sm font-medium text-ink/65">{{ stat }}</li>
           </ul>
           <p v-if="game.description" class="mt-6 line-clamp-6 leading-7 text-ink/65">{{ game.description }}</p>
+          <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
+            <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
+            <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>
+            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1">{{ game.mechanics.join('、') }}</dd></div>
+            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1">{{ game.categories.join('、') }}</dd></div>
+          </dl>
           <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
           <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button type="button" :disabled="selecting" class="min-h-12 rounded-xl bg-copper px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" @click="selectGame">

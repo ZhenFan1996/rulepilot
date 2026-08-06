@@ -16,6 +16,13 @@ const details = {
   maxPlayers: 5,
   playingTimeMinutes: 60,
   minimumAge: 10,
+  imageUrl: 'https://example.test/catalog-cover-large.jpg',
+  averageRating: 7.8,
+  averageWeight: 2.4,
+  categories: ['Strategy'],
+  mechanics: ['Drafting'],
+  designers: ['Designer Name'],
+  publishers: ['Publisher Name'],
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
 }
 
@@ -35,6 +42,9 @@ describe('GameDiscoveryView', () => {
 
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('BGG 资料仅用于推荐、识别游戏和展示封面')
+    expect(wrapper.text()).toContain('Designer Name')
+    expect(wrapper.text()).toContain('Publisher Name')
+    expect(wrapper.text()).toContain('BGG 评分 7.8')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42"]').attributes('target')).toBe('_blank')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
   })

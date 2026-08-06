@@ -45,6 +45,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const fetchMock = mockApplicationFetch(() => 'READY')
     fetchMock.mockImplementationOnce(async () => response({ username: 'player' }))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).includes('/api/v1/documents/rulebook-candidates')) return response({
+        configured: true,
+        candidates: [{
+          title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
+          language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+        }],
+      })
       if (String(input).includes('/api/v1/games')) return response([{
         game: { id: 'game-1', name: 'Catalog Game' },
         editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
@@ -61,6 +68,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
     expect(wrapper.get('select').element.value).toBe('edition-1')
+    await wrapper.findAll('button').find(button => button.text().includes('Agent 寻找官方规则书'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Catalog Game Rules')
+    expect(wrapper.text()).toContain('域名匹配出版社')
+    await wrapper.findAll('button').find(button => button.text() === '选择并继续核对')!.trigger('click')
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
+    expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
     wrapper.unmount()
   })
 

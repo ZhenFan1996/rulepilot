@@ -220,6 +220,13 @@ public class GameCatalogController {
             Integer maxPlayers,
             Integer playingTimeMinutes,
             Integer minimumAge,
+            String imageUrl,
+            BigDecimal averageRating,
+            BigDecimal averageWeight,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> designers,
+            List<String> publishers,
             String bggUrl) {
         static BggGameSelectionResponse from(
                 com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails game) {
@@ -233,6 +240,13 @@ public class GameCatalogController {
                     game.maxPlayers(),
                     game.playingTimeMinutes(),
                     game.minimumAge(),
+                    game.imageUrl(),
+                    game.averageRating(),
+                    game.averageWeight(),
+                    game.categories(),
+                    game.mechanics(),
+                    game.designers(),
+                    game.publishers(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }
