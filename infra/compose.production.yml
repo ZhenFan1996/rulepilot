@@ -38,11 +38,13 @@ services:
       # evidence contexts in the web process. The reader-facing API stays responsive while the complete lesson
       # still arrives in the same ordered structure.
       TEACHING_BASE_SECTION_PARALLELISM: ${PRODUCTION_TEACHING_BASE_SECTION_PARALLELISM:-1}
-      # Verified local crops are optional post-publication work. Keep their small queue separate from the base
-      # lesson worker so a fresh upload can start immediately while an older lesson gains illustrations.
+      # Verified local crops are optional post-publication work. Keep their queue separate from the base lesson
+      # worker so a fresh upload can start immediately while older lessons gain illustrations. Four accepted lesson
+      # sessions need one running visual task plus three lightweight queued launch records; visual work itself stays
+      # single-threaded so queued sessions do not retain rendered page buffers or add concurrent provider calls.
       VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"
       VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"
-      VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "1"
+      VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "3"
       VISUAL_ENRICHMENT_REQUEST_PARALLELISM: "1"
       # Vision work is optional after the cited text lesson exists. A single Qwen request avoids holding multiple
       # rendered rulebook pages in the API process and protects ordinary reading, upload, and question requests.

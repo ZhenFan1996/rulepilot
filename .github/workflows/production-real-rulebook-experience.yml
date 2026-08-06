@@ -300,7 +300,7 @@ jobs:
           wait "${child_pids[3]}"; user_d_status=$?
           set -e
           touch "$RUNNER_TEMP/concurrent-generation-finished"
-          for attempt in {1..30}; do
+          for attempt in {1..90}; do
             if ! kill -0 "$browser_pid" 2>/dev/null; then break; fi
             sleep 1
           done
@@ -314,15 +314,17 @@ jobs:
             wait "$browser_pid"; browser_status=$?
             set -e
           fi
+          printf '{"userA":%d,"userB":%d,"userC":%d,"userD":%d,"browser":%d}\n' \
+            "$user_a_status" "$user_b_status" "$user_c_status" "$user_d_status" \
+            "$browser_status" > "$artifact_dir/status.json"
           if [[ -d frontend/test-results ]]; then
-            cp -R frontend/test-results "$artifact_dir/playwright-test-results"
+            mkdir -p "$artifact_dir/playwright-test-results"
+            find frontend/test-results -type f -name '*.png' \
+              -exec cp {} "$artifact_dir/playwright-test-results/" \; || true
           fi
           kill "$server_resource_pid" 2>/dev/null || true
           wait "$server_resource_pid" 2>/dev/null || true
           server_resource_pid=
-          printf '{"userA":%d,"userB":%d,"userC":%d,"userD":%d,"browser":%d}\n' \
-            "$user_a_status" "$user_b_status" "$user_c_status" "$user_d_status" \
-            "$browser_status" > "$artifact_dir/status.json"
           chmod -R go-rwx "$artifact_dir"
           [[ "$user_a_status" == 0 \
             && "$user_b_status" == 0 \
