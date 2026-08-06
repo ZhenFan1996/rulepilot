@@ -29,6 +29,13 @@ interface HotGame {
   publicationYear: number | null
   thumbnailUrl: string
   bggUrl: string
+  minPlayers: number | null
+  maxPlayers: number | null
+  playingTimeMinutes: number | null
+  averageRating: number | null
+  averageWeight: number | null
+  categories: string[]
+  mechanics: string[]
 }
 
 interface PublicLessonPreview {
@@ -49,6 +56,10 @@ const hotGames = ref<HotGame[]>([])
 const hotGamesLoading = ref(true)
 const hotGamesUnavailable = ref(false)
 const showingPersonalShelf = ref(false)
+const playerFilter = ref('')
+const durationFilter = ref('')
+const weightFilter = ref('')
+const filtersActive = computed(() => Boolean(playerFilter.value || durationFilter.value || weightFilter.value))
 const publicLessons = ref<PublicLessonPreview[]>([])
 const featuredPublicLessons = computed(() => deduplicatePublicLessons(publicLessons.value).slice(0, 3))
 
@@ -60,6 +71,24 @@ function createdLabel(value: string) {
 function hideBrokenImage(event: Event) {
   const image = event.currentTarget as HTMLImageElement
   image.hidden = true
+}
+
+function playerTimeLabel(game: HotGame) {
+  const parts: string[] = []
+  if (game.minPlayers !== null && game.maxPlayers !== null) {
+    parts.push(t('home.hotPlayers', { min: game.minPlayers, max: game.maxPlayers }))
+  }
+  if (game.playingTimeMinutes !== null) {
+    parts.push(t('home.hotMinutes', { minutes: game.playingTimeMinutes }))
+  }
+  return parts.join(' · ')
+}
+
+function ratingWeightLabel(game: HotGame) {
+  const parts: string[] = []
+  if (game.averageRating !== null) parts.push(t('home.hotRating', { rating: game.averageRating.toFixed(1) }))
+  if (game.averageWeight !== null) parts.push(t('home.hotWeight', { weight: game.averageWeight.toFixed(1) }))
+  return parts.join(' · ')
 }
 
 async function loadPersonalHome() {
@@ -75,11 +104,20 @@ async function loadPersonalHome() {
 }
 
 async function loadHotGames() {
+  hotGamesLoading.value = true
+  hotGamesUnavailable.value = false
+  showingPersonalShelf.value = false
   try {
-    const response = await fetch('/api/v1/bgg/hot', { credentials: 'include' })
+    const parameters = new URLSearchParams()
+    if (playerFilter.value) parameters.set('players', playerFilter.value)
+    if (durationFilter.value) parameters.set('maxMinutes', durationFilter.value)
+    if (weightFilter.value) parameters.set('maxWeight', weightFilter.value)
+    const query = parameters.size ? `?${parameters.toString()}` : ''
+    const response = await fetch(`/api/v1/bgg/recommendations${query}`, { credentials: 'include' })
     if (response.ok) {
       hotGames.value = await response.json() as HotGame[]
-    } else {
+      hotGamesUnavailable.value = hotGames.value.length === 0 && !filtersActive.value
+    } else if (!filtersActive.value) {
       const catalogResponse = await fetch('/api/v1/games', { credentials: 'include' })
       if (catalogResponse.ok) {
         const catalog = await catalogResponse.json() as Array<{
@@ -95,12 +133,23 @@ async function loadHotGames() {
             publicationYear: null,
             thumbnailUrl: entry.bggMetadata!.thumbnailUrl,
             bggUrl: entry.bggMetadata!.bggUrl,
+            minPlayers: null,
+            maxPlayers: null,
+            playingTimeMinutes: null,
+            averageRating: null,
+            averageWeight: null,
+            categories: [],
+            mechanics: [],
           }))
         showingPersonalShelf.value = hotGames.value.length > 0
       }
+      hotGamesUnavailable.value = hotGames.value.length === 0
+    } else {
+      hotGames.value = []
+      hotGamesUnavailable.value = true
     }
-    hotGamesUnavailable.value = hotGames.value.length === 0
   } catch {
+    hotGames.value = []
     hotGamesUnavailable.value = true
   } finally {
     hotGamesLoading.value = false
@@ -180,6 +229,36 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
           <a v-if="!showingPersonalShelf" href="https://boardgamegeek.com/hotness" target="_blank" rel="noreferrer" class="shrink-0 text-xs font-semibold text-ink/45 hover:text-indigo">Powered by BGG ↗</a>
         </div>
 
+        <form v-if="!showingPersonalShelf" class="mt-5 grid gap-3 rounded-xl border border-ink/10 bg-paper p-4 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end" @submit.prevent="loadHotGames">
+          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
+            {{ t('home.hotPlayerFilter') }}
+            <select v-model="playerFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
+              <option value="">{{ t('home.hotAnyPlayers') }}</option>
+              <option v-for="players in [1, 2, 3, 4, 5, 6]" :key="players" :value="String(players)">{{ t('home.hotPlayersExact', { players }) }}</option>
+            </select>
+          </label>
+          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
+            {{ t('home.hotDurationFilter') }}
+            <select v-model="durationFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
+              <option value="">{{ t('home.hotAnyDuration') }}</option>
+              <option value="30">{{ t('home.hotWithinMinutes', { minutes: 30 }) }}</option>
+              <option value="60">{{ t('home.hotWithinMinutes', { minutes: 60 }) }}</option>
+              <option value="90">{{ t('home.hotWithinMinutes', { minutes: 90 }) }}</option>
+              <option value="120">{{ t('home.hotWithinMinutes', { minutes: 120 }) }}</option>
+            </select>
+          </label>
+          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
+            {{ t('home.hotWeightFilter') }}
+            <select v-model="weightFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
+              <option value="">{{ t('home.hotAnyWeight') }}</option>
+              <option value="2">{{ t('home.hotMaxWeight', { weight: '2.0' }) }}</option>
+              <option value="3">{{ t('home.hotMaxWeight', { weight: '3.0' }) }}</option>
+              <option value="4">{{ t('home.hotMaxWeight', { weight: '4.0' }) }}</option>
+            </select>
+          </label>
+          <button type="submit" :disabled="hotGamesLoading" class="min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas disabled:opacity-50">{{ t('home.hotApply') }}</button>
+        </form>
+
         <div v-if="hotGamesLoading" class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6" :aria-label="t('home.hotLoading')">
           <div v-for="index in 6" :key="index" class="animate-pulse">
             <div class="aspect-[4/5] rounded-xl bg-ink/8" />
@@ -194,7 +273,12 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
             </div>
             <h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-5">{{ game.name }}</h3>
             <p class="mt-1 text-xs text-ink/40">{{ game.publicationYear ?? t('home.unknownYear') }}</p>
+            <p v-if="playerTimeLabel(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTimeLabel(game) }}</p>
+            <p v-if="ratingWeightLabel(game)" class="text-xs leading-5 text-ink/45">{{ ratingWeightLabel(game) }}</p>
           </a>
+        </div>
+        <div v-else-if="filtersActive && !hotGamesUnavailable" class="mt-6 rounded-xl border border-dashed border-ink/15 bg-paper px-5 py-6">
+          <p class="text-sm leading-6 text-ink/55">{{ t('home.hotNoMatch') }}</p>
         </div>
         <div v-else-if="hotGamesUnavailable" class="mt-6 flex flex-col gap-3 rounded-xl border border-dashed border-ink/15 bg-paper px-5 py-6 sm:flex-row sm:items-center sm:justify-between">
           <p class="text-sm leading-6 text-ink/55">{{ t('home.hotMissing') }}</p>

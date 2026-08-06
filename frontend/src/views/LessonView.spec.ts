@@ -34,6 +34,9 @@ describe('LessonView progressive reading', () => {
           ],
         })
       }
+      if (path === '/api/v1/teaching-plans/plan-1/catalog-presentation') {
+        return Response.json(catalogPresentationFixture('目录桌游'))
+      }
       if (path.includes('mode=VISUAL_ENRICHMENT')) return new Response(null, { status: 404 })
       if (path.includes('/api/v1/assistant-runs/latest')) {
         runReads++
@@ -111,6 +114,15 @@ describe('LessonView progressive reading', () => {
     expect(wrapper.text()).toContain('正在确认后台生成状态')
     expect(wrapper.text()).toContain('先摆主板')
     expect(wrapper.text()).toContain('我的图文讲解')
+    expect(wrapper.text()).toContain('目录桌游')
+    expect(wrapper.text()).toContain('SETI')
+    expect(wrapper.text()).toContain('1–5 人')
+    expect(wrapper.text()).toContain('桌游资料由 BoardGameGeek 提供')
+    expect(wrapper.text()).toContain('讲解与答疑仍只依据已上传规则书及其引用')
+    expect(wrapper.get('[data-testid="catalog-game-presentation"] a').attributes('href'))
+      .toBe('https://boardgamegeek.com/boardgame/42')
+    expect(wrapper.get('img[alt="目录桌游 的 BGG 封面"]').attributes('src'))
+      .toBe('https://example.test/catalog-cover.jpg')
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
     expect(wrapper.text()).toContain('问规则书')
@@ -490,6 +502,15 @@ function section(position: number, title: string) {
         sourcePages: [position], visualFocus: null,
       },
     ],
+  }
+}
+
+function catalogPresentationFixture(gameName: string) {
+  return {
+    editionId: 'edition-1', gameName, editionName: `${gameName} edition`, language: 'zh-CN',
+    publicationYear: 2024, bggId: 42, thumbnailUrl: 'https://example.test/catalog-cover.jpg',
+    minPlayers: 1, maxPlayers: 5, playingTimeMinutes: 60, minimumAge: 10,
+    bggUrl: 'https://boardgamegeek.com/boardgame/42',
   }
 }
 

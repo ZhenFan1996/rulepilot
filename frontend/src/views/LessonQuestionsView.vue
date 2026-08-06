@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } fr
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import CatalogGameAttribution from '@/components/CatalogGameAttribution.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
@@ -17,6 +18,7 @@ import {
   type LessonAnswerThreadScope,
 } from '@/lib/lessonAnswerThread'
 import { useLocale } from '@/lib/locale'
+import type { CatalogGamePresentation } from '@/lib/catalogGamePresentation'
 import {
   cacheOfflineAnswer,
   cacheOfflineRuling,
@@ -42,6 +44,8 @@ const { locale, t } = useLocale()
 const planId = computed(() => String(route.params.planId ?? ''))
 const plan = ref<TeachingPlan | null>(null)
 const lesson = ref<IllustratedLesson | null>(null)
+const catalogPresentation = ref<CatalogGamePresentation | null>(null)
+const catalogCoverUnavailable = ref(false)
 const loading = ref(true)
 const errorMessage = ref('')
 const online = ref(navigator.onLine)
@@ -199,6 +203,18 @@ async function csrfToken() {
   return (await response.json()) as CsrfResponse
 }
 
+async function loadCatalogPresentation(targetPlanId: string) {
+  try {
+    const response = await fetch(
+      `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/catalog-presentation`,
+      { credentials: 'include' },
+    )
+    return response.ok ? await response.json() as CatalogGamePresentation : null
+  } catch {
+    return null
+  }
+}
+
 async function loadWorkspace() {
   const targetPlanId = planId.value
   const request = ++latestWorkspaceLoad
@@ -206,6 +222,8 @@ async function loadWorkspace() {
   errorMessage.value = ''
   plan.value = null
   lesson.value = null
+  catalogPresentation.value = null
+  catalogCoverUnavailable.value = false
   answerThreadUsername.value = ''
   resetConversation(true)
   resetRuling()
@@ -217,10 +235,11 @@ async function loadWorkspace() {
     return
   }
   try {
-    const [planResponse, lessonResponse, sessionResponse] = await Promise.all([
+    const [planResponse, lessonResponse, sessionResponse, loadedCatalogPresentation] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       fetch('/api/auth/session', { credentials: 'include' }),
+      loadCatalogPresentation(targetPlanId),
     ])
     if (!isCurrentWorkspaceLoad(request, targetPlanId)) return
     if (planResponse.status === 401 || lessonResponse.status === 401) {
@@ -231,6 +250,7 @@ async function loadWorkspace() {
     if (!planResponse.ok || !lessonResponse.ok) throw new Error(t('questions.error'))
     plan.value = await planResponse.json() as TeachingPlan
     lesson.value = await lessonResponse.json() as IllustratedLesson
+    catalogPresentation.value = loadedCatalogPresentation
     if (sessionResponse.ok) {
       const session = await sessionResponse.json() as { username?: unknown }
       if (typeof session.username === 'string') answerThreadUsername.value = session.username.trim()
@@ -298,11 +318,18 @@ onUnmounted(() => {
 
         <template v-else>
           <LessonGuideHero
-            :title="t('questions.title', { game: plan?.gameTitle ?? '' })"
+            :title="t('questions.title', { game: catalogPresentation?.gameName ?? plan?.gameTitle ?? '' })"
             :eyebrow="t('questions.eyebrow')"
             :description="t('questions.description')"
-            compact
+            :rulebook-title="catalogPresentation ? plan?.gameTitle : ''"
+            :cover-url="catalogPresentation?.thumbnailUrl ?? ''"
+            :cover-alt="t('lesson.catalog.coverAlt', { game: catalogPresentation?.gameName ?? '' })"
+            :cover-href="catalogPresentation?.bggUrl ?? ''"
+            :cover-unavailable="catalogCoverUnavailable"
+            @cover-error="catalogCoverUnavailable = true"
           />
+
+          <CatalogGameAttribution v-if="catalogPresentation" :presentation="catalogPresentation" />
 
           <LessonAnswerPanel
             :question="question"

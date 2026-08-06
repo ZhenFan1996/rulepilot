@@ -2,14 +2,16 @@ package com.rulepilot.catalog.adapter.in.web;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
-import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import com.rulepilot.catalog.application.GameCatalogService;
 import com.rulepilot.catalog.application.GameCatalogView;
 import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.Game;
 import com.rulepilot.catalog.domain.GameEdition;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -59,6 +61,17 @@ public class GameCatalogController {
     List<BggHotGameResponse> hotBggGames() {
         requireBgg();
         return bggService.hotGames().stream().map(BggHotGameResponse::from).toList();
+    }
+
+    @GetMapping("/bgg/recommendations")
+    List<BggRecommendationResponse> recommendBggGames(
+            @RequestParam(required = false) Integer players,
+            @RequestParam(required = false) Integer maxMinutes,
+            @RequestParam(required = false) BigDecimal maxWeight) {
+        requireBgg();
+        return bggService.recommendations(players, maxMinutes, maxWeight).stream()
+                .map(BggRecommendationResponse::from)
+                .toList();
     }
 
     @PostMapping("/bgg/games/{bggId}/import")
@@ -126,6 +139,38 @@ public class GameCatalogController {
                     game.name(),
                     game.publicationYear(),
                     game.thumbnailUrl(),
+                    "https://boardgamegeek.com/boardgame/" + game.bggId());
+        }
+    }
+
+    record BggRecommendationResponse(
+            int rank,
+            int bggId,
+            String name,
+            Integer publicationYear,
+            String thumbnailUrl,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer playingTimeMinutes,
+            BigDecimal averageRating,
+            BigDecimal averageWeight,
+            List<String> categories,
+            List<String> mechanics,
+            String bggUrl) {
+        static BggRecommendationResponse from(DiscoveryGame game) {
+            return new BggRecommendationResponse(
+                    game.rank(),
+                    game.bggId(),
+                    game.name(),
+                    game.publicationYear(),
+                    game.thumbnailUrl(),
+                    game.minPlayers(),
+                    game.maxPlayers(),
+                    game.playingTimeMinutes(),
+                    game.averageRating(),
+                    game.averageWeight(),
+                    game.categories(),
+                    game.mechanics(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }

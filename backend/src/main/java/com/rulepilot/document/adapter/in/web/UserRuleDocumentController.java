@@ -1,5 +1,10 @@
 package com.rulepilot.document.adapter.in.web;
 
+import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
+import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
+import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
+import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
+import com.rulepilot.document.application.OfficialRulebookImportService;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
@@ -31,14 +36,23 @@ public class UserRuleDocumentController {
     private final UploadRuleDocumentService documents;
     private final PhotographedRulebookUploadService photographedDocuments;
     private final RuleDocumentRemovalService removals;
+    private final RuleDocumentMetadataSuggestionService metadataSuggestions;
+    private final RuleDocumentMetadataConfirmationService metadataConfirmations;
+    private final OfficialRulebookImportService officialImports;
 
     public UserRuleDocumentController(
             UploadRuleDocumentService documents,
             PhotographedRulebookUploadService photographedDocuments,
-            RuleDocumentRemovalService removals) {
+            RuleDocumentRemovalService removals,
+            RuleDocumentMetadataSuggestionService metadataSuggestions,
+            RuleDocumentMetadataConfirmationService metadataConfirmations,
+            OfficialRulebookImportService officialImports) {
         this.documents = documents;
         this.photographedDocuments = photographedDocuments;
         this.removals = removals;
+        this.metadataSuggestions = metadataSuggestions;
+        this.metadataConfirmations = metadataConfirmations;
+        this.officialImports = officialImports;
     }
 
     @GetMapping
@@ -112,6 +126,32 @@ public class UserRuleDocumentController {
         removals.removeOwned(documentId, principal.getName());
     }
 
+    @GetMapping("/{documentId}/bgg-suggestions")
+    List<BggSuggestionResponse> bggSuggestions(@PathVariable UUID documentId, Principal principal) {
+        return metadataSuggestions.suggest(documentId, principal.getName()).stream()
+                .map(BggSuggestionResponse::from)
+                .toList();
+    }
+
+    @PostMapping("/{documentId}/bgg-link")
+    BggLinkResponse confirmBggLink(
+            @PathVariable UUID documentId, @RequestBody ConfirmBggLinkRequest request, Principal principal) {
+        return BggLinkResponse.from(metadataConfirmations.confirm(documentId, request.bggId(), principal.getName()));
+    }
+
+    @PostMapping("/official-imports")
+    @ResponseStatus(HttpStatus.CREATED)
+    RuleDocumentController.UploadResponse importOfficialRulebook(
+            @RequestBody OfficialRulebookImportRequest request, Principal principal) {
+        return RuleDocumentController.UploadResponse.from(officialImports.importRulebook(
+                request.editionId(),
+                request.title(),
+                request.sourceType(),
+                request.officialSourceUrl(),
+                request.rightsConfirmed(),
+                principal.getName()));
+    }
+
     private List<PhotographedRulebookUploadService.PhotoPage> photoPages(List<MultipartFile> photos) throws IOException {
         try {
             return photos.stream().map(photo -> {
@@ -140,4 +180,66 @@ public class UserRuleDocumentController {
             }
         }
     }
+
+    record BggSuggestionResponse(
+            int bggId,
+            String name,
+            Integer publicationYear,
+            String coverUrl,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer playingTimeMinutes,
+            Integer minimumAge,
+            boolean normalizedTitleMatch,
+            String bggUrl) {
+        static BggSuggestionResponse from(Candidate candidate) {
+            return new BggSuggestionResponse(
+                    candidate.bggId(),
+                    candidate.name(),
+                    candidate.publicationYear(),
+                    candidate.coverUrl(),
+                    candidate.minPlayers(),
+                    candidate.maxPlayers(),
+                    candidate.playingTimeMinutes(),
+                    candidate.minimumAge(),
+                    candidate.normalizedTitleMatch(),
+                    "https://boardgamegeek.com/boardgame/" + candidate.bggId());
+        }
+    }
+
+    record ConfirmBggLinkRequest(int bggId) {
+        ConfirmBggLinkRequest {
+            if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        }
+    }
+
+    record BggLinkResponse(
+            RuleDocumentController.DocumentDetails document,
+            UUID gameId,
+            UUID editionId,
+            int bggId,
+            String name,
+            String coverUrl,
+            String bggUrl,
+            boolean alreadyImported) {
+        static BggLinkResponse from(Confirmation confirmation) {
+            var link = confirmation.link();
+            return new BggLinkResponse(
+                    RuleDocumentController.DocumentDetails.from(confirmation.document()),
+                    link.gameId(),
+                    link.editionId(),
+                    link.bggId(),
+                    link.gameName(),
+                    link.coverUrl(),
+                    "https://boardgamegeek.com/boardgame/" + link.bggId(),
+                    link.alreadyImported());
+        }
+    }
+
+    record OfficialRulebookImportRequest(
+            UUID editionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            boolean rightsConfirmed) {}
 }

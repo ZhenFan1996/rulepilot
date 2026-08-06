@@ -23,6 +23,9 @@ describe('LessonQuestionsView', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '星际探索'))
+      if (path === '/api/v1/teaching-plans/plan-1/catalog-presentation') {
+        return Response.json(catalogPresentationFixture('目录桌游'))
+      }
       if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture())
       if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       if (path.endsWith('/answers') && init?.method === 'POST') {
@@ -33,7 +36,10 @@ describe('LessonQuestionsView', () => {
     }))
     const { wrapper } = await mountQuestions('/lesson/plan-1/questions?section=2')
 
-    expect(wrapper.text()).toContain('向《星际探索》规则书提问')
+    expect(wrapper.text()).toContain('向《目录桌游》规则书提问')
+    expect(wrapper.text()).toContain('星际探索')
+    expect(wrapper.text()).toContain('1–5 人')
+    expect(wrapper.text()).toContain('桌游资料由 BoardGameGeek 提供')
     expect(wrapper.text()).toContain('独立答疑')
     expect(wrapper.text()).not.toContain('优先参考')
     expect(wrapper.text()).not.toContain('第 2 章 · 结算分数')
@@ -49,6 +55,9 @@ describe('LessonQuestionsView', () => {
       language: 'zh-CN',
     })
     expect(answerRequest).not.toHaveProperty('currentLessonSection')
+    expect(answerRequest).not.toHaveProperty('catalogPresentation')
+    expect(answerRequest).not.toHaveProperty('bggId')
+    expect(JSON.stringify(answerRequest)).not.toContain('目录桌游')
     wrapper.unmount()
   })
 
@@ -228,5 +237,14 @@ function lessonFixture(first = '准备游戏', second = '结算分数') {
       { position: 1, topicKey: 'setup', coverageTags: ['start'], title: first },
       { position: 2, topicKey: 'scoring', coverageTags: ['score', 'end'], title: second },
     ],
+  }
+}
+
+function catalogPresentationFixture(gameName: string) {
+  return {
+    editionId: 'edition-1', gameName, editionName: `${gameName} edition`, language: 'zh-CN',
+    publicationYear: 2024, bggId: 42, thumbnailUrl: 'https://example.test/catalog-cover.jpg',
+    minPlayers: 1, maxPlayers: 5, playingTimeMinutes: 60, minimumAge: 10,
+    bggUrl: 'https://boardgamegeek.com/boardgame/42',
   }
 }

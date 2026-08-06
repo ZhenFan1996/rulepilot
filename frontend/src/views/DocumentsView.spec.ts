@@ -180,6 +180,226 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).not.toContain('现在拍一页')
     wrapper.unmount()
   })
+
+  it('requires a direct URL and explicit rights confirmation before importing an official PDF', async () => {
+    let importOptions: RequestInit | undefined
+    const fetchMock = mockApplicationFetch(
+      () => 'READY',
+      'COMPLETED',
+      [],
+      undefined,
+      undefined,
+      (options) => {
+        importOptions = options
+        return response({ duplicate: false, version: { id: 'imported-version', status: 'EXTRACTING' } }, 201)
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    const importButton = wrapper.findAll('button').find((button) => button.text() === '下载并生成讲解')!
+    expect(importButton.attributes('disabled')).toBeDefined()
+    await wrapper.get('input[type="url"]').setValue('https://publisher.example/wingspan_rules.pdf')
+    expect(importButton.attributes('disabled')).toBeDefined()
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(importButton.attributes('disabled')).toBeUndefined()
+
+    await importButton.trigger('click')
+    await flushPromises()
+
+    expect(JSON.parse(String(importOptions?.body))).toEqual({
+      editionId: null,
+      title: 'wingspan rules',
+      sourceType: 'BASE_RULEBOOK',
+      officialSourceUrl: 'https://publisher.example/wingspan_rules.pdf',
+      rightsConfirmed: true,
+    })
+    expect(importOptions?.headers).toEqual({
+      'Content-Type': 'application/json',
+      'X-CSRF-TOKEN': 'csrf',
+    })
+    expect(wrapper.text()).toContain('上传完成，正在读取页面和图片')
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([
+      { versionId: 'imported-version', playerCount: 4, beginnerCount: 4, durationMinutes: 25 },
+    ])
+    expect(FakeEventSource.instances.some((source) => source.url.includes('imported-version'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps manual upload available after a safe official-import failure', async () => {
+    const fetchMock = mockApplicationFetch(
+      () => 'READY',
+      'COMPLETED',
+      [],
+      undefined,
+      undefined,
+      () => new Response(null, { status: 422 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    await wrapper.get('input[type="url"]').setValue('https://publisher.example/not-a-pdf')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find((button) => button.text() === '下载并生成讲解')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('无法安全导入该链接')
+    expect(wrapper.text()).toContain('已有 PDF')
+    expect(wrapper.find('#rulebook-file').exists()).toBe(true)
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value)
+      .toBe('https://publisher.example/not-a-pdf')
+    wrapper.unmount()
+  })
+
+  it('shows bounded ambiguous BGG candidates and requires an explicit keyboard-ready selection', async () => {
+    let resolveSuggestions!: (response: Response) => void
+    const pendingSuggestions = new Promise<Response>((resolve) => { resolveSuggestions = resolve })
+    const fetchMock = mockApplicationFetch(
+      () => 'READY',
+      'COMPLETED',
+      [],
+      () => pendingSuggestions,
+      () => response({ alreadyImported: false }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    const completeButton = wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')
+    expect(completeButton).toBeDefined()
+    await completeButton!.trigger('click')
+    expect(wrapper.text()).toContain('正在用规则书标题查找 BGG 候选')
+    expect(completeButton!.attributes('disabled')).toBeDefined()
+
+    resolveSuggestions(response([
+      {
+        bggId: 266192,
+        name: 'Wingspan',
+        publicationYear: 2019,
+        coverUrl: 'https://example.test/wingspan.jpg',
+        minPlayers: 1,
+        maxPlayers: 5,
+        playingTimeMinutes: 70,
+        minimumAge: 10,
+        normalizedTitleMatch: true,
+        bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+      },
+      {
+        bggId: 123,
+        name: 'Wingspan: Fan Edition',
+        publicationYear: 2020,
+        coverUrl: '',
+        minPlayers: 2,
+        maxPlayers: 4,
+        playingTimeMinutes: 60,
+        minimumAge: 10,
+        normalizedTitleMatch: false,
+        bggUrl: 'https://boardgamegeek.com/boardgame/123',
+      },
+    ]))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('找到 2 个候选，请确认')
+    expect(wrapper.text()).toContain('BGG 资料只用于封面和目录展示，不会作为规则问答证据')
+    expect(wrapper.findAll('button').filter((button) => button.text() === '选择此项')).toHaveLength(2)
+    const selectButton = wrapper.findAll('button').find((button) => button.text() === '选择此项')!
+    expect(selectButton.attributes('aria-pressed')).toBe('false')
+    await selectButton.trigger('click')
+    expect(selectButton.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.text()).toContain('请再次确认后再关联')
+    expect(wrapper.text()).toContain('确认关联这款桌游')
+    expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').attributes('rel')).toContain('noopener')
+    await wrapper.findAll('button').find((button) => button.text() === '确认关联这款桌游')!.trigger('click')
+    await flushPromises()
+    const linkRequest = fetchMock.mock.calls.find(([input, options]) =>
+      String(input).endsWith('/api/v1/documents/document-1/bgg-link') && options?.method === 'POST')
+    expect(JSON.parse(String(linkRequest?.[1]?.body))).toEqual({ bggId: 266192 })
+    expect(linkRequest?.[1]?.headers).toEqual({
+      'Content-Type': 'application/json',
+      'X-CSRF-TOKEN': 'csrf',
+    })
+    expect(wrapper.text()).toContain('已关联桌游资料')
+    expect(wrapper.text()).toContain('开始讲解')
+    wrapper.unmount()
+  })
+
+  it('keeps no-match and BGG failure states local to metadata completion', async () => {
+    const noMatchFetch = mockApplicationFetch(() => 'READY', 'COMPLETED', [], () => response([]))
+    vi.stubGlobal('fetch', noMatchFetch)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    await wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('没有找到同名桌游')
+    expect(wrapper.text()).toContain('开始讲解')
+    wrapper.unmount()
+
+    const failingFetch = mockApplicationFetch(
+      () => 'READY',
+      'COMPLETED',
+      [],
+      () => new Response(null, { status: 503 }),
+    )
+    vi.stubGlobal('fetch', failingFetch)
+    const second = await mountDocuments()
+    await flushPromises()
+    await second.wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')!.trigger('click')
+    await flushPromises()
+    expect(second.wrapper.text()).toContain('规则书和讲解不受影响')
+    expect(second.wrapper.text()).toContain('重试查找')
+    expect(second.wrapper.text()).toContain('开始讲解')
+    second.wrapper.unmount()
+  })
+
+  it('reports reused and failed final links without hiding the ready guide action', async () => {
+    const suggestion = () => response([{
+      bggId: 266192,
+      name: 'Wingspan',
+      publicationYear: 2019,
+      coverUrl: '',
+      minPlayers: 1,
+      maxPlayers: 5,
+      playingTimeMinutes: 70,
+      minimumAge: 10,
+      normalizedTitleMatch: true,
+      bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+    }])
+    vi.stubGlobal('fetch', mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], suggestion, () => response({ alreadyImported: true }),
+    ))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const reused = await mountDocuments()
+    await flushPromises()
+    await reused.wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')!.trigger('click')
+    await flushPromises()
+    await reused.wrapper.findAll('button').find((button) => button.text() === '选择此项')!.trigger('click')
+    await reused.wrapper.findAll('button').find((button) => button.text() === '确认关联这款桌游')!.trigger('click')
+    await flushPromises()
+    expect(reused.wrapper.text()).toContain('已复用现有桌游资料并完成关联')
+    expect(reused.wrapper.text()).toContain('开始讲解')
+    reused.wrapper.unmount()
+
+    vi.stubGlobal('fetch', mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], suggestion, () => new Response(null, { status: 409 }),
+    ))
+    const failed = await mountDocuments()
+    await flushPromises()
+    await failed.wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')!.trigger('click')
+    await flushPromises()
+    await failed.wrapper.findAll('button').find((button) => button.text() === '选择此项')!.trigger('click')
+    await failed.wrapper.findAll('button').find((button) => button.text() === '确认关联这款桌游')!.trigger('click')
+    await flushPromises()
+    expect(failed.wrapper.text()).toContain('关联失败，没有改变规则书')
+    expect(failed.wrapper.text()).toContain('开始讲解')
+    failed.wrapper.unmount()
+  })
 })
 
 async function mountDocuments() {
@@ -205,6 +425,9 @@ function mockApplicationFetch(
   documentStatus: () => string,
   preparationState = 'COMPLETED',
   preparationActivities: Array<{ sequence: number; operation: string; outcome: string }> = [],
+  bggSuggestions?: () => Response | Promise<Response>,
+  bggLink?: (options?: RequestInit) => Response | Promise<Response>,
+  officialImport?: (options?: RequestInit) => Response | Promise<Response>,
 ) {
   return vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
     const path = String(input)
@@ -224,6 +447,15 @@ function mockApplicationFetch(
           id: 'version-1', originalFilename: 'rules.pdf', size: 2048, status: documentStatus(),
         },
       }])
+    }
+    if (path.endsWith('/api/v1/documents/document-1/bgg-suggestions')) {
+      return bggSuggestions ? await bggSuggestions() : new Response(null, { status: 404 })
+    }
+    if (path.endsWith('/api/v1/documents/document-1/bgg-link') && options?.method === 'POST') {
+      return bggLink ? await bggLink(options) : new Response(null, { status: 404 })
+    }
+    if (path.endsWith('/api/v1/documents/official-imports') && options?.method === 'POST') {
+      return officialImport ? await officialImport(options) : new Response(null, { status: 404 })
     }
     if (path.includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
     if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
