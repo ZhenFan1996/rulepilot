@@ -41,6 +41,29 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('shows the selected game and edition handed off from discovery', async () => {
+    const fetchMock = mockApplicationFetch(() => 'READY')
+    fetchMock.mockImplementationOnce(async () => response({ username: 'player' }))
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).includes('/api/v1/games')) return response([{
+        game: { id: 'game-1', name: 'Catalog Game' },
+        editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
+        bggMetadata: { thumbnailUrl: 'https://example.test/cover.jpg', bggUrl: 'https://boardgamegeek.com/boardgame/42' },
+      }])
+      return fetchMock(input, options)
+    }))
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments('/teach?editionId=edition-1&onboarding=selected-game')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在为这款桌游找规则书')
+    expect(wrapper.text()).toContain('Catalog Game')
+    expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
+    expect(wrapper.get('select').element.value).toBe('edition-1')
+    wrapper.unmount()
+  })
+
   it('treats a failed terminal progress event as failure and never starts teaching', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
@@ -402,7 +425,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 })
 
-async function mountDocuments() {
+async function mountDocuments(path = '/teach') {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -416,7 +439,7 @@ async function mountDocuments() {
       { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },
     ],
   })
-  await router.push('/teach')
+  await router.push(path)
   await router.isReady()
   return { wrapper: mount(DocumentsView, { global: { plugins: [router] } }), router }
 }

@@ -31,6 +31,11 @@ const router = createRouter({
       component: () => import('@/views/CatalogView.vue'),
     },
     {
+      path: '/discover/:bggId',
+      name: 'game-discovery',
+      component: () => import('@/views/GameDiscoveryView.vue'),
+    },
+    {
       path: '/teach',
       name: 'teach',
       component: () => import('@/views/DocumentsView.vue'),

@@ -13,6 +13,7 @@ describe('HomeView', () => {
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
         { path: '/lessons/:planId', name: 'lesson', component: { template: '<div />' } },
@@ -100,6 +101,8 @@ describe('HomeView', () => {
     expect(wrapper.text()).not.toContain('Corpus Replay')
     expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
     expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
+    expect(wrapper.get('a[href="/discover/266192"]').attributes('aria-label')).toContain('Wingspan')
+    expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').text()).toContain('BGG 资料')
     expect(wrapper.text()).toContain('1–5 人')
     expect(wrapper.text()).toContain('复杂度 2.5 / 5')
   })

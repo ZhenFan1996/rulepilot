@@ -18,6 +18,7 @@ interface CsrfResponse { headerName: string; token: string }
 interface GameResponse {
   game: { id: string; name: string }
   editions: Array<{ id: string; name: string; language: string }>
+  bggMetadata?: null | { thumbnailUrl: string; bggUrl: string }
 }
 interface DocumentResponse {
   document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
@@ -107,6 +108,13 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
   id: edition.id,
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
+const selectedEditionContext = computed(() => {
+  for (const entry of games.value) {
+    const edition = entry.editions.find(candidate => candidate.id === editionId.value)
+    if (edition) return { game: entry.game, edition, bggMetadata: entry.bggMetadata ?? null }
+  }
+  return null
+})
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
@@ -801,6 +809,16 @@ onBeforeUnmount(() => {
         <p class="text-sm font-medium text-copper">{{ t('documents.heading.eyebrow') }}</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('documents.heading.title') }}</h1>
         <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">{{ t('documents.heading.description') }}</p>
+
+        <div v-if="selectedEditionContext" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
+          <img v-if="selectedEditionContext.bggMetadata?.thumbnailUrl" :src="selectedEditionContext.bggMetadata.thumbnailUrl" :alt="t('documents.game.selectedCover', { game: selectedEditionContext.game.name })" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('documents.game.selectedEyebrow') }}</p>
+            <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ selectedEditionContext.game.name }}</h2>
+            <p class="mt-1 text-sm text-ink/55">{{ t('documents.game.selectedEdition', { edition: selectedEditionContext.edition.name }) }}</p>
+            <a v-if="selectedEditionContext.bggMetadata?.bggUrl" :href="selectedEditionContext.bggMetadata.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-xs font-semibold text-indigo">{{ t('documents.game.selectedSource') }} ↗</a>
+          </div>
+        </div>
 
         <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>

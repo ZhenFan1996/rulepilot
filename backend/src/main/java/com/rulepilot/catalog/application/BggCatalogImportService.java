@@ -95,6 +95,11 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
                 .toList();
     }
 
+    public GameDetails gameDetails(int bggId) {
+        if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
+        return bgg.game(bggId);
+    }
+
     private void validateRecommendationFilters(Integer players, Integer maxMinutes, BigDecimal maxWeight) {
         if (players != null && (players < 1 || players > 20)) {
             throw new IllegalArgumentException("players must be between 1 and 20");

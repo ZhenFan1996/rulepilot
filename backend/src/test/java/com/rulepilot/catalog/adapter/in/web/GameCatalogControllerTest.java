@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.GameCatalogService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -39,5 +40,21 @@ class GameCatalogControllerTest {
         assertThat(response.getFirst().rank()).isEqualTo(2);
         assertThat(response.getFirst().averageWeight()).isEqualByComparingTo("2.7");
         assertThat(response.getFirst().bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/1002");
+    }
+
+    @Test
+    void exposesReadOnlyAttributedGameSelectionDetails() {
+        BggCatalogImportService bgg = mock(BggCatalogImportService.class);
+        when(bgg.configured()).thenReturn(true);
+        when(bgg.gameDetails(266192)).thenReturn(new GameDetails(
+                266192, "Wingspan", "Build a bird reserve.", "https://example.test/wingspan.jpg",
+                2019, 1, 5, 70, 10));
+        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg);
+
+        var response = controller.bggGame(266192);
+
+        assertThat(response.name()).isEqualTo("Wingspan");
+        assertThat(response.minimumAge()).isEqualTo(10);
+        assertThat(response.bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/266192");
     }
 }

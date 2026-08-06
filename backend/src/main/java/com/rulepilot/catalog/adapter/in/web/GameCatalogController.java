@@ -80,6 +80,12 @@ public class GameCatalogController {
         return BggImportResponse.from(bggService.importGame(bggId));
     }
 
+    @GetMapping("/bgg/games/{bggId}")
+    BggGameSelectionResponse bggGame(@PathVariable int bggId) {
+        requireBgg();
+        return BggGameSelectionResponse.from(bggService.gameDetails(bggId));
+    }
+
     @PostMapping("/games")
     @ResponseStatus(HttpStatus.CREATED)
     GameDetails createGame(@RequestBody CreateGameRequest request) {
@@ -201,6 +207,33 @@ public class GameCatalogController {
                     metadata.minimumAge(),
                     "https://boardgamegeek.com/boardgame/" + metadata.bggId(),
                     imported.alreadyImported());
+        }
+    }
+
+    record BggGameSelectionResponse(
+            int bggId,
+            String name,
+            String description,
+            String thumbnailUrl,
+            Integer publicationYear,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer playingTimeMinutes,
+            Integer minimumAge,
+            String bggUrl) {
+        static BggGameSelectionResponse from(
+                com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails game) {
+            return new BggGameSelectionResponse(
+                    game.bggId(),
+                    game.name(),
+                    game.description(),
+                    game.thumbnailUrl(),
+                    game.publicationYear(),
+                    game.minPlayers(),
+                    game.maxPlayers(),
+                    game.playingTimeMinutes(),
+                    game.minimumAge(),
+                    "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }
 

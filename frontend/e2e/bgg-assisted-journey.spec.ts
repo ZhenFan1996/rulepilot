@@ -24,11 +24,13 @@ const candidate = {
 
 test('covers attributed discovery, official PDF intake, and explicit metadata confirmation on desktop', async ({ page }) => {
   let officialImport: Record<string, unknown> | null = null
+  let bggImportCount = 0
   let bggLink: Record<string, unknown> | null = null
   await mockOnboardingApis(page, {
     recommendations: [hotGame],
     suggestions: [candidate],
     onOfficialImport: body => { officialImport = body },
+    onBggImport: () => { bggImportCount++ },
     onBggLink: body => { bggLink = body },
   })
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -41,8 +43,15 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     'href', 'https://boardgamegeek.com/hotness',
   )
 
-  await page.locator('a[href="/teach"]:visible').first().click()
-  await expect(page).toHaveURL('/teach')
+  await page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' }).click()
+  await expect(page).toHaveURL('/discover/42')
+  await expect(page.getByRole('heading', { name: 'Catalog Game' })).toBeVisible()
+  await expect(page.getByText(/BGG 资料仅用于推荐、识别游戏和展示封面/)).toBeVisible()
+  await page.getByRole('button', { name: '选择这款桌游并找规则书' }).click()
+  await expect(page).toHaveURL(/\/teach\?editionId=edition-1&onboarding=selected-game/)
+  expect(bggImportCount).toBe(1)
+  await expect(page.getByText('正在为这款桌游找规则书')).toBeVisible()
+  await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 
   await page.getByText('可选：关联游戏、官方链接和讲解偏好').click()
@@ -53,7 +62,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(officialButton).toBeEnabled()
   await officialButton.click()
   await expect.poll(() => officialImport).toEqual({
-    editionId: null,
+    editionId: 'edition-1',
     title: 'rules',
     sourceType: 'BASE_RULEBOOK',
     officialSourceUrl: 'https://publisher.example/rules.pdf',
@@ -93,6 +102,7 @@ async function mockOnboardingApis(page: Page, options: {
   recommendations: Array<typeof hotGame> | null
   suggestions: Array<typeof candidate> | null
   onOfficialImport?: (body: Record<string, unknown>) => void
+  onBggImport?: () => void
   onBggLink?: (body: Record<string, unknown>) => void
 }) {
   await page.route('**/api/**', async (route) => {
@@ -109,7 +119,32 @@ async function mockOnboardingApis(page: Page, options: {
         ? route.fulfill({ status: 503 })
         : route.fulfill({ json: options.recommendations })
     }
-    if (path === '/api/v1/games') return route.fulfill({ json: [] })
+    if (path === '/api/v1/bgg/games/42' && request.method() === 'GET') {
+      return route.fulfill({ json: {
+        ...hotGame,
+        description: 'A game selected from recommendations.',
+        minimumAge: 10,
+      } })
+    }
+    if (path === '/api/v1/bgg/games/42/import' && request.method() === 'POST') {
+      options.onBggImport?.()
+      return route.fulfill({ json: {
+        game: { id: 'game-1', name: 'Catalog Game' },
+        edition: { id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2024 },
+        bggId: 42,
+        alreadyImported: false,
+      } })
+    }
+    if (path === '/api/v1/games') return route.fulfill({ json: options.recommendations === null ? [] : [{
+      game: { id: 'game-1', name: 'Catalog Game' },
+      editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
+      expansions: [],
+      bggMetadata: {
+        bggId: 42,
+        thumbnailUrl: hotGame.thumbnailUrl,
+        bggUrl: hotGame.bggUrl,
+      },
+    }] })
     if (path === '/api/v1/model-configuration') {
       return route.fulfill({ json: {
         providers: [{ id: 'qwen', configured: true, visionCapable: true }],
