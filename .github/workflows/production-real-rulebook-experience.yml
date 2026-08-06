@@ -23,6 +23,26 @@ on:
         required: true
         default: SETI Search for Extraterrestrial Intelligence
         type: string
+      rulebook_c_url:
+        description: HTTPS URL of the third publisher-hosted PDF
+        required: true
+        default: https://www.alderac.com/wp-content/uploads/2017/07/cl_rulebook-v2-6.pdf
+        type: string
+      rulebook_c_title:
+        description: Expected source-grounded title for the third PDF
+        required: true
+        default: Cat Lady
+        type: string
+      rulebook_d_url:
+        description: HTTPS URL of the fourth publisher-hosted PDF
+        required: true
+        default: https://www.alderac.com/wp-content/uploads/2017/05/sakuraarms_rulebook_web2.pdf
+        type: string
+      rulebook_d_title:
+        description: Expected source-grounded title for the fourth PDF
+        required: true
+        default: Sakura Arms
+        type: string
 
 permissions:
   contents: read
@@ -33,9 +53,9 @@ concurrency:
 
 jobs:
   experience:
-    name: Two users generate and browse concurrently
+    name: Four generation sessions and two browsers run concurrently
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     environment:
       name: production
     env:
@@ -49,6 +69,10 @@ jobs:
       RULEBOOK_A_URL: ${{ inputs.rulebook_a_url }}
       RULEBOOK_B_TITLE: ${{ inputs.rulebook_b_title }}
       RULEBOOK_B_URL: ${{ inputs.rulebook_b_url }}
+      RULEBOOK_C_TITLE: ${{ inputs.rulebook_c_title }}
+      RULEBOOK_C_URL: ${{ inputs.rulebook_c_url }}
+      RULEBOOK_D_TITLE: ${{ inputs.rulebook_d_title }}
+      RULEBOOK_D_URL: ${{ inputs.rulebook_d_url }}
       RULEPILOT_PUBLIC_URL: https://rulepilot.cn
     steps:
       - uses: actions/checkout@v6
@@ -85,7 +109,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          for variable_name in RULEBOOK_A_URL RULEBOOK_B_URL; do
+          for variable_name in RULEBOOK_A_URL RULEBOOK_B_URL RULEBOOK_C_URL RULEBOOK_D_URL; do
             value=${!variable_name}
             if [[ "$value" != https://* ]]; then
               echo "$variable_name must use HTTPS" >&2
@@ -96,11 +120,19 @@ jobs:
             "$RULEBOOK_A_URL" --output "$RUNNER_TEMP/rulebook-a.pdf"
           curl --proto '=https' --location --fail --silent --show-error --max-filesize 26214400 \
             "$RULEBOOK_B_URL" --output "$RUNNER_TEMP/rulebook-b.pdf"
-          for pdf in "$RUNNER_TEMP/rulebook-a.pdf" "$RUNNER_TEMP/rulebook-b.pdf"; do
+          curl --proto '=https' --location --fail --silent --show-error --max-filesize 26214400 \
+            "$RULEBOOK_C_URL" --output "$RUNNER_TEMP/rulebook-c.pdf"
+          curl --proto '=https' --location --fail --silent --show-error --max-filesize 26214400 \
+            "$RULEBOOK_D_URL" --output "$RUNNER_TEMP/rulebook-d.pdf"
+          for pdf in \
+            "$RUNNER_TEMP/rulebook-a.pdf" \
+            "$RUNNER_TEMP/rulebook-b.pdf" \
+            "$RUNNER_TEMP/rulebook-c.pdf" \
+            "$RUNNER_TEMP/rulebook-d.pdf"; do
             [[ "$(head -c 5 "$pdf")" == '%PDF-' ]] || { echo "Publisher response was not a PDF" >&2; exit 1; }
           done
 
-      - name: Exercise production with two independent users
+      - name: Exercise production with four independent sessions across two users
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -231,9 +263,41 @@ jobs:
               > "$artifact_dir/user-b-summary.json" 2> "$artifact_dir/user-b-diagnostics.log" &
           child_pids+=("$!")
 
+          RULEPILOT_SMOKE_PASSWORD="$player_password" \
+            bash scripts/smoke-production-ordinary-user.sh \
+              --base-url "http://127.0.0.1:18082" \
+              --pdf "$RUNNER_TEMP/rulebook-c.pdf" \
+              --username "$player_username" \
+              --expected-title "${RULEBOOK_C_TITLE,,}" \
+              --uploaded-title "$RULEBOOK_C_TITLE" \
+              --official-source-url "$RULEBOOK_C_URL" \
+              --visual-expectation required \
+              --navigation-mode api \
+              --navigation-file "$artifact_dir/user-c-navigation.tsv" \
+              --result-file "$artifact_dir/user-c-result.json" \
+              > "$artifact_dir/user-c-summary.json" 2> "$artifact_dir/user-c-diagnostics.log" &
+          child_pids+=("$!")
+
+          RULEPILOT_SMOKE_PASSWORD="$admin_password" \
+            bash scripts/smoke-production-ordinary-user.sh \
+              --base-url "http://127.0.0.1:18082" \
+              --pdf "$RUNNER_TEMP/rulebook-d.pdf" \
+              --username "$admin_username" \
+              --expected-title "${RULEBOOK_D_TITLE,,}" \
+              --uploaded-title "$RULEBOOK_D_TITLE" \
+              --official-source-url "$RULEBOOK_D_URL" \
+              --visual-expectation required \
+              --navigation-mode api \
+              --navigation-file "$artifact_dir/user-d-navigation.tsv" \
+              --result-file "$artifact_dir/user-d-result.json" \
+              > "$artifact_dir/user-d-summary.json" 2> "$artifact_dir/user-d-diagnostics.log" &
+          child_pids+=("$!")
+
           set +e
           wait "${child_pids[0]}"; user_a_status=$?
           wait "${child_pids[1]}"; user_b_status=$?
+          wait "${child_pids[2]}"; user_c_status=$?
+          wait "${child_pids[3]}"; user_d_status=$?
           set -e
           touch "$RUNNER_TEMP/concurrent-generation-finished"
           for attempt in {1..30}; do
@@ -256,10 +320,15 @@ jobs:
           kill "$server_resource_pid" 2>/dev/null || true
           wait "$server_resource_pid" 2>/dev/null || true
           server_resource_pid=
-          printf '{"userA":%d,"userB":%d,"browser":%d}\n' \
-            "$user_a_status" "$user_b_status" "$browser_status" > "$artifact_dir/status.json"
+          printf '{"userA":%d,"userB":%d,"userC":%d,"userD":%d,"browser":%d}\n' \
+            "$user_a_status" "$user_b_status" "$user_c_status" "$user_d_status" \
+            "$browser_status" > "$artifact_dir/status.json"
           chmod -R go-rwx "$artifact_dir"
-          [[ "$user_a_status" == 0 && "$user_b_status" == 0 && "$browser_status" == 0 ]]
+          [[ "$user_a_status" == 0 \
+            && "$user_b_status" == 0 \
+            && "$user_c_status" == 0 \
+            && "$user_d_status" == 0 \
+            && "$browser_status" == 0 ]]
 
       - name: Upload private diagnostic output
         if: always()
