@@ -82,11 +82,26 @@ case "${1:-config}" in
 		compose up -d --no-deps worker
 		echo "Production API, frontend, gateway, and worker are running."
 		;;
+	diagnose)
+		echo "Production filesystem usage:"
+		df -h "$ROOT_DIR" || true
+		echo "Production Docker usage:"
+		docker system df || true
+		echo "Production container status:"
+		compose ps --all || true
+		echo "PostgreSQL runtime state:"
+		postgres_container=$(compose ps -q postgres 2>/dev/null || true)
+		if [ -n "$postgres_container" ]; then
+			docker inspect --format '{{json .State}}' "$postgres_container" || true
+		fi
+		echo "Recent PostgreSQL logs:"
+		compose logs --no-color --tail=120 postgres || true
+		;;
 	down)
 		compose down
 		;;
 	*)
-		echo "Usage: $0 [config|up|down]"
+		echo "Usage: $0 [config|up|diagnose|down]"
 		exit 2
 		;;
 esac

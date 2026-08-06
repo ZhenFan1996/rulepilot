@@ -122,6 +122,15 @@ jobs:
           archive="/tmp/rulepilot-${release_id}.tar.gz"
           release_dir="${application_root}/releases/${release_id}"
 
+          diagnose_failure() {
+            status=$?
+            echo "Production activation failed; collecting safe diagnostics." >&2
+            cd "${release_dir}" 2>/dev/null || cd "${application_root}/current"
+            sh scripts/run-production.sh diagnose || true
+            exit "$status"
+          }
+          trap diagnose_failure ERR
+
           test -f "${application_root}/.env"
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
