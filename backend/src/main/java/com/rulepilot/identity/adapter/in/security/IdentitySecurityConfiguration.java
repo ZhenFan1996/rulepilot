@@ -49,6 +49,7 @@ public class IdentitySecurityConfiguration {
                                 "/api/auth/login",
                                 "/api/auth/register",
                                 "/api/v1/bgg/hot",
+                                "/api/v1/bgg/recommendations",
                                 "/api/public/lessons/**",
                                 "/error")
                         .permitAll()

@@ -55,7 +55,7 @@ describe('HomeView', () => {
   it('lets a signed-in player continue the latest teaching plan from home', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
-      if (path.includes('/api/v1/bgg/hot')) {
+      if (path.includes('/api/v1/bgg/recommendations')) {
         return new Response(JSON.stringify([{
           rank: 1,
           bggId: 266192,
@@ -63,6 +63,13 @@ describe('HomeView', () => {
           publicationYear: 2019,
           thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
           bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+          minPlayers: 1,
+          maxPlayers: 5,
+          playingTimeMinutes: 70,
+          averageRating: 8.1,
+          averageWeight: 2.5,
+          categories: ['Animals'],
+          mechanics: ['Card Drafting'],
         }]), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       if (path.includes('/api/v1/teaching-plans')) {
@@ -93,6 +100,38 @@ describe('HomeView', () => {
     expect(wrapper.text()).not.toContain('Corpus Replay')
     expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
     expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
+    expect(wrapper.text()).toContain('1–5 人')
+    expect(wrapper.text()).toContain('复杂度 2.5 / 5')
+  })
+
+  it('requests bounded player-fit filters and explains an empty hot set', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json([])
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const wrapper = await mountHome()
+    await flushPromises()
+    const filters = wrapper.findAll('select')
+    await filters[0]!.setValue('4')
+    await filters[1]!.setValue('90')
+    await filters[2]!.setValue('3')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('players=4&maxMinutes=90&maxWeight=3'))).toBe(true)
+    expect(wrapper.text()).toContain('没有同时满足条件的结果')
+  })
+
+  it('shows a recovery action when BGG and the personal catalog both return errors', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
+
+    const wrapper = await mountHome()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂时没有热门桌游资料')
+    expect(wrapper.findAll('a[href="/catalog"]').some(link => link.text().includes('搜索桌游'))).toBe(true)
   })
 
   it('puts a public lesson alongside the first upload action', async () => {

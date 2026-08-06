@@ -23,6 +23,26 @@ interface DocumentResponse {
   document: { id: string; gameEditionId: string | null; title: string; officialSourceUrl: string | null; officialCoverUrl: string | null }
   latestVersion: { id: string; originalFilename: string; size: number; status: string }
 }
+interface BggSuggestion {
+  bggId: number
+  name: string
+  publicationYear: number | null
+  coverUrl: string
+  minPlayers: number | null
+  maxPlayers: number | null
+  playingTimeMinutes: number | null
+  minimumAge: number | null
+  normalizedTitleMatch: boolean
+  bggUrl: string
+}
+interface BggSuggestionState {
+  status: 'loading' | 'success' | 'error'
+  candidates: BggSuggestion[]
+  selectedBggId: number | null
+  linkStatus: 'idle' | 'confirming' | 'linked' | 'error'
+  linkAlreadyImported: boolean
+}
+interface BggLinkResponse { alreadyImported: boolean }
 interface TeachingPlanResponse { id: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -53,17 +73,20 @@ const username = ref('')
 const games = ref<GameResponse[]>([])
 const editionId = ref('')
 const documents = ref<DocumentResponse[]>([])
+const bggSuggestionStates = ref<Record<string, BggSuggestionState>>({})
 const file = ref<File | null>(null)
 const photographedPages = ref<PhotographedPage[]>([])
 const preparingPhotos = ref(false)
 const title = ref('')
 const officialSourceUrl = ref('')
+const officialImportRightsConfirmed = ref(false)
 const sourceType = ref('BASE_RULEBOOK')
 const playerCount = ref(4)
 const beginnerCount = ref(4)
 const durationMinutes = ref(25)
 const loading = ref(true)
 const uploading = ref(false)
+const importingOfficial = ref(false)
 const deletingDocumentId = ref('')
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
@@ -85,7 +108,18 @@ const editionOptions = computed(() => games.value.flatMap((entry) => entry.editi
   label: `${entry.game.name} · ${edition.name}${edition.language ? ` · ${edition.language}` : ''}`,
 }))))
 const canUpload = computed(() => Boolean(
-  (file.value || photographedPages.value.length) && !preparingPhotos.value && !uploading.value && !preparingVersionId.value,
+  (file.value || photographedPages.value.length)
+  && !preparingPhotos.value
+  && !uploading.value
+  && !importingOfficial.value
+  && !preparingVersionId.value,
+))
+const canImportOfficial = computed(() => Boolean(
+  officialSourceUrl.value.trim()
+  && officialImportRightsConfirmed.value
+  && !uploading.value
+  && !importingOfficial.value
+  && !preparingVersionId.value,
 ))
 const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
@@ -99,6 +133,96 @@ function documentStatusLabel(status: string) {
     READY: t('documents.status.ready'),
     FAILED: t('documents.status.failed'),
   }[status] ?? t('documents.status.processing')
+}
+
+function bggSuggestionState(documentId: string) {
+  return bggSuggestionStates.value[documentId]
+}
+
+async function loadBggSuggestions(documentId: string) {
+  bggSuggestionStates.value = {
+    ...bggSuggestionStates.value,
+    [documentId]: {
+      status: 'loading', candidates: [], selectedBggId: null, linkStatus: 'idle', linkAlreadyImported: false,
+    },
+  }
+  try {
+    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(documentId)}/bgg-suggestions`)
+    if (!response.ok) throw new Error(t('documents.bgg.error'))
+    bggSuggestionStates.value = {
+      ...bggSuggestionStates.value,
+      [documentId]: {
+        status: 'success',
+        candidates: await response.json() as BggSuggestion[],
+        selectedBggId: null,
+        linkStatus: 'idle',
+        linkAlreadyImported: false,
+      },
+    }
+  } catch {
+    bggSuggestionStates.value = {
+      ...bggSuggestionStates.value,
+      [documentId]: {
+        status: 'error', candidates: [], selectedBggId: null, linkStatus: 'idle', linkAlreadyImported: false,
+      },
+    }
+  }
+}
+
+function selectBggSuggestion(documentId: string, bggId: number) {
+  const state = bggSuggestionState(documentId)
+  if (!state || state.status !== 'success') return
+  bggSuggestionStates.value = {
+    ...bggSuggestionStates.value,
+    [documentId]: {
+      ...state, selectedBggId: bggId, linkStatus: 'idle', linkAlreadyImported: false,
+    },
+  }
+}
+
+async function confirmBggSuggestion(documentId: string) {
+  const state = bggSuggestionState(documentId)
+  if (!state?.selectedBggId || state.linkStatus === 'confirming') return
+  bggSuggestionStates.value = {
+    ...bggSuggestionStates.value,
+    [documentId]: { ...state, linkStatus: 'confirming' },
+  }
+  try {
+    const csrf = await csrfToken()
+    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(documentId)}/bgg-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({ bggId: state.selectedBggId }),
+    })
+    if (!response.ok) throw new Error(t('documents.bgg.linkError'))
+    const linked = await response.json() as BggLinkResponse
+    const [documentResponse, catalogResponse] = await Promise.all([
+      checkedFetch('/api/v1/documents'),
+      checkedFetch('/api/v1/games'),
+    ])
+    if (documentResponse.ok) documents.value = await documentResponse.json() as DocumentResponse[]
+    if (catalogResponse.ok) games.value = await catalogResponse.json() as GameResponse[]
+    bggSuggestionStates.value = {
+      ...bggSuggestionStates.value,
+      [documentId]: {
+        ...state,
+        linkStatus: 'linked',
+        linkAlreadyImported: linked.alreadyImported,
+      },
+    }
+  } catch {
+    bggSuggestionStates.value = {
+      ...bggSuggestionStates.value,
+      [documentId]: { ...state, linkStatus: 'error' },
+    }
+  }
+}
+
+function candidatePlayerLabel(candidate: BggSuggestion) {
+  if (candidate.minPlayers == null || candidate.maxPlayers == null) return ''
+  return candidate.minPlayers === candidate.maxPlayers
+    ? t('documents.bgg.playersExact', { players: candidate.minPlayers })
+    : t('documents.bgg.playersRange', { min: candidate.minPlayers, max: candidate.maxPlayers })
 }
 
 function progressMessage(snapshot: ProcessingSnapshot) {
@@ -562,25 +686,70 @@ async function uploadRulebook() {
     })
     if (!response.ok) throw new Error(t('documents.error'))
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
-    const pending = currentPreferences(result.version.id)
-    if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
     file.value = null
     clearPhotographedPages()
-    title.value = ''
-    officialSourceUrl.value = ''
-    await loadDocuments()
-    if (result.version.status === 'READY') {
-      await startLesson(result.version.id, pending)
-    } else if (result.version.status === 'FAILED') {
-      await handleTerminalProgress(pending, 'FAILED')
-    } else {
-      message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
-      watchProgress(pending)
-    }
+    await continueUploadedRulebook(result)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     uploading.value = false
+  }
+}
+
+async function continueUploadedRulebook(result: { duplicate: boolean; version: { id: string; status: string } }) {
+  const pending = currentPreferences(result.version.id)
+  if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
+  title.value = ''
+  officialSourceUrl.value = ''
+  officialImportRightsConfirmed.value = false
+  await loadDocuments()
+  if (result.version.status === 'READY') {
+    await startLesson(result.version.id, pending)
+  } else if (result.version.status === 'FAILED') {
+    await handleTerminalProgress(pending, 'FAILED')
+  } else {
+    message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
+    watchProgress(pending)
+  }
+}
+
+function titleFromOfficialSource() {
+  if (title.value.trim()) return title.value.trim()
+  try {
+    const filename = decodeURIComponent(new URL(officialSourceUrl.value.trim()).pathname.split('/').pop() ?? '')
+    return filename.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || t('documents.titleFallback')
+  } catch {
+    return t('documents.titleFallback')
+  }
+}
+
+async function importOfficialRulebook() {
+  if (!canImportOfficial.value) return
+  importingOfficial.value = true
+  message.value = t('documents.officialImport.downloading')
+  errorMessage.value = ''
+  try {
+    const csrf = await csrfToken()
+    const response = await checkedFetch('/api/v1/documents/official-imports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+      body: JSON.stringify({
+        editionId: editionId.value || null,
+        title: titleFromOfficialSource(),
+        sourceType: sourceType.value,
+        officialSourceUrl: officialSourceUrl.value.trim(),
+        rightsConfirmed: officialImportRightsConfirmed.value,
+      }),
+    })
+    if (!response.ok) throw new Error(t('documents.officialImport.error'))
+    await continueUploadedRulebook(await response.json() as {
+      duplicate: boolean
+      version: { id: string; status: string }
+    })
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
+  } finally {
+    importingOfficial.value = false
   }
 }
 
@@ -690,6 +859,15 @@ onBeforeUnmount(() => {
                 <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
               </label>
+              <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
+                <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
+                <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
+                  <input v-model="officialImportRightsConfirmed" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
+                  <span>{{ t('documents.officialImport.consent') }}</span>
+                </label>
+                <button type="button" :disabled="!canImportOfficial" class="mt-3 min-h-11 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="importOfficialRulebook">{{ importingOfficial ? t('documents.officialImport.importing') : t('documents.officialImport.action') }}</button>
+              </div>
 
               <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
                 <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal">
@@ -767,9 +945,50 @@ onBeforeUnmount(() => {
                 </p>
               </div>
               <div class="flex shrink-0 flex-wrap gap-2">
+                <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
                 <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
                 <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>
+            </div>
+            <div v-if="bggSuggestionState(entry.document.id)" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4">
+              <p v-if="bggSuggestionState(entry.document.id)?.status === 'loading'" class="text-sm text-ink/55" role="status">{{ t('documents.bgg.loadingDetail') }}</p>
+              <div v-else-if="bggSuggestionState(entry.document.id)?.status === 'error'" role="alert">
+                <p class="text-sm leading-6 text-red-700">{{ t('documents.bgg.error') }}</p>
+                <button type="button" class="mt-3 min-h-11 rounded-lg border border-red-200 px-4 py-2 text-sm font-semibold text-red-700" @click="loadBggSuggestions(entry.document.id)">{{ t('documents.bgg.retry') }}</button>
+              </div>
+              <div v-else-if="bggSuggestionState(entry.document.id)?.candidates.length === 0">
+                <p class="text-sm font-semibold">{{ t('documents.bgg.noneTitle') }}</p>
+                <p class="mt-1 text-sm leading-6 text-ink/50">{{ t('documents.bgg.noneDetail') }}</p>
+              </div>
+              <template v-else>
+                <p class="text-sm font-semibold">{{ bggSuggestionState(entry.document.id)!.candidates.length === 1 ? t('documents.bgg.oneTitle') : t('documents.bgg.manyTitle', { count: bggSuggestionState(entry.document.id)!.candidates.length }) }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.bgg.review') }}</p>
+                <ul class="mt-4 grid gap-3 lg:grid-cols-2">
+                  <li v-for="candidate in bggSuggestionState(entry.document.id)!.candidates" :key="candidate.bggId" class="flex gap-3 rounded-lg border bg-paper p-3" :class="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? 'border-indigo/50 ring-1 ring-indigo/20' : 'border-ink/10'">
+                    <img v-if="candidate.coverUrl" :src="candidate.coverUrl" :alt="t('documents.bgg.coverAlt', { name: candidate.name })" class="h-24 w-20 shrink-0 rounded object-contain" loading="lazy">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <p class="font-semibold">{{ candidate.name }}<span v-if="candidate.publicationYear" class="font-normal text-ink/45"> · {{ candidate.publicationYear }}</span></p>
+                        <span v-if="candidate.normalizedTitleMatch" class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">{{ t('documents.bgg.titleMatch') }}</span>
+                      </div>
+                      <p v-if="candidatePlayerLabel(candidate) || candidate.playingTimeMinutes" class="mt-1 text-xs text-ink/50">
+                        {{ [candidatePlayerLabel(candidate), candidate.playingTimeMinutes ? t('documents.bgg.minutes', { minutes: candidate.playingTimeMinutes }) : ''].filter(Boolean).join(' · ') }}
+                      </p>
+                      <div class="mt-3 flex flex-wrap items-center gap-3">
+                        <button type="button" class="min-h-11 rounded-lg bg-indigo px-3 py-2 text-sm font-semibold text-white" :aria-pressed="bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId" @click="selectBggSuggestion(entry.document.id, candidate.bggId)">{{ bggSuggestionState(entry.document.id)?.selectedBggId === candidate.bggId ? t('documents.bgg.selected') : t('documents.bgg.select') }}</button>
+                        <a :href="candidate.bggUrl" target="_blank" rel="noopener noreferrer" class="py-2 text-xs font-semibold text-indigo underline underline-offset-2">{{ t('documents.bgg.view') }}</a>
+                      </div>
+                    </div>
+                  </li>
+                </ul>
+                <div v-if="bggSuggestionState(entry.document.id)?.selectedBggId" class="mt-4 rounded-lg bg-indigo/8 px-3 py-3">
+                  <p class="text-sm leading-6 text-indigo">{{ t('documents.bgg.handoff') }}</p>
+                  <button v-if="bggSuggestionState(entry.document.id)?.linkStatus !== 'linked'" type="button" :disabled="bggSuggestionState(entry.document.id)?.linkStatus === 'confirming'" class="mt-3 min-h-11 rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-paper disabled:opacity-50" @click="confirmBggSuggestion(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.linkStatus === 'confirming' ? t('documents.bgg.confirming') : t('documents.bgg.confirm') }}</button>
+                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'error'" class="mt-2 text-sm text-red-700" role="alert">{{ t('documents.bgg.linkError') }}</p>
+                  <p v-if="bggSuggestionState(entry.document.id)?.linkStatus === 'linked'" class="mt-2 text-sm font-semibold text-emerald-800" role="status">{{ bggSuggestionState(entry.document.id)?.linkAlreadyImported ? t('documents.bgg.reused') : t('documents.bgg.linked') }}</p>
+                </div>
+                <p class="mt-4 text-[11px] text-ink/40">{{ t('documents.bgg.attribution') }}</p>
+              </template>
             </div>
           </li>
         </ul>

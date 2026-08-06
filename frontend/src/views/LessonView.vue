@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import CatalogGameAttribution from '@/components/CatalogGameAttribution.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
@@ -19,6 +20,7 @@ import { useLessonComprehensionFeedback } from '@/composables/useLessonComprehen
 import { useLessonReaderProgress } from '@/composables/useLessonReaderProgress'
 import { acceptProgressiveLesson } from '@/lib/liveLesson'
 import { loadOfflineKnowledge, type OfflineKnowledgeEntry } from '@/lib/offlineKnowledge'
+import type { CatalogGamePresentation } from '@/lib/catalogGamePresentation'
 import {
   mergeTeachingRunProgress,
   teachingActivityCursor,
@@ -85,6 +87,8 @@ const sourceLesson = ref<IllustratedLesson | null>(null)
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const teachingRun = ref<TeachingRunProgress | null>(null)
 const visualEnrichmentRun = ref<TeachingRunProgress | null>(null)
+const catalogPresentation = ref<CatalogGamePresentation | null>(null)
+const catalogCoverUnavailable = ref(false)
 const generationStatusUnknown = ref(false)
 const generationRefreshError = ref('')
 const generationFinishedMessage = ref('')
@@ -218,6 +222,8 @@ function resetLessonReader() {
   plan.value = null
   lesson.value = null
   sourceLesson.value = null
+  catalogPresentation.value = null
+  catalogCoverUnavailable.value = false
   resetLessonLocalization()
   resetLessonProgress()
   offlineKnowledge.value = []
@@ -226,6 +232,18 @@ function resetLessonReader() {
 async function optionalFetch(url: string) {
   try {
     return await fetch(url, { credentials: 'include' })
+  } catch {
+    return null
+  }
+}
+
+async function loadCatalogPresentation(targetPlanId: string) {
+  try {
+    const response = await fetch(
+      `/api/v1/teaching-plans/${encodeURIComponent(targetPlanId)}/catalog-presentation`,
+      { credentials: 'include' },
+    )
+    return response.ok ? await response.json() as CatalogGamePresentation : null
   } catch {
     return null
   }
@@ -260,11 +278,12 @@ async function loadLesson() {
   }
   refreshOfflineKnowledge(targetPlanId)
   try {
-    const [planResponse, lessonResponse, runResponse, visualRunResponse] = await Promise.all([
+    const [planResponse, lessonResponse, runResponse, visualRunResponse, loadedCatalogPresentation] = await Promise.all([
       fetch(`/api/v1/teaching-plans/${targetPlanId}`, { credentials: 'include' }),
       fetch(`/api/v1/teaching-plans/${targetPlanId}/illustrated-lessons/latest`, { credentials: 'include' }),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(targetPlanId)}`),
       optionalFetch(`/api/v1/assistant-runs/latest?mode=VISUAL_ENRICHMENT&subjectId=${encodeURIComponent(targetPlanId)}`),
+      loadCatalogPresentation(targetPlanId),
     ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     if (planResponse.status === 401 || lessonResponse.status === 401 || runResponse?.status === 401 || visualRunResponse?.status === 401) {
@@ -283,6 +302,7 @@ async function loadLesson() {
     ])
     if (!isCurrentLessonLoad(request, targetPlanId)) return
     plan.value = loadedPlan
+    catalogPresentation.value = loadedCatalogPresentation
     sourceLesson.value = loadedLesson
     lesson.value = sourceLesson.value
     await applySelectedLocale(targetPlanId, request)
@@ -513,15 +533,23 @@ onUnmounted(() => {
 
       <article v-else class="mx-auto max-w-6xl px-5 py-9 sm:px-8 lg:py-14" data-testid="private-lesson-reader">
         <LessonGuideHero
-          :title="plan?.gameTitle ?? ''"
+          :title="catalogPresentation?.gameName ?? plan?.gameTitle ?? ''"
           :eyebrow="t('lesson.reader.guideEyebrow')"
           :description="t('lesson.reader.guideDescription')"
+          :rulebook-title="catalogPresentation ? plan?.gameTitle : ''"
+          :cover-url="catalogPresentation?.thumbnailUrl ?? ''"
+          :cover-alt="t('lesson.catalog.coverAlt', { game: catalogPresentation?.gameName ?? '' })"
+          :cover-href="catalogPresentation?.bggUrl ?? ''"
+          :cover-unavailable="catalogCoverUnavailable"
+          @cover-error="catalogCoverUnavailable = true"
         >
           <template #actions>
             <RouterLink :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] shadow-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
             <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-paper/25 bg-paper/10 px-4 text-sm font-semibold text-paper">{{ t('lesson.reader.public') }}</RouterLink>
           </template>
         </LessonGuideHero>
+
+        <CatalogGameAttribution v-if="catalogPresentation" :presentation="catalogPresentation" />
 
         <LessonChapterList
           :sections="lesson.sections"
