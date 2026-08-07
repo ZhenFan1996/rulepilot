@@ -104,6 +104,21 @@ class BggMetadataLocalizationServiceTest {
     }
 
     @Test
+    void normalizesAnOfficialTraditionalNameAndTraditionalPrimaryFallbackForZhCnOnly() {
+        var official = game("Wingspan", List.of("鳥翼寶島"));
+        var fallback = game("奇幻寶島", List.of());
+
+        var localizedOfficial = service.sourceOnly(official, "zh-CN");
+        var localizedFallback = service.sourceOnly(fallback, "zh-CN");
+
+        assertThat(localizedOfficial.name()).isEqualTo("鸟翼宝岛");
+        assertThat(localizedOfficial.officialNameLocalized()).isTrue();
+        assertThat(localizedFallback.name()).isEqualTo("奇幻宝岛");
+        assertThat(localizedFallback.officialNameLocalized()).isFalse();
+        assertThat(service.sourceOnly(fallback, "en").name()).isEqualTo("奇幻寶島");
+    }
+
+    @Test
     void translatesTheBoundedDiscoveryCategoryVocabularyInOneRequest() {
         when(translations.translate(any())).thenReturn(Optional.of(new Translation(
                 "", List.of("家庭", "策略"), List.of())));
@@ -113,6 +128,19 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.translated()).isTrue();
         assertThat(localized.categories()).containsEntry("Family", "家庭").containsEntry("Strategy", "策略");
         verify(translations).translate(any());
+    }
+
+    @Test
+    void normalizesTraditionalTranslationOutputAtTheApplicationBoundary() {
+        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+                "建立一座鳥類保護區。", List.of("動物"), List.of("卡牌輪抽"))));
+        var source = game(List.of(), "Build a bird reserve.");
+
+        var localized = service.localize(source, "zh-CN");
+
+        assertThat(localized.description()).isEqualTo("建立一座鸟类保护区。");
+        assertThat(localized.categories()).containsExactly("动物");
+        assertThat(localized.mechanics()).containsExactly("卡牌轮抽");
     }
 
     @Test
@@ -155,9 +183,18 @@ class BggMetadataLocalizationServiceTest {
     }
 
     private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames, String description) {
+        return game("Wingspan", officialChineseNames, description);
+    }
+
+    private BoardGameGeekCatalog.GameDetails game(String name, List<String> officialChineseNames) {
+        return game(name, officialChineseNames, "Build a bird reserve.");
+    }
+
+    private BoardGameGeekCatalog.GameDetails game(
+            String name, List<String> officialChineseNames, String description) {
         return new BoardGameGeekCatalog.GameDetails(
                 266192,
-                "Wingspan",
+                name,
                 description,
                 "https://example.test/wingspan.jpg",
                 2019,

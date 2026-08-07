@@ -49,7 +49,7 @@ public interface BoardGameGeekCatalog {
             List<String> mechanics) {
 
         public DiscoveryGame {
-            chineseName = chineseName == null ? "" : chineseName;
+            chineseName = SimplifiedChineseText.normalize(chineseName);
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
         }
@@ -78,7 +78,10 @@ public interface BoardGameGeekCatalog {
             mechanics = List.copyOf(mechanics);
             designers = List.copyOf(designers);
             publishers = List.copyOf(publishers);
-            officialChineseNames = List.copyOf(officialChineseNames);
+            officialChineseNames = SimplifiedChineseText.normalize(officialChineseNames).stream()
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .toList();
         }
 
         public GameDetails(

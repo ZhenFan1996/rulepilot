@@ -84,4 +84,29 @@ class BggRankedCatalogControllerTest {
                 .isThrownBy(() -> controller.catalog("", "all", "popular", 0, 20, "en", false))
                 .withMessage("sort is unsupported");
     }
+
+    @Test
+    void normalizesATraditionalSourceTitleWithoutClaimingAnOfficialLocalizedVersion() {
+        RankedGame ranked = new RankedGame(
+                42,
+                "奇幻寶島",
+                2026,
+                10,
+                new BigDecimal("7.0"),
+                new BigDecimal("7.5"),
+                100,
+                false,
+                Map.of(GameType.FAMILY, 1));
+        when(catalog.browse("", GameType.ALL, Sort.RANK, 0, 20, false))
+                .thenReturn(new BrowseResult(Optional.empty(), 1, 0, 20, Sort.RANK, GameType.ALL,
+                        List.of(new BrowseGame(ranked, null, null))));
+        when(localization.localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedDiscoveryTaxonomy(Map.of(), Map.of(), false));
+
+        var response = controller.catalog("", "all", "rank", 0, 20, "zh-CN", false);
+
+        assertThat(response.games().getFirst().name()).isEqualTo("奇幻宝岛");
+        assertThat(response.games().getFirst().originalName()).isEqualTo("奇幻寶島");
+        assertThat(response.games().getFirst().nameLocalized()).isFalse();
+    }
 }

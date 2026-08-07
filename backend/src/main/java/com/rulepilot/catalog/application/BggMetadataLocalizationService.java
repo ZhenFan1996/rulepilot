@@ -54,8 +54,9 @@ public class BggMetadataLocalizationService {
         String name = game.name();
         boolean officialNameLocalized = false;
         if (isSimplifiedChinese(requestedLocale)) {
-            name = game.officialChineseNames().stream().findFirst().orElse(game.name());
-            officialNameLocalized = !name.equals(game.name());
+            String sourceName = SimplifiedChineseText.normalize(game.name());
+            name = game.officialChineseNames().stream().findFirst().orElse(sourceName);
+            officialNameLocalized = !game.officialChineseNames().isEmpty() && !name.equals(sourceName);
         }
         return source(game, name, officialNameLocalized, description);
     }
@@ -153,7 +154,7 @@ public class BggMetadataLocalizationService {
     private Map<String, String> indexed(List<String> source, List<String> translated) {
         return IntStream.range(0, source.size()).boxed().collect(java.util.stream.Collectors.toUnmodifiableMap(
                 source::get,
-                index -> translated.get(index).strip()));
+                index -> SimplifiedChineseText.normalize(translated.get(index).strip())));
     }
 
     private LocalizedMetadata source(
@@ -189,9 +190,15 @@ public class BggMetadataLocalizationService {
             LocalizedMetadata fallback,
             Request request,
             Translation translation) {
-        String description = translation.description().strip();
-        List<String> categories = translation.categories().stream().map(String::strip).toList();
-        List<String> mechanics = translation.mechanics().stream().map(String::strip).toList();
+        String description = SimplifiedChineseText.normalize(translation.description().strip());
+        List<String> categories = translation.categories().stream()
+                .map(String::strip)
+                .map(SimplifiedChineseText::normalize)
+                .toList();
+        List<String> mechanics = translation.mechanics().stream()
+                .map(String::strip)
+                .map(SimplifiedChineseText::normalize)
+                .toList();
         return new LocalizedMetadata(
                 fallback.name(),
                 fallback.officialNameLocalized(),

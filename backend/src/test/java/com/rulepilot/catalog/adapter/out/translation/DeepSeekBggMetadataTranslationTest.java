@@ -64,7 +64,7 @@ class DeepSeekBggMetadataTranslationTest {
             verify(redis.values()).set(
                     key.capture(), value.capture(), org.mockito.ArgumentMatchers.eq(Duration.ofDays(30)));
             assertThat(key.getValue())
-                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v2:266192:")
+                    .startsWith("rulepilot:bgg:metadata-translation:zh-CN:v3:266192:")
                     .doesNotContain("Build a bird reserve", "Animals", "Card Drafting");
             assertThat(value.getValue()).contains("建造一座鸟类保护区。", "动物", "卡牌轮抽");
         } finally {
@@ -76,15 +76,19 @@ class DeepSeekBggMetadataTranslationTest {
     void servesValidCachedMetadataWithoutCallingTheProviderOrSpendingBudget() throws Exception {
         RedisMocks redis = redisWithMissAndBudget(1L);
         when(redis.values().get(anyString())).thenReturn(new ObjectMapper().writeValueAsString(Map.of(
-                "description", "已缓存的中文简介。",
-                "categories", List.of("动物"),
-                "mechanics", List.of("卡牌轮抽"))));
+                "description", "已緩存的中文簡介。",
+                "categories", List.of("動物"),
+                "mechanics", List.of("卡牌輪抽"))));
         OkHttpClient calls = mock(OkHttpClient.class);
         var adapter = adapter(calls, redis.template(), "http://provider.invalid");
 
         var translation = adapter.translate(REQUEST);
 
-        assertThat(translation).hasValueSatisfying(value -> assertThat(value.mechanics()).containsExactly("卡牌轮抽"));
+        assertThat(translation).hasValueSatisfying(value -> {
+            assertThat(value.description()).isEqualTo("已缓存的中文简介。");
+            assertThat(value.categories()).containsExactly("动物");
+            assertThat(value.mechanics()).containsExactly("卡牌轮抽");
+        });
         verify(redis.values(), never()).increment(anyString());
         verify(calls, never()).newCall(org.mockito.ArgumentMatchers.any());
     }
@@ -124,17 +128,17 @@ class DeepSeekBggMetadataTranslationTest {
             AtomicReference<String> authorization,
             AtomicReference<String> requestBody) throws Exception {
         HttpServer server = responseServer(Map.of(
-                "description", "建造一座鸟类保护区。",
-                "categories", List.of("动物"),
-                "mechanics", List.of("卡牌轮抽")));
+                "description", "建造一座鳥類保護區。",
+                "categories", List.of("動物"),
+                "mechanics", List.of("卡牌輪抽")));
         server.removeContext("/chat/completions");
         server.createContext("/chat/completions", exchange -> {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             respond(exchange, Map.of(
-                    "description", "建造一座鸟类保护区。",
-                    "categories", List.of("动物"),
-                    "mechanics", List.of("卡牌轮抽")));
+                    "description", "建造一座鳥類保護區。",
+                    "categories", List.of("動物"),
+                    "mechanics", List.of("卡牌輪抽")));
         });
         return server;
     }
