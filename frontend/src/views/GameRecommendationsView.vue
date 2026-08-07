@@ -64,7 +64,7 @@ const copy = {
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
     categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
-    previous: '上一页', next: '下一页', page: '第 {page} / {pages} 页', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    loadMore: '再看一批', loadingMore: '正在取下一批…', shown: '已展示 {shown} 款', enriching: '正在后台补齐封面、人数和中文资料…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
   },
   en: {
     eyebrow: 'Full BGG game catalog', title: 'Find your next game across the BGG catalog',
@@ -78,7 +78,7 @@ const copy = {
     errorTitle: 'The full catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
-    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', previous: 'Previous', next: 'Next', page: 'Page {page} of {pages}', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
+    emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', loadMore: 'Show another batch', loadingMore: 'Loading another batch…', shown: '{shown} games shown', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
   },
 } as const
 type CopyKey = keyof typeof copy['zh-CN']
@@ -97,38 +97,88 @@ const totalPages = ref(0)
 const sourceDate = ref<string | null>(null)
 const taxonomyTranslated = ref(false)
 const loading = ref(true)
+const enriching = ref(false)
 const loadFailed = ref(false)
-const sort = ref<CatalogSort>('hot')
+const sort = ref<CatalogSort>('rank')
 const type = ref<CatalogType>('all')
 const page = ref(0)
 const searchQuery = ref('')
 const submittedQuery = ref('')
 const searchValidation = ref(false)
 let requestSequence = 0
+const basePageCache = new Map<string, CatalogResponse>()
 
-const filterActive = computed(() => sort.value !== 'hot' || type.value !== 'all' || Boolean(submittedQuery.value))
+const filterActive = computed(() => sort.value !== 'rank' || type.value !== 'all' || Boolean(submittedQuery.value))
 
-async function loadCatalog() {
-  const request = ++requestSequence
-  loading.value = true
-  loadFailed.value = false
-  const parameters = new URLSearchParams({ sort: sort.value, type: type.value, page: String(page.value), size: '20', locale: locale.value })
+function catalogRequest(pageNumber: number, enrich: boolean) {
+  const parameters = new URLSearchParams({ sort: sort.value, type: type.value, page: String(pageNumber), size: '20', locale: locale.value, enrich: String(enrich) })
   if (submittedQuery.value) parameters.set('q', submittedQuery.value)
+  return `/api/v1/bgg/catalog?${parameters.toString()}`
+}
+
+function mergeGames(current: CatalogGame[], incoming: CatalogGame[]) {
+  const richById = new Map(incoming.map(game => [game.bggId, game]))
+  return current.map(game => richById.get(game.bggId) ?? game)
+}
+
+function updateSummary(data: CatalogResponse) {
+  ready.value = data.ready
+  sourceCount.value = data.sourceCount
+  total.value = data.total
+  totalPages.value = data.totalPages
+  sourceDate.value = data.sourceDate
+}
+
+async function enrichPage(request: number, pageNumber: number) {
+  enriching.value = true
   try {
-    const response = await fetch(`/api/v1/bgg/catalog?${parameters.toString()}`, { credentials: 'include' })
-    if (!response.ok) throw new Error('catalog unavailable')
+    const response = await fetch(catalogRequest(pageNumber, true), { credentials: 'include' })
+    if (!response.ok) return
     const data = await response.json() as CatalogResponse
     if (request !== requestSequence) return
-    ready.value = data.ready
-    games.value = data.games
-    sourceCount.value = data.sourceCount
-    total.value = data.total
-    totalPages.value = data.totalPages
-    sourceDate.value = data.sourceDate
+    games.value = mergeGames(games.value, data.games)
     taxonomyTranslated.value = data.taxonomyTranslated
+  } finally {
+    if (request === requestSequence) enriching.value = false
+  }
+}
+
+function prefetchNextPage(data: CatalogResponse) {
+  const nextPage = data.page + 1
+  if (nextPage >= data.totalPages) return
+  const url = catalogRequest(nextPage, false)
+  if (basePageCache.has(url)) return
+  void fetch(url, { credentials: 'include' }).then(async response => {
+    if (response.ok) basePageCache.set(url, await response.json() as CatalogResponse)
+  }).catch(() => undefined)
+}
+
+async function loadCatalog(append = false) {
+  const request = ++requestSequence
+  const targetPage = append ? page.value + 1 : 0
+  loading.value = true
+  enriching.value = false
+  loadFailed.value = false
+  const url = catalogRequest(targetPage, false)
+  try {
+    let data = basePageCache.get(url)
+    if (!data) {
+      const response = await fetch(url, { credentials: 'include' })
+      if (!response.ok) throw new Error('catalog unavailable')
+      data = await response.json() as CatalogResponse
+    } else {
+      basePageCache.delete(url)
+    }
+    if (request !== requestSequence) return
+    updateSummary(data)
+    page.value = data.page
+    games.value = append ? [...games.value, ...data.games.filter(next => !games.value.some(game => game.bggId === next.bggId))] : data.games
+    taxonomyTranslated.value = false
+    loading.value = false
+    void enrichPage(request, data.page)
+    prefetchNextPage(data)
   } catch {
     if (request !== requestSequence) return
-    games.value = []
     loadFailed.value = true
   } finally {
     if (request === requestSequence) loading.value = false
@@ -136,8 +186,7 @@ async function loadCatalog() {
 }
 
 function applyFilters() {
-  page.value = 0
-  void loadCatalog()
+  void loadCatalog(false)
 }
 
 function searchGames() {
@@ -145,25 +194,16 @@ function searchGames() {
   searchValidation.value = checked.length > 0 && checked.length < 2
   if (searchValidation.value) return
   submittedQuery.value = checked
-  page.value = 0
-  void loadCatalog()
+  void loadCatalog(false)
 }
 
 function clearFilters() {
-  sort.value = 'hot'
+  sort.value = 'rank'
   type.value = 'all'
-  page.value = 0
   searchQuery.value = ''
   submittedQuery.value = ''
   searchValidation.value = false
-  void loadCatalog()
-}
-
-function changePage(nextPage: number) {
-  if (nextPage < 0 || nextPage >= totalPages.value || loading.value) return
-  page.value = nextPage
-  void loadCatalog()
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  void loadCatalog(false)
 }
 
 function playerTime(game: CatalogGame) {
@@ -177,8 +217,8 @@ function hideBrokenImage(event: Event) {
   ;(event.currentTarget as HTMLImageElement).hidden = true
 }
 
-onMounted(loadCatalog)
-watch(locale, () => void loadCatalog())
+onMounted(() => void loadCatalog(false))
+watch(locale, () => void loadCatalog(false))
 </script>
 
 <template>
@@ -236,16 +276,17 @@ watch(locale, () => void loadCatalog())
           <span v-if="locale === 'zh-CN' && !taxonomyTranslated"> · {{ t('taxonomyFallback') }}</span>
         </p>
 
-        <div v-if="loading" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :aria-label="t('loading')">
+        <div v-if="loading && !games.length" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :aria-label="t('loading')">
           <div v-for="index in 8" :key="index" class="animate-pulse rounded-2xl border border-ink/10 bg-paper p-3"><div class="aspect-[4/3] rounded-xl bg-ink/8" /><div class="mt-3 h-4 w-2/3 rounded bg-ink/8" /></div>
         </div>
-        <div v-else-if="loadFailed" class="mt-7 rounded-2xl border border-danger/20 bg-danger/5 p-6" role="alert">
-          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-ink/60">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="loadCatalog">{{ t('retry') }}</button>
+        <div v-else-if="loadFailed && !games.length" class="mt-7 rounded-2xl border border-danger/20 bg-danger/5 p-6" role="alert">
+          <h3 class="font-display text-2xl font-semibold">{{ t('errorTitle') }}</h3><p class="mt-2 text-sm text-ink/60">{{ t('errorDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas" @click="loadCatalog(false)">{{ t('retry') }}</button>
         </div>
         <div v-else-if="!ready" class="mt-7 rounded-2xl border border-copper/25 bg-copper/5 p-7" role="status">
           <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
         </div>
-        <div v-else-if="games.length" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        <p v-if="enriching && games.length" class="mt-4 text-xs font-medium text-copper" role="status">{{ t('enriching') }}</p>
+        <div v-if="games.length" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
           <article v-for="game in games" :key="game.bggId" class="group min-w-0 rounded-2xl border border-ink/10 bg-paper p-3 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
               <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-canvas p-3 text-ink/25">
@@ -265,12 +306,11 @@ watch(locale, () => void loadCatalog())
             </ul>
           </article>
         </div>
-        <div v-else class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
+        <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
 
-        <nav v-if="ready && totalPages > 1" class="mt-8 flex items-center justify-center gap-3" :aria-label="t('page', { page: page + 1, pages: totalPages })">
-          <button type="button" :disabled="page === 0 || loading" class="min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold disabled:opacity-35" @click="changePage(page - 1)">{{ t('previous') }}</button>
-          <span class="text-sm text-ink/55">{{ t('page', { page: page + 1, pages: totalPages }) }}</span>
-          <button type="button" :disabled="page + 1 >= totalPages || loading" class="min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold disabled:opacity-35" @click="changePage(page + 1)">{{ t('next') }}</button>
+        <nav v-if="ready && games.length" class="mt-8 flex flex-col items-center gap-3" :aria-label="t('shown', { shown: games.length })">
+          <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
+          <button v-if="games.length < total" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold shadow-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
         </nav>
       </section>
     </main>

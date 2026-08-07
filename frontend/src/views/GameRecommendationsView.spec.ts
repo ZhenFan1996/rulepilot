@@ -84,6 +84,33 @@ describe('GameRecommendationsView', () => {
     const attribution = wrapper.get('a[href="https://boardgamegeek.com"]')
     expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
     expect(attribution.get('img').attributes('alt')).toBe('Powered by BoardGameGeek')
+    expect(wrapper.text()).not.toContain('第 1 / 378 页')
+    expect((wrapper.findAll('select')[0]!.element as HTMLSelectElement).value).toBe('rank')
+  })
+
+  it('paints ranked data before the slower BGG detail hydration finishes', async () => {
+    let resolveRich!: (response: Response) => void
+    const richResponse = new Promise<Response>(resolve => { resolveRich = resolve })
+    const base = {
+      ...catalog,
+      total: 1,
+      totalPages: 1,
+      taxonomyTranslated: false,
+      games: [{ ...catalog.games[0], name: 'Wingspan', nameLocalized: false, originalName: 'Wingspan', detailsAvailable: false, thumbnailUrl: '', minPlayers: null, maxPlayers: null, playingTimeMinutes: null, averageWeight: null, categories: [], mechanics: [] }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
+      String(input).includes('enrich=true') ? richResponse : Response.json(base)))
+
+    const wrapper = await mountView()
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Wingspan'))
+
+    expect(wrapper.text()).toContain('正在后台补齐封面、人数和中文资料')
+    expect(wrapper.text()).not.toContain('卡牌轮抽')
+
+    resolveRich(Response.json({ ...catalog, total: 1, totalPages: 1 }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('展翅翱翔')
+    expect(wrapper.text()).toContain('卡牌轮抽')
   })
 
   it('sends rating and BGG type filters to the server-side catalog query', async () => {
@@ -104,10 +131,14 @@ describe('GameRecommendationsView', () => {
     })).toBe(true)
   })
 
-  it('searches the imported full catalog and keeps pagination server-side', async () => {
+  it('searches the imported full catalog and appends a prefetched next batch', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)
-      return Response.json(url.includes('page=1') ? { ...catalog, page: 1 } : catalog)
+      return Response.json(url.includes('page=1') ? {
+        ...catalog,
+        page: 1,
+        games: [{ ...catalog.games[0], bggId: 13, name: 'CATAN', originalName: 'CATAN', nameLocalized: false }],
+      } : catalog)
     })
     vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountView()
@@ -118,9 +149,11 @@ describe('GameRecommendationsView', () => {
     await flushPromises()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=Wingspan'))).toBe(true)
 
-    await wrapper.findAll('nav button')[1]!.trigger('click')
+    await wrapper.get('nav button').trigger('click')
     await flushPromises()
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1'))).toBe(true)
+    expect(wrapper.text()).toContain('CATAN')
+    expect(wrapper.text()).toContain('已展示 2 款')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1') && String(input).includes('enrich=false'))).toBe(true)
   })
 
   it('states clearly when the official full snapshot has not been imported', async () => {

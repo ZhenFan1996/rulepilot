@@ -41,6 +41,11 @@ public class BggRankedCatalogService implements BggRankedCatalog {
     }
 
     public BrowseResult browse(String search, GameType type, Sort sort, int page, int size) {
+        return browse(search, type, sort, page, size, true);
+    }
+
+    public BrowseResult browse(
+            String search, GameType type, Sort sort, int page, int size, boolean includeDetails) {
         String checkedSearch = checkedSearch(search);
         GameType checkedType = type == null ? GameType.ALL : type;
         Sort checkedSort = sort == null ? Sort.HOT : sort;
@@ -55,7 +60,7 @@ public class BggRankedCatalogService implements BggRankedCatalog {
                 HotGame::rank,
                 Math::min,
                 LinkedHashMap::new));
-        Map<Integer, DiscoveryGame> details = details(ranked.games());
+        Map<Integer, DiscoveryGame> details = includeDetails ? details(ranked.games()) : Map.of();
         List<BrowseGame> games = ranked.games().stream()
                 .map(game -> new BrowseGame(game, hotRanks.get(game.bggId()), details.get(game.bggId())))
                 .toList();

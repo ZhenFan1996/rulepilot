@@ -40,6 +40,9 @@ describe('HomeView', () => {
     expect(wrapper.text()).toContain('不用先创建游戏')
     expect(wrapper.text()).not.toContain('Agent')
     expect(wrapper.text()).not.toContain('FROM RULEBOOK')
+    const attribution = wrapper.get('a[href="https://boardgamegeek.com/hotness"]')
+    expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
+    expect(attribution.get('img').attributes('alt')).toBe('Powered by BoardGameGeek')
   })
 
   it('updates the accessible theme toggle label', async () => {

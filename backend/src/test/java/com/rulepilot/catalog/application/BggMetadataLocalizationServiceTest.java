@@ -52,6 +52,31 @@ class BggMetadataLocalizationServiceTest {
     }
 
     @Test
+    void exposesTheOfficialChineseEditionAndFullSourceMetadataWithoutWaitingForTranslation() {
+        var game = game(List.of("展翅翡翔"));
+
+        var localized = service.sourceOnly(game, "zh-CN");
+
+        assertThat(localized.name()).isEqualTo("展翅翡翔");
+        assertThat(localized.officialNameLocalized()).isTrue();
+        assertThat(localized.description()).isEqualTo("Build a bird reserve.");
+        assertThat(localized.categories()).containsExactly("Animals");
+        assertThat(localized.mechanics()).containsExactly("Card Drafting");
+        assertThat(localized.descriptionTranslated()).isFalse();
+        verify(translations, never()).translate(any());
+    }
+
+    @Test
+    void decodesBggDescriptionEntitiesAsSafePlainText() {
+        var game = game(List.of(), "Build&nbsp;a reserve.&lt;br/&gt;Win &mdash; together.");
+
+        var localized = service.sourceOnly(game, "en");
+
+        assertThat(localized.description()).isEqualTo("Build a reserve.\nWin — together.");
+        verify(translations, never()).translate(any());
+    }
+
+    @Test
     void retainsTheOfficialNameButFallsBackOnInvalidModelMetadata() {
         var game = game(List.of("展翅翱翔"));
         when(translations.translate(any())).thenReturn(Optional.of(new Translation(
@@ -126,10 +151,14 @@ class BggMetadataLocalizationServiceTest {
     }
 
     private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames) {
+        return game(officialChineseNames, "Build a bird reserve.");
+    }
+
+    private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames, String description) {
         return new BoardGameGeekCatalog.GameDetails(
                 266192,
                 "Wingspan",
-                "Build a bird reserve.",
+                description,
                 "https://example.test/wingspan.jpg",
                 2019,
                 1,

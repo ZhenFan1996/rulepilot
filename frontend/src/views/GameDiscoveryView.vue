@@ -48,7 +48,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '桌游推荐 · BGG 资料', unknownYear: '发行年份未知', stats: '游戏信息',
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
-  translation: 'AI 翻译 · 基于 BGG 原文',
+  translation: 'AI 翻译 · 基于 BGG 原文', translating: '原文已就绪，正在后台补齐中文…',
   officialName: '官方中文名 · BGG 版本资料', metadataTranslation: 'AI 翻译',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
@@ -60,7 +60,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'Game recommendation · BGG data', unknownYear: 'Publication year unavailable', stats: 'Game details',
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
-  translation: 'AI translation · based on the BGG source',
+  translation: 'AI translation · based on the BGG source', translating: 'Source details are ready; localized metadata is being added…',
   officialName: 'Official Chinese name · BGG edition data', metadataTranslation: 'AI translation',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
@@ -69,9 +69,11 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
 })
 const game = ref<BggGameDetails | null>(null)
 const loading = ref(true)
+const translating = ref(false)
 const selecting = ref(false)
 const errorMessage = ref('')
 const bggId = computed(() => Number(route.params.bggId))
+let requestSequence = 0
 
 const stats = computed(() => {
   if (!game.value) return []
@@ -86,33 +88,54 @@ const stats = computed(() => {
   return values
 })
 
+function normalizeDetails(parsed: BggGameDetails): BggGameDetails {
+  return {
+    ...parsed,
+    imageUrl: parsed.imageUrl ?? '',
+    averageRating: parsed.averageRating ?? null,
+    averageWeight: parsed.averageWeight ?? null,
+    categories: parsed.categories ?? [],
+    mechanics: parsed.mechanics ?? [],
+    designers: parsed.designers ?? [],
+    publishers: parsed.publishers ?? [],
+    descriptionTranslated: parsed.descriptionTranslated ?? false,
+    originalName: parsed.originalName ?? parsed.name,
+    officialNameLocalized: parsed.officialNameLocalized ?? false,
+    categoriesTranslated: parsed.categoriesTranslated ?? false,
+    mechanicsTranslated: parsed.mechanicsTranslated ?? false,
+  }
+}
+
+async function loadLocalized(request: number) {
+  if (locale.value !== 'zh-CN') return
+  translating.value = true
+  try {
+    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}&translate=true`, { credentials: 'include' })
+    if (!response.ok || request !== requestSequence) return
+    game.value = normalizeDetails(await response.json() as BggGameDetails)
+  } finally {
+    if (request === requestSequence) translating.value = false
+  }
+}
+
 async function load() {
+  const request = ++requestSequence
   loading.value = true
+  translating.value = false
   errorMessage.value = ''
   try {
     if (!Number.isInteger(bggId.value) || bggId.value <= 0) throw new Error(copy.value.error)
-    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}&translate=false`, { credentials: 'include' })
     if (!response.ok) throw new Error(copy.value.error)
-    const parsed = await response.json() as BggGameDetails
-    game.value = {
-      ...parsed,
-      imageUrl: parsed.imageUrl ?? '',
-      averageRating: parsed.averageRating ?? null,
-      averageWeight: parsed.averageWeight ?? null,
-      categories: parsed.categories ?? [],
-      mechanics: parsed.mechanics ?? [],
-      designers: parsed.designers ?? [],
-      publishers: parsed.publishers ?? [],
-      descriptionTranslated: parsed.descriptionTranslated ?? false,
-      originalName: parsed.originalName ?? parsed.name,
-      officialNameLocalized: parsed.officialNameLocalized ?? false,
-      categoriesTranslated: parsed.categoriesTranslated ?? false,
-      mechanicsTranslated: parsed.mechanicsTranslated ?? false,
-    }
+    const parsed = normalizeDetails(await response.json() as BggGameDetails)
+    if (request !== requestSequence) return
+    game.value = parsed
+    loading.value = false
+    void loadLocalized(request)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : copy.value.error
   } finally {
-    loading.value = false
+    if (request === requestSequence) loading.value = false
   }
 }
 
@@ -171,8 +194,9 @@ watch(locale, load)
           <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
             <li v-for="stat in stats" :key="stat" class="rounded-full bg-canvas px-3 py-1.5 text-sm font-medium text-ink/65">{{ stat }}</li>
           </ul>
-          <p v-if="game.descriptionTranslated" class="mt-6 text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated ? 'mt-2' : 'mt-6'" class="line-clamp-6 leading-7 text-ink/65">{{ game.description }}</p>
+          <p v-if="translating" class="mt-6 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
+          <p v-else-if="game.descriptionTranslated" class="mt-6 text-xs font-semibold text-copper">{{ copy.translation }}</p>
+          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : 'mt-6'" class="whitespace-pre-line leading-7 text-ink/65">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>

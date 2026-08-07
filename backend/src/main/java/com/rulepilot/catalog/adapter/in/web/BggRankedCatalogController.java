@@ -52,8 +52,15 @@ public class BggRankedCatalogController {
             @RequestParam(defaultValue = "hot") String sort,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestParam(defaultValue = "en") String locale) {
-        BrowseResult result = catalog.browse(q, enumValue(GameType.class, type, "type"), enumValue(Sort.class, sort, "sort"), page, size);
+            @RequestParam(defaultValue = "en") String locale,
+            @RequestParam(defaultValue = "true") boolean enrich) {
+        BrowseResult result = catalog.browse(
+                q,
+                enumValue(GameType.class, type, "type"),
+                enumValue(Sort.class, sort, "sort"),
+                page,
+                size,
+                enrich);
         List<String> categories = result.games().stream()
                 .map(BrowseGame::details)
                 .filter(java.util.Objects::nonNull)
