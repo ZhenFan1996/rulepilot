@@ -224,6 +224,12 @@ rulepilot:
     base-url: ${BGG_BASE_URL:https://boardgamegeek.com}
     api-token: ${BGG_API_TOKEN:}
     resolved-addresses: ${BGG_RESOLVED_ADDRESSES:}
+    translation:
+      enabled: ${BGG_TRANSLATION_ENABLED:false}
+      timeout: ${BGG_TRANSLATION_TIMEOUT:PT20S}
+      cache-ttl: ${BGG_TRANSLATION_CACHE_TTL:P30D}
+      hourly-limit: ${BGG_TRANSLATION_HOURLY_LIMIT:60}
+      provider-concurrency: ${BGG_TRANSLATION_PROVIDER_CONCURRENCY:2}
   rulebook-discovery:
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
