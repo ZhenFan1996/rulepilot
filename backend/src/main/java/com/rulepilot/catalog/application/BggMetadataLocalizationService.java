@@ -18,7 +18,10 @@ public class BggMetadataLocalizationService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggMetadataLocalizationService.class);
     private static final int DISCOVERY_TAXONOMY_ID = Integer.MAX_VALUE;
+    private static final int RANKED_CATALOG_TAXONOMY_ID = Integer.MAX_VALUE - 1;
     private static final int MAX_DISCOVERY_CATEGORIES = 50;
+    private static final int MAX_RANKED_CATALOG_TERMS = 160;
+    private static final int TRANSLATION_CHUNK_SIZE = 50;
 
     private final BggMetadataTranslation translations;
 
@@ -76,6 +79,56 @@ public class BggMetadataLocalizationService {
             LOGGER.warn("BGG discovery category translation fell back to source values");
             return new LocalizedTaxonomy(identity(source), false);
         }
+    }
+
+    public LocalizedDiscoveryTaxonomy localizeDiscoveryTaxonomy(
+            List<String> categories, List<String> mechanics, String requestedLocale) {
+        List<String> sourceCategories = normalizedTaxonomy(categories);
+        List<String> sourceMechanics = normalizedTaxonomy(mechanics);
+        LocalizedDiscoveryTaxonomy fallback = new LocalizedDiscoveryTaxonomy(
+                identity(sourceCategories), identity(sourceMechanics), false);
+        if (!isSimplifiedChinese(requestedLocale)
+                || sourceCategories.size() + sourceMechanics.size() > MAX_RANKED_CATALOG_TERMS
+                || (sourceCategories.isEmpty() && sourceMechanics.isEmpty())) {
+            return fallback;
+        }
+        try {
+            Map<String, String> localizedCategories = new java.util.LinkedHashMap<>();
+            Map<String, String> localizedMechanics = new java.util.LinkedHashMap<>();
+            List<TaxonomyTerm> terms = java.util.stream.Stream.concat(
+                            sourceCategories.stream().map(value -> new TaxonomyTerm(value, true)),
+                            sourceMechanics.stream().map(value -> new TaxonomyTerm(value, false)))
+                    .toList();
+            for (int start = 0; start < terms.size(); start += TRANSLATION_CHUNK_SIZE) {
+                List<TaxonomyTerm> chunk = terms.subList(start, Math.min(start + TRANSLATION_CHUNK_SIZE, terms.size()));
+                List<String> categoryChunk = chunk.stream().filter(TaxonomyTerm::category).map(TaxonomyTerm::value).toList();
+                List<String> mechanicChunk = chunk.stream().filter(term -> !term.category()).map(TaxonomyTerm::value).toList();
+                Request request = new Request(
+                        RANKED_CATALOG_TAXONOMY_ID,
+                        "BGG ranked catalog taxonomy",
+                        "",
+                        categoryChunk,
+                        mechanicChunk);
+                Translation translation = translations.translate(request)
+                        .filter(candidate -> validFor(request, candidate))
+                        .orElse(null);
+                if (translation == null) return fallback;
+                localizedCategories.putAll(indexed(categoryChunk, translation.categories()));
+                localizedMechanics.putAll(indexed(mechanicChunk, translation.mechanics()));
+            }
+            return new LocalizedDiscoveryTaxonomy(localizedCategories, localizedMechanics, true);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("BGG ranked catalog taxonomy translation fell back to source values");
+            return fallback;
+        }
+    }
+
+    private List<String> normalizedTaxonomy(List<String> values) {
+        return values == null ? List.of() : values.stream()
+                .map(value -> value == null ? "" : value.strip())
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .toList();
     }
 
     private Map<String, String> identity(List<String> source) {
@@ -155,4 +208,14 @@ public class BggMetadataLocalizationService {
             categories = Map.copyOf(categories);
         }
     }
+
+    public record LocalizedDiscoveryTaxonomy(
+            Map<String, String> categories, Map<String, String> mechanics, boolean translated) {
+        public LocalizedDiscoveryTaxonomy {
+            categories = Map.copyOf(categories);
+            mechanics = Map.copyOf(mechanics);
+        }
+    }
+
+    private record TaxonomyTerm(String value, boolean category) {}
 }

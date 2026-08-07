@@ -203,6 +203,11 @@ class BggCatalogImportServiceTest {
         }
 
         @Override
+        public List<DiscoveryGame> gameDetails(List<Integer> bggIds) {
+            return List.of();
+        }
+
+        @Override
         public GameDetails game(int bggId) {
             detailCalls++;
             return new GameDetails(bggId, "Wingspan", "Bird game", "", 2019, 1, 5, 70, 10);

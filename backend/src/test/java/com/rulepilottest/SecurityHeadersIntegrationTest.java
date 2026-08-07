@@ -56,7 +56,11 @@ class SecurityHeadersIntegrationTest {
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/bgg/search").param("q", "Wingspan"))
                 .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/bgg/catalog"))
+                .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/bgg/games/42/import"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/admin/bgg/ranked-catalog"))
                 .andExpect(status().isForbidden());
     }
 }
