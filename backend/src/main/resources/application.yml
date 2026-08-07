@@ -223,6 +223,7 @@ rulepilot:
   bgg:
     base-url: ${BGG_BASE_URL:https://boardgamegeek.com}
     api-token: ${BGG_API_TOKEN:}
+    resolved-addresses: ${BGG_RESOLVED_ADDRESSES:}
   rulebook-discovery:
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}

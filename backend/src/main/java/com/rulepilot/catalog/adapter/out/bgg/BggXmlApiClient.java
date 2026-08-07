@@ -6,7 +6,10 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameMatch;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import java.io.StringReader;
 import java.math.BigDecimal;
+import java.net.InetAddress;
+import java.net.URI;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -23,6 +26,7 @@ import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
 import okhttp3.OkHttpClient;
+import okhttp3.Dns;
 import okhttp3.Request;
 import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,19 +55,66 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
     @Autowired
     public BggXmlApiClient(
             @Value("${rulepilot.bgg.base-url:https://boardgamegeek.com}") String baseUrl,
-            @Value("${rulepilot.bgg.api-token:}") String token) {
-        this(baseUrl, token, Duration.ofSeconds(5));
+            @Value("${rulepilot.bgg.api-token:}") String token,
+            @Value("${rulepilot.bgg.resolved-addresses:}") String resolvedAddresses) {
+        this(baseUrl, token, resolvedAddresses, Duration.ofSeconds(5));
+    }
+
+    BggXmlApiClient(String baseUrl, String token) {
+        this(baseUrl, token, "", Duration.ofSeconds(5));
     }
 
     BggXmlApiClient(String baseUrl, String token, Duration minRequestInterval) {
+        this(baseUrl, token, "", minRequestInterval);
+    }
+
+    BggXmlApiClient(String baseUrl, String token, String resolvedAddresses, Duration minRequestInterval) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.token = token == null ? "" : token.trim();
         this.minRequestIntervalNanos = minRequestInterval.toNanos();
         this.http = new OkHttpClient.Builder()
+                .dns(preferredDns(this.baseUrl, resolvedAddresses))
                 .connectTimeout(5, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.SECONDS)
                 .build();
         this.xml = secureXmlFactory();
+    }
+
+    static Dns preferredDns(String baseUrl, String configuredAddresses) {
+        String apiHost = URI.create(baseUrl).getHost();
+        if (apiHost == null || apiHost.isBlank()) {
+            throw new IllegalArgumentException("BGG base URL must include a host");
+        }
+        List<InetAddress> preferred = parseAddresses(configuredAddresses);
+        if (preferred.isEmpty()) return Dns.SYSTEM;
+        return hostname -> {
+            if (!apiHost.equalsIgnoreCase(hostname)) return Dns.SYSTEM.lookup(hostname);
+            LinkedHashMap<String, InetAddress> ordered = new LinkedHashMap<>();
+            preferred.forEach(address -> ordered.put(address.getHostAddress(), address));
+            try {
+                Dns.SYSTEM.lookup(hostname).forEach(address -> ordered.putIfAbsent(address.getHostAddress(), address));
+            } catch (UnknownHostException ignored) {
+                // Operator-provided addresses keep the integration available when the runtime resolver is unavailable.
+            }
+            return List.copyOf(ordered.values());
+        };
+    }
+
+    private static List<InetAddress> parseAddresses(String configuredAddresses) {
+        if (configuredAddresses == null || configuredAddresses.isBlank()) return List.of();
+        List<InetAddress> addresses = new ArrayList<>();
+        for (String entry : configuredAddresses.split(",")) {
+            String address = entry.trim();
+            if (address.isEmpty() || !address.matches("[0-9A-Fa-f:.]+")) {
+                throw new IllegalArgumentException("BGG resolved addresses must contain only IP literals");
+            }
+            try {
+                addresses.add(InetAddress.getByName(address));
+            } catch (UnknownHostException invalidAddress) {
+                throw new IllegalArgumentException("BGG resolved address is invalid", invalidAddress);
+            }
+        }
+        return List.copyOf(addresses);
     }
 
     @Override
