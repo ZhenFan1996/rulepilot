@@ -4,6 +4,9 @@ import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedMetadata;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedTaxonomy;
+import com.rulepilot.catalog.application.BggCatalogImportService.DiscoveryPage;
+import com.rulepilot.catalog.application.BggCatalogImportService.RecommendationSort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
@@ -16,6 +19,7 @@ import com.rulepilot.catalog.domain.GameEdition;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.context.annotation.Profile;
@@ -80,6 +84,26 @@ public class GameCatalogController {
         return bggService.recommendations(players, maxMinutes, maxWeight).stream()
                 .map(game -> BggRecommendationResponse.from(game, locale))
                 .toList();
+    }
+
+    @GetMapping("/bgg/discovery")
+    BggDiscoveryResponse discoverBggGames(
+            @RequestParam(required = false) Integer players,
+            @RequestParam(required = false) Integer maxMinutes,
+            @RequestParam(required = false) BigDecimal maxWeight,
+            @RequestParam(required = false) String category,
+            @RequestParam(defaultValue = "hot") String sort,
+            @RequestParam(defaultValue = "en") String locale) {
+        requireBgg();
+        RecommendationSort requestedSort;
+        try {
+            requestedSort = RecommendationSort.valueOf(sort.strip().toUpperCase(Locale.ROOT));
+        } catch (RuntimeException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sort must be hot or rating");
+        }
+        DiscoveryPage page = bggService.discovery(players, maxMinutes, maxWeight, category, requestedSort);
+        LocalizedTaxonomy taxonomy = metadataLocalization.localizeDiscoveryCategories(page.categories(), locale);
+        return BggDiscoveryResponse.from(page, taxonomy, locale, requestedSort);
     }
 
     @PostMapping("/bgg/games/{bggId}/import")
@@ -197,6 +221,30 @@ public class GameCatalogController {
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }
+
+    record BggDiscoveryResponse(
+            int sourceCount,
+            String sort,
+            boolean categoriesTranslated,
+            List<BggDiscoveryCategory> categories,
+            List<BggRecommendationResponse> games) {
+        static BggDiscoveryResponse from(
+                DiscoveryPage page,
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                RecommendationSort sort) {
+            return new BggDiscoveryResponse(
+                    page.sourceCount(),
+                    sort.name().toLowerCase(Locale.ROOT),
+                    taxonomy.translated(),
+                    page.categories().stream()
+                            .map(source -> new BggDiscoveryCategory(source, taxonomy.categories().getOrDefault(source, source)))
+                            .toList(),
+                    page.games().stream().map(game -> BggRecommendationResponse.from(game, locale)).toList());
+        }
+    }
+
+    record BggDiscoveryCategory(String value, String label) {}
 
     record BggImportResponse(
             GameDetails game,

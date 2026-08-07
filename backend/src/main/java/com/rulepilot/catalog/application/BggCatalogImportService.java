@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.text.Normalizer;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -80,8 +81,31 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
     }
 
     public List<DiscoveryGame> recommendations(Integer players, Integer maxMinutes, BigDecimal maxWeight) {
+        return discovery(players, maxMinutes, maxWeight, null, RecommendationSort.HOT).games();
+    }
+
+    public DiscoveryPage discovery(
+            Integer players,
+            Integer maxMinutes,
+            BigDecimal maxWeight,
+            String category,
+            RecommendationSort sort) {
         validateRecommendationFilters(players, maxMinutes, maxWeight);
-        return bgg.hotGameDetails().stream()
+        String checkedCategory = checkedCategory(category);
+        RecommendationSort checkedSort = sort == null ? RecommendationSort.HOT : sort;
+        List<DiscoveryGame> candidates = bgg.hotGameDetails().stream().limit(12).toList();
+        List<String> categories = candidates.stream()
+                .flatMap(game -> game.categories().stream())
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        Comparator<DiscoveryGame> order = checkedSort == RecommendationSort.RATING
+                ? Comparator.comparing(DiscoveryGame::averageRating, Comparator.nullsLast(Comparator.reverseOrder()))
+                        .thenComparingInt(DiscoveryGame::rank)
+                : Comparator.comparingInt(DiscoveryGame::rank);
+        List<DiscoveryGame> games = candidates.stream()
                 .filter(game -> players == null
                         || (game.minPlayers() != null
                                 && game.maxPlayers() != null
@@ -91,8 +115,11 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
                         || (game.playingTimeMinutes() != null && game.playingTimeMinutes() <= maxMinutes))
                 .filter(game -> maxWeight == null
                         || (game.averageWeight() != null && game.averageWeight().compareTo(maxWeight) <= 0))
-                .limit(12)
+                .filter(game -> checkedCategory == null || game.categories().stream()
+                        .anyMatch(value -> value.equalsIgnoreCase(checkedCategory)))
+                .sorted(order)
                 .toList();
+        return new DiscoveryPage(candidates.size(), categories, games);
     }
 
     public GameDetails gameDetails(int bggId) {
@@ -112,6 +139,13 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
                         || maxWeight.compareTo(BigDecimal.valueOf(5)) > 0)) {
             throw new IllegalArgumentException("maxWeight must be between 1 and 5");
         }
+    }
+
+    private String checkedCategory(String category) {
+        if (category == null || category.isBlank()) return null;
+        String checked = category.strip().replaceAll("\\s+", " ");
+        if (checked.length() > 80) throw new IllegalArgumentException("category must contain at most 80 characters");
+        return checked;
     }
 
     private String checkedSearchQuery(String query) {
@@ -176,4 +210,16 @@ public class BggCatalogImportService implements BoardGameMetadataMatching, Board
     }
 
     public record ImportedGame(Game game, GameEdition edition, BggGameMetadata metadata, boolean alreadyImported) {}
+
+    public enum RecommendationSort {
+        HOT,
+        RATING
+    }
+
+    public record DiscoveryPage(int sourceCount, List<String> categories, List<DiscoveryGame> games) {
+        public DiscoveryPage {
+            categories = List.copyOf(categories);
+            games = List.copyOf(games);
+        }
+    }
 }

@@ -13,6 +13,7 @@ describe('HomeView', () => {
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },

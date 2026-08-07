@@ -57,17 +57,19 @@ const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'D
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
+  { name: 'game-recommendations', path: '/discover', labelKey: 'nav.discover', icon: 'meeple' },
   { name: 'public-library', path: '/library', labelKey: 'nav.library', icon: 'library' },
   { name: 'teach', path: '/teach', labelKey: 'nav.rulebook', icon: 'rulebook' },
   { name: 'lessons', path: '/lessons', labelKey: 'nav.lessons', icon: 'cards' },
   { name: 'catalog', path: '/catalog', labelKey: 'nav.games', icon: 'meeple' },
   { name: 'account', path: '/account', labelKey: 'nav.account', icon: 'players' },
 ] as const
-const mobileNavigation = navigation.filter((item) => item.name !== 'account')
+const mobileNavigation = navigation.filter((item) => item.name !== 'account' && item.name !== 'public-library')
 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'
   if (route.name === 'public-lesson') return 'public-library'
+  if (route.name === 'game-discovery') return 'game-recommendations'
   return route.name
 })
 const isAdmin = computed(() => roles.value.includes('ADMIN') || roles.value.includes('ROLE_ADMIN'))

@@ -230,7 +230,10 @@ watch(locale, loadHotGames)
             <p class="text-sm font-medium text-copper">{{ showingPersonalShelf ? t('home.shelfEyebrow') : t('home.hotEyebrow') }}</p>
             <h2 class="mt-2 font-display text-3xl font-semibold">{{ showingPersonalShelf ? t('home.shelfTitle') : t('home.hotTitle') }}</h2>
           </div>
-          <a v-if="!showingPersonalShelf" href="https://boardgamegeek.com/hotness" target="_blank" rel="noreferrer" class="shrink-0 text-xs font-semibold text-ink/45 hover:text-indigo">Powered by BGG ↗</a>
+          <div v-if="!showingPersonalShelf" class="flex shrink-0 flex-col items-end gap-1">
+            <RouterLink :to="{ name: 'game-recommendations' }" class="text-sm font-semibold text-indigo">{{ t('home.exploreGames') }} →</RouterLink>
+            <a href="https://boardgamegeek.com/hotness" target="_blank" rel="noreferrer" class="text-xs font-semibold text-ink/45 hover:text-indigo">Powered by BGG ↗</a>
+          </div>
         </div>
 
         <form v-if="!showingPersonalShelf" class="mt-5 grid gap-3 rounded-xl border border-ink/10 bg-paper p-4 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end" @submit.prevent="loadHotGames">

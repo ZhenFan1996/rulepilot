@@ -57,6 +57,26 @@ class BggCatalogImportServiceTest {
     }
 
     @Test
+    void exposesCategoriesAndSortsFilteredDiscoveryByRatingWithNullsLast() {
+        FakeBgg bgg = new FakeBgg();
+        BggCatalogImportService service = new BggCatalogImportService(
+                bgg,
+                new MemoryCatalogRepository(),
+                Clock.fixed(Instant.parse("2026-07-19T00:00:00Z"), ZoneOffset.UTC));
+
+        var page = service.discovery(
+                null,
+                null,
+                null,
+                "strategy",
+                BggCatalogImportService.RecommendationSort.RATING);
+
+        assertThat(page.sourceCount()).isEqualTo(3);
+        assertThat(page.categories()).containsExactly("Family", "Strategy");
+        assertThat(page.games()).extracting(DiscoveryGame::bggId).containsExactly(1001, 1003);
+    }
+
+    @Test
     void readsSelectionDetailsWithoutCreatingCatalogState() {
         FakeBgg bgg = new FakeBgg();
         MemoryCatalogRepository repository = new MemoryCatalogRepository();
@@ -178,7 +198,7 @@ class BggCatalogImportServiceTest {
                             null,
                             null,
                             null,
-                            List.of(),
+                            List.of("Strategy"),
                             List.of()));
         }
 

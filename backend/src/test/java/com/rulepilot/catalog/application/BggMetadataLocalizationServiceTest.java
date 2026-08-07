@@ -77,6 +77,18 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.officialNameLocalized()).isFalse();
     }
 
+    @Test
+    void translatesTheBoundedDiscoveryCategoryVocabularyInOneRequest() {
+        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+                "", List.of("家庭", "策略"), List.of())));
+
+        var localized = service.localizeDiscoveryCategories(List.of("Family", "Strategy", "Family"), "zh-CN");
+
+        assertThat(localized.translated()).isTrue();
+        assertThat(localized.categories()).containsEntry("Family", "家庭").containsEntry("Strategy", "策略");
+        verify(translations).translate(any());
+    }
+
     private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames) {
         return new BoardGameGeekCatalog.GameDetails(
                 266192,

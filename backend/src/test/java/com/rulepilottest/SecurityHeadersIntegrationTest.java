@@ -52,6 +52,10 @@ class SecurityHeadersIntegrationTest {
     void permitsAnonymousBggSelectionReadsButProtectsImports() throws Exception {
         mockMvc.perform(get("/api/v1/bgg/games/42"))
                 .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/bgg/discovery"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/bgg/search").param("q", "Wingspan"))
+                .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/bgg/games/42/import"))
                 .andExpect(status().isForbidden());
     }
