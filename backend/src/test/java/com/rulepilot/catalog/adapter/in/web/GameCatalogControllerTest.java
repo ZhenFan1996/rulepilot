@@ -7,11 +7,15 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedMetadata;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedTaxonomy;
+import com.rulepilot.catalog.application.BggCatalogImportService.DiscoveryPage;
+import com.rulepilot.catalog.application.BggCatalogImportService.RecommendationSort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.GameCatalogService;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class GameCatalogControllerTest {
@@ -80,5 +84,30 @@ class GameCatalogControllerTest {
         assertThat(response.mechanics()).containsExactly("卡牌轮抽");
         assertThat(response.minimumAge()).isEqualTo(10);
         assertThat(response.bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/266192");
+    }
+
+    @Test
+    void exposesLocalizedDiscoveryCategoriesAndRequestedRatingOrder() {
+        BggCatalogImportService bgg = mock(BggCatalogImportService.class);
+        when(bgg.configured()).thenReturn(true);
+        DiscoveryGame game = new DiscoveryGame(
+                2, 1002, "Fitting Game", "合适的游戏", 2025, "https://example.test/fitting.jpg",
+                2, 5, 75, new BigDecimal("7.6"), new BigDecimal("2.7"),
+                List.of("Family"), List.of("Set Collection"));
+        when(bgg.discovery(null, null, null, "Family", RecommendationSort.RATING))
+                .thenReturn(new DiscoveryPage(12, List.of("Family", "Strategy"), List.of(game)));
+        BggMetadataLocalizationService metadata = mock(BggMetadataLocalizationService.class);
+        when(metadata.localizeDiscoveryCategories(List.of("Family", "Strategy"), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of("Family", "家庭", "Strategy", "策略"), true));
+        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg, metadata);
+
+        var response = controller.discoverBggGames(null, null, null, "Family", "rating", "zh-CN");
+
+        assertThat(response.sourceCount()).isEqualTo(12);
+        assertThat(response.sort()).isEqualTo("rating");
+        assertThat(response.categoriesTranslated()).isTrue();
+        assertThat(response.categories()).extracting(GameCatalogController.BggDiscoveryCategory::label)
+                .containsExactly("家庭", "策略");
+        assertThat(response.games().getFirst().name()).isEqualTo("合适的游戏");
     }
 }

@@ -36,6 +36,11 @@ const router = createRouter({
       component: () => import('@/views/GameWorkspaceView.vue'),
     },
     {
+      path: '/discover',
+      name: 'game-recommendations',
+      component: () => import('@/views/GameRecommendationsView.vue'),
+    },
+    {
       path: '/discover/:bggId',
       name: 'game-discovery',
       component: () => import('@/views/GameDiscoveryView.vue'),
