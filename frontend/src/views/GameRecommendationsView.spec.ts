@@ -4,35 +4,48 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import GameRecommendationsView from './GameRecommendationsView.vue'
 
-const discovery = {
-  sourceCount: 12,
+const catalog = {
+  ready: true,
+  sourceCount: 162686,
+  total: 7543,
+  page: 0,
+  size: 20,
+  totalPages: 378,
   sort: 'hot',
-  categoriesTranslated: true,
-  categories: [
-    { value: 'Family', label: '家庭' },
-    { value: 'Strategy', label: '策略' },
-  ],
+  type: 'all',
+  importedAt: '2026-08-07T08:00:00Z',
+  sourceDate: '2026-08-07',
+  taxonomyTranslated: true,
   games: [{
-    rank: 2,
     bggId: 266192,
     name: '展翅翱翔',
     originalName: 'Wingspan',
     nameLocalized: true,
     publicationYear: 2019,
+    overallRank: 34,
+    hotRank: 2,
+    geekRating: 7.79,
+    averageRating: 8.09,
+    usersRated: 102030,
+    expansion: false,
+    types: ['family', 'strategy'],
+    detailsAvailable: true,
     thumbnailUrl: 'https://example.test/wingspan.jpg',
     minPlayers: 1,
     maxPlayers: 5,
     playingTimeMinutes: 70,
-    averageRating: 8.1,
     averageWeight: 2.5,
-    categories: ['Family', 'Strategy'],
-    mechanics: ['Card Drafting'],
+    categories: ['动物'],
+    mechanics: ['卡牌轮抽'],
     bggUrl: 'https://boardgamegeek.com/boardgame/266192',
   }],
 }
 
 describe('GameRecommendationsView', () => {
-  beforeEach(() => localStorage.setItem('rulepilot:locale', 'zh-CN'))
+  beforeEach(() => {
+    localStorage.setItem('rulepilot:locale', 'zh-CN')
+    vi.stubGlobal('scrollTo', vi.fn())
+  })
   afterEach(() => vi.unstubAllGlobals())
 
   async function mountView() {
@@ -55,76 +68,76 @@ describe('GameRecommendationsView', () => {
     return mount(GameRecommendationsView, { global: { plugins: [router] } })
   }
 
-  it('renders localized BGG categories and applies rating, category, and table filters', async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/discovery')) return Response.json(discovery)
-      return new Response(null, { status: 401 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
+  it('renders a paginated full snapshot with official localized metadata and the required BGG logo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(catalog)))
 
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('当前 12 款 BGG 热门桌游')
+    expect(wrapper.text()).toContain('BGG 快照共 162,686 条记录')
+    expect(wrapper.text()).toContain('当前条件匹配 7,543 条')
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.text()).toContain('家庭')
+    expect(wrapper.text()).toContain('动物')
+    expect(wrapper.text()).toContain('卡牌轮抽')
     expect(wrapper.get('a[href="/discover/266192"]').attributes('href')).toBe('/discover/266192')
+    const attribution = wrapper.get('a[href="https://boardgamegeek.com"]')
+    expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
+    expect(attribution.get('img').attributes('alt')).toBe('Powered by BoardGameGeek')
+  })
+
+  it('sends rating and BGG type filters to the server-side catalog query', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json(catalog))
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountView()
+    await flushPromises()
 
     const selects = wrapper.findAll('select')
     await selects[0]!.setValue('rating')
-    await selects[1]!.setValue('Strategy')
-    await selects[2]!.setValue('4')
+    await selects[1]!.setValue('strategy')
     await wrapper.findAll('form')[1]!.trigger('submit')
     await flushPromises()
 
     expect(fetchMock.mock.calls.some(([input]) => {
       const url = String(input)
-      return url.includes('sort=rating') && url.includes('category=Strategy') && url.includes('players=4')
+      return url.includes('/api/v1/bgg/catalog?') && url.includes('sort=rating') && url.includes('type=strategy')
     })).toBe(true)
   })
 
-  it('searches BGG directly and links each result to the existing detail journey', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = String(input)
-      if (path.includes('/api/v1/bgg/discovery')) return Response.json(discovery)
-      if (path.includes('/api/v1/bgg/search')) return Response.json([
-        { bggId: 266192, name: 'Wingspan', publicationYear: 2019, bggUrl: 'https://boardgamegeek.com/boardgame/266192' },
-      ])
-      return new Response(null, { status: 401 })
-    }))
+  it('searches the imported full catalog and keeps pagination server-side', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      return Response.json(url.includes('page=1') ? { ...catalog, page: 1 } : catalog)
+    })
+    vi.stubGlobal('fetch', fetchMock)
     const wrapper = await mountView()
     await flushPromises()
 
     await wrapper.get('input[type="search"]').setValue('Wingspan')
     await wrapper.findAll('form')[0]!.trigger('submit')
     await flushPromises()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=Wingspan'))).toBe(true)
 
-    expect(wrapper.text()).toContain('“Wingspan”的 BGG 搜索结果')
-    expect(wrapper.text()).toContain('BGG #266192')
-    expect(wrapper.get('a[href="/discover/266192"]').text()).toContain('查看详情')
-    expect(wrapper.text()).toContain('返回热门推荐')
+    await wrapper.findAll('nav button')[1]!.trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('page=1'))).toBe(true)
   })
 
-  it('keeps a useful empty state and can clear restrictive filters', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/discovery')) return Response.json({ ...discovery, games: [] })
-      return new Response(null, { status: 401 })
-    }))
+  it('states clearly when the official full snapshot has not been imported', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ...catalog, ready: false, sourceCount: 0, total: 0, totalPages: 0, games: [] })))
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('这一批暂时没有合适的结果')
-    expect(wrapper.text()).toContain('清空')
+    expect(wrapper.text()).toContain('全量目录还没有导入')
+    expect(wrapper.text()).toContain('不会用 11 款热榜数据伪装成全量目录')
   })
 
-  it('shows a retryable error without hiding direct title search', async () => {
+  it('shows a retryable error without hiding full-catalog search', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('暂时读不到 BGG 热门资料')
+    expect(wrapper.text()).toContain('全量目录暂时不可用')
     expect(wrapper.get('input[type="search"]').attributes('type')).toBe('search')
-    expect(wrapper.get('button').text()).toBeTruthy()
   })
 })

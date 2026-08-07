@@ -112,12 +112,20 @@ class BggXmlApiClientTest {
                   <item type="boardgame" id="432123">
                     <thumbnail>https://cf.geekdo-images.com/hot-game-detail.jpg</thumbnail>
                     <name type="primary" value="A Hot Strategy Game"/>
-                    <name type="alternate" value="热门策略游戏"/>
+                    <name type="alternate" value="デューン 砂の惑星"/>
+                    <name type="alternate" value="未经版本验证的中文别名"/>
                     <yearpublished value="2026"/>
                     <minplayers value="2"/><maxplayers value="4"/><playingtime value="90"/>
                     <link type="boardgamecategory" id="1" value="Strategy"/>
                     <link type="boardgamemechanic" id="2" value="Worker Placement"/>
                     <statistics><ratings><average value="7.81234"/><averageweight value="3.14"/></ratings></statistics>
+                    <versions>
+                      <item type="boardgameversion" id="9">
+                        <canonicalname value="热门策略游戏"/>
+                        <name type="primary" value="Simplified Chinese edition"/>
+                        <link type="language" value="Chinese"/>
+                      </item>
+                    </versions>
                   </item>
                 </items>
                 """,
@@ -170,8 +178,52 @@ class BggXmlApiClientTest {
             assertThat(local.hotGameDetails()).extracting(game -> game.bggId()).containsExactly(101, 102);
             assertThat(hotCalls).hasValue(1);
             assertThat(thingCalls).hasValue(1);
-            assertThat(thingQuery.get()).contains("id=101,102", "stats=1");
+            assertThat(thingQuery.get()).contains("id=101,102", "stats=1", "versions=1");
             assertThat(authorization.get()).isEqualTo("Bearer test-token");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void hydratesAnArbitraryCatalogPageInOneBoundedThingRequest() throws Exception {
+        AtomicInteger thingCalls = new AtomicInteger();
+        AtomicReference<String> thingQuery = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/xmlapi2/thing", exchange -> {
+            thingCalls.incrementAndGet();
+            thingQuery.set(exchange.getRequestURI().getRawQuery());
+            respond(exchange, """
+                    <items>
+                      <item id="9">
+                        <name type="primary" value="Nine"/>
+                        <name type="alternate" value="不应采用的中文别名"/>
+                        <versions>
+                          <item type="boardgameversion" id="99">
+                            <canonicalname value="九号"/>
+                            <name type="primary" value="Simplified Chinese edition"/>
+                            <link type="language" value="Chinese"/>
+                          </item>
+                        </versions>
+                      </item>
+                      <item id="7"><name type="primary" value="Seven"/><name type="alternate" value="七号"/></item>
+                    </items>
+                    """);
+        });
+        server.start();
+        try {
+            BggXmlApiClient local = new BggXmlApiClient(
+                    "http://127.0.0.1:" + server.getAddress().getPort(), "test-token", Duration.ZERO);
+
+            var first = local.gameDetails(List.of(7, 9));
+            var cached = local.gameDetails(List.of(7, 9));
+
+            assertThat(first).extracting(game -> game.bggId()).containsExactly(7, 9);
+            assertThat(first.getFirst().chineseName()).isBlank();
+            assertThat(first.get(1).chineseName()).isEqualTo("九号");
+            assertThat(cached).isSameAs(first);
+            assertThat(thingCalls).hasValue(1);
+            assertThat(thingQuery.get()).contains("id=7,9", "stats=1", "versions=1");
         } finally {
             server.stop(0);
         }

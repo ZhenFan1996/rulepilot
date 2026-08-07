@@ -15,6 +15,8 @@ public interface BoardGameGeekCatalog {
 
     List<DiscoveryGame> hotGameDetails();
 
+    List<DiscoveryGame> gameDetails(List<Integer> bggIds);
+
     GameDetails game(int bggId);
 
     record SearchResult(int bggId, String name, Integer publicationYear) {}

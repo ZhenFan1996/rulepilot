@@ -224,6 +224,9 @@ rulepilot:
     base-url: ${BGG_BASE_URL:https://boardgamegeek.com}
     api-token: ${BGG_API_TOKEN:}
     resolved-addresses: ${BGG_RESOLVED_ADDRESSES:}
+    ranked-catalog:
+      minimum-rows: ${BGG_RANKED_CATALOG_MINIMUM_ROWS:100000}
+      maximum-rows: ${BGG_RANKED_CATALOG_MAXIMUM_ROWS:500000}
     translation:
       enabled: ${BGG_TRANSLATION_ENABLED:false}
       timeout: ${BGG_TRANSLATION_TIMEOUT:PT20S}

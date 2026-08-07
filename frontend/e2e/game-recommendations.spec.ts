@@ -1,62 +1,73 @@
 import { expect, test } from '@playwright/test'
 
-const discovery = {
-  sourceCount: 12,
+const catalog = {
+  ready: true,
+  sourceCount: 162686,
+  total: 7543,
+  page: 0,
+  size: 20,
+  totalPages: 378,
   sort: 'hot',
-  categoriesTranslated: true,
-  categories: [
-    { value: 'Family', label: '家庭' },
-    { value: 'Strategy', label: '策略' },
-  ],
+  type: 'all',
+  importedAt: '2026-08-07T08:00:00Z',
+  sourceDate: '2026-08-07',
+  taxonomyTranslated: true,
   games: [{
-    rank: 2,
     bggId: 266192,
     name: '展翅翱翔',
     originalName: 'Wingspan',
     nameLocalized: true,
     publicationYear: 2019,
+    overallRank: 34,
+    hotRank: 2,
+    geekRating: 7.79,
+    averageRating: 8.09,
+    usersRated: 102030,
+    expansion: false,
+    types: ['family', 'strategy'],
+    detailsAvailable: true,
     thumbnailUrl: 'https://example.test/wingspan.jpg',
     minPlayers: 1,
     maxPlayers: 5,
     playingTimeMinutes: 70,
-    averageRating: 8.1,
     averageWeight: 2.5,
-    categories: ['Family', 'Strategy'],
-    mechanics: ['Card Drafting'],
+    categories: ['策略'],
+    mechanics: ['卡牌轮抽'],
     bggUrl: 'https://boardgamegeek.com/boardgame/266192',
   }],
 }
 
 async function mockPublicDiscovery(page: import('@playwright/test').Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401 }))
-  await page.route('**/api/v1/bgg/discovery?*', route => route.fulfill({ json: discovery }))
-  await page.route('**/api/v1/bgg/search?*', route => route.fulfill({ json: [
-    { bggId: 266192, name: 'Wingspan', publicationYear: 2019, bggUrl: 'https://boardgamegeek.com/boardgame/266192' },
-  ] }))
+  await page.route('**/api/v1/bgg/catalog?*', route => route.fulfill({ json: catalog }))
 }
 
-test('sorts and filters the bounded hot list before direct title search', async ({ page }) => {
+test('sorts, filters, and searches the full server-side BGG snapshot', async ({ page }) => {
   await mockPublicDiscovery(page)
   await page.goto('/discover')
 
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('适合上桌')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('整个 BGG 目录')
+  await expect(page.getByText('BGG 快照共 162,686 条记录')).toBeVisible()
   await expect(page.getByText('展翅翱翔')).toBeVisible()
-  await expect(page.locator('li', { hasText: '策略' })).toBeVisible()
+  await expect(page.locator('li', { hasText: '卡牌轮抽' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
 
   await page.getByRole('combobox', { name: '排序' }).selectOption('rating')
-  await page.getByRole('combobox', { name: /游戏类型/ }).selectOption('Strategy')
-  const filteredRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/discovery?')
-    && request.url().includes('sort=rating') && request.url().includes('category=Strategy'))
+  await page.getByRole('combobox', { name: /BGG 类型榜/ }).selectOption('strategy')
+  const filteredRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
+    && request.url().includes('sort=rating') && request.url().includes('type=strategy'))
   await page.getByRole('button', { name: '应用' }).click()
   await filteredRequest
 
-  await page.getByLabel('直接搜索桌游').fill('Wingspan')
+  await page.getByLabel('搜索整个目录').fill('Wingspan')
+  const searchRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
+    && request.url().includes('q=Wingspan'))
   await page.getByRole('button', { name: '搜索', exact: true }).click()
-  await expect(page.getByRole('heading', { name: /Wingspan.*BGG 搜索结果/ })).toBeVisible()
-  await expect(page.getByRole('link', { name: '查看详情' })).toHaveAttribute('href', '/discover/266192')
+  await searchRequest
+  await expect(page.getByRole('link', { name: /展翅翱翔/ })).toHaveAttribute('href', '/discover/266192')
 })
 
-test('keeps discovery usable without horizontal overflow at 390 px', async ({ page }) => {
+test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockPublicDiscovery(page)
   await page.goto('/discover')

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -87,6 +88,41 @@ class BggMetadataLocalizationServiceTest {
         assertThat(localized.translated()).isTrue();
         assertThat(localized.categories()).containsEntry("Family", "家庭").containsEntry("Strategy", "策略");
         verify(translations).translate(any());
+    }
+
+    @Test
+    void translatesRankedCatalogCategoriesAndMechanicsInOneBoundedRequest() {
+        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+                "", List.of("策略"), List.of("牌库构筑"))));
+
+        var localized = service.localizeDiscoveryTaxonomy(
+                List.of("Strategy"), List.of("Deck Building"), "zh-CN");
+
+        assertThat(localized.translated()).isTrue();
+        assertThat(localized.categories()).containsEntry("Strategy", "策略");
+        assertThat(localized.mechanics()).containsEntry("Deck Building", "牌库构筑");
+        verify(translations).translate(any());
+    }
+
+    @Test
+    void chunksALargeRankedCatalogTaxonomyAndPublishesItOnlyWhenEveryChunkIsValid() {
+        List<String> mechanics = java.util.stream.IntStream.rangeClosed(1, 51)
+                .mapToObj(index -> "Mechanic " + index)
+                .toList();
+        when(translations.translate(any())).thenAnswer(invocation -> {
+            BggMetadataTranslation.Request request = invocation.getArgument(0);
+            return Optional.of(new Translation(
+                    "",
+                    request.categories().stream().map(value -> "译:" + value).toList(),
+                    request.mechanics().stream().map(value -> "译:" + value).toList()));
+        });
+
+        var localized = service.localizeDiscoveryTaxonomy(List.of("Strategy"), mechanics, "zh-CN");
+
+        assertThat(localized.translated()).isTrue();
+        assertThat(localized.categories()).containsEntry("Strategy", "译:Strategy");
+        assertThat(localized.mechanics()).containsEntry("Mechanic 51", "译:Mechanic 51");
+        verify(translations, times(2)).translate(any());
     }
 
     private BoardGameGeekCatalog.GameDetails game(List<String> officialChineseNames) {
