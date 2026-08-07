@@ -5,8 +5,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
-import com.rulepilot.catalog.application.BggDescriptionLocalizationService;
-import com.rulepilot.catalog.application.BggDescriptionLocalizationService.LocalizedDescription;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedMetadata;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.GameCatalogService;
@@ -25,6 +25,7 @@ class GameCatalogControllerTest {
                         2,
                         1002,
                         "Fitting Game",
+                        "合适的游戏",
                         2025,
                         "https://example.test/fitting.jpg",
                         2,
@@ -35,12 +36,15 @@ class GameCatalogControllerTest {
                         List.of("Family"),
                         List.of("Set Collection"))));
         GameCatalogController controller = new GameCatalogController(
-                mock(GameCatalogService.class), bgg, mock(BggDescriptionLocalizationService.class));
+                mock(GameCatalogService.class), bgg, mock(BggMetadataLocalizationService.class));
 
-        var response = controller.recommendBggGames(4, 90, new BigDecimal("3.0"));
+        var response = controller.recommendBggGames(4, 90, new BigDecimal("3.0"), "zh-CN");
 
         assertThat(response).hasSize(1);
         assertThat(response.getFirst().rank()).isEqualTo(2);
+        assertThat(response.getFirst().name()).isEqualTo("合适的游戏");
+        assertThat(response.getFirst().originalName()).isEqualTo("Fitting Game");
+        assertThat(response.getFirst().nameLocalized()).isTrue();
         assertThat(response.getFirst().averageWeight()).isEqualByComparingTo("2.7");
         assertThat(response.getFirst().bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/1002");
     }
@@ -52,16 +56,28 @@ class GameCatalogControllerTest {
         when(bgg.gameDetails(266192)).thenReturn(new GameDetails(
                 266192, "Wingspan", "Build a bird reserve.", "https://example.test/wingspan.jpg",
                 2019, 1, 5, 70, 10));
-        BggDescriptionLocalizationService descriptions = mock(BggDescriptionLocalizationService.class);
-        when(descriptions.localize(bgg.gameDetails(266192), "zh-CN"))
-                .thenReturn(new LocalizedDescription("建造一座鸟类保护区。", true));
-        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg, descriptions);
+        BggMetadataLocalizationService metadata = mock(BggMetadataLocalizationService.class);
+        when(metadata.localize(bgg.gameDetails(266192), "zh-CN"))
+                .thenReturn(new LocalizedMetadata(
+                        "展翅翱翔",
+                        true,
+                        "建造一座鸟类保护区。",
+                        true,
+                        List.of("动物"),
+                        true,
+                        List.of("卡牌轮抽"),
+                        true));
+        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg, metadata);
 
         var response = controller.bggGame(266192, "zh-CN");
 
-        assertThat(response.name()).isEqualTo("Wingspan");
+        assertThat(response.name()).isEqualTo("展翅翱翔");
+        assertThat(response.originalName()).isEqualTo("Wingspan");
+        assertThat(response.officialNameLocalized()).isTrue();
         assertThat(response.description()).isEqualTo("建造一座鸟类保护区。");
         assertThat(response.descriptionTranslated()).isTrue();
+        assertThat(response.categories()).containsExactly("动物");
+        assertThat(response.mechanics()).containsExactly("卡牌轮抽");
         assertThat(response.minimumAge()).isEqualTo(10);
         assertThat(response.bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/266192");
     }

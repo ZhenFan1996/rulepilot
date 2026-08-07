@@ -40,6 +40,7 @@ class BggXmlApiClientTest {
                   <thumbnail>https://cf.geekdo-images.com/example.jpg</thumbnail>
                   <image>https://cf.geekdo-images.com/example-large.jpg</image>
                   <name type="primary" value="Wingspan"/>
+                  <name type="alternate" value="展翅翱翔"/>
                   <description>A game about birds &amp; habitats.</description>
                   <yearpublished value="2019"/><minplayers value="1"/><maxplayers value="5"/>
                   <playingtime value="70"/><minage value="10"/>
@@ -48,6 +49,25 @@ class BggXmlApiClientTest {
                   <link type="boardgamedesigner" value="Elizabeth Hargrave"/>
                   <link type="boardgamepublisher" value="Stonemaier Games"/>
                   <statistics><ratings><average value="8.1"/><averageweight value="2.5"/></ratings></statistics>
+                  <versions>
+                    <item type="boardgameversion" id="0">
+                      <canonicalname value="翼展"/>
+                      <name type="primary" value="Chinese edition"/>
+                      <link type="language" value="Chinese"/>
+                    </item>
+                    <item type="boardgameversion" id="1">
+                      <thumbnail>https://example.test/version-only.jpg</thumbnail>
+                      <canonicalname value="展翅翱翔"/>
+                      <name type="primary" value="Simplified Chinese edition"/>
+                      <link type="boardgamepublisher" value="Localized Publisher"/>
+                      <link type="language" value="Chinese"/>
+                    </item>
+                    <item type="boardgameversion" id="2">
+                      <canonicalname value="Wingspan"/>
+                      <name type="primary" value="English edition"/>
+                      <link type="language" value="English"/>
+                    </item>
+                  </versions>
                 </item></items>
                 """, 266192);
 
@@ -63,6 +83,7 @@ class BggXmlApiClientTest {
         assertThat(game.mechanics()).containsExactly("Card Drafting");
         assertThat(game.designers()).containsExactly("Elizabeth Hargrave");
         assertThat(game.publishers()).containsExactly("Stonemaier Games");
+        assertThat(game.officialChineseNames()).containsExactly("展翅翱翔", "翼展");
     }
 
     @Test
@@ -91,6 +112,7 @@ class BggXmlApiClientTest {
                   <item type="boardgame" id="432123">
                     <thumbnail>https://cf.geekdo-images.com/hot-game-detail.jpg</thumbnail>
                     <name type="primary" value="A Hot Strategy Game"/>
+                    <name type="alternate" value="热门策略游戏"/>
                     <yearpublished value="2026"/>
                     <minplayers value="2"/><maxplayers value="4"/><playingtime value="90"/>
                     <link type="boardgamecategory" id="1" value="Strategy"/>
@@ -105,6 +127,7 @@ class BggXmlApiClientTest {
         assertThat(games).hasSize(1);
         assertThat(games.getFirst().rank()).isEqualTo(3);
         assertThat(games.getFirst().name()).isEqualTo("A Hot Strategy Game");
+        assertThat(games.getFirst().chineseName()).isEqualTo("热门策略游戏");
         assertThat(games.getFirst().minPlayers()).isEqualTo(2);
         assertThat(games.getFirst().averageRating()).isEqualByComparingTo(new BigDecimal("7.81234"));
         assertThat(games.getFirst().averageWeight()).isEqualByComparingTo(new BigDecimal("3.14"));

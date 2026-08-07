@@ -9,6 +9,8 @@ import { useLocale } from '@/lib/locale'
 interface BggGameDetails {
   bggId: number
   name: string
+  originalName?: string
+  officialNameLocalized?: boolean
   description: string
   thumbnailUrl: string
   publicationYear: number | null
@@ -24,6 +26,8 @@ interface BggGameDetails {
   designers: string[]
   publishers: string[]
   descriptionTranslated?: boolean
+  categoriesTranslated?: boolean
+  mechanicsTranslated?: boolean
   bggUrl: string
 }
 
@@ -45,6 +49,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
   translation: 'AI 翻译 · 基于 BGG 原文',
+  officialName: '官方中文名 · BGG 版本资料', metadataTranslation: 'AI 翻译',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
   rating: (rating: number) => `BGG 评分 ${rating.toFixed(1)}`, weight: (weight: number) => `复杂度 ${weight.toFixed(1)} / 5`,
@@ -56,6 +61,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
   translation: 'AI translation · based on the BGG source',
+  officialName: 'Official Chinese name · BGG edition data', metadataTranslation: 'AI translation',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
   rating: (rating: number) => `BGG rating ${rating.toFixed(1)}`, weight: (weight: number) => `Weight ${weight.toFixed(1)} / 5`,
@@ -98,6 +104,10 @@ async function load() {
       designers: parsed.designers ?? [],
       publishers: parsed.publishers ?? [],
       descriptionTranslated: parsed.descriptionTranslated ?? false,
+      originalName: parsed.originalName ?? parsed.name,
+      officialNameLocalized: parsed.officialNameLocalized ?? false,
+      categoriesTranslated: parsed.categoriesTranslated ?? false,
+      mechanicsTranslated: parsed.mechanicsTranslated ?? false,
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : copy.value.error
@@ -156,6 +166,7 @@ watch(locale, load)
         <div class="min-w-0 self-center">
           <p class="text-sm font-semibold text-copper">{{ copy.eyebrow }}</p>
           <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ game.name }}</h1>
+          <p v-if="game.officialNameLocalized" class="mt-2 text-sm font-medium text-copper">{{ game.originalName }} · {{ copy.officialName }}</p>
           <p class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
           <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
             <li v-for="stat in stats" :key="stat" class="rounded-full bg-canvas px-3 py-1.5 text-sm font-medium text-ink/65">{{ stat }}</li>
@@ -165,8 +176,8 @@ watch(locale, load)
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>
-            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1">{{ game.mechanics.join('、') }}</dd></div>
-            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1">{{ game.categories.join('、') }}</dd></div>
+            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}<span v-if="game.mechanicsTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1">{{ game.mechanics.join('、') }}</dd></div>
+            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}<span v-if="game.categoriesTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1">{{ game.categories.join('、') }}</dd></div>
           </dl>
           <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
           <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">

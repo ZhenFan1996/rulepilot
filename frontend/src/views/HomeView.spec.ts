@@ -60,7 +60,9 @@ describe('HomeView', () => {
         return new Response(JSON.stringify([{
           rank: 1,
           bggId: 266192,
-          name: 'Wingspan',
+          name: '展翅翱翔',
+          originalName: 'Wingspan',
+          nameLocalized: true,
           publicationYear: 2019,
           thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
           bggUrl: 'https://boardgamegeek.com/boardgame/266192',
@@ -100,8 +102,9 @@ describe('HomeView', () => {
     expect(wrapper.text()).toContain('CATAN')
     expect(wrapper.text()).not.toContain('Corpus Replay')
     expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
-    expect(wrapper.get('img[alt="Wingspan 封面"]').attributes('src')).toContain('wingspan.jpg')
-    expect(wrapper.get('a[href="/discover/266192"]').attributes('aria-label')).toContain('Wingspan')
+    expect(wrapper.get('img[alt="展翅翱翔 封面"]').attributes('src')).toContain('wingspan.jpg')
+    expect(wrapper.get('a[href="/discover/266192"]').attributes('aria-label')).toContain('展翅翱翔')
+    expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').text()).toContain('BGG 资料')
     expect(wrapper.text()).toContain('1–5 人')
     expect(wrapper.text()).toContain('复杂度 2.5 / 5')
