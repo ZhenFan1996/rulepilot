@@ -628,6 +628,33 @@ fi
 log_stage "visual-expectation-verified expectation=$visual_expectation visualSteps=$visual_step_count focusedVisualSteps=$focused_visual_step_count"
 log_stage "lesson-verified"
 
+refresh_csrf
+answer_response=$(curl --fail-with-body --silent --show-error \
+	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
+	--request POST --header "Content-Type: application/json" \
+	--header "$csrf_header: $csrf_token" \
+	--data '{"question":"How many victory points is each lit dock worth during final scoring?","language":"en"}' \
+	"$base_url/api/v1/document-versions/$version_id/answers")
+answer_run_id=$(jq -er '.assistantRunId' <<<"$answer_response")
+answer_status=$(jq -er '.answer.status' <<<"$answer_response")
+answer_citation_count=$(jq -er '.answer.citations | length' <<<"$answer_response")
+if ! jq -e --arg version_id "$version_id" '
+	.answer.documentVersionId == $version_id
+	and (.answer.status == "ANSWERED" or .answer.status == "ANSWERED_WITH_WARNING")
+	and (.answer.shortVerdict | length > 0)
+	and (.answer.explanation | length > 0)
+	and (.answer.citations | length > 0)
+	and all(.answer.citations[];
+		.documentVersionId == $version_id
+		and .pageFrom >= 1
+		and .pageTo >= .pageFrom
+		and (.excerpt | length > 0))
+' >/dev/null <<<"$answer_response"; then
+	echo "Rule answer did not publish a conclusion with same-version page evidence" >&2
+	exit 1
+fi
+log_stage "answer-verified run=$answer_run_id status=$answer_status citations=$answer_citation_count"
+
 navigation=$(navigation_summary)
 navigation_failures=$(jq -er '.failureCount' <<<"$navigation")
 log_stage "navigation-verified requests=$(jq -er '.requestCount' <<<"$navigation") averageMs=$(jq -er '.averageMs' <<<"$navigation") maxMs=$(jq -er '.maxMs' <<<"$navigation")"
@@ -641,13 +668,16 @@ summary=$(jq -n \
 	--arg preparationState "$preparation_state" \
 	--arg lessonState "$lesson_state" \
 	--arg lessonStatus "$lesson_status" \
+	--arg answerStatus "$answer_status" \
 	--argjson sectionCount "$section_count" \
+	--argjson answerCitationCount "$answer_citation_count" \
 	--argjson visualStepCount "$visual_step_count" \
 	--argjson focusedVisualStepCount "$focused_visual_step_count" \
 	--arg visualEnrichmentState "$(jq -r '.run.state // "NOT_STARTED"' <<<"$visual_result")" \
 	--argjson navigation "$navigation" \
 	'{title: $title, preparationState: $preparationState, lessonState: $lessonState,
-	  lessonStatus: $lessonStatus, sectionCount: $sectionCount,
+	  lessonStatus: $lessonStatus, answerStatus: $answerStatus,
+	  sectionCount: $sectionCount, answerCitationCount: $answerCitationCount,
 	  visualStepCount: $visualStepCount, focusedVisualStepCount: $focusedVisualStepCount,
 	  visualEnrichmentState: $visualEnrichmentState, navigation: $navigation,
 	  cleanup: "scheduled"}')
