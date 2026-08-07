@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -23,6 +23,7 @@ interface BggGameDetails {
   mechanics: string[]
   designers: string[]
   publishers: string[]
+  descriptionTranslated?: boolean
   bggUrl: string
 }
 
@@ -43,6 +44,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '桌游推荐 · BGG 资料', unknownYear: '发行年份未知', stats: '游戏信息',
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
+  translation: 'AI 翻译 · 基于 BGG 原文',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
   rating: (rating: number) => `BGG 评分 ${rating.toFixed(1)}`, weight: (weight: number) => `复杂度 ${weight.toFixed(1)} / 5`,
@@ -53,6 +55,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: 'Game recommendation · BGG data', unknownYear: 'Publication year unavailable', stats: 'Game details',
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
+  translation: 'AI translation · based on the BGG source',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
   rating: (rating: number) => `BGG rating ${rating.toFixed(1)}`, weight: (weight: number) => `Weight ${weight.toFixed(1)} / 5`,
@@ -82,7 +85,7 @@ async function load() {
   errorMessage.value = ''
   try {
     if (!Number.isInteger(bggId.value) || bggId.value <= 0) throw new Error(copy.value.error)
-    const response = await fetch(`/api/v1/bgg/games/${bggId.value}`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/bgg/games/${bggId.value}?locale=${encodeURIComponent(locale.value)}`, { credentials: 'include' })
     if (!response.ok) throw new Error(copy.value.error)
     const parsed = await response.json() as BggGameDetails
     game.value = {
@@ -94,6 +97,7 @@ async function load() {
       mechanics: parsed.mechanics ?? [],
       designers: parsed.designers ?? [],
       publishers: parsed.publishers ?? [],
+      descriptionTranslated: parsed.descriptionTranslated ?? false,
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : copy.value.error
@@ -133,6 +137,7 @@ async function selectGame() {
 }
 
 onMounted(load)
+watch(locale, load)
 </script>
 
 <template>
@@ -155,7 +160,8 @@ onMounted(load)
           <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
             <li v-for="stat in stats" :key="stat" class="rounded-full bg-canvas px-3 py-1.5 text-sm font-medium text-ink/65">{{ stat }}</li>
           </ul>
-          <p v-if="game.description" class="mt-6 line-clamp-6 leading-7 text-ink/65">{{ game.description }}</p>
+          <p v-if="game.descriptionTranslated" class="mt-6 text-xs font-semibold text-copper">{{ copy.translation }}</p>
+          <p v-if="game.description" :class="game.descriptionTranslated ? 'mt-2' : 'mt-6'" class="line-clamp-6 leading-7 text-ink/65">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>

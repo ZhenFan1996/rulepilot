@@ -324,11 +324,12 @@ jobs:
                 throw new Error('BGG recommendations did not contain a valid game identity')
               }
               const details = await fetch(
-                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/games/${firstGame.bggId}`,
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/games/${firstGame.bggId}?locale=zh-CN`,
                 { signal: AbortSignal.timeout(30_000) },
               )
               const game = await details.json()
               if (!details.ok || game.bggId !== firstGame.bggId || typeof game.description !== 'string'
+                  || typeof game.descriptionTranslated !== 'boolean'
                   || !Array.isArray(game.categories) || !Array.isArray(game.mechanics)) {
                 throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
               }

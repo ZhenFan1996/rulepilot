@@ -2,6 +2,8 @@ package com.rulepilot.catalog.adapter.in.web;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
+import com.rulepilot.catalog.application.BggDescriptionLocalizationService;
+import com.rulepilot.catalog.application.BggDescriptionLocalizationService.LocalizedDescription;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
@@ -35,10 +37,15 @@ public class GameCatalogController {
 
     private final GameCatalogService catalogService;
     private final BggCatalogImportService bggService;
+    private final BggDescriptionLocalizationService descriptions;
 
-    public GameCatalogController(GameCatalogService catalogService, BggCatalogImportService bggService) {
+    public GameCatalogController(
+            GameCatalogService catalogService,
+            BggCatalogImportService bggService,
+            BggDescriptionLocalizationService descriptions) {
         this.catalogService = catalogService;
         this.bggService = bggService;
+        this.descriptions = descriptions;
     }
 
     @GetMapping("/games")
@@ -81,9 +88,12 @@ public class GameCatalogController {
     }
 
     @GetMapping("/bgg/games/{bggId}")
-    BggGameSelectionResponse bggGame(@PathVariable int bggId) {
+    BggGameSelectionResponse bggGame(
+            @PathVariable int bggId,
+            @RequestParam(defaultValue = "en") String locale) {
         requireBgg();
-        return BggGameSelectionResponse.from(bggService.gameDetails(bggId));
+        var game = bggService.gameDetails(bggId);
+        return BggGameSelectionResponse.from(game, descriptions.localize(game, locale));
     }
 
     @PostMapping("/games")
@@ -227,13 +237,15 @@ public class GameCatalogController {
             List<String> mechanics,
             List<String> designers,
             List<String> publishers,
+            boolean descriptionTranslated,
             String bggUrl) {
         static BggGameSelectionResponse from(
-                com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails game) {
+                com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails game,
+                LocalizedDescription description) {
             return new BggGameSelectionResponse(
                     game.bggId(),
                     game.name(),
-                    game.description(),
+                    description.text(),
                     game.thumbnailUrl(),
                     game.publicationYear(),
                     game.minPlayers(),
@@ -247,6 +259,7 @@ public class GameCatalogController {
                     game.mechanics(),
                     game.designers(),
                     game.publishers(),
+                    description.translated(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }

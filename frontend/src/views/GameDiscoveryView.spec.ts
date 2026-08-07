@@ -3,13 +3,15 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { LOGIN_REQUIRED_EVENT } from '@/lib/authSession'
+import { setLocale } from '@/lib/locale'
 
 import GameDiscoveryView from './GameDiscoveryView.vue'
 
 const details = {
   bggId: 42,
   name: 'Catalog Game',
-  description: 'A game selected from recommendations.',
+  description: '一款从推荐中选出的游戏。',
+  descriptionTranslated: true,
   thumbnailUrl: 'https://example.test/catalog-cover.jpg',
   publicationYear: 2024,
   minPlayers: 1,
@@ -27,7 +29,10 @@ const details = {
 }
 
 describe('GameDiscoveryView', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    setLocale('zh-CN')
+    vi.unstubAllGlobals()
+  })
 
   it('inspects attributed BGG details without mutating the catalog', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, _options?: RequestInit) => {
@@ -41,12 +46,31 @@ describe('GameDiscoveryView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Catalog Game')
+    expect(wrapper.text()).toContain('AI 翻译 · 基于 BGG 原文')
     expect(wrapper.text()).toContain('BGG 资料仅用于推荐、识别游戏和展示封面')
     expect(wrapper.text()).toContain('Designer Name')
     expect(wrapper.text()).toContain('Publisher Name')
     expect(wrapper.text()).toContain('BGG 评分 7.8')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42"]').attributes('target')).toBe('_blank')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN', { credentials: 'include' })
+  })
+
+  it('requests and displays the original description for the English locale', async () => {
+    setLocale('en')
+    const fetchMock = vi.fn(async () => Response.json({
+      ...details,
+      description: 'A game selected from recommendations.',
+      descriptionTranslated: false,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { wrapper } = await mountDiscovery()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('A game selected from recommendations.')
+    expect(wrapper.text()).not.toContain('AI 翻译')
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en', { credentials: 'include' })
   })
 
   it('idempotently selects the game and hands its edition to rulebook acquisition', async () => {

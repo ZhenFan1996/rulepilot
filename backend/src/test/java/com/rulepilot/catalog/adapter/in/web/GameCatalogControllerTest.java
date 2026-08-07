@@ -5,6 +5,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
+import com.rulepilot.catalog.application.BggDescriptionLocalizationService;
+import com.rulepilot.catalog.application.BggDescriptionLocalizationService.LocalizedDescription;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.GameCatalogService;
@@ -32,7 +34,8 @@ class GameCatalogControllerTest {
                         new BigDecimal("2.7"),
                         List.of("Family"),
                         List.of("Set Collection"))));
-        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg);
+        GameCatalogController controller = new GameCatalogController(
+                mock(GameCatalogService.class), bgg, mock(BggDescriptionLocalizationService.class));
 
         var response = controller.recommendBggGames(4, 90, new BigDecimal("3.0"));
 
@@ -49,11 +52,16 @@ class GameCatalogControllerTest {
         when(bgg.gameDetails(266192)).thenReturn(new GameDetails(
                 266192, "Wingspan", "Build a bird reserve.", "https://example.test/wingspan.jpg",
                 2019, 1, 5, 70, 10));
-        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg);
+        BggDescriptionLocalizationService descriptions = mock(BggDescriptionLocalizationService.class);
+        when(descriptions.localize(bgg.gameDetails(266192), "zh-CN"))
+                .thenReturn(new LocalizedDescription("建造一座鸟类保护区。", true));
+        GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg, descriptions);
 
-        var response = controller.bggGame(266192);
+        var response = controller.bggGame(266192, "zh-CN");
 
         assertThat(response.name()).isEqualTo("Wingspan");
+        assertThat(response.description()).isEqualTo("建造一座鸟类保护区。");
+        assertThat(response.descriptionTranslated()).isTrue();
         assertThat(response.minimumAge()).isEqualTo(10);
         assertThat(response.bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/266192");
     }

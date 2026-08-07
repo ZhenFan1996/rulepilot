@@ -33,7 +33,8 @@ test('production deployment synchronizes the protected BGG credential without pa
 
 test('production deployment verifies live BGG recommendations and detail enrichment', () => {
   assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendations/)
-  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}/)
+  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/games\/\$\{firstGame\.bggId\}\?locale=zh-CN/)
+  assert.match(deploymentWorkflow, /typeof game\.descriptionTranslated !== 'boolean'/)
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.categories\)/)
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.mechanics\)/)
 })
