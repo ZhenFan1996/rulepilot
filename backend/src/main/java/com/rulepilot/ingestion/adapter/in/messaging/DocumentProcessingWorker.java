@@ -8,6 +8,7 @@ import com.rulepilot.document.DocumentProcessingJobs;
 import com.rulepilot.document.DocumentProcessingIdempotency;
 import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingStage;
+import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -38,6 +39,7 @@ public class DocumentProcessingWorker {
     private final DocumentProcessingJobs jobs;
     private final DocumentProcessingIdempotency idempotency;
     private final DocumentProcessingFailures failures;
+    private final DocumentVersionScopeLookup versions;
     private final MeterRegistry metrics;
     private final int maxAttempts;
 
@@ -47,6 +49,7 @@ public class DocumentProcessingWorker {
             DocumentProcessingJobs jobs,
             DocumentProcessingIdempotency idempotency,
             DocumentProcessingFailures failures,
+            DocumentVersionScopeLookup versions,
             MeterRegistry metrics,
             @Value("${rulepilot.document.messaging.max-attempts}") int maxAttempts) {
         this.ingestion = ingestion;
@@ -54,6 +57,7 @@ public class DocumentProcessingWorker {
         this.jobs = jobs;
         this.idempotency = idempotency;
         this.failures = failures;
+        this.versions = versions;
         this.metrics = metrics;
         this.maxAttempts = maxAttempts;
     }
@@ -98,6 +102,18 @@ public class DocumentProcessingWorker {
     }
 
     private void execute(DocumentProcessingCommand command, UUID eventId, int attempt) {
+        if (versions.findVersion(command.documentVersionId()).isEmpty()) {
+            metrics.counter(
+                            "rulepilot.document.processing.orphaned",
+                            "stage",
+                            command.stage().name().toLowerCase())
+                    .increment();
+            LOGGER.info(
+                    "Acknowledging document processing delivery after its document was removed for documentVersionId={}, stage={}",
+                    command.documentVersionId(),
+                    command.stage());
+            return;
+        }
         if (!idempotency.begin(command, eventId, attempt)) {
             metrics.counter(
                             "rulepilot.document.processing.duplicates",

@@ -108,10 +108,11 @@ public class JpaDocumentProcessingQueue
                         insert into processing_stage_execution (
                             id, document_version_id, processing_job_id, stage, pipeline_version,
                             first_event_id, status, attempt_count, started_at, updated_at
-                        ) values (
+                        ) select
                             :id, :documentVersionId, :processingJobId, :stage, :pipelineVersion,
                             :eventId, 'RUNNING', :attempt, :startedAt, :startedAt
-                        )
+                        from document_version
+                        where id = :documentVersionId
                         on conflict (document_version_id, stage, pipeline_version) do update
                         set processing_job_id = excluded.processing_job_id,
                             first_event_id = excluded.first_event_id,
