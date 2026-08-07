@@ -8,6 +8,8 @@ import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import java.math.BigDecimal;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -35,6 +37,7 @@ class PostgresBggRankedCatalogTest {
 
     @BeforeAll
     static void migrate() {
+        enableProductionExtensions();
         Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
@@ -43,6 +46,16 @@ class PostgresBggRankedCatalogTest {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         repository = new PostgresBggRankedCatalog(new NamedParameterJdbcTemplate(dataSource));
+    }
+
+    private static void enableProductionExtensions() {
+        try (var connection = DriverManager.getConnection(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+                var statement = connection.createStatement()) {
+            statement.execute("CREATE EXTENSION IF NOT EXISTS vector");
+        } catch (SQLException exception) {
+            throw new IllegalStateException("Could not initialize the production PostgreSQL extensions", exception);
+        }
     }
 
     @Test
