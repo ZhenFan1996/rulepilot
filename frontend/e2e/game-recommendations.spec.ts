@@ -39,7 +39,33 @@ const catalog = {
 
 async function mockPublicDiscovery(page: import('@playwright/test').Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401 }))
-  await page.route('**/api/v1/bgg/catalog?*', route => route.fulfill({ json: catalog }))
+  await page.route('**/api/v1/bgg/catalog?*', async route => {
+    if (route.request().url().includes('enrich=true')) {
+      await new Promise(resolve => setTimeout(resolve, 1_500))
+      await route.fulfill({ json: catalog })
+      return
+    }
+    await route.fulfill({
+      json: {
+        ...catalog,
+        taxonomyTranslated: false,
+        games: [{
+          ...catalog.games[0],
+          name: 'Wingspan',
+          originalName: 'Wingspan',
+          nameLocalized: false,
+          detailsAvailable: false,
+          thumbnailUrl: '',
+          minPlayers: null,
+          maxPlayers: null,
+          playingTimeMinutes: null,
+          averageWeight: null,
+          categories: [],
+          mechanics: [],
+        }],
+      },
+    })
+  })
 }
 
 test('sorts, filters, and searches the full server-side BGG snapshot', async ({ page }) => {
@@ -48,6 +74,8 @@ test('sorts, filters, and searches the full server-side BGG snapshot', async ({ 
 
   await expect(page.getByRole('heading', { level: 1 })).toContainText('整个 BGG 目录')
   await expect(page.getByText('BGG 快照共 162,686 条记录')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 3, name: 'Wingspan' })).toBeVisible()
+  await expect(page.getByText('正在后台补齐封面、人数和中文资料…')).toBeVisible()
   await expect(page.getByText('展翅翱翔')).toBeVisible()
   await expect(page.locator('li', { hasText: '卡牌轮抽' })).toBeVisible()
   await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
@@ -65,6 +93,8 @@ test('sorts, filters, and searches the full server-side BGG snapshot', async ({ 
   await page.getByRole('button', { name: '搜索', exact: true }).click()
   await searchRequest
   await expect(page.getByRole('link', { name: /展翅翱翔/ })).toHaveAttribute('href', '/discover/266192')
+  await expect(page.getByText('第 1 / 378 页')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '再看一批' })).toBeVisible()
 })
 
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {

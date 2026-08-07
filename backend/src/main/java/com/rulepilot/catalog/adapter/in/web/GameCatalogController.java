@@ -115,10 +115,14 @@ public class GameCatalogController {
     @GetMapping("/bgg/games/{bggId}")
     BggGameSelectionResponse bggGame(
             @PathVariable int bggId,
-            @RequestParam(defaultValue = "en") String locale) {
+            @RequestParam(defaultValue = "en") String locale,
+            @RequestParam(defaultValue = "true") boolean translate) {
         requireBgg();
         var game = bggService.gameDetails(bggId);
-        return BggGameSelectionResponse.from(game, metadataLocalization.localize(game, locale));
+        LocalizedMetadata metadata = translate
+                ? metadataLocalization.localize(game, locale)
+                : metadataLocalization.sourceOnly(game, locale);
+        return BggGameSelectionResponse.from(game, metadata);
     }
 
     @PostMapping("/games")

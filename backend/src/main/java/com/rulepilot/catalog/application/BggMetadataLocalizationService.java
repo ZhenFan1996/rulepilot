@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
 
 @Service
 @Profile("!test")
@@ -30,18 +31,13 @@ public class BggMetadataLocalizationService {
     }
 
     public LocalizedMetadata localize(BoardGameGeekCatalog.GameDetails game, String requestedLocale) {
-        String description = game.description() == null ? "" : game.description().strip();
-        if (!isSimplifiedChinese(requestedLocale)) {
-            return source(game, game.name(), false, description);
-        }
-
-        String localizedName = game.officialChineseNames().stream().findFirst().orElse(game.name());
-        boolean officialNameLocalized = !localizedName.equals(game.name());
-        LocalizedMetadata fallback = source(game, localizedName, officialNameLocalized, description);
+        LocalizedMetadata fallback = sourceOnly(game, requestedLocale);
+        String description = fallback.description();
+        if (!isSimplifiedChinese(requestedLocale)) return fallback;
         if (description.isBlank() && game.categories().isEmpty() && game.mechanics().isEmpty()) return fallback;
 
         Request request = new Request(
-                game.bggId(), localizedName, description, game.categories(), game.mechanics());
+                game.bggId(), fallback.name(), description, game.categories(), game.mechanics());
         try {
             return translations.translate(request)
                     .filter(translation -> validFor(request, translation))
@@ -51,6 +47,25 @@ public class BggMetadataLocalizationService {
             LOGGER.warn("BGG metadata translation fell back to source values for bggId={}", game.bggId());
             return fallback;
         }
+    }
+
+    public LocalizedMetadata sourceOnly(BoardGameGeekCatalog.GameDetails game, String requestedLocale) {
+        String description = normalizedDescription(game.description());
+        String name = game.name();
+        boolean officialNameLocalized = false;
+        if (isSimplifiedChinese(requestedLocale)) {
+            name = game.officialChineseNames().stream().findFirst().orElse(game.name());
+            officialNameLocalized = !name.equals(game.name());
+        }
+        return source(game, name, officialNameLocalized, description);
+    }
+
+    private String normalizedDescription(String source) {
+        if (source == null || source.isBlank()) return "";
+        return HtmlUtils.htmlUnescape(source)
+                .replace('\u00a0', ' ')
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .strip();
     }
 
     public static boolean isSimplifiedChinese(String requestedLocale) {

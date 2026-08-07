@@ -41,6 +41,18 @@ class BggRankedCatalogServiceTest {
         assertThat(result.games().getFirst().details().chineseName()).isEqualTo("策略十号");
     }
 
+    @Test
+    void returnsTheRankedSnapshotWithoutCallingBggDetailsForTheFastFirstPaint() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.browse("", GameType.STRATEGY, Sort.RANK, 0, 20, false);
+
+        assertThat(result.games()).allSatisfy(game -> assertThat(game.details()).isNull());
+        assertThat(bgg.detailIds).isEmpty();
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 

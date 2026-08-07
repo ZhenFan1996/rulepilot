@@ -73,7 +73,7 @@ class GameCatalogControllerTest {
                         true));
         GameCatalogController controller = new GameCatalogController(mock(GameCatalogService.class), bgg, metadata);
 
-        var response = controller.bggGame(266192, "zh-CN");
+        var response = controller.bggGame(266192, "zh-CN", true);
 
         assertThat(response.name()).isEqualTo("展翅翱翔");
         assertThat(response.originalName()).isEqualTo("Wingspan");

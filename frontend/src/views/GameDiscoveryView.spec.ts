@@ -62,7 +62,9 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.text()).toContain('BGG 评分 7.8')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42"]').attributes('target')).toBe('_blank')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN', { credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=false', { credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=true', { credentials: 'include' })
+    expect(wrapper.get('p.whitespace-pre-line').classes()).not.toContain('line-clamp-6')
   })
 
   it('requests and displays the original description for the English locale', async () => {
@@ -89,7 +91,7 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.text()).toContain('Drafting')
     expect(wrapper.text()).not.toContain('Official Chinese name')
     expect(wrapper.text()).not.toContain('AI 翻译')
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en', { credentials: 'include' })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en&translate=false', { credentials: 'include' })
   })
 
   it('idempotently selects the game and hands its edition to rulebook acquisition', async () => {

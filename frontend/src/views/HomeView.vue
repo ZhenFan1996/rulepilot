@@ -232,7 +232,9 @@ watch(locale, loadHotGames)
           </div>
           <div v-if="!showingPersonalShelf" class="flex shrink-0 flex-col items-end gap-1">
             <RouterLink :to="{ name: 'game-recommendations' }" class="text-sm font-semibold text-indigo">{{ t('home.exploreGames') }} →</RouterLink>
-            <a href="https://boardgamegeek.com/hotness" target="_blank" rel="noreferrer" class="text-xs font-semibold text-ink/45 hover:text-indigo">Powered by BGG ↗</a>
+            <a href="https://boardgamegeek.com/hotness" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-8 items-center" :aria-label="t('home.hotSource')">
+              <img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76">
+            </a>
           </div>
         </div>
 

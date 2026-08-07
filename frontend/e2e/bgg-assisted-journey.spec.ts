@@ -39,9 +39,8 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByRole('heading', { name: '看看热门桌游' })).toBeVisible()
   await expect(page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' })).toBeVisible()
   await expect(page.getByText('1–5 人 · 约 60 分钟')).toBeVisible()
-  await expect(page.getByRole('link', { name: /Powered by BGG/ })).toHaveAttribute(
-    'href', 'https://boardgamegeek.com/hotness',
-  )
+  const bggAttribution = page.locator('a[href="https://boardgamegeek.com/hotness"]')
+  await expect(bggAttribution.getByRole('img', { name: 'Powered by BoardGameGeek' })).toBeVisible()
 
   await page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' }).click()
   await expect(page).toHaveURL('/discover/42')

@@ -59,7 +59,7 @@ class BggRankedCatalogControllerTest {
                 List.of("Card Drafting"));
         Snapshot snapshot = new Snapshot(
                 Instant.parse("2026-08-07T08:00:00Z"), LocalDate.parse("2026-08-07"), 162_686, "a".repeat(64));
-        when(catalog.browse("", GameType.STRATEGY, Sort.RATING, 0, 20))
+        when(catalog.browse("", GameType.STRATEGY, Sort.RATING, 0, 20, true))
                 .thenReturn(new BrowseResult(
                         Optional.of(snapshot), 7_543, 0, 20, Sort.RATING, GameType.STRATEGY,
                         List.of(new BrowseGame(ranked, 2, details))));
@@ -67,7 +67,7 @@ class BggRankedCatalogControllerTest {
                 .thenReturn(new LocalizedDiscoveryTaxonomy(
                         Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽"), true));
 
-        var response = controller.catalog("", "strategy", "rating", 0, 20, "zh-CN");
+        var response = controller.catalog("", "strategy", "rating", 0, 20, "zh-CN", true);
 
         assertThat(response.ready()).isTrue();
         assertThat(response.sourceCount()).isEqualTo(162_686);
@@ -81,7 +81,7 @@ class BggRankedCatalogControllerTest {
     @Test
     void rejectsUnsupportedSortsBeforeQueryingTheCatalog() {
         assertThatIllegalArgumentException()
-                .isThrownBy(() -> controller.catalog("", "all", "popular", 0, 20, "en"))
+                .isThrownBy(() -> controller.catalog("", "all", "popular", 0, 20, "en", false))
                 .withMessage("sort is unsupported");
     }
 }
