@@ -224,6 +224,15 @@ rulepilot:
     base-url: ${BGG_BASE_URL:https://boardgamegeek.com}
     api-token: ${BGG_API_TOKEN:}
     resolved-addresses: ${BGG_RESOLVED_ADDRESSES:}
+    cache:
+      hot-fresh-ttl: ${BGG_CACHE_HOT_FRESH_TTL:PT1H}
+      hot-stale-ttl: ${BGG_CACHE_HOT_STALE_TTL:P1D}
+      detail-fresh-ttl: ${BGG_CACHE_DETAIL_FRESH_TTL:P7D}
+      detail-stale-ttl: ${BGG_CACHE_DETAIL_STALE_TTL:P30D}
+      maximum-entry-bytes: ${BGG_CACHE_MAXIMUM_ENTRY_BYTES:262144}
+      maximum-entries: ${BGG_CACHE_MAXIMUM_ENTRIES:10000}
+      maximum-bytes: ${BGG_CACHE_MAXIMUM_BYTES:67108864}
+      cleanup-delay: ${BGG_CACHE_CLEANUP_DELAY:PT1H}
     ranked-catalog:
       minimum-rows: ${BGG_RANKED_CATALOG_MINIMUM_ROWS:100000}
       maximum-rows: ${BGG_RANKED_CATALOG_MAXIMUM_ROWS:500000}

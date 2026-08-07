@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
@@ -40,15 +39,23 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
 
     private static final int MAX_RESPONSE_BYTES = 2_000_000;
     private static final Duration CACHE_TTL = Duration.ofHours(24);
+    private static final int SEARCH_CACHE_ENTRIES = 500;
+    private static final int EXACT_MATCH_CACHE_ENTRIES = 500;
+    private static final int BATCH_CACHE_ENTRIES = 1_000;
+    private static final int GAME_CACHE_ENTRIES = 2_000;
     private final OkHttpClient http;
     private final String baseUrl;
     private final String token;
     private final long minRequestIntervalNanos;
     private final XMLInputFactory xml;
-    private final Map<String, CacheEntry<List<SearchResult>>> searchCache = new ConcurrentHashMap<>();
-    private final Map<String, CacheEntry<List<GameMatch>>> exactMatchCache = new ConcurrentHashMap<>();
-    private final Map<Integer, CacheEntry<GameDetails>> gameCache = new ConcurrentHashMap<>();
-    private final Map<String, CacheEntry<List<DiscoveryGame>>> batchDiscoveryCache = new ConcurrentHashMap<>();
+    private final BoundedExpiringCache<String, List<SearchResult>> searchCache =
+            new BoundedExpiringCache<>(SEARCH_CACHE_ENTRIES);
+    private final BoundedExpiringCache<String, List<GameMatch>> exactMatchCache =
+            new BoundedExpiringCache<>(EXACT_MATCH_CACHE_ENTRIES);
+    private final BoundedExpiringCache<Integer, GameDetails> gameCache =
+            new BoundedExpiringCache<>(GAME_CACHE_ENTRIES);
+    private final BoundedExpiringCache<String, List<DiscoveryGame>> batchDiscoveryCache =
+            new BoundedExpiringCache<>(BATCH_CACHE_ENTRIES);
     private volatile CacheEntry<List<HotGame>> hotCache;
     private volatile CacheEntry<List<DiscoveryGame>> discoveryCache;
     private final AtomicLong nextRequestAt = new AtomicLong();
@@ -127,12 +134,12 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
     public List<SearchResult> search(String query) {
         requireConfigured();
         String key = "broad:" + query.toLowerCase(java.util.Locale.ROOT);
-        CacheEntry<List<SearchResult>> cached = searchCache.get(key);
-        if (cached != null && cached.valid()) return cached.value();
+        List<SearchResult> cached = searchCache.get(key);
+        if (cached != null) return cached;
         String url = baseUrl + "/xmlapi2/search?query="
                 + URLEncoder.encode(query, StandardCharsets.UTF_8) + "&type=boardgame";
         List<SearchResult> results = parseSearch(get(url));
-        searchCache.put(key, new CacheEntry<>(results, Instant.now().plus(CACHE_TTL)));
+        searchCache.put(key, results, CACHE_TTL);
         return results;
     }
 
@@ -140,13 +147,13 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
     public List<GameMatch> exactMatches(String query) {
         requireConfigured();
         String key = "exact:" + query.toLowerCase(java.util.Locale.ROOT);
-        CacheEntry<List<GameMatch>> cached = exactMatchCache.get(key);
-        if (cached != null && cached.valid()) return cached.value();
+        List<GameMatch> cached = exactMatchCache.get(key);
+        if (cached != null) return cached;
         String searchUrl = baseUrl + "/xmlapi2/search?query="
                 + URLEncoder.encode(query, StandardCharsets.UTF_8) + "&type=boardgame&exact=1";
         List<SearchResult> candidates = parseSearch(get(searchUrl)).stream().limit(5).toList();
         if (candidates.isEmpty()) {
-            exactMatchCache.put(key, new CacheEntry<>(List.of(), Instant.now().plus(CACHE_TTL)));
+            exactMatchCache.put(key, List.of(), CACHE_TTL);
             return List.of();
         }
         String ids = candidates.stream()
@@ -154,7 +161,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 .collect(java.util.stream.Collectors.joining(","));
         List<GameMatch> parsed = parseGameMatches(
                 get(baseUrl + "/xmlapi2/thing?id=" + ids + "&type=boardgame"), candidates);
-        exactMatchCache.put(key, new CacheEntry<>(parsed, Instant.now().plus(CACHE_TTL)));
+        exactMatchCache.put(key, parsed, CACHE_TTL);
         return parsed;
     }
 
@@ -204,8 +211,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             throw new IllegalArgumentException("BGG batch details require 1 to 20 positive ids");
         }
         String key = ids.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
-        CacheEntry<List<DiscoveryGame>> cached = batchDiscoveryCache.get(key);
-        if (cached != null && cached.valid()) return cached.value();
+        List<DiscoveryGame> cached = batchDiscoveryCache.get(key);
+        if (cached != null) return cached;
         List<HotGame> candidates = java.util.stream.IntStream.range(0, ids.size())
                 .mapToObj(index -> new HotGame(index + 1, ids.get(index), "", null, ""))
                 .toList();
@@ -214,18 +221,18 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         Map<Integer, DiscoveryGame> byId = parsed.stream().collect(java.util.stream.Collectors.toMap(
                 DiscoveryGame::bggId, game -> game, (first, ignored) -> first, LinkedHashMap::new));
         List<DiscoveryGame> ordered = ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
-        batchDiscoveryCache.put(key, new CacheEntry<>(ordered, Instant.now().plus(CACHE_TTL)));
+        batchDiscoveryCache.put(key, ordered, CACHE_TTL);
         return ordered;
     }
 
     @Override
     public GameDetails game(int bggId) {
         requireConfigured();
-        CacheEntry<GameDetails> cached = gameCache.get(bggId);
-        if (cached != null && cached.valid()) return cached.value();
+        GameDetails cached = gameCache.get(bggId);
+        if (cached != null) return cached;
         GameDetails details = parseGame(
                 get(baseUrl + "/xmlapi2/thing?id=" + bggId + "&type=boardgame&stats=1&versions=1"), bggId);
-        gameCache.put(bggId, new CacheEntry<>(details, Instant.now().plus(CACHE_TTL)));
+        gameCache.put(bggId, details, CACHE_TTL);
         return details;
     }
 
