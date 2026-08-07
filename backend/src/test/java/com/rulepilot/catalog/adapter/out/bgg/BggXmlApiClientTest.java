@@ -155,6 +155,24 @@ class BggXmlApiClientTest {
     }
 
     @Test
+    void prioritizesOperatorProvidedAddressesWithoutChangingTheApiHostname() throws Exception {
+        var dns = BggXmlApiClient.preferredDns(
+                "https://boardgamegeek.com", "192.0.2.10, 2001:db8::10");
+
+        assertThat(dns.lookup("boardgamegeek.com"))
+                .extracting(address -> address.getHostAddress())
+                .startsWith("192.0.2.10", "2001:db8:0:0:0:0:0:10");
+    }
+
+    @Test
+    void rejectsHostnamesInResolvedAddressConfiguration() {
+        org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
+                .isThrownBy(() -> new BggXmlApiClient(
+                        "https://boardgamegeek.com", "test-token", "proxy.example.com", Duration.ZERO))
+                .withMessage("BGG resolved addresses must contain only IP literals");
+    }
+
+    @Test
     void boundsCachesAndHydratesExactSearchWithOneDetailRequest() throws Exception {
         AtomicInteger searchCalls = new AtomicInteger();
         AtomicInteger thingCalls = new AtomicInteger();
