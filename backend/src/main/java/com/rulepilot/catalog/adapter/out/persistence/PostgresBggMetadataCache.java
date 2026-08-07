@@ -163,12 +163,13 @@ public class PostgresBggMetadataCache implements BggMetadataCache {
                 UPDATE bgg_metadata_cache
                 SET last_accessed_at = GREATEST(last_accessed_at, :accessedAt)
                 WHERE cache_kind = :kind AND bgg_id IN (:ids)
-                  AND last_accessed_at < :accessedAt - INTERVAL '15 minutes'
+                  AND last_accessed_at < :touchBefore
                 """,
                 new MapSqlParameterSource()
                         .addValue("kind", kind)
                         .addValue("ids", ids)
-                        .addValue("accessedAt", Timestamp.from(accessedAt)));
+                        .addValue("accessedAt", Timestamp.from(accessedAt))
+                        .addValue("touchBefore", Timestamp.from(accessedAt.minus(java.time.Duration.ofMinutes(15)))));
     }
 
     private void put(String kind, int bggId, Object value, CacheWindow window) {
