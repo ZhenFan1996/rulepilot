@@ -9,7 +9,9 @@ import GameDiscoveryView from './GameDiscoveryView.vue'
 
 const details = {
   bggId: 42,
-  name: 'Catalog Game',
+  name: '目录游戏',
+  originalName: 'Catalog Game',
+  officialNameLocalized: true,
   description: '一款从推荐中选出的游戏。',
   descriptionTranslated: true,
   thumbnailUrl: 'https://example.test/catalog-cover.jpg',
@@ -21,8 +23,10 @@ const details = {
   imageUrl: 'https://example.test/catalog-cover-large.jpg',
   averageRating: 7.8,
   averageWeight: 2.4,
-  categories: ['Strategy'],
-  mechanics: ['Drafting'],
+  categories: ['策略'],
+  categoriesTranslated: true,
+  mechanics: ['轮抽'],
+  mechanicsTranslated: true,
   designers: ['Designer Name'],
   publishers: ['Publisher Name'],
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
@@ -45,8 +49,13 @@ describe('GameDiscoveryView', () => {
     const { wrapper } = await mountDiscovery()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Catalog Game')
+    expect(wrapper.text()).toContain('目录游戏')
+    expect(wrapper.text()).toContain('Catalog Game · 官方中文名 · BGG 版本资料')
     expect(wrapper.text()).toContain('AI 翻译 · 基于 BGG 原文')
+    expect(wrapper.text()).toContain('机制 · AI 翻译')
+    expect(wrapper.text()).toContain('类别 · AI 翻译')
+    expect(wrapper.text()).toContain('轮抽')
+    expect(wrapper.text()).toContain('策略')
     expect(wrapper.text()).toContain('BGG 资料仅用于推荐、识别游戏和展示封面')
     expect(wrapper.text()).toContain('Designer Name')
     expect(wrapper.text()).toContain('Publisher Name')
@@ -60,8 +69,15 @@ describe('GameDiscoveryView', () => {
     setLocale('en')
     const fetchMock = vi.fn(async () => Response.json({
       ...details,
+      name: 'Catalog Game',
+      originalName: 'Catalog Game',
+      officialNameLocalized: false,
       description: 'A game selected from recommendations.',
       descriptionTranslated: false,
+      categories: ['Strategy'],
+      categoriesTranslated: false,
+      mechanics: ['Drafting'],
+      mechanicsTranslated: false,
     }))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -69,6 +85,9 @@ describe('GameDiscoveryView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('A game selected from recommendations.')
+    expect(wrapper.text()).toContain('Strategy')
+    expect(wrapper.text()).toContain('Drafting')
+    expect(wrapper.text()).not.toContain('Official Chinese name')
     expect(wrapper.text()).not.toContain('AI 翻译')
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=en', { credentials: 'include' })
   })

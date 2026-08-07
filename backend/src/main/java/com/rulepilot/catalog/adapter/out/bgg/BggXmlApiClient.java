@@ -197,7 +197,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         requireConfigured();
         CacheEntry<GameDetails> cached = gameCache.get(bggId);
         if (cached != null && cached.valid()) return cached.value();
-        GameDetails details = parseGame(get(baseUrl + "/xmlapi2/thing?id=" + bggId + "&type=boardgame&stats=1"), bggId);
+        GameDetails details = parseGame(
+                get(baseUrl + "/xmlapi2/thing?id=" + bggId + "&type=boardgame&stats=1&versions=1"), bggId);
         gameCache.put(bggId, new CacheEntry<>(details, Instant.now().plus(CACHE_TTL)));
         return details;
     }
@@ -301,6 +302,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             XMLStreamReader reader = xml.createXMLStreamReader(new StringReader(body));
             Integer id = null;
             String name = null;
+            String chineseName = "";
             String thumbnail = "";
             Integer year = null;
             Integer minPlayers = null;
@@ -315,6 +317,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 if (event == XMLStreamConstants.START_ELEMENT && "item".equals(reader.getLocalName())) {
                     id = integer(reader.getAttributeValue(null, "id"));
                     name = null;
+                    chineseName = "";
                     thumbnail = "";
                     year = null;
                     minPlayers = null;
@@ -328,6 +331,12 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                         && "name".equals(reader.getLocalName())
                         && "primary".equals(reader.getAttributeValue(null, "type"))) {
                     name = reader.getAttributeValue(null, "value");
+                } else if (event == XMLStreamConstants.START_ELEMENT
+                        && "name".equals(reader.getLocalName())
+                        && chineseName.isBlank()
+                        && "alternate".equals(reader.getAttributeValue(null, "type"))) {
+                    String candidate = reader.getAttributeValue(null, "value");
+                    if (validChineseName(candidate)) chineseName = candidate.strip();
                 } else if (event == XMLStreamConstants.START_ELEMENT && "thumbnail".equals(reader.getLocalName())) {
                     thumbnail = reader.getElementText();
                 } else if (event == XMLStreamConstants.START_ELEMENT && "yearpublished".equals(reader.getLocalName())) {
@@ -354,6 +363,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                             hot.rank(),
                             id,
                             name,
+                            chineseName,
                             year,
                             thumbnail.isBlank() ? hot.thumbnailUrl() : thumbnail,
                             minPlayers,
@@ -459,11 +469,48 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             List<String> mechanics = new ArrayList<>();
             List<String> designers = new ArrayList<>();
             List<String> publishers = new ArrayList<>();
+            List<String> simplifiedChineseNames = new ArrayList<>();
+            List<String> otherChineseNames = new ArrayList<>();
+            boolean inVersion = false;
+            String versionCanonicalName = null;
+            String versionLabel = null;
+            boolean chineseVersion = false;
             while (reader.hasNext()) {
                 int event = reader.next();
+                if (event == XMLStreamConstants.END_ELEMENT
+                        && "item".equals(reader.getLocalName())
+                        && inVersion) {
+                    if (chineseVersion && validChineseName(versionCanonicalName)) {
+                        List<String> candidates = versionLabel != null
+                                        && versionLabel.toLowerCase(java.util.Locale.ROOT).contains("simplified chinese")
+                                ? simplifiedChineseNames
+                                : otherChineseNames;
+                        addBoundedUnique(candidates, versionCanonicalName.strip());
+                    }
+                    inVersion = false;
+                    continue;
+                }
                 if (event != XMLStreamConstants.START_ELEMENT) continue;
                 String element = reader.getLocalName();
-                if ("name".equals(element) && "primary".equals(reader.getAttributeValue(null, "type"))) {
+                if ("item".equals(element)
+                        && "boardgameversion".equals(reader.getAttributeValue(null, "type"))) {
+                    inVersion = true;
+                    versionCanonicalName = null;
+                    versionLabel = null;
+                    chineseVersion = false;
+                } else if (inVersion && "canonicalname".equals(element)) {
+                    versionCanonicalName = reader.getAttributeValue(null, "value");
+                } else if (inVersion
+                        && "name".equals(element)
+                        && "primary".equals(reader.getAttributeValue(null, "type"))) {
+                    versionLabel = reader.getAttributeValue(null, "value");
+                } else if (inVersion && "link".equals(element)) {
+                    chineseVersion = chineseVersion
+                            || ("language".equals(reader.getAttributeValue(null, "type"))
+                                    && "Chinese".equalsIgnoreCase(reader.getAttributeValue(null, "value")));
+                } else if (inVersion) {
+                    continue;
+                } else if ("name".equals(element) && "primary".equals(reader.getAttributeValue(null, "type"))) {
                     name = reader.getAttributeValue(null, "value");
                 } else if ("description".equals(element)) {
                     description = reader.getElementText();
@@ -496,6 +543,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             }
             reader.close();
             if (name == null) throw new IllegalArgumentException("BGG game does not exist: " + expectedId);
+            List<String> officialChineseNames = new ArrayList<>(simplifiedChineseNames);
+            otherChineseNames.forEach(candidate -> addBoundedUnique(officialChineseNames, candidate));
             return new GameDetails(
                     expectedId,
                     name,
@@ -512,7 +561,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     categories,
                     mechanics,
                     designers,
-                    publishers);
+                    publishers,
+                    officialChineseNames);
         } catch (XMLStreamException exception) {
             throw new IllegalStateException("BGG returned invalid XML", exception);
         }
@@ -525,6 +575,19 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private boolean validChineseName(String value) {
+        return value != null && !value.isBlank() && value.length() <= 200 && containsHan(value);
+    }
+
+    private boolean containsHan(String value) {
+        return value.codePoints()
+                .anyMatch(codePoint -> Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN);
+    }
+
+    private void addBoundedUnique(List<String> values, String candidate) {
+        if (values.size() < 8 && !values.contains(candidate)) values.add(candidate);
     }
 
     private BigDecimal positiveDecimal(String value) {

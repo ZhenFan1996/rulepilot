@@ -2,8 +2,8 @@ package com.rulepilot.catalog.adapter.in.web;
 
 import com.rulepilot.catalog.application.BggCatalogImportService;
 import com.rulepilot.catalog.application.BggCatalogImportService.ImportedGame;
-import com.rulepilot.catalog.application.BggDescriptionLocalizationService;
-import com.rulepilot.catalog.application.BggDescriptionLocalizationService.LocalizedDescription;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService;
+import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedMetadata;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
@@ -37,15 +37,15 @@ public class GameCatalogController {
 
     private final GameCatalogService catalogService;
     private final BggCatalogImportService bggService;
-    private final BggDescriptionLocalizationService descriptions;
+    private final BggMetadataLocalizationService metadataLocalization;
 
     public GameCatalogController(
             GameCatalogService catalogService,
             BggCatalogImportService bggService,
-            BggDescriptionLocalizationService descriptions) {
+            BggMetadataLocalizationService metadataLocalization) {
         this.catalogService = catalogService;
         this.bggService = bggService;
-        this.descriptions = descriptions;
+        this.metadataLocalization = metadataLocalization;
     }
 
     @GetMapping("/games")
@@ -74,10 +74,11 @@ public class GameCatalogController {
     List<BggRecommendationResponse> recommendBggGames(
             @RequestParam(required = false) Integer players,
             @RequestParam(required = false) Integer maxMinutes,
-            @RequestParam(required = false) BigDecimal maxWeight) {
+            @RequestParam(required = false) BigDecimal maxWeight,
+            @RequestParam(defaultValue = "en") String locale) {
         requireBgg();
         return bggService.recommendations(players, maxMinutes, maxWeight).stream()
-                .map(BggRecommendationResponse::from)
+                .map(game -> BggRecommendationResponse.from(game, locale))
                 .toList();
     }
 
@@ -93,7 +94,7 @@ public class GameCatalogController {
             @RequestParam(defaultValue = "en") String locale) {
         requireBgg();
         var game = bggService.gameDetails(bggId);
-        return BggGameSelectionResponse.from(game, descriptions.localize(game, locale));
+        return BggGameSelectionResponse.from(game, metadataLocalization.localize(game, locale));
     }
 
     @PostMapping("/games")
@@ -163,6 +164,8 @@ public class GameCatalogController {
             int rank,
             int bggId,
             String name,
+            String originalName,
+            boolean nameLocalized,
             Integer publicationYear,
             String thumbnailUrl,
             Integer minPlayers,
@@ -173,11 +176,15 @@ public class GameCatalogController {
             List<String> categories,
             List<String> mechanics,
             String bggUrl) {
-        static BggRecommendationResponse from(DiscoveryGame game) {
+        static BggRecommendationResponse from(DiscoveryGame game, String locale) {
+            boolean localized = BggMetadataLocalizationService.isSimplifiedChinese(locale)
+                    && !game.chineseName().isBlank();
             return new BggRecommendationResponse(
                     game.rank(),
                     game.bggId(),
+                    localized ? game.chineseName() : game.name(),
                     game.name(),
+                    localized,
                     game.publicationYear(),
                     game.thumbnailUrl(),
                     game.minPlayers(),
@@ -223,6 +230,8 @@ public class GameCatalogController {
     record BggGameSelectionResponse(
             int bggId,
             String name,
+            String originalName,
+            boolean officialNameLocalized,
             String description,
             String thumbnailUrl,
             Integer publicationYear,
@@ -238,14 +247,18 @@ public class GameCatalogController {
             List<String> designers,
             List<String> publishers,
             boolean descriptionTranslated,
+            boolean categoriesTranslated,
+            boolean mechanicsTranslated,
             String bggUrl) {
         static BggGameSelectionResponse from(
                 com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails game,
-                LocalizedDescription description) {
+                LocalizedMetadata metadata) {
             return new BggGameSelectionResponse(
                     game.bggId(),
+                    metadata.name(),
                     game.name(),
-                    description.text(),
+                    metadata.officialNameLocalized(),
+                    metadata.description(),
                     game.thumbnailUrl(),
                     game.publicationYear(),
                     game.minPlayers(),
@@ -255,11 +268,13 @@ public class GameCatalogController {
                     game.imageUrl(),
                     game.averageRating(),
                     game.averageWeight(),
-                    game.categories(),
-                    game.mechanics(),
+                    metadata.categories(),
+                    metadata.mechanics(),
                     game.designers(),
                     game.publishers(),
-                    description.translated(),
+                    metadata.descriptionTranslated(),
+                    metadata.categoriesTranslated(),
+                    metadata.mechanicsTranslated(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
         }
     }

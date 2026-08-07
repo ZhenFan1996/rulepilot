@@ -35,6 +35,7 @@ public interface BoardGameGeekCatalog {
             int rank,
             int bggId,
             String name,
+            String chineseName,
             Integer publicationYear,
             String thumbnailUrl,
             Integer minPlayers,
@@ -46,6 +47,7 @@ public interface BoardGameGeekCatalog {
             List<String> mechanics) {
 
         public DiscoveryGame {
+            chineseName = chineseName == null ? "" : chineseName;
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
         }
@@ -67,12 +69,14 @@ public interface BoardGameGeekCatalog {
             List<String> categories,
             List<String> mechanics,
             List<String> designers,
-            List<String> publishers) {
+            List<String> publishers,
+            List<String> officialChineseNames) {
         public GameDetails {
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
             designers = List.copyOf(designers);
             publishers = List.copyOf(publishers);
+            officialChineseNames = List.copyOf(officialChineseNames);
         }
 
         public GameDetails(
@@ -98,6 +102,7 @@ public interface BoardGameGeekCatalog {
                     "",
                     null,
                     null,
+                    List.of(),
                     List.of(),
                     List.of(),
                     List.of(),

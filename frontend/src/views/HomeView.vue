@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
@@ -26,6 +26,8 @@ interface HotGame {
   rank: number
   bggId: number
   name: string
+  originalName?: string
+  nameLocalized?: boolean
   publicationYear: number | null
   thumbnailUrl: string
   bggUrl: string
@@ -112,7 +114,8 @@ async function loadHotGames() {
     if (playerFilter.value) parameters.set('players', playerFilter.value)
     if (durationFilter.value) parameters.set('maxMinutes', durationFilter.value)
     if (weightFilter.value) parameters.set('maxWeight', weightFilter.value)
-    const query = parameters.size ? `?${parameters.toString()}` : ''
+    parameters.set('locale', locale.value)
+    const query = `?${parameters.toString()}`
     const response = await fetch(`/api/v1/bgg/recommendations${query}`, { credentials: 'include' })
     if (response.ok) {
       hotGames.value = await response.json() as HotGame[]
@@ -166,6 +169,7 @@ async function loadPublicLessons() {
 }
 
 onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLessons()]))
+watch(locale, loadHotGames)
 </script>
 
 <template>
@@ -274,6 +278,7 @@ onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLesso
               </div>
               <h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-5">{{ game.name }}</h3>
             </RouterLink>
+            <p v-if="game.nameLocalized && game.originalName" class="mt-1 line-clamp-1 text-xs text-ink/40">{{ game.originalName }}</p>
             <p class="mt-1 text-xs text-ink/40">{{ game.publicationYear ?? t('home.unknownYear') }}</p>
             <p v-if="playerTimeLabel(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTimeLabel(game) }}</p>
             <p v-if="ratingWeightLabel(game)" class="text-xs leading-5 text-ink/45">{{ ratingWeightLabel(game) }}</p>
