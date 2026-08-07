@@ -2,6 +2,7 @@ package com.rulepilot.ingestion.adapter.in.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -12,10 +13,12 @@ import com.rulepilot.document.DocumentProcessingFailures;
 import com.rulepilot.document.DocumentProcessingJobs;
 import com.rulepilot.document.DocumentProcessingIdempotency;
 import com.rulepilot.document.DocumentProcessingStage;
+import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.RetryableDocumentProcessingException;
 import com.rulepilot.ingestion.application.UploadedDocumentIngestion;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -108,6 +111,31 @@ class DocumentProcessingWorkerTest {
     }
 
     @Test
+    void acknowledgesAQueuedStageAfterItsDocumentWasRemoved() {
+        UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
+        DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
+        DocumentProcessingJobs jobs = Mockito.mock(DocumentProcessingJobs.class);
+        DocumentProcessingIdempotency idempotency = Mockito.mock(DocumentProcessingIdempotency.class);
+        DocumentProcessingFailures failures = Mockito.mock(DocumentProcessingFailures.class);
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        UUID documentVersionId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        var metrics = new SimpleMeterRegistry();
+        when(versions.findVersion(documentVersionId)).thenReturn(Optional.empty());
+
+        worker(ingestion, commands, jobs, idempotency, failures, versions, metrics)
+                .process(message(payload(documentVersionId, jobId, "PARSE"), eventId, 1));
+
+        verify(versions).findVersion(documentVersionId);
+        verifyNoInteractions(ingestion, commands, jobs, idempotency, failures);
+        assertThat(metrics
+                        .counter("rulepilot.document.processing.orphaned", "stage", "parse")
+                        .count())
+                .isEqualTo(1);
+    }
+
+    @Test
     void routesTransientFailureToNextRetryAttempt() {
         UploadedDocumentIngestion ingestion = Mockito.mock(UploadedDocumentIngestion.class);
         DocumentProcessingCommands commands = Mockito.mock(DocumentProcessingCommands.class);
@@ -195,8 +223,22 @@ class DocumentProcessingWorkerTest {
             DocumentProcessingIdempotency idempotency,
             DocumentProcessingFailures failures,
             SimpleMeterRegistry metrics) {
+        DocumentVersionScopeLookup versions = Mockito.mock(DocumentVersionScopeLookup.class);
+        when(versions.findVersion(any())).thenAnswer(invocation -> Optional.of(new DocumentVersionScopeLookup.VersionScope(
+                invocation.getArgument(0), UUID.randomUUID(), "UPLOADED", "player")));
+        return worker(ingestion, commands, jobs, idempotency, failures, versions, metrics);
+    }
+
+    private DocumentProcessingWorker worker(
+            UploadedDocumentIngestion ingestion,
+            DocumentProcessingCommands commands,
+            DocumentProcessingJobs jobs,
+            DocumentProcessingIdempotency idempotency,
+            DocumentProcessingFailures failures,
+            DocumentVersionScopeLookup versions,
+            SimpleMeterRegistry metrics) {
         return new DocumentProcessingWorker(
-                ingestion, commands, jobs, idempotency, failures, metrics, 4);
+                ingestion, commands, jobs, idempotency, failures, versions, metrics, 4);
     }
 
     private String payload(UUID documentVersionId, UUID jobId, String stage) {
