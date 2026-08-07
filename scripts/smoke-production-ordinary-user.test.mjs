@@ -18,6 +18,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let lessonReads = 0
   let visualRunEnabled = false
   let visualRunReads = 0
+  let answerHasCitations = true
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -187,6 +188,29 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         }],
       })
     }
+    if (request.method === 'POST'
+      && request.url === '/api/v1/document-versions/22222222-2222-2222-2222-222222222222/answers') {
+      assert.deepEqual(JSON.parse(body.toString()), {
+        question: 'How many victory points is each lit dock worth during final scoring?',
+        language: 'en',
+      })
+      return json(response, 200, {
+        assistantRunId: '77777777-7777-4777-8777-777777777777',
+        answer: {
+          documentVersionId: '22222222-2222-2222-2222-222222222222',
+          status: 'ANSWERED',
+          shortVerdict: 'Each lit dock is worth three victory points.',
+          explanation: 'Final scoring awards three points for every dock you lit.',
+          citations: answerHasCitations ? [{
+            chunkId: '88888888-8888-4888-8888-888888888888',
+            documentVersionId: '22222222-2222-2222-2222-222222222222',
+            pageFrom: 4,
+            pageTo: 4,
+            excerpt: 'Score three victory points for each dock you lit.',
+          }] : [],
+        },
+      })
+    }
     if (request.method === 'POST' && request.url?.endsWith('/cancellation')) {
       return json(response, 202, {})
     }
@@ -228,7 +252,9 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       preparationState: 'COMPLETED',
       lessonState: 'COMPLETED',
       lessonStatus: 'COMPLETE',
+      answerStatus: 'ANSWERED',
       sectionCount: 1,
+      answerCitationCount: 1,
       visualStepCount: 0,
       focusedVisualStepCount: 0,
       visualEnrichmentState: 'NOT_STARTED',
@@ -257,6 +283,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_STAGE login-completed/)
     assert.match(result.stderr, /SMOKE_STAGE title-verified/)
     assert.match(result.stderr, /SMOKE_STAGE lesson-verified/)
+    assert.match(result.stderr, /SMOKE_STAGE answer-verified run=77777777-7777-4777-8777-777777777777 status=ANSWERED citations=1/)
     assert.match(result.stderr, /SMOKE_STAGE lesson-launch-visible run=55555555-5555-5555-5555-555555555555 state=RECEIVED/)
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=organizeTeachingOutline .*latencyMs=11000/)
@@ -265,6 +292,22 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
+
+    answerHasCitations = false
+    deleted = false
+    planStarted = false
+    const ungroundedAnswer = await spawnResult(
+      'bash',
+      [resolve('scripts/smoke-production-ordinary-user.sh'),
+        '--base-url', `http://127.0.0.1:${address.port}`,
+        '--pdf', pdf,
+        '--timeout-seconds', '10'],
+      { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
+    )
+    assert.notEqual(ungroundedAnswer.code, 0)
+    assert.match(ungroundedAnswer.stderr, /Rule answer did not publish a conclusion with same-version page evidence/)
+    assert.equal(deleted, true)
+    answerHasCitations = true
 
     deleted = false
     planStarted = false
