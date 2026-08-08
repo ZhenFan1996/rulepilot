@@ -213,6 +213,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.games()).singleElement().satisfies(game -> assertThat(game.reasons())
                 .anySatisfy(reason -> {
                     assertThat(reason.kind()).isEqualTo(ReasonKind.WEB_RESEARCH);
+                    assertThat(reason.text()).isEqualTo("玩家普遍认为轮次流畅");
                     assertThat(reason.sourceIndexes()).containsExactly(1);
                 }));
         assertThat(response.researchSources()).singleElement().satisfies(source -> {

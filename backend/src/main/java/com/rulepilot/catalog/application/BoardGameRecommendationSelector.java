@@ -3,6 +3,7 @@ package com.rulepilot.catalog.application;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Choice;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
@@ -61,7 +62,8 @@ class BoardGameRecommendationSelector {
             CandidatePool pool,
             Slate slate,
             RecommendationProfile profile,
-            boolean chinese) {
+            boolean chinese,
+            Research research) {
         Map<Integer, BrowseGame> candidates = pool.candidates().stream().collect(java.util.stream.Collectors.toMap(
                 game -> game.ranked().bggId(), Function.identity()));
         List<RecommendedGame> result = new ArrayList<>();
@@ -72,8 +74,7 @@ class BoardGameRecommendationSelector {
             List<RecommendationReason> reasons = new ArrayList<>(facts.reasons());
             choice.preferenceReasons().forEach(text -> reasons.add(new RecommendationReason(
                     ReasonKind.PREFERENCE_INFERENCE, text, List.of())));
-            choice.researchedReasons().forEach(reason -> reasons.add(new RecommendationReason(
-                    ReasonKind.WEB_RESEARCH, reason.text(), reason.sourceIndexes())));
+            reasons.addAll(validatedResearchReasons(research, choice.bggId()));
             List<String> matches = new ArrayList<>(facts.matches());
             matches.addAll(choice.preferenceReasons());
             List<String> tradeoffs = new ArrayList<>(facts.tradeoffs());
@@ -81,6 +82,26 @@ class BoardGameRecommendationSelector {
             result.add(new RecommendedGame(game, matches, tradeoffs, reasons));
         }
         return List.copyOf(result);
+    }
+
+    private List<RecommendationReason> validatedResearchReasons(Research research, int bggId) {
+        Set<Integer> validSources = research.sources().stream()
+                .map(com.rulepilot.catalog.BoardGameRecommendationWebResearch.Source::index)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return research.games().stream()
+                .filter(game -> game.bggId() == bggId)
+                .flatMap(game -> game.observations().stream())
+                .filter(observation -> observation.text() != null
+                        && !observation.text().isBlank()
+                        && observation.text().length() <= 600
+                        && !observation.sourceIndexes().isEmpty()
+                        && validSources.containsAll(observation.sourceIndexes()))
+                .limit(3)
+                .map(observation -> new RecommendationReason(
+                        ReasonKind.WEB_RESEARCH,
+                        observation.text(),
+                        observation.sourceIndexes()))
+                .toList();
     }
 
     private Candidate candidate(BrowseGame game) {

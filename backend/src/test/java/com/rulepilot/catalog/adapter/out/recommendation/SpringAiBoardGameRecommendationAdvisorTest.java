@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -124,14 +125,15 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 "zh-CN"));
 
         assertThat(result).isEmpty();
+        verify(fixture.values, never()).set(anyString(), anyString(), any(Duration.class));
     }
 
     @Test
-    void validatesRequiredResearchFieldsAndIgnoresUnmodelledDebugData() {
+    void discardsModelAuthoredResearchCitationsAndCachesOnlyTheValidatedSlate() {
         Fixture fixture = fixture("""
                 {"assistantMessage":"这款值得继续了解。","nextQuestion":"想看规则书吗？",
                  "choices":[{"bggId":10,"preferenceReasons":["可能符合你偏好的温和互动"],
-                 "researchedReasons":[{"text":"玩家体验报告认为双人局节奏紧凑。","sourceIndexes":[1],
+                 "researchedReasons":[{"text":"玩家体验报告认为双人局节奏紧凑。","sourceIndexes":[999],
                  "debug":"ignored"}],"tradeoffs":["卡牌文字较多"]}]}
                 """);
         Candidate candidate = new Candidate(
@@ -152,8 +154,8 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 "zh-CN"));
 
         assertThat(result).hasValueSatisfying(slate -> assertThat(slate.choices()).singleElement().satisfies(choice ->
-                assertThat(choice.researchedReasons()).singleElement().satisfies(reason ->
-                        assertThat(reason.sourceIndexes()).containsExactly(1))));
+                assertThat(choice.researchedReasons()).isEmpty()));
+        verify(fixture.values).set(anyString(), anyString(), any(Duration.class));
     }
 
     private Fixture fixture(String response) {
@@ -179,7 +181,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 60,
                 2,
                 CLOCK);
-        return new Fixture(adapter, models);
+        return new Fixture(adapter, models, values);
     }
 
     private ProfileView profile() {
@@ -188,5 +190,6 @@ class SpringAiBoardGameRecommendationAdvisorTest {
 
     private record Fixture(
             SpringAiBoardGameRecommendationAdvisor adapter,
-            RuntimeModelConfiguration models) {}
+            RuntimeModelConfiguration models,
+            ValueOperations<String, String> values) {}
 }
