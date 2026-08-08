@@ -71,3 +71,18 @@ export type RecommendationAgentResponse = {
 }
 
 export type RecommendationMessage = { id: number; role: 'assistant' | 'user'; text: string }
+
+export type RecommendationProgressStage =
+  | 'understanding_request'
+  | 'selecting_tools'
+  | 'searching_bgg_catalog'
+  | 'reading_game_details'
+  | 'discovering_candidates'
+  | 'verifying_bgg_candidates'
+  | 'researching_game_fit'
+  | 'composing_response'
+
+export type RecommendationProgressUpdate = {
+  stage: RecommendationProgressStage
+  elapsedMs: number
+}

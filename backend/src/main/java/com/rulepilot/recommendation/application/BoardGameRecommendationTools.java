@@ -66,6 +66,20 @@ public class BoardGameRecommendationTools {
         return lookupGames(bggIds, ToolName.LOOKUP_BGG_CANDIDATES);
     }
 
+    NameSearchObservation searchByNames(List<String> names) {
+        try {
+            return new NameSearchObservation(
+                    ToolStatus.SUCCESS,
+                    catalog.searchByNames(names),
+                    "");
+        } catch (IllegalArgumentException exception) {
+            return new NameSearchObservation(ToolStatus.ERROR, List.of(), "INVALID_ARGUMENT");
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation BGG name-search tool failed");
+            return new NameSearchObservation(ToolStatus.ERROR, List.of(), "CATALOG_UNAVAILABLE");
+        }
+    }
+
     private CatalogObservation lookupGames(List<Integer> bggIds, ToolName tool) {
         try {
             return new CatalogObservation(
@@ -108,10 +122,15 @@ public class BoardGameRecommendationTools {
         return webResearch.configured();
     }
 
+    int catalogGameCount() {
+        return catalog.gameCount();
+    }
+
     enum ToolName {
         SEARCH_BGG_CATALOG,
         LOOKUP_BGG_GAME,
         LOOKUP_BGG_CANDIDATES,
+        SEARCH_BGG_BY_NAME,
         DISCOVER_CANDIDATES,
         RESEARCH_GAME_FIT,
         RESEARCH_GAME_QUESTION
@@ -150,6 +169,19 @@ public class BoardGameRecommendationTools {
 
         Optional<CandidateDiscovery> result() {
             return Optional.ofNullable(discovery);
+        }
+    }
+
+    record NameSearchObservation(
+            ToolStatus status,
+            List<BoardGameRecommendationCatalog.Ranking> matches,
+            String code) {
+        NameSearchObservation {
+            matches = List.copyOf(matches);
+        }
+
+        boolean succeeded() {
+            return status == ToolStatus.SUCCESS;
         }
     }
 

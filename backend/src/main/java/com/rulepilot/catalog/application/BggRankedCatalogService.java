@@ -122,6 +122,27 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
     }
 
     @Override
+    public List<BoardGameRecommendationCatalog.Ranking> searchByNames(List<String> names) {
+        List<String> checked = names == null
+                ? List.of()
+                : names.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .map(this::checkedSearch)
+                        .distinct()
+                        .toList();
+        if (checked.isEmpty() || checked.size() > 8) {
+            throw new IllegalArgumentException("BGG name search requires one to eight names");
+        }
+        LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
+        for (String name : checked) {
+            repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of()))
+                    .games()
+                    .forEach(game -> matches.putIfAbsent(game.bggId(), game));
+        }
+        return matches.values().stream().map(this::recommendationRanking).toList();
+    }
+
+    @Override
     public Optional<BoardGameRecommendationCatalog.Game> findGameById(int bggId) {
         if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
         Optional<RankedGame> ranked = repository.findByIds(List.of(bggId)).stream().findFirst();
@@ -167,7 +188,9 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
                         details.weightVotes(),
                         details.families(),
                         details.designers(),
-                        details.publishers());
+                        details.publishers(),
+                        details.description(),
+                        details.imageUrl());
         return new BoardGameRecommendationCatalog.Game(
                 new BoardGameRecommendationCatalog.Ranking(
                         ranked.bggId(),

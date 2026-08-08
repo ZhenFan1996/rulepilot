@@ -40,14 +40,25 @@ const catalog = {
 async function mockPublicDiscovery(page: import('@playwright/test').Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401 }))
   await page.route('**/api/auth/csrf', route => route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } }))
-  await page.route('**/api/v1/bgg/recommendation-agent?*', async route => {
+  await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
     const body = route.request().postDataJSON() as {
       profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
       focusedBggId: number | null
       transcript: { role: string; text: string }[]
     }
+    const fulfill = async (payload: Record<string, unknown>) => {
+      if (route.request().url().includes('/stream?')) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'text/event-stream',
+          body: `event: progress\ndata: {"stage":"selecting_tools","elapsedMs":8}\n\nevent: result\ndata: ${JSON.stringify(payload)}\n\n`,
+        })
+        return
+      }
+      await route.fulfill({ json: payload })
+    }
     if (body.focusedBggId === 266192) {
-      await route.fulfill({ json: {
+      await fulfill({
         outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我补查了教学和实际桌上节奏。',
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 1,
@@ -59,33 +70,33 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page) {
           { kind: 'preference_inference', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
           { kind: 'web_research', text: '发行商资料提供了分步教学流程', sourceIndexes: [1] },
         ] }],
-      } })
+      })
       return
     }
     if (body.profile.maxMinutes === null) {
-      await route.fulfill({ json: {
+      await fulfill({
         outcome: 'recommendations', mode: 'deterministic', assistantMessage: '先给你几款候选。你们愿意为一局留出多长时间？',
         profile: { ...body.profile, players: 4, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
         games: [{ game: catalog.games[0], matches: ['支持 4 人游玩'], tradeoffs: [] }],
         clarification: { field: 'duration', prompt: '你们愿意为一局留出多长时间？', options: [{ value: '90', label: '90 分钟内' }] },
-      } })
+      })
       return
     }
     if (body.profile.maxWeight === null) {
-      await route.fulfill({ json: {
+      await fulfill({
         outcome: 'recommendations', mode: 'deterministic', assistantMessage: '我按时长更新了候选。这次想要多复杂？',
         profile: { ...body.profile, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
         games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
         clarification: { field: 'complexity', prompt: '这次想要多复杂？', options: [{ value: '3.2', label: '中等策略' }] },
-      } })
+      })
       return
     }
-    await route.fulfill({ json: {
+    await fulfill({
       outcome: 'recommendations', mode: 'deterministic', assistantMessage: '下面这些各有侧重。',
       profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
       sourceCount: 179737, candidatesEvaluated: 20,
       games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
-    } })
+    })
   })
   await page.route('**/api/v1/bgg/catalog?*', async route => {
     if (route.request().url().includes('enrich=true')) {

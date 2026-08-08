@@ -233,11 +233,14 @@ rulepilot:
       maximum-entries: ${BGG_CACHE_MAXIMUM_ENTRIES:10000}
       maximum-bytes: ${BGG_CACHE_MAXIMUM_BYTES:67108864}
       cleanup-delay: ${BGG_CACHE_CLEANUP_DELAY:PT1H}
+      prewarm:
+        enabled: ${BGG_CACHE_PREWARM_ENABLED:true}
+        game-count: ${BGG_CACHE_PREWARM_GAME_COUNT:500}
     ranked-catalog:
       minimum-rows: ${BGG_RANKED_CATALOG_MINIMUM_ROWS:100000}
       maximum-rows: ${BGG_RANKED_CATALOG_MAXIMUM_ROWS:500000}
     translation:
-      enabled: ${BGG_TRANSLATION_ENABLED:false}
+      enabled: ${BGG_TRANSLATION_ENABLED:${DEEPSEEK_ENABLED:false}}
       timeout: ${BGG_TRANSLATION_TIMEOUT:PT20S}
       cache-ttl: ${BGG_TRANSLATION_CACHE_TTL:P30D}
       hourly-limit: ${BGG_TRANSLATION_HOURLY_LIMIT:60}
@@ -249,7 +252,6 @@ rulepilot:
       cache-ttl: ${BGG_RECOMMENDATION_AGENT_CACHE_TTL:P1D}
       hourly-limit: ${BGG_RECOMMENDATION_AGENT_HOURLY_LIMIT:240}
       provider-concurrency: ${BGG_RECOMMENDATION_AGENT_PROVIDER_CONCURRENCY:2}
-      candidate-pool-size: ${BGG_RECOMMENDATION_CANDIDATE_POOL_SIZE:20}
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}

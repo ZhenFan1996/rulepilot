@@ -11,6 +11,10 @@ public interface BoardGameRecommendationCatalog {
 
     List<Game> findGamesByIds(List<Integer> bggIds);
 
+    default List<Ranking> searchByNames(List<String> names) {
+        return List.of();
+    }
+
     default Optional<Game> findGameById(int bggId) {
         return findGamesByIds(List.of(bggId)).stream().findFirst();
     }

@@ -57,7 +57,9 @@ public interface BoardGameGeekCatalog {
             Integer weightVotes,
             List<String> families,
             List<String> designers,
-            List<String> publishers) {
+            List<String> publishers,
+            String description,
+            String imageUrl) {
 
         public DiscoveryGame {
             chineseName = SimplifiedChineseText.normalize(chineseName);
@@ -68,6 +70,41 @@ public interface BoardGameGeekCatalog {
             families = List.copyOf(families);
             designers = List.copyOf(designers);
             publishers = List.copyOf(publishers);
+            description = description == null ? "" : description;
+            imageUrl = imageUrl == null ? "" : imageUrl;
+        }
+
+        public DiscoveryGame(
+                int rank,
+                int bggId,
+                String name,
+                String chineseName,
+                Integer publicationYear,
+                String thumbnailUrl,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                BigDecimal averageRating,
+                BigDecimal averageWeight,
+                List<String> categories,
+                List<String> mechanics,
+                Integer minimumPlayTimeMinutes,
+                Integer maximumPlayTimeMinutes,
+                Integer minimumAge,
+                Integer suggestedMinimumAge,
+                String bestWith,
+                String recommendedWith,
+                Integer languageDependenceLevel,
+                Integer weightVotes,
+                List<String> families,
+                List<String> designers,
+                List<String> publishers) {
+            this(
+                    rank, bggId, name, chineseName, publicationYear, thumbnailUrl,
+                    minPlayers, maxPlayers, playingTimeMinutes, averageRating, averageWeight,
+                    categories, mechanics, minimumPlayTimeMinutes, maximumPlayTimeMinutes,
+                    minimumAge, suggestedMinimumAge, bestWith, recommendedWith,
+                    languageDependenceLevel, weightVotes, families, designers, publishers, "", "");
         }
 
         public DiscoveryGame(
@@ -108,7 +145,9 @@ public interface BoardGameGeekCatalog {
                     null,
                     List.of(),
                     List.of(),
-                    List.of());
+                    List.of(),
+                    "",
+                    "");
         }
     }
 
