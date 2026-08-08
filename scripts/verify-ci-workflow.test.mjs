@@ -46,6 +46,10 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8/)
   assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendation-agent\?locale=zh-CN/)
   assert.match(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
+  assert.match(deploymentWorkflow, /RANK_STRUCTURED_CANDIDATES/)
+  assert.match(deploymentWorkflow, /MODEL_SELECT_TOOLS/)
+  assert.match(deploymentWorkflow, /SEARCH_BGG_BY_NAME/)
+  assert.match(deploymentWorkflow, /LOOKUP_BGG_CANDIDATES/)
 })
 
 test('production deployment captures bounded API diagnostics without reading protected environment values', () => {

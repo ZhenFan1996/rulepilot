@@ -358,9 +358,17 @@ jobs:
                 },
               )
               const agentResult = await agent.json()
+              const agentActions = agentResult.harness?.actions
+              const completedRecommendation = Array.isArray(agentActions)
+                && (agentActions.includes('COMPOSE_RECOMMENDATIONS')
+                  || agentActions.includes('RANK_STRUCTURED_CANDIDATES'))
+              const usedNativeBggTools = Array.isArray(agentActions)
+                && agentActions.includes('MODEL_SELECT_TOOLS')
+                && agentActions.includes('SEARCH_BGG_BY_NAME')
+                && agentActions.includes('LOOKUP_BGG_CANDIDATES')
               if (!agent.ok || agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
-                  || !agentResult.harness?.actions?.includes('COMPOSE_RECOMMENDATIONS')) {
+                  || !completedRecommendation || !usedNativeBggTools) {
                 throw new Error(`recommendation Agent returned an invalid HTTP ${agent.status} response`)
               }
               const recommendations = await fetch(
