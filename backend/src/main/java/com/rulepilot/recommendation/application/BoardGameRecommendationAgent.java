@@ -287,9 +287,13 @@ public class BoardGameRecommendationAgent {
         }
         CandidatePool pool = selector.prepare(
                 sourceGames, turn.profile(), effectiveExcludedBggIds, retrievalPlan, discoveredBggIds);
+        boolean nativeCandidatesComplete = nativeCandidateSucceeded
+                && pool.status() == SelectionStatus.READY
+                && !requiresExternalCandidateEvidence(retrievalPlan);
         if (!featureFirstDiscovery
                 && !focusedDiscussion
-                && (referenceGame != null || shouldDiscoverCandidates(retrievalPlan, pool))
+                && (referenceGame != null
+                        || (!nativeCandidatesComplete && shouldDiscoverCandidates(retrievalPlan, pool)))
                 && tools.webResearchConfigured()) {
             progress.accept(ProgressStage.DISCOVERING_CANDIDATES);
             researchCalls++;
@@ -532,6 +536,12 @@ public class BoardGameRecommendationAgent {
         boolean experienceDriven = retrievalPlan.features().stream()
                 .anyMatch(feature -> feature.source() != BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA);
         return experienceDriven;
+    }
+
+    private boolean requiresExternalCandidateEvidence(RetrievalPlan retrievalPlan) {
+        return retrievalPlan.features().stream().anyMatch(feature ->
+                feature.mode() == BoardGameRecommendationAdvisor.FeatureMode.REQUIRED
+                        && feature.source() != BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA);
     }
 
     private RetrievalPlan similarityRetrievalPlan(RetrievalPlan planned, Game reference) {

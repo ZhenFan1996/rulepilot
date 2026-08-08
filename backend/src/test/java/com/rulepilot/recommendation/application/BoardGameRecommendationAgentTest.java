@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
-import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Choice;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Confidence;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
@@ -20,6 +19,10 @@ import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ResearchedRea
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Slate;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
+import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
+import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.ToolCall;
+import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
@@ -275,6 +278,88 @@ class BoardGameRecommendationAgentTest {
             assertThat(game.game().ranking().bggId()).isEqualTo(70);
             assertThat(game.game().details().mechanics()).contains("Auction");
         });
+    }
+
+    @Test
+    void doesNotRepeatWebDiscoveryAfterNativeToolsReturnAReadyCandidatePool() {
+        AtomicInteger turns = new AtomicInteger();
+        BoardGameRecommendationCandidateModel candidateModel = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                if (turns.getAndIncrement() == 0) {
+                    return new Turn("", List.of(new ToolCall(
+                            "search-1",
+                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                            "{\"names\":[\"Game 10\",\"Game 11\"]}")));
+                }
+                return new Turn("", List.of(new ToolCall(
+                        "lookup-1",
+                        BoardGameRecommendationCandidateAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[10,11]}")));
+            }
+        };
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                throw new AssertionError("ready native candidates must not trigger duplicate web discovery");
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("the planner did not request experience research");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(4, 90, null, null, InteractionPreference.COOPERATIVE),
+                new UserModel("四人合作局，希望容易进入状态", List.of()),
+                "我会先核对 BGG 候选。",
+                "还想调整什么？",
+                false,
+                "",
+                new RetrievalPlan(
+                        List.of(BggGameType.STRATEGY),
+                        List.of(new FeatureConstraint(
+                                "easy to teach",
+                                FeatureMode.PREFERRED,
+                                FeatureSource.EXPERIENCE,
+                                "容易进入状态")),
+                        true));
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "先从合作候选里选。",
+                        "",
+                        List.of(new Choice(10, List.of("BGG 硬条件匹配"), List.of(), List.of())))),
+                research,
+                candidateModel);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "4 人，90 分钟，想玩容易上手的合作游戏",
+                List.of(),
+                List.of(new DialogueMessage("user", "4 人，90 分钟，想玩容易上手的合作游戏")),
+                null), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions())
+                .contains(
+                        "MODEL_SELECT_TOOLS",
+                        "SEARCH_BGG_BY_NAME",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "COMPOSE_RECOMMENDATIONS")
+                .doesNotContain("DISCOVER_CANDIDATES");
     }
 
     @Test
@@ -906,6 +991,14 @@ class BoardGameRecommendationAgentTest {
                 Function<BoardGameRecommendationAdvisor.PlanningRequest, Optional<Plan>> planning,
                 Function<BoardGameRecommendationAdvisor.CompositionRequest, Optional<Slate>> composition,
                 BoardGameRecommendationWebResearch research) {
+            this(planning, composition, research, disabledCandidateModel());
+        }
+
+        private Fixture(
+                Function<BoardGameRecommendationAdvisor.PlanningRequest, Optional<Plan>> planning,
+                Function<BoardGameRecommendationAdvisor.CompositionRequest, Optional<Slate>> composition,
+                BoardGameRecommendationWebResearch research,
+                BoardGameRecommendationCandidateModel candidateModel) {
             var advisor = new BoardGameRecommendationAdvisor() {
                 @Override
                 public Optional<Plan> plan(PlanningRequest request) {
@@ -921,17 +1014,7 @@ class BoardGameRecommendationAgentTest {
             var properties = new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"));
             var recommendationTools = new BoardGameRecommendationTools(service, research);
             var candidateAgent = new BoardGameRecommendationCandidateAgent(
-                    new BoardGameRecommendationCandidateModel() {
-                        @Override
-                        public boolean configured() {
-                            return false;
-                        }
-
-                        @Override
-                        public Turn next(Request request) {
-                            throw new AssertionError("disabled native candidate model must not run");
-                        }
-                    },
+                    candidateModel,
                     recommendationTools,
                     new ObjectMapper());
             agent = new BoardGameRecommendationAgent(
@@ -942,6 +1025,20 @@ class BoardGameRecommendationAgentTest {
                     new BoardGameRecommendationSelector(properties),
                     advisor,
                     properties);
+        }
+
+        private static BoardGameRecommendationCandidateModel disabledCandidateModel() {
+            return new BoardGameRecommendationCandidateModel() {
+                @Override
+                public boolean configured() {
+                    return false;
+                }
+
+                @Override
+                public Turn next(Request request) {
+                    throw new AssertionError("disabled native candidate model must not run");
+                }
+            };
         }
     }
 
