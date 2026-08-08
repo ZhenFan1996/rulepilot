@@ -67,6 +67,18 @@ public class BggRankedCatalogService implements BggRankedCatalog {
         return new BrowseResult(repository.findSnapshot(), ranked.total(), page, size, checkedSort, checkedType, games);
     }
 
+    public List<BrowseGame> browseIds(List<Integer> bggIds) {
+        List<Integer> ids = bggIds == null
+                ? List.of()
+                : bggIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.size() > 5 || ids.stream().anyMatch(id -> id <= 0)) {
+            throw new IllegalArgumentException("focused BGG lookup requires one to five positive ids");
+        }
+        List<RankedGame> ranked = repository.findByIds(ids);
+        Map<Integer, DiscoveryGame> details = details(ranked);
+        return ranked.stream().map(game -> new BrowseGame(game, null, details.get(game.bggId()))).toList();
+    }
+
     private List<HotGame> hotGames() {
         try {
             return bgg.hotGames();

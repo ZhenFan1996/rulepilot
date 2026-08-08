@@ -242,6 +242,25 @@ rulepilot:
       cache-ttl: ${BGG_TRANSLATION_CACHE_TTL:P30D}
       hourly-limit: ${BGG_TRANSLATION_HOURLY_LIMIT:60}
       provider-concurrency: ${BGG_TRANSLATION_PROVIDER_CONCURRENCY:2}
+    recommendation-agent:
+      enabled: ${BGG_RECOMMENDATION_AGENT_ENABLED:${BGG_TRANSLATION_ENABLED:false}}
+      provider: ${BGG_RECOMMENDATION_PROVIDER:fake}
+      model-provider: ${BGG_RECOMMENDATION_MODEL_PROVIDER:qwen}
+      cache-ttl: ${BGG_RECOMMENDATION_AGENT_CACHE_TTL:P1D}
+      hourly-limit: ${BGG_RECOMMENDATION_AGENT_HOURLY_LIMIT:240}
+      provider-concurrency: ${BGG_RECOMMENDATION_AGENT_PROVIDER_CONCURRENCY:2}
+      candidate-pool-size: ${BGG_RECOMMENDATION_CANDIDATE_POOL_SIZE:20}
+      result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
+      diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}
+      web-research:
+        enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
+        api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}
+        base-url: ${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
+        model: ${WEB_SEARCH_MODEL:qwen3.5-plus}
+        timeout: ${BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT:PT60S}
+        cache-ttl: ${BGG_RECOMMENDATION_WEB_RESEARCH_CACHE_TTL:P7D}
+        hourly-limit: ${BGG_RECOMMENDATION_WEB_RESEARCH_HOURLY_LIMIT:60}
+        provider-concurrency: ${BGG_RECOMMENDATION_WEB_RESEARCH_PROVIDER_CONCURRENCY:2}
   rulebook-discovery:
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}

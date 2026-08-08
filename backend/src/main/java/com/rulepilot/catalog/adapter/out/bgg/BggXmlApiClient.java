@@ -341,16 +341,31 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             Integer minPlayers = null;
             Integer maxPlayers = null;
             Integer playingTime = null;
+            Integer minimumPlayTime = null;
+            Integer maximumPlayTime = null;
+            Integer minimumAge = null;
+            Integer suggestedMinimumAge = null;
             BigDecimal averageRating = null;
             BigDecimal averageWeight = null;
+            Integer weightVotes = null;
+            String bestWith = "";
+            String recommendedWith = "";
+            Integer languageDependenceLevel = null;
+            int languageDependenceVotes = -1;
+            int suggestedAgeVotes = -1;
             List<String> categories = new ArrayList<>();
             List<String> mechanics = new ArrayList<>();
+            List<String> families = new ArrayList<>();
+            List<String> designers = new ArrayList<>();
+            List<String> publishers = new ArrayList<>();
             List<String> simplifiedChineseNames = new ArrayList<>();
             List<String> otherChineseNames = new ArrayList<>();
             boolean inVersion = false;
             String versionCanonicalName = null;
             String versionLabel = null;
             boolean chineseVersion = false;
+            boolean inPlayerSummary = false;
+            String currentPoll = null;
             while (reader.hasNext()) {
                 int event = reader.next();
                 if (event == XMLStreamConstants.END_ELEMENT
@@ -394,12 +409,27 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     minPlayers = null;
                     maxPlayers = null;
                     playingTime = null;
+                    minimumPlayTime = null;
+                    maximumPlayTime = null;
+                    minimumAge = null;
+                    suggestedMinimumAge = null;
                     averageRating = null;
                     averageWeight = null;
+                    weightVotes = null;
+                    bestWith = "";
+                    recommendedWith = "";
+                    languageDependenceLevel = null;
+                    languageDependenceVotes = -1;
+                    suggestedAgeVotes = -1;
                     categories = new ArrayList<>();
                     mechanics = new ArrayList<>();
+                    families = new ArrayList<>();
+                    designers = new ArrayList<>();
+                    publishers = new ArrayList<>();
                     simplifiedChineseNames = new ArrayList<>();
                     otherChineseNames = new ArrayList<>();
+                    inPlayerSummary = false;
+                    currentPoll = null;
                 } else if (event == XMLStreamConstants.START_ELEMENT
                         && "name".equals(reader.getLocalName())
                         && "primary".equals(reader.getAttributeValue(null, "type"))) {
@@ -414,15 +444,58 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     maxPlayers = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "playingtime".equals(reader.getLocalName())) {
                     playingTime = integer(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.START_ELEMENT && "minplaytime".equals(reader.getLocalName())) {
+                    minimumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.START_ELEMENT && "maxplaytime".equals(reader.getLocalName())) {
+                    maximumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.START_ELEMENT && "minage".equals(reader.getLocalName())) {
+                    minimumAge = integer(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "average".equals(reader.getLocalName())) {
                     averageRating = positiveDecimal(reader.getAttributeValue(null, "value"));
                 } else if (event == XMLStreamConstants.START_ELEMENT && "averageweight".equals(reader.getLocalName())) {
                     averageWeight = positiveDecimal(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.START_ELEMENT && "numweights".equals(reader.getLocalName())) {
+                    weightVotes = integer(reader.getAttributeValue(null, "value"));
+                } else if (event == XMLStreamConstants.START_ELEMENT && "poll-summary".equals(reader.getLocalName())) {
+                    inPlayerSummary = "suggested_numplayers".equals(reader.getAttributeValue(null, "name"));
+                } else if (event == XMLStreamConstants.END_ELEMENT && "poll-summary".equals(reader.getLocalName())) {
+                    inPlayerSummary = false;
+                } else if (event == XMLStreamConstants.START_ELEMENT && "poll".equals(reader.getLocalName())) {
+                    currentPoll = reader.getAttributeValue(null, "name");
+                } else if (event == XMLStreamConstants.END_ELEMENT && "poll".equals(reader.getLocalName())) {
+                    currentPoll = null;
+                } else if (event == XMLStreamConstants.START_ELEMENT
+                        && "result".equals(reader.getLocalName())
+                        && inPlayerSummary) {
+                    String summaryName = reader.getAttributeValue(null, "name");
+                    if ("bestwith".equals(summaryName)) bestWith = value(reader);
+                    if ("recommmendedwith".equals(summaryName)) recommendedWith = value(reader);
+                } else if (event == XMLStreamConstants.START_ELEMENT
+                        && "result".equals(reader.getLocalName())
+                        && "language_dependence".equals(currentPoll)) {
+                    Integer votes = integer(reader.getAttributeValue(null, "numvotes"));
+                    Integer level = integer(reader.getAttributeValue(null, "level"));
+                    if (votes != null && level != null && votes > languageDependenceVotes) {
+                        languageDependenceVotes = votes;
+                        languageDependenceLevel = level;
+                    }
+                } else if (event == XMLStreamConstants.START_ELEMENT
+                        && "result".equals(reader.getLocalName())
+                        && "suggested_playerage".equals(currentPoll)) {
+                    Integer votes = integer(reader.getAttributeValue(null, "numvotes"));
+                    Integer age = integer(reader.getAttributeValue(null, "value"));
+                    if (votes != null && age != null && votes > suggestedAgeVotes) {
+                        suggestedAgeVotes = votes;
+                        suggestedMinimumAge = age;
+                    }
                 } else if (event == XMLStreamConstants.START_ELEMENT && "link".equals(reader.getLocalName())) {
                     String type = reader.getAttributeValue(null, "type");
                     String value = reader.getAttributeValue(null, "value");
                     if (value != null && "boardgamecategory".equals(type)) categories.add(value);
                     if (value != null && "boardgamemechanic".equals(type)) mechanics.add(value);
+                    if (value != null && "boardgamefamily".equals(type)) families.add(value);
+                    if (value != null && "boardgamedesigner".equals(type)) designers.add(value);
+                    if (value != null && "boardgamepublisher".equals(type)) publishers.add(value);
                 } else if (event == XMLStreamConstants.END_ELEMENT && "item".equals(reader.getLocalName())
                         && id != null && name != null && hotById.containsKey(id)) {
                     HotGame hot = hotById.get(id);
@@ -442,7 +515,18 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                             averageRating,
                             averageWeight,
                             categories,
-                            mechanics));
+                            mechanics,
+                            minimumPlayTime,
+                            maximumPlayTime,
+                            minimumAge,
+                            suggestedMinimumAge,
+                            bestWith,
+                            recommendedWith,
+                            languageDependenceLevel,
+                            weightVotes,
+                            families,
+                            designers,
+                            publishers));
                 }
             }
             reader.close();
@@ -645,6 +729,11 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
         } catch (NumberFormatException exception) {
             return null;
         }
+    }
+
+    private String value(XMLStreamReader reader) {
+        String value = reader.getAttributeValue(null, "value");
+        return value == null ? "" : value.strip();
     }
 
     private boolean validChineseName(String value) {

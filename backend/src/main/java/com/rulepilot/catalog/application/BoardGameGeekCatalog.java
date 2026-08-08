@@ -46,12 +46,69 @@ public interface BoardGameGeekCatalog {
             BigDecimal averageRating,
             BigDecimal averageWeight,
             List<String> categories,
-            List<String> mechanics) {
+            List<String> mechanics,
+            Integer minimumPlayTimeMinutes,
+            Integer maximumPlayTimeMinutes,
+            Integer minimumAge,
+            Integer suggestedMinimumAge,
+            String bestWith,
+            String recommendedWith,
+            Integer languageDependenceLevel,
+            Integer weightVotes,
+            List<String> families,
+            List<String> designers,
+            List<String> publishers) {
 
         public DiscoveryGame {
             chineseName = SimplifiedChineseText.normalize(chineseName);
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
+            bestWith = bestWith == null ? "" : bestWith;
+            recommendedWith = recommendedWith == null ? "" : recommendedWith;
+            families = List.copyOf(families);
+            designers = List.copyOf(designers);
+            publishers = List.copyOf(publishers);
+        }
+
+        public DiscoveryGame(
+                int rank,
+                int bggId,
+                String name,
+                String chineseName,
+                Integer publicationYear,
+                String thumbnailUrl,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                BigDecimal averageRating,
+                BigDecimal averageWeight,
+                List<String> categories,
+                List<String> mechanics) {
+            this(
+                    rank,
+                    bggId,
+                    name,
+                    chineseName,
+                    publicationYear,
+                    thumbnailUrl,
+                    minPlayers,
+                    maxPlayers,
+                    playingTimeMinutes,
+                    averageRating,
+                    averageWeight,
+                    categories,
+                    mechanics,
+                    playingTimeMinutes,
+                    playingTimeMinutes,
+                    null,
+                    null,
+                    "",
+                    "",
+                    null,
+                    null,
+                    List.of(),
+                    List.of(),
+                    List.of());
         }
     }
 

@@ -39,6 +39,54 @@ const catalog = {
 
 async function mockPublicDiscovery(page: import('@playwright/test').Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401 }))
+  await page.route('**/api/auth/csrf', route => route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } }))
+  await page.route('**/api/v1/bgg/recommendation-agent?*', async route => {
+    const body = route.request().postDataJSON() as {
+      profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
+      focusedBggId: number | null
+      transcript: { role: string; text: string }[]
+    }
+    if (body.focusedBggId === 266192) {
+      await route.fulfill({ json: {
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '我补查了教学和实际桌上节奏。',
+        profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 1,
+        userModel: { summary: '朋友聚会，可能重视参与感', hypotheses: [{ text: '可能不喜欢等待太久', confidence: 'medium', basedOn: '想热闹一点' }] },
+        researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
+        harness: { modelCalls: 2, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'RESEARCH_GAME_FIT', 'COMPOSE_RECOMMENDATIONS'] },
+        games: [{ game: catalog.games[0], matches: ['BGG 总榜第 34 名'], tradeoffs: [], reasons: [
+          { kind: 'bgg_fact', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
+          { kind: 'preference_inference', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
+          { kind: 'web_research', text: '发行商资料提供了分步教学流程', sourceIndexes: [1] },
+        ] }],
+      } })
+      return
+    }
+    if (body.profile.maxMinutes === null) {
+      await route.fulfill({ json: {
+        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '先给你几款候选。你们愿意为一局留出多长时间？',
+        profile: { ...body.profile, players: 4, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
+        games: [{ game: catalog.games[0], matches: ['支持 4 人游玩'], tradeoffs: [] }],
+        clarification: { field: 'duration', prompt: '你们愿意为一局留出多长时间？', options: [{ value: '90', label: '90 分钟内' }] },
+      } })
+      return
+    }
+    if (body.profile.maxWeight === null) {
+      await route.fulfill({ json: {
+        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '我按时长更新了候选。这次想要多复杂？',
+        profile: { ...body.profile, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
+        games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
+        clarification: { field: 'complexity', prompt: '这次想要多复杂？', options: [{ value: '3.2', label: '中等策略' }] },
+      } })
+      return
+    }
+    await route.fulfill({ json: {
+      outcome: 'recommendations', mode: 'deterministic', assistantMessage: '下面这些各有侧重。',
+      profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
+      sourceCount: 179737, candidatesEvaluated: 20,
+      games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
+    } })
+  })
   await page.route('**/api/v1/bgg/catalog?*', async route => {
     if (route.request().url().includes('enrich=true')) {
       await new Promise(resolve => setTimeout(resolve, 1_500))
@@ -79,6 +127,25 @@ test('sorts, filters, and searches the full server-side BGG snapshot', async ({ 
   await expect(page.getByText('展翅翱翔')).toBeVisible()
   await expect(page.locator('li', { hasText: '卡牌轮抽' })).toBeVisible()
   await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
+
+  const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
+    && request.headers()['x-csrf-token'] === 'csrf')
+  await page.getByRole('button', { name: '朋友聚会想热闹一点', exact: true }).click()
+  await firstAgentRequest
+  await page.getByRole('button', { name: '90 分钟内' }).click()
+  await page.getByRole('button', { name: '中等策略' }).click()
+  await expect(page.getByText('从 179,737 条 BGG 快照记录中')).toBeVisible()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+
+  const focusedRequest = page.waitForRequest(request => {
+    if (!request.url().includes('/api/v1/bgg/recommendation-agent')) return false
+    return (request.postDataJSON() as { focusedBggId?: number }).focusedBggId === 266192
+  })
+  await page.getByRole('button', { name: '介绍一下' }).click()
+  await focusedRequest
+  await expect(page.getByText('发行商资料提供了分步教学流程')).toBeVisible()
+  await expect(page.getByRole('link', { name: /publisher\.example/ })).toHaveAttribute('rel', /noopener/)
+  await expect(page.getByText('我目前的理解')).toBeVisible()
 
   await page.getByRole('combobox', { name: '排序' }).selectOption('rating')
   await page.getByRole('combobox', { name: /BGG 类型榜/ }).selectOption('strategy')

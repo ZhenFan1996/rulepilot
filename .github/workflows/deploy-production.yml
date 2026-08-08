@@ -136,10 +136,21 @@ jobs:
 
           umask 077
           found=false
+          qwen_enabled=false
+          qwen_key_present=false
+          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED WEB_SEARCH_MODEL '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
               found=true
+            elif [[ "$line" == QWEN_ENABLED=true ]]; then
+              printf '%s\n' "$line"
+              qwen_enabled=true
+            elif [[ "$line" == QWEN_API_KEY=* ]]; then
+              printf '%s\n' "$line"
+              [[ -n "${line#QWEN_API_KEY=}" ]] && qwen_key_present=true
+            elif [[ "$managed_recommendation_keys" == *" ${line%%=*} "* ]]; then
+              continue
             else
               printf '%s\n' "$line"
             fi
@@ -147,6 +158,16 @@ jobs:
           if [[ "$found" == false ]]; then
             printf 'BGG_API_TOKEN=%s\n' "$token" >> "$temporary_env"
           fi
+          if [[ "$qwen_enabled" != true || "$qwen_key_present" != true ]]; then
+            echo "Production Qwen configuration is required for the recommendation Agent" >&2
+            exit 1
+          fi
+          printf '%s\n' \
+            'BGG_RECOMMENDATION_AGENT_ENABLED=true' \
+            'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
+            'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
+            'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
+            'WEB_SEARCH_MODEL=qwen3.5-plus' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
           unset token
@@ -311,6 +332,35 @@ jobs:
               if (!csrf.ok || typeof payload.token !== 'string' || payload.token.length === 0) {
                 throw new Error(`CSRF endpoint returned an invalid HTTP ${csrf.status} response`)
               }
+              const setCookies = typeof csrf.headers.getSetCookie === 'function'
+                ? csrf.headers.getSetCookie()
+                : [csrf.headers.get('set-cookie')].filter(Boolean)
+              const cookie = setCookies.map((value) => value.split(';', 1)[0]).join('; ')
+              const agent = await fetch(
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent?locale=zh-CN`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'content-type': 'application/json',
+                    [payload.headerName]: payload.token,
+                    cookie,
+                  },
+                  body: JSON.stringify({
+                    profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+                    message: '4 人，60 分钟，想玩合作游戏',
+                    excludedBggIds: [],
+                    transcript: [{ role: 'user', text: '4 人，60 分钟，想玩合作游戏' }],
+                    focusedBggId: null,
+                  }),
+                  signal: AbortSignal.timeout(60_000),
+                },
+              )
+              const agentResult = await agent.json()
+              if (!agent.ok || agentResult.mode !== 'model_assisted'
+                  || !Array.isArray(agentResult.games) || agentResult.games.length === 0
+                  || !agentResult.harness?.actions?.includes('COMPOSE_RECOMMENDATIONS')) {
+                throw new Error(`recommendation Agent returned an invalid HTTP ${agent.status} response`)
+              }
               const recommendations = await fetch(
                 `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendations`,
                 { signal: AbortSignal.timeout(45_000) },
@@ -334,7 +384,7 @@ jobs:
                 throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
               }
               console.log(
-                `Verified public frontend, API, BGG recommendations, and game detail on attempt ${attempt}`,
+                `Verified public frontend, recommendation Agent, BGG API, and game detail on attempt ${attempt}`,
               )
               process.exit(0)
             } catch (error) {

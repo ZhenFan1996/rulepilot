@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import GameRecommendationAgent from '@/components/GameRecommendationAgent.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
 
@@ -239,6 +240,8 @@ watch(locale, () => void loadCatalog(false))
           <p v-if="searchValidation" class="mt-2 text-xs text-danger" role="alert">{{ t('searchValidation') }}</p>
         </form>
       </header>
+
+      <GameRecommendationAgent />
 
       <section class="py-8">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">

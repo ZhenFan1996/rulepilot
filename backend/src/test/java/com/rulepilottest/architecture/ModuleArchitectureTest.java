@@ -41,4 +41,15 @@ class ModuleArchitectureTest {
                 .resideInAPackage("..adapter.out.persistence..")
                 .check(productionClasses);
     }
+
+    @Test
+    void catalogRecommendationAgentDoesNotDependOnTheRuleAnsweringModule() {
+        noClasses()
+                .that()
+                .resideInAPackage("com.rulepilot.catalog..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAPackage("com.rulepilot.assistant..")
+                .check(productionClasses);
+    }
 }

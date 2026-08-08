@@ -77,6 +77,19 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     @Override
+    public List<RankedGame> findByIds(List<Integer> bggIds) {
+        if (bggIds == null || bggIds.isEmpty()) return List.of();
+        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("bggIds", bggIds);
+        List<RankedGame> found = jdbc.query(
+                "SELECT " + COLUMNS + " FROM bgg_ranked_game WHERE bgg_id IN (:bggIds)",
+                parameters,
+                this::mapGame);
+        Map<Integer, RankedGame> byId = found.stream().collect(java.util.stream.Collectors.toMap(
+                RankedGame::bggId, game -> game));
+        return bggIds.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
+    }
+
+    @Override
     public void stage(UUID importId, List<RankedGame> games) {
         if (games.isEmpty()) return;
         String sql = "INSERT INTO bgg_ranked_game_import (import_id, " + COLUMNS + ") VALUES ("

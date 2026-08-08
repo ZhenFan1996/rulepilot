@@ -39,6 +39,13 @@ test('production deployment verifies live BGG recommendations and detail enrichm
   assert.match(deploymentWorkflow, /Array\.isArray\(game\.mechanics\)/)
 })
 
+test('production deployment enables and exercises the bounded recommendation Agent', () => {
+  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_PROVIDER=spring-ai/)
+  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true/)
+  assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendation-agent\?locale=zh-CN/)
+  assert.match(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
+})
+
 test('production deployment captures bounded API diagnostics without reading protected environment values', () => {
   assert.match(deploymentWorkflow, /name: Collect bounded production diagnostics after a failed verification/)
   assert.match(deploymentWorkflow, /if: failure\(\)/)

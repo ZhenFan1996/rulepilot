@@ -44,6 +44,8 @@ public class IdentitySecurityConfiguration {
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.GET, "/api/v1/bgg/games/*")
                         .permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/bgg/recommendation-agent")
+                        .permitAll()
                         .requestMatchers(
                                 "/actuator/health",
                                 "/actuator/info",
