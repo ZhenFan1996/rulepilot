@@ -26,6 +26,7 @@ describe('GameRecommendationAgent', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
       ],
     })
     await router.push('/')
@@ -195,6 +196,39 @@ describe('GameRecommendationAgent', () => {
 
     expect(wrapper.text()).toContain('目录浏览不受影响')
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
+  })
+
+  it('opens the rulebook handoff directly from a recommendation card', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [],
+      })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以先看看。',
+        profile: { ...baseProfile, players: 4 }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 1, games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('想找自然主题的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    await flushPromises()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
+    expect(wrapper.text()).toContain('已选《展翅翱翔》')
+    expect(wrapper.text()).toContain('仍可粘贴出版社链接或上传自己的规则书')
   })
 
   it('shows only progress stages actually reported by the recommendation stream', async () => {

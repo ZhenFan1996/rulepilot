@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
+import RecommendationRulebookHandoff from '@/components/RecommendationRulebookHandoff.vue'
 import type {
   RecommendationAgentResponse,
   RecommendationClarification,
@@ -90,6 +91,7 @@ const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
 const knownGames = ref<RecommendationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
+const selectedGame = ref<RecommendationGame | null>(null)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
@@ -242,6 +244,11 @@ function introduce(bggId: number, name: string) {
   void sendTurn(message, profile.value, message, [], bggId)
 }
 
+function selectGame(game: RecommendationGame) {
+  selectedGame.value = game
+  activeFocusedBggId.value = game.bggId
+}
+
 function retry() {
   const pending = lastRequest.value
   if (!pending) return
@@ -261,6 +268,7 @@ function reset() {
   seenBggIds.value = []
   knownGames.value = []
   activeFocusedBggId.value = null
+  selectedGame.value = null
 }
 
 function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
@@ -307,7 +315,8 @@ onBeforeUnmount(() => {
         <div><p class="max-w-3xl text-sm leading-6 text-ink/55">{{ t('source', { source: response.sourceCount.toLocaleString(), count: response.candidatesEvaluated }) }}</p><p v-if="harnessLabels.length" class="mt-1 text-xs font-semibold text-indigo">{{ harnessLabels.join(' · ') }}</p></div>
         <div class="flex items-center gap-4"><span class="text-xs font-semibold text-indigo">{{ response.harness?.fallbackUsed ? t('fallback') : t('agent') }}</span><button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-copper underline decoration-copper/30 underline-offset-4 disabled:opacity-40" @click="moreGames">{{ t('more') }}</button></div>
       </div>
-      <div class="mt-4 grid gap-4 md:grid-cols-3"><RecommendationGameCard v-for="entry in response.games" :key="entry.game.bggId" :entry="entry" :sources="response.researchSources ?? []" :loading="loading" @introduce="introduce" /></div>
+      <div class="mt-4 grid gap-4 md:grid-cols-3"><RecommendationGameCard v-for="entry in response.games" :key="entry.game.bggId" :entry="entry" :sources="response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" /></div>
+      <RecommendationRulebookHandoff v-if="selectedGame" :key="selectedGame.bggId" :game="selectedGame" :profile="profile" @close="selectedGame = null" />
     </div>
   </section>
 </template>
