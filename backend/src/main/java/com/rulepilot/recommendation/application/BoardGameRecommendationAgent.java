@@ -1,24 +1,24 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueAct;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Plan;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.ProfileView;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.RetrievalPlan;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.UserModel;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateDiscovery;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoveryRequest;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoverySignal;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Research;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseGame;
-import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseResult;
-import com.rulepilot.catalog.application.BoardGamePreferenceDialogue.ResolvedTurn;
-import com.rulepilot.catalog.application.BoardGameRecommendationSelector.CandidatePool;
-import com.rulepilot.catalog.application.BoardGameRecommendationSelector.SelectionStatus;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Plan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ProfileView;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Slate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoverySignal;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.recommendation.application.BoardGamePreferenceDialogue.ResolvedTurn;
+import com.rulepilot.recommendation.application.BoardGameRecommendationSelector.CandidatePool;
+import com.rulepilot.recommendation.application.BoardGameRecommendationSelector.SelectionStatus;
+import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,31 +39,28 @@ public class BoardGameRecommendationAgent {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BoardGameRecommendationAgent.class);
 
-    private final BggRankedCatalogService catalog;
+    private final BoardGameRecommendationTools tools;
     private final BoardGamePreferenceDialogue dialogue;
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationAdvisor advisor;
-    private final BoardGameRecommendationWebResearch webResearch;
     private final BoardGameRecommendationProperties properties;
 
     public BoardGameRecommendationAgent(
-            BggRankedCatalogService catalog,
+            BoardGameRecommendationTools tools,
             BoardGamePreferenceDialogue dialogue,
             BoardGameRecommendationSelector selector,
             BoardGameRecommendationAdvisor advisor,
-            BoardGameRecommendationWebResearch webResearch,
             BoardGameRecommendationProperties properties) {
-        this.catalog = catalog;
+        this.tools = tools;
         this.dialogue = dialogue;
         this.selector = selector;
         this.advisor = advisor;
-        this.webResearch = webResearch;
         this.properties = properties;
     }
 
     public ConversationResponse converse(ConversationRequest input, String requestedLocale) {
         ConversationRequest request = validate(input);
-        String locale = BggMetadataLocalizationService.isSimplifiedChinese(requestedLocale) ? "zh-CN" : "en";
+        String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
         List<String> actions = new ArrayList<>();
         int modelCalls = 0;
         int catalogCalls = 0;
@@ -125,27 +122,23 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
 
-        BrowseResult source;
-        List<BrowseGame> sourceGames;
+        List<Game> sourceGames;
         int sourceCount;
-        try {
-            catalogCalls++;
-            actions.add("SEARCH_BGG_CATALOG");
-            if (request.focusedBggId() != null) {
-                sourceGames = catalog.browseIds(List.of(request.focusedBggId()));
-                source = null;
-                sourceCount = Optional.ofNullable(catalog.snapshot()).map(BggRankedCatalog.Snapshot::gameCount).orElse(0);
-            } else {
-                RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
-                source = catalog.recommendationCandidates(
-                        turn.profile().type(), retrievalPlan.candidateTypes(), properties.candidatePoolSize());
-                sourceGames = source.games();
-                sourceCount = source.snapshot().map(BggRankedCatalog.Snapshot::gameCount).orElse(0);
-            }
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Board-game recommendation catalog is unavailable");
+        catalogCalls++;
+        CatalogObservation catalogObservation;
+        if (request.focusedBggId() != null) {
+            catalogObservation = tools.lookupGame(request.focusedBggId());
+        } else {
+            RetrievalPlan plannedRetrieval = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
+            catalogObservation = tools.searchCatalog(
+                    turn.profile().type(), plannedRetrieval.candidateTypes(), properties.candidatePoolSize());
+        }
+        actions.add(catalogObservation.tool().name());
+        if (!catalogObservation.succeeded()) {
             return unavailable(turn, locale, userModel, modelCalls, catalogCalls, researchCalls, actions);
         }
+        sourceGames = catalogObservation.games();
+        sourceCount = catalogObservation.sourceCount();
 
         RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
         List<Integer> discoveredBggIds = List.of();
@@ -153,9 +146,11 @@ public class BoardGameRecommendationAgent {
         CandidatePool pool = selector.prepare(
                 sourceGames, turn.profile(), request.excludedBggIds(), retrievalPlan, discoveredBggIds);
         if (request.focusedBggId() == null && shouldDiscoverCandidates(retrievalPlan, pool)
-                && webResearch.configured()) {
+                && tools.webResearchConfigured()) {
             researchCalls++;
-            Optional<CandidateDiscovery> discovery = safeDiscovery(discoveryRequest(retrievalPlan, locale));
+            actions.add("DISCOVER_CANDIDATES");
+            Optional<CandidateDiscovery> discovery = tools.discoverCandidates(discoveryRequest(retrievalPlan, locale))
+                    .result();
             if (discovery.isPresent()) {
                 CandidateDiscovery completedDiscovery = discovery.orElseThrow();
                 discoveredBggIds = completedDiscovery.candidates().stream()
@@ -164,14 +159,14 @@ public class BoardGameRecommendationAgent {
                         .limit(12)
                         .toList();
                 if (!discoveredBggIds.isEmpty()) {
-                    try {
-                        catalogCalls++;
-                        List<BrowseGame> discoveredGames = catalog.browseIds(discoveredBggIds);
+                    catalogCalls++;
+                    CatalogObservation discoveredLookup = tools.lookupCandidates(discoveredBggIds);
+                    actions.add(discoveredLookup.tool().name());
+                    if (discoveredLookup.succeeded()) {
+                        List<Game> discoveredGames = discoveredLookup.games();
                         candidateDiscoveryEvidence = discoveryEvidence(
                                 completedDiscovery, discoveredGames, retrievalPlan);
                         sourceGames = mergeCandidates(discoveredGames, sourceGames, properties.candidatePoolSize());
-                        actions.add("DISCOVER_CANDIDATES");
-                        actions.add("LOOKUP_BGG_CANDIDATES");
                         if (!candidateDiscoveryEvidence.games().isEmpty()) actions.add("RESEARCH_GAME_FIT");
                         pool = selector.prepare(
                                 sourceGames,
@@ -179,7 +174,7 @@ public class BoardGameRecommendationAgent {
                                 request.excludedBggIds(),
                                 retrievalPlan,
                                 discoveredBggIds);
-                    } catch (RuntimeException exception) {
+                    } else {
                         LOGGER.warn("Discovered BGG candidate lookup failed; keeping structured catalog candidates");
                     }
                 }
@@ -217,15 +212,14 @@ public class BoardGameRecommendationAgent {
         }
 
         Research research = candidateDiscoveryEvidence;
-        boolean researchUseful = request.focusedBggId() != null
-                || planned.filter(this::experienceResearchJustified).isPresent();
-        if (researchUseful && research.games().isEmpty() && webResearch.configured()) {
+        boolean researchUseful = planned.filter(plan -> researchJustified(plan, request.focusedBggId() != null))
+                .isPresent();
+        if (researchUseful && research.games().isEmpty() && tools.webResearchConfigured()) {
             List<BoardGameRecommendationAdvisor.Candidate> candidates = selector.advisorCandidates(pool).stream()
                     .limit(5)
                     .toList();
             researchCalls++;
-            Optional<Research> researched = safeResearch(new BoardGameRecommendationWebResearch.Request(
-                    candidates, locale));
+            Optional<Research> researched = tools.researchGameFit(candidates, locale).result();
             if (researched.isPresent()) {
                 research = researched.get();
                 actions.add("RESEARCH_GAME_FIT");
@@ -304,24 +298,6 @@ public class BoardGameRecommendationAgent {
         }
     }
 
-    private Optional<Research> safeResearch(BoardGameRecommendationWebResearch.Request request) {
-        try {
-            return webResearch.research(request);
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation web research failed; continuing with catalog and user-model evidence");
-            return Optional.empty();
-        }
-    }
-
-    private Optional<CandidateDiscovery> safeDiscovery(DiscoveryRequest request) {
-        try {
-            return webResearch.discover(request);
-        } catch (RuntimeException exception) {
-            LOGGER.warn("Recommendation candidate discovery failed; keeping structured catalog candidates");
-            return Optional.empty();
-        }
-    }
-
     private boolean canUseStructuredRanking(
             ConversationRequest request,
             Optional<Plan> planned,
@@ -345,6 +321,10 @@ public class BoardGameRecommendationAgent {
                 .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
     }
 
+    private boolean researchJustified(Plan plan, boolean focusedGame) {
+        return focusedGame ? plan.researchRequested() : experienceResearchJustified(plan);
+    }
+
     private boolean shouldDiscoverCandidates(RetrievalPlan retrievalPlan, CandidatePool pool) {
         if (!retrievalPlan.candidateDiscoveryRequested() || retrievalPlan.features().isEmpty()) return false;
         boolean experienceDriven = retrievalPlan.features().stream()
@@ -361,21 +341,21 @@ public class BoardGameRecommendationAgent {
         return new DiscoveryRequest(signals, retrievalPlan.candidateTypes(), locale);
     }
 
-    private List<BrowseGame> mergeCandidates(
-            List<BrowseGame> discovered, List<BrowseGame> structured, int maximum) {
-        java.util.LinkedHashMap<Integer, BrowseGame> merged = new java.util.LinkedHashMap<>();
+    private List<Game> mergeCandidates(
+            List<Game> discovered, List<Game> structured, int maximum) {
+        java.util.LinkedHashMap<Integer, Game> merged = new java.util.LinkedHashMap<>();
         java.util.stream.Stream.concat(discovered.stream(), structured.stream())
-                .forEach(game -> merged.putIfAbsent(game.ranked().bggId(), game));
+                .forEach(game -> merged.putIfAbsent(game.ranking().bggId(), game));
         return merged.values().stream().limit(maximum).toList();
     }
 
     private Research discoveryEvidence(
-            CandidateDiscovery discovery, List<BrowseGame> verifiedGames, RetrievalPlan retrievalPlan) {
+            CandidateDiscovery discovery, List<Game> verifiedGames, RetrievalPlan retrievalPlan) {
         boolean experienceDriven = retrievalPlan.features().stream()
                 .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
         if (!experienceDriven) return Research.empty();
         java.util.Set<Integer> verifiedIds = verifiedGames.stream()
-                .map(game -> game.ranked().bggId())
+                .map(game -> game.ranking().bggId())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         List<BoardGameRecommendationWebResearch.GameResearch> games = discovery.candidates().stream()
                 .filter(lead -> verifiedIds.contains(lead.bggId()))
@@ -546,6 +526,11 @@ public class BoardGameRecommendationAgent {
         return "zh-CN".equals(locale);
     }
 
+    private boolean simplifiedChineseLocale(String locale) {
+        String value = locale == null ? "" : locale.strip().toLowerCase(java.util.Locale.ROOT);
+        return value.equals("zh") || value.equals("zh-cn") || value.equals("zh-hans");
+    }
+
     public record ConversationRequest(
             RecommendationProfile profile,
             String message,
@@ -570,10 +555,10 @@ public class BoardGameRecommendationAgent {
             Integer players,
             Integer maxMinutes,
             BigDecimal maxWeight,
-            GameType type,
+            BggGameType type,
             InteractionPreference interaction) {
         public static RecommendationProfile empty() {
-            return new RecommendationProfile(null, null, null, GameType.ALL, InteractionPreference.ANY);
+            return new RecommendationProfile(null, null, null, BggGameType.ALL, InteractionPreference.ANY);
         }
     }
 
@@ -648,11 +633,11 @@ public class BoardGameRecommendationAgent {
     public record ClarificationOption(String value, String label) {}
 
     public record RecommendedGame(
-            BrowseGame game,
+            Game game,
             List<String> matches,
             List<String> tradeoffs,
             List<RecommendationReason> reasons) {
-        public RecommendedGame(BrowseGame game, List<String> matches, List<String> tradeoffs) {
+        public RecommendedGame(Game game, List<String> matches, List<String> tradeoffs) {
             this(game, matches, tradeoffs, List.of());
         }
 

@@ -2,7 +2,7 @@ package com.rulepilot.catalog.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -30,11 +30,11 @@ class BggRankedCatalogServiceTest {
         FakeBgg bgg = new FakeBgg();
         BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
 
-        var result = service.browse("", GameType.STRATEGY, Sort.HOT, 0, 20);
+        var result = service.browse("", BggGameType.STRATEGY, Sort.HOT, 0, 20);
 
         assertThat(result.snapshot()).isPresent();
         assertThat(result.total()).isEqualTo(162_686);
-        assertThat(repository.query.type()).isEqualTo(GameType.STRATEGY);
+        assertThat(repository.query.type()).isEqualTo(BggGameType.STRATEGY);
         assertThat(repository.query.hotIds()).containsExactly(20, 10);
         assertThat(bgg.detailIds).containsExactly(10, 20);
         assertThat(result.games().getFirst().hotRank()).isEqualTo(2);
@@ -47,7 +47,7 @@ class BggRankedCatalogServiceTest {
         FakeBgg bgg = new FakeBgg();
         BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
 
-        var result = service.browse("", GameType.STRATEGY, Sort.RANK, 0, 20, false);
+        var result = service.browse("", BggGameType.STRATEGY, Sort.RANK, 0, 20, false);
 
         assertThat(result.games()).allSatisfy(game -> assertThat(game.details()).isNull());
         assertThat(bgg.detailIds).isEmpty();
@@ -82,7 +82,7 @@ class BggRankedCatalogServiceTest {
                     new BigDecimal("8.1"),
                     1_000,
                     false,
-                    Map.of(GameType.STRATEGY, rank));
+                    Map.of(BggGameType.STRATEGY, rank));
         }
 
         @Override

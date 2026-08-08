@@ -1,6 +1,6 @@
 package com.rulepilot.catalog.application;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import java.io.BufferedInputStream;
@@ -171,21 +171,21 @@ public class BggRankedCatalogImportService {
             case "0" -> false;
             default -> throw invalid(record, "is_expansion must be 0 or 1");
         };
-        Map<GameType, Integer> typeRanks = new EnumMap<>(GameType.class);
-        addRank(record, typeRanks, GameType.ABSTRACT, "abstracts_rank");
-        addRank(record, typeRanks, GameType.CUSTOMIZABLE, "cgs_rank");
-        addRank(record, typeRanks, GameType.CHILDREN, "childrensgames_rank");
-        addRank(record, typeRanks, GameType.FAMILY, "familygames_rank");
-        addRank(record, typeRanks, GameType.PARTY, "partygames_rank");
-        addRank(record, typeRanks, GameType.STRATEGY, "strategygames_rank");
-        addRank(record, typeRanks, GameType.THEMATIC, "thematic_rank");
-        addRank(record, typeRanks, GameType.WAR, "wargames_rank");
-        if (expansion) typeRanks.put(GameType.EXPANSION, 1);
+        Map<BggGameType, Integer> typeRanks = new EnumMap<>(BggGameType.class);
+        addRank(record, typeRanks, BggGameType.ABSTRACT, "abstracts_rank");
+        addRank(record, typeRanks, BggGameType.CUSTOMIZABLE, "cgs_rank");
+        addRank(record, typeRanks, BggGameType.CHILDREN, "childrensgames_rank");
+        addRank(record, typeRanks, BggGameType.FAMILY, "familygames_rank");
+        addRank(record, typeRanks, BggGameType.PARTY, "partygames_rank");
+        addRank(record, typeRanks, BggGameType.STRATEGY, "strategygames_rank");
+        addRank(record, typeRanks, BggGameType.THEMATIC, "thematic_rank");
+        addRank(record, typeRanks, BggGameType.WAR, "wargames_rank");
+        if (expansion) typeRanks.put(BggGameType.EXPANSION, 1);
         return new RankedGame(
                 id, name, year, rank, bayesAverage, averageRating, usersRated, expansion, typeRanks);
     }
 
-    private void addRank(CSVRecord record, Map<GameType, Integer> ranks, GameType type, String column) {
+    private void addRank(CSVRecord record, Map<BggGameType, Integer> ranks, BggGameType type, String column) {
         Integer value = optionalPositiveInteger(record, column);
         if (value != null) ranks.put(type, value);
     }

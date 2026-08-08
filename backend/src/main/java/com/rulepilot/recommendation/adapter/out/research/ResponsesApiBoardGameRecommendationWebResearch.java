@@ -1,8 +1,8 @@
-package com.rulepilot.catalog.adapter.out.recommendation;
+package com.rulepilot.recommendation.adapter.out.research;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import java.io.IOException;
 import java.net.IDN;
 import java.net.URI;
@@ -283,7 +283,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                 return invalid("payload-shape");
             }
             java.util.Set<Integer> allowed = request.candidates().stream()
-                    .map(com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate::bggId)
+                    .map(com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate::bggId)
                     .collect(java.util.stream.Collectors.toUnmodifiableSet());
             java.util.Set<Integer> sourceIndexes = sources.stream()
                     .map(Source::index)

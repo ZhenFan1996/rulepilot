@@ -1,4 +1,4 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;

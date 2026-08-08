@@ -1,4 +1,4 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
 import java.math.BigDecimal;
 import org.springframework.boot.context.properties.ConfigurationProperties;

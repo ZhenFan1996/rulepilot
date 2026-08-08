@@ -1,4 +1,4 @@
-package com.rulepilot.catalog.adapter.in.web;
+package com.rulepilot.recommendation.adapter.in.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -6,22 +6,22 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.rulepilot.catalog.application.BggMetadataLocalizationService;
-import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
-import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseGame;
-import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.Clarification;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ClarificationOption;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ConversationResponse;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.DecisionMode;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.Outcome;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.PreferenceField;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BggRecommendationPresentation;
+import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ClarificationOption;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -30,14 +30,14 @@ import org.junit.jupiter.api.Test;
 class BggRecommendationAgentControllerTest {
 
     private final BoardGameRecommendationAgent agent = mock(BoardGameRecommendationAgent.class);
-    private final BggMetadataLocalizationService localization = mock(BggMetadataLocalizationService.class);
+    private final BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
     private final BggRecommendationAgentController controller =
-            new BggRecommendationAgentController(agent, localization);
+            new BggRecommendationAgentController(agent, presentation);
 
     @Test
     void exposesTheTypedClarificationAndNormalizedProfile() {
         RecommendationProfile profile = new RecommendationProfile(
-                4, null, null, GameType.ALL, InteractionPreference.ANY);
+                4, null, null, BggGameType.ALL, InteractionPreference.ANY);
         when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
                 Outcome.NEEDS_CLARIFICATION,
                 DecisionMode.DETERMINISTIC,
@@ -50,8 +50,8 @@ class BggRecommendationAgentControllerTest {
                 0,
                 0,
                 List.of()));
-        when(localization.localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN"))
-                .thenReturn(new LocalizedDiscoveryTaxonomy(Map.of(), Map.of(), false));
+        when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
 
         var response = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(
@@ -69,31 +69,36 @@ class BggRecommendationAgentControllerTest {
     @Test
     void returnsAttributedCardsWithOfficialChineseNamesAndTranslatedTaxonomy() {
         RecommendationProfile profile = new RecommendationProfile(
-                4, 90, new BigDecimal("3.2"), GameType.STRATEGY, InteractionPreference.COOPERATIVE);
-        RankedGame ranked = new RankedGame(
+                4, 90, new BigDecimal("3.2"), BggGameType.STRATEGY, InteractionPreference.COOPERATIVE);
+        Ranking ranked = new Ranking(
                 266192,
                 "Wingspan",
                 2019,
                 34,
                 new BigDecimal("7.79"),
                 new BigDecimal("8.09"),
-                102_030,
-                false,
-                Map.of(GameType.STRATEGY, 50));
-        DiscoveryGame details = new DiscoveryGame(
-                1,
-                266192,
+                102_030);
+        Details details = new Details(
                 "Wingspan",
                 "展翅翱翔",
-                2019,
                 "https://example.test/wingspan.jpg",
                 1,
                 5,
                 70,
-                new BigDecimal("8.09"),
                 new BigDecimal("2.5"),
                 List.of("Animals"),
-                List.of("Card Drafting"));
+                List.of("Card Drafting"),
+                40,
+                70,
+                10,
+                10,
+                "3",
+                "2-4",
+                2,
+                1_000,
+                List.of(),
+                List.of(),
+                List.of());
         when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
@@ -103,12 +108,13 @@ class BggRecommendationAgentControllerTest {
                 179_737,
                 20,
                 List.of(new RecommendedGame(
-                        new BrowseGame(ranked, null, details),
+                        new Game(ranked, details),
                         List.of("支持 4 人游玩"),
                         List.of()))));
-        when(localization.localizeDiscoveryTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
-                .thenReturn(new LocalizedDiscoveryTaxonomy(
-                        Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽"), true));
+        when(presentation.localizeTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
+                .thenReturn(new LocalizedTaxonomy(
+                        Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽")));
+        when(presentation.usesSimplifiedChinese("zh-CN")).thenReturn(true);
 
         var response = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(null, "四个人一起玩"),

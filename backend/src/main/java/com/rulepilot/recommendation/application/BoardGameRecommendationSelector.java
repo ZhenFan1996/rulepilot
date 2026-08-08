@@ -1,20 +1,20 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Choice;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureConstraint;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.RetrievalPlan;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Research;
-import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseGame;
-import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ReasonKind;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationReason;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Choice;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureConstraint;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Slate;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -37,7 +37,7 @@ class BoardGameRecommendationSelector {
     }
 
     CandidatePool prepare(
-            List<BrowseGame> source,
+            List<Game> source,
             RecommendationProfile profile,
             List<Integer> excludedBggIds,
             RetrievalPlan retrievalPlan,
@@ -47,8 +47,8 @@ class BoardGameRecommendationSelector {
         if (!source.isEmpty() && candidatesEvaluated == 0) {
             return new CandidatePool(SelectionStatus.NO_DETAILS, 0, List.of(), retrievalPlan, discovered);
         }
-        List<BrowseGame> eligible = source.stream()
-                .filter(game -> !excludedBggIds.contains(game.ranked().bggId()))
+        List<Game> eligible = source.stream()
+                .filter(game -> !excludedBggIds.contains(game.ranking().bggId()))
                 .filter(game -> eligible(game.details(), profile))
                 .filter(game -> satisfiesRequiredFeatures(game, retrievalPlan))
                 .filter(game -> avoidsRejectedFeatures(game, retrievalPlan))
@@ -80,11 +80,11 @@ class BoardGameRecommendationSelector {
             RecommendationProfile profile,
             boolean chinese,
             Research research) {
-        Map<Integer, BrowseGame> candidates = pool.candidates().stream().collect(java.util.stream.Collectors.toMap(
-                game -> game.ranked().bggId(), Function.identity()));
+        Map<Integer, Game> candidates = pool.candidates().stream().collect(java.util.stream.Collectors.toMap(
+                game -> game.ranking().bggId(), Function.identity()));
         List<RecommendedGame> result = new ArrayList<>();
         for (Choice choice : slate.choices()) {
-            BrowseGame game = candidates.get(choice.bggId());
+            Game game = candidates.get(choice.bggId());
             if (game == null) return List.of();
             RecommendedGame facts = factsOnly(game, profile, pool.retrievalPlan(), chinese);
             List<RecommendationReason> reasons = new ArrayList<>(facts.reasons());
@@ -102,7 +102,7 @@ class BoardGameRecommendationSelector {
 
     private List<RecommendationReason> validatedResearchReasons(Research research, int bggId) {
         Set<Integer> validSources = research.sources().stream()
-                .map(com.rulepilot.catalog.BoardGameRecommendationWebResearch.Source::index)
+                .map(com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source::index)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         return research.games().stream()
                 .filter(game -> game.bggId() == bggId)
@@ -120,14 +120,14 @@ class BoardGameRecommendationSelector {
                 .toList();
     }
 
-    private Candidate candidate(BrowseGame game) {
-        DiscoveryGame details = game.details();
+    private Candidate candidate(Game game) {
+        Details details = game.details();
         return new Candidate(
-                game.ranked().bggId(),
-                game.ranked().sourceName(),
-                game.ranked().publicationYear(),
-                game.ranked().overallRank(),
-                game.ranked().averageRating(),
+                game.ranking().bggId(),
+                game.ranking().sourceName(),
+                game.ranking().publicationYear(),
+                game.ranking().overallRank(),
+                game.ranking().averageRating(),
                 details.averageWeight(),
                 details.minPlayers(),
                 details.maxPlayers(),
@@ -147,46 +147,46 @@ class BoardGameRecommendationSelector {
                 details.publishers());
     }
 
-    private Comparator<BrowseGame> candidateComparator(
+    private Comparator<Game> candidateComparator(
             RecommendationProfile profile, RetrievalPlan retrievalPlan, Set<Integer> discoveredBggIds) {
-        return Comparator.comparingInt((BrowseGame game) -> discoveredBggIds.contains(game.ranked().bggId()) ? 1 : 0)
+        return Comparator.comparingInt((Game game) -> discoveredBggIds.contains(game.ranking().bggId()) ? 1 : 0)
                 .reversed()
                 .thenComparing(Comparator.comparingInt(
-                                (BrowseGame game) -> preferredFeatureFit(game, retrievalPlan))
+                                (Game game) -> preferredFeatureFit(game, retrievalPlan))
                         .reversed())
                 .thenComparing(Comparator.comparingInt(
-                                (BrowseGame game) -> playerFit(game.details(), profile.players()))
+                                (Game game) -> playerFit(game.details(), profile.players()))
                         .reversed())
                 .thenComparing(Comparator.comparingInt(
-                                (BrowseGame game) -> interactionFit(game.details(), profile.interaction()))
+                                (Game game) -> interactionFit(game.details(), profile.interaction()))
                         .reversed())
                 .thenComparing(
-                        (BrowseGame game) -> game.ranked().bayesAverage(),
+                        (Game game) -> game.ranking().bayesAverage(),
                         Comparator.nullsLast(Comparator.reverseOrder()))
                 .thenComparing(
-                        (BrowseGame game) -> game.ranked().overallRank(),
+                        (Game game) -> game.ranking().overallRank(),
                         Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(Comparator.comparingInt(
-                                (BrowseGame game) -> game.ranked().usersRated())
+                                (Game game) -> game.ranking().usersRated())
                         .reversed())
-                .thenComparingInt(game -> game.ranked().bggId());
+                .thenComparingInt(game -> game.ranking().bggId());
     }
 
-    private boolean satisfiesRequiredFeatures(BrowseGame game, RetrievalPlan retrievalPlan) {
+    private boolean satisfiesRequiredFeatures(Game game, RetrievalPlan retrievalPlan) {
         return retrievalPlan.features().stream()
                 .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
                 .filter(feature -> feature.mode() == FeatureMode.REQUIRED)
                 .allMatch(feature -> matchesFeature(game, feature));
     }
 
-    private boolean avoidsRejectedFeatures(BrowseGame game, RetrievalPlan retrievalPlan) {
+    private boolean avoidsRejectedFeatures(Game game, RetrievalPlan retrievalPlan) {
         return retrievalPlan.features().stream()
                 .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
                 .filter(feature -> feature.mode() == FeatureMode.AVOID)
                 .noneMatch(feature -> matchesFeature(game, feature));
     }
 
-    private int preferredFeatureFit(BrowseGame game, RetrievalPlan retrievalPlan) {
+    private int preferredFeatureFit(Game game, RetrievalPlan retrievalPlan) {
         return (int) retrievalPlan.features().stream()
                 .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
                 .filter(feature -> feature.mode() == FeatureMode.PREFERRED)
@@ -194,16 +194,16 @@ class BoardGameRecommendationSelector {
                 .count();
     }
 
-    private boolean matchesFeature(BrowseGame game, FeatureConstraint feature) {
+    private boolean matchesFeature(Game game, FeatureConstraint feature) {
         String term = normalizedFeature(feature.term());
         if (term.isBlank() || game.details() == null) return false;
         return featureValues(game).stream().map(this::normalizedFeature).anyMatch(term::equals);
     }
 
-    private List<String> featureValues(BrowseGame game) {
-        DiscoveryGame details = game.details();
+    private List<String> featureValues(Game game) {
+        Details details = game.details();
         return java.util.stream.Stream.of(
-                        java.util.stream.Stream.of(game.ranked().sourceName(), details.name(), details.chineseName()),
+                        java.util.stream.Stream.of(game.ranking().sourceName(), details.name(), details.officialChineseName()),
                         details.categories().stream(),
                         details.mechanics().stream(),
                         details.families().stream(),
@@ -222,7 +222,7 @@ class BoardGameRecommendationSelector {
                 .replaceAll("\\s+", " ");
     }
 
-    private int playerFit(DiscoveryGame game, Integer players) {
+    private int playerFit(Details game, Integer players) {
         if (game == null || players == null) return 1;
         if (includesPlayerCount(game.bestWith(), players)) return 3;
         if (includesPlayerCount(game.recommendedWith(), players)) return 2;
@@ -242,7 +242,7 @@ class BoardGameRecommendationSelector {
         return false;
     }
 
-    private boolean eligible(DiscoveryGame game, RecommendationProfile profile) {
+    private boolean eligible(Details game, RecommendationProfile profile) {
         if (game == null) return false;
         if (profile.players() != null
                 && (game.minPlayers() == null
@@ -259,7 +259,7 @@ class BoardGameRecommendationSelector {
                 || (game.averageWeight() != null && game.averageWeight().compareTo(profile.maxWeight()) <= 0);
     }
 
-    private int interactionFit(DiscoveryGame game, InteractionPreference preference) {
+    private int interactionFit(Details game, InteractionPreference preference) {
         if (preference == InteractionPreference.ANY) return 1;
         Set<String> mechanics = game.mechanics().stream()
                 .map(value -> value.toLowerCase(Locale.ROOT))
@@ -274,11 +274,11 @@ class BoardGameRecommendationSelector {
         };
     }
 
-    private List<BrowseGame> diversify(List<BrowseGame> ranked, int maximum) {
-        List<BrowseGame> remaining = new ArrayList<>(ranked);
-        List<BrowseGame> selected = new ArrayList<>();
+    private List<Game> diversify(List<Game> ranked, int maximum) {
+        List<Game> remaining = new ArrayList<>(ranked);
+        List<Game> selected = new ArrayList<>();
         while (!remaining.isEmpty() && selected.size() < maximum) {
-            BrowseGame next = remaining.stream()
+            Game next = remaining.stream()
                     .filter(candidate -> selected.stream().allMatch(chosen -> overlap(candidate, chosen)
                             <= properties.diversityOverlapLimit().doubleValue()))
                     .findFirst()
@@ -289,7 +289,7 @@ class BoardGameRecommendationSelector {
         return List.copyOf(selected);
     }
 
-    private double overlap(BrowseGame left, BrowseGame right) {
+    private double overlap(Game left, Game right) {
         Set<String> leftTerms = taxonomy(left.details());
         Set<String> rightTerms = taxonomy(right.details());
         if (leftTerms.isEmpty() || rightTerms.isEmpty()) return 0;
@@ -300,7 +300,7 @@ class BoardGameRecommendationSelector {
         return (double) intersection.size() / union.size();
     }
 
-    private Set<String> taxonomy(DiscoveryGame game) {
+    private Set<String> taxonomy(Details game) {
         if (game == null) return Set.of();
         return java.util.stream.Stream.of(game.categories(), game.mechanics(), game.families())
                 .flatMap(List::stream)
@@ -309,8 +309,8 @@ class BoardGameRecommendationSelector {
     }
 
     private RecommendedGame factsOnly(
-            BrowseGame game, RecommendationProfile profile, RetrievalPlan retrievalPlan, boolean chinese) {
-        DiscoveryGame details = game.details();
+            Game game, RecommendationProfile profile, RetrievalPlan retrievalPlan, boolean chinese) {
+        Details details = game.details();
         List<String> matches = new ArrayList<>();
         List<String> tradeoffs = new ArrayList<>();
         if (profile.players() != null) {
@@ -350,7 +350,7 @@ class BoardGameRecommendationSelector {
     }
 
     private void interactionExplanation(
-            DiscoveryGame game,
+            Details game,
             InteractionPreference preference,
             boolean chinese,
             List<String> matches,
@@ -371,8 +371,8 @@ class BoardGameRecommendationSelector {
         }
     }
 
-    private String rankSignal(BrowseGame game, boolean chinese) {
-        Integer overallRank = game.ranked().overallRank();
+    private String rankSignal(Game game, boolean chinese) {
+        Integer overallRank = game.ranking().overallRank();
         if (overallRank != null) return chinese ? "BGG 总榜第 " + overallRank + " 名" : "BGG overall rank #" + overallRank;
         return chinese ? "按 BGG Geek 评分和评分人数进入候选" : "Selected by BGG Geek rating and rating volume";
     }
@@ -384,7 +384,7 @@ class BoardGameRecommendationSelector {
     record CandidatePool(
             SelectionStatus status,
             int candidatesEvaluated,
-            List<BrowseGame> candidates,
+            List<Game> candidates,
             RetrievalPlan retrievalPlan,
             Set<Integer> discoveredBggIds) {
         CandidatePool {

@@ -1,5 +1,6 @@
 package com.rulepilot.catalog.application;
 
+import com.rulepilot.catalog.BggGameType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -18,20 +19,7 @@ public interface BggRankedCatalog {
         RANK
     }
 
-    enum GameType {
-        ALL,
-        ABSTRACT,
-        CUSTOMIZABLE,
-        CHILDREN,
-        FAMILY,
-        PARTY,
-        STRATEGY,
-        THEMATIC,
-        WAR,
-        EXPANSION
-    }
-
-    record Query(String search, GameType type, Sort sort, int page, int size, List<Integer> hotIds) {
+    record Query(String search, BggGameType type, Sort sort, int page, int size, List<Integer> hotIds) {
         public Query {
             hotIds = List.copyOf(hotIds);
         }
@@ -46,12 +34,12 @@ public interface BggRankedCatalog {
             BigDecimal averageRating,
             int usersRated,
             boolean expansion,
-            Map<GameType, Integer> typeRanks) {
+            Map<BggGameType, Integer> typeRanks) {
         public RankedGame {
             typeRanks = Map.copyOf(typeRanks);
         }
 
-        public List<GameType> types() {
+        public List<BggGameType> types() {
             return List.copyOf(typeRanks.keySet());
         }
     }

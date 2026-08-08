@@ -1,9 +1,9 @@
-package com.rulepilot.catalog;
+package com.rulepilot.recommendation;
 
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.catalog.BggGameType;
 import java.util.List;
 import java.util.Optional;
 
@@ -32,7 +32,7 @@ public interface BoardGameRecommendationWebResearch {
 
     record Source(int index, String title, String url, String domain) {}
 
-    record DiscoveryRequest(List<DiscoverySignal> signals, List<GameType> candidateTypes, String locale) {
+    record DiscoveryRequest(List<DiscoverySignal> signals, List<BggGameType> candidateTypes, String locale) {
         public DiscoveryRequest {
             signals = signals == null ? List.of() : List.copyOf(signals);
             candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);

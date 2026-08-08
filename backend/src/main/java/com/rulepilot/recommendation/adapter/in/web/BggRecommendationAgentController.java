@@ -1,16 +1,16 @@
-package com.rulepilot.catalog.adapter.in.web;
+package com.rulepilot.recommendation.adapter.in.web;
 
-import com.rulepilot.catalog.application.BggMetadataLocalizationService;
-import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ConversationRequest;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ConversationResponse;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationProfile;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendedGame;
-import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BggRecommendationPresentation;
+import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
@@ -26,13 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class BggRecommendationAgentController {
 
     private final BoardGameRecommendationAgent agent;
-    private final BggMetadataLocalizationService localization;
+    private final BggRecommendationPresentation presentation;
 
     public BggRecommendationAgentController(
             BoardGameRecommendationAgent agent,
-            BggMetadataLocalizationService localization) {
+            BggRecommendationPresentation presentation) {
         this.agent = agent;
-        this.localization = localization;
+        this.presentation = presentation;
     }
 
     @PostMapping("/api/v1/bgg/recommendation-agent")
@@ -54,8 +54,8 @@ public class BggRecommendationAgentController {
                 .flatMap(game -> game.mechanics().stream())
                 .distinct()
                 .toList();
-        LocalizedDiscoveryTaxonomy taxonomy = localization.localizeDiscoveryTaxonomy(categories, mechanics, locale);
-        return RecommendationConversationResponse.from(response, taxonomy, locale);
+        LocalizedTaxonomy taxonomy = presentation.localizeTaxonomy(categories, mechanics, locale);
+        return RecommendationConversationResponse.from(response, taxonomy, locale, presentation);
     }
 
     record RecommendationConversationRequest(
@@ -100,7 +100,7 @@ public class BggRecommendationAgentController {
                     players,
                     maxMinutes,
                     maxWeight,
-                    enumValue(GameType.class, type, GameType.ALL),
+                    enumValue(BggGameType.class, type, BggGameType.ALL),
                     enumValue(InteractionPreference.class, interaction, InteractionPreference.ANY));
         }
     }
@@ -119,8 +119,9 @@ public class BggRecommendationAgentController {
             List<RecommendedGameResponse> games) {
         static RecommendationConversationResponse from(
                 ConversationResponse response,
-                LocalizedDiscoveryTaxonomy taxonomy,
-                String locale) {
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                BggRecommendationPresentation presentation) {
             return new RecommendationConversationResponse(
                     response.outcome().name().toLowerCase(Locale.ROOT),
                     response.mode().name().toLowerCase(Locale.ROOT),
@@ -133,7 +134,7 @@ public class BggRecommendationAgentController {
                     response.researchSources().stream().map(ResearchSourceResponse::from).toList(),
                     HarnessResponse.from(response.harness()),
                     response.games().stream()
-                            .map(game -> RecommendedGameResponse.from(game, taxonomy, locale))
+                            .map(game -> RecommendedGameResponse.from(game, taxonomy, locale, presentation))
                             .toList());
         }
     }
@@ -211,10 +212,11 @@ public class BggRecommendationAgentController {
             List<RecommendationReasonResponse> reasons) {
         static RecommendedGameResponse from(
                 RecommendedGame game,
-                LocalizedDiscoveryTaxonomy taxonomy,
-                String locale) {
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                BggRecommendationPresentation presentation) {
             return new RecommendedGameResponse(
-                    CatalogGameResponse.from(game, taxonomy, locale),
+                    CatalogGameResponse.from(game, taxonomy, locale, presentation),
                     game.matches(),
                     game.tradeoffs(),
                     game.reasons().stream().map(RecommendationReasonResponse::from).toList());
@@ -248,29 +250,30 @@ public class BggRecommendationAgentController {
             String bggUrl) {
         static CatalogGameResponse from(
                 RecommendedGame recommendation,
-                LocalizedDiscoveryTaxonomy taxonomy,
-                String locale) {
+                LocalizedTaxonomy taxonomy,
+                String locale,
+                BggRecommendationPresentation presentation) {
             var browse = recommendation.game();
-            DiscoveryGame details = browse.details();
+            Details details = browse.details();
             boolean localized = details != null
-                    && BggMetadataLocalizationService.isSimplifiedChinese(locale)
-                    && !details.chineseName().isBlank();
-            String sourceName = browse.ranked().sourceName();
+                    && presentation.usesSimplifiedChinese(locale)
+                    && !details.officialChineseName().isBlank();
+            String sourceName = browse.ranking().sourceName();
             String displayName = localized
-                    ? details.chineseName()
-                    : BggMetadataLocalizationService.isSimplifiedChinese(locale)
-                            ? com.rulepilot.catalog.application.SimplifiedChineseText.normalize(sourceName)
+                    ? details.officialChineseName()
+                    : presentation.usesSimplifiedChinese(locale)
+                            ? presentation.normalizeSourceName(sourceName)
                             : sourceName;
             return new CatalogGameResponse(
-                    browse.ranked().bggId(),
+                    browse.ranking().bggId(),
                     displayName,
                     sourceName,
                     localized,
-                    browse.ranked().publicationYear(),
-                    browse.ranked().overallRank(),
-                    browse.ranked().bayesAverage(),
-                    browse.ranked().averageRating(),
-                    browse.ranked().usersRated(),
+                    browse.ranking().publicationYear(),
+                    browse.ranking().overallRank(),
+                    browse.ranking().bayesAverage(),
+                    browse.ranking().averageRating(),
+                    browse.ranking().usersRated(),
                     details == null ? "" : details.thumbnailUrl(),
                     details == null ? null : details.minPlayers(),
                     details == null ? null : details.maxPlayers(),
@@ -278,7 +281,7 @@ public class BggRecommendationAgentController {
                     details == null ? null : details.averageWeight(),
                     details == null ? List.of() : translate(details.categories(), taxonomy.categories()),
                     details == null ? List.of() : translate(details.mechanics(), taxonomy.mechanics()),
-                    "https://boardgamegeek.com/boardgame/" + browse.ranked().bggId());
+                    "https://boardgamegeek.com/boardgame/" + browse.ranking().bggId());
         }
 
         private static List<String> translate(List<String> values, Map<String, String> translations) {

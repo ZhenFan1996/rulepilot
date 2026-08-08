@@ -43,13 +43,38 @@ class ModuleArchitectureTest {
     }
 
     @Test
-    void catalogRecommendationAgentDoesNotDependOnTheRuleAnsweringModule() {
+    void recommendationAndTeachingAgentsRemainIndependentBusinessModules() {
+        noClasses()
+                .that()
+                .resideInAPackage("com.rulepilot.recommendation..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAnyPackage("com.rulepilot.teaching..", "com.rulepilot.gamesession..")
+                .check(productionClasses);
+        noClasses()
+                .that()
+                .resideInAnyPackage("com.rulepilot.teaching..", "com.rulepilot.gamesession..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAPackage("com.rulepilot.recommendation..")
+                .check(productionClasses);
+    }
+
+    @Test
+    void recommendationUsesOnlyTheCatalogPublicApi() {
+        noClasses()
+                .that()
+                .resideInAPackage("com.rulepilot.recommendation..")
+                .should()
+                .dependOnClassesThat()
+                .resideInAnyPackage("com.rulepilot.catalog.application..", "com.rulepilot.catalog.adapter..")
+                .check(productionClasses);
         noClasses()
                 .that()
                 .resideInAPackage("com.rulepilot.catalog..")
                 .should()
                 .dependOnClassesThat()
-                .resideInAPackage("com.rulepilot.assistant..")
+                .resideInAPackage("com.rulepilot.recommendation..")
                 .check(productionClasses);
     }
 }

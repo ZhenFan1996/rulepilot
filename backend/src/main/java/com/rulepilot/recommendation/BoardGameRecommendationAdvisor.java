@@ -1,7 +1,7 @@
-package com.rulepilot.catalog;
+package com.rulepilot.recommendation;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -34,14 +34,14 @@ public interface BoardGameRecommendationAdvisor {
             Integer players,
             Integer maxMinutes,
             BigDecimal maxWeight,
-            GameType type,
+            BggGameType type,
             InteractionPreference interaction) {}
 
     record PreferencePatch(
             Integer players,
             Integer maxMinutes,
             BigDecimal maxWeight,
-            GameType type,
+            BggGameType type,
             InteractionPreference interaction) {}
 
     record Plan(
@@ -78,10 +78,10 @@ public interface BoardGameRecommendationAdvisor {
     }
 
     record RetrievalPlan(
-            List<GameType> candidateTypes,
+            List<BggGameType> candidateTypes,
             List<FeatureConstraint> features,
             boolean candidateDiscoveryRequested) {
-        public RetrievalPlan(List<GameType> candidateTypes, List<FeatureConstraint> features) {
+        public RetrievalPlan(List<BggGameType> candidateTypes, List<FeatureConstraint> features) {
             this(candidateTypes, features, false);
         }
 

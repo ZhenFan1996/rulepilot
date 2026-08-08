@@ -1,10 +1,10 @@
-package com.rulepilot.catalog.adapter.out.recommendation;
+package com.rulepilot.recommendation.adapter.out.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import java.io.IOException;
@@ -185,7 +185,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                     guardedPlayers(nullableInteger(root.get("players")), latest),
                     guardedMinutes(nullableInteger(root.get("maxMinutes")), latest),
                     guardedWeight(nullableDecimal(root.get("maxWeight")), latest),
-                    guardedType(nullableEnum(root.get("type"), GameType.class), latest),
+                    guardedType(nullableEnum(root.get("type"), BggGameType.class), latest),
                     guardedInteraction(nullableEnum(root.get("interaction"), InteractionPreference.class), latest));
             Plan plan = new Plan(
                     requiredEnum(root.get("act"), DialogueAct.class),
@@ -293,12 +293,12 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     private RetrievalPlan retrievalPlan(JsonNode root, PlanningRequest request) {
         JsonNode typesNode = root.get("candidateTypes");
         if (!typesNode.isArray() || typesNode.size() > 2) throw new ValidationFailure("candidate-types");
-        List<GameType> types = new ArrayList<>();
+        List<BggGameType> types = new ArrayList<>();
         for (JsonNode value : typesNode) {
             if (!value.isTextual()) continue;
             try {
-                GameType type = requiredEnum(value, GameType.class);
-                if (type != GameType.ALL && type != GameType.EXPANSION && !types.contains(type)) types.add(type);
+                BggGameType type = requiredEnum(value, BggGameType.class);
+                if (type != BggGameType.ALL && type != BggGameType.EXPANSION && !types.contains(type)) types.add(type);
             } catch (IllegalArgumentException ignored) {
                 // Candidate channels are hints; unsupported taxonomy belongs in featureConstraints.
             }
@@ -371,8 +371,13 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 + "otherwise return null and preserve the supplied profile. Hypotheses must be reversible, cite the user's own wording "
                 + "in basedOn, and use LOW/MEDIUM/HIGH confidence. Ask usage-oriented questions a newcomer can answer. Set act to "
                 + "RECOMMEND whenever useful context exists or the user asks for games; EXPLAIN when a focused game is supplied; ASK only "
-                + "when recommending would be arbitrary. Request web research for EXPLAIN, explicit comparison, or when current external "
-                + "experience reports would materially change the answer. Return JSON with exactly: act, players, maxMinutes, maxWeight, "
+                + "when recommending would be arbitrary. A focused BGG ID is a verified reference to a card already returned by the "
+                + "application: never search for that title again and never claim it does not exist. Treat researchRequested and "
+                + "candidateDiscoveryRequested as choices of allow-listed read tools in an observe-decide-act loop. Set researchRequested "
+                + "only when current external evidence would materially improve this turn—for example subjective table experience, an "
+                + "explicit comparison, or facts absent from the supplied BGG record. A routine focused introduction can use BGG facts "
+                + "without web research. Never expose private reasoning; return only the structured decision. Return JSON with exactly: "
+                + "act, players, maxMinutes, maxWeight, "
                 + "type, interaction, profileSummary, hypotheses, assistantMessage, nextQuestion, researchRequested, researchQuestion, "
                 + "candidateTypes, featureConstraints, candidateDiscoveryRequested. candidateTypes contains at most two BGG ranking domains likely to "
                 + "improve candidate recall; it is a retrieval hint, not a user hard constraint. featureConstraints contains at most eight "
@@ -435,7 +440,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 : null;
     }
 
-    private GameType guardedType(GameType value, String text) {
+    private BggGameType guardedType(BggGameType value, String text) {
         if (value == null) return null;
         return switch (value) {
             case PARTY -> containsAny(text, "聚会游戏", "派对游戏", "party game") ? value : null;
