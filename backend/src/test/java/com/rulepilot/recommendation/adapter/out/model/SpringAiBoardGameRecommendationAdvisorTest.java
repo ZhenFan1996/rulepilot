@@ -31,6 +31,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -195,6 +196,17 @@ class SpringAiBoardGameRecommendationAdvisorTest {
             assertThat(slate.assistantMessage()).contains("工人放置", "卡牌构筑");
             assertThat(slate.choices()).isEmpty();
         });
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions())
+                .filteredOn(org.springframework.ai.chat.messages.SystemMessage.class::isInstance)
+                .extracting(message -> message.getText())
+                .singleElement()
+                .asString()
+                .contains(
+                        "answer every explicit subquestion separately",
+                        "Do not reuse sentences",
+                        "Never ask for player count");
     }
 
     private Fixture fixture(String response) {
@@ -220,7 +232,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 60,
                 2,
                 CLOCK);
-        return new Fixture(adapter, models, values);
+        return new Fixture(adapter, models, values, chatModel);
     }
 
     private ProfileView profile() {
@@ -230,5 +242,6 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     private record Fixture(
             SpringAiBoardGameRecommendationAdvisor adapter,
             RuntimeModelConfiguration models,
-            ValueOperations<String, String> values) {}
+            ValueOperations<String, String> values,
+            ChatModel chatModel) {}
 }

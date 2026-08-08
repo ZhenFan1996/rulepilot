@@ -68,6 +68,10 @@ class BoardGameRecommendationSelector {
                 .toList();
     }
 
+    Candidate advisorCandidate(Game game) {
+        return candidate(game);
+    }
+
     List<RecommendedGame> fallback(CandidatePool pool, RecommendationProfile profile, boolean chinese) {
         return diversify(pool.candidates(), properties.resultCount()).stream()
                 .map(game -> factsOnly(game, profile, pool.retrievalPlan(), chinese))
