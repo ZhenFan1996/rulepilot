@@ -244,7 +244,7 @@ onUnmounted(() => {
       </header>
 
       <main class="mx-auto max-w-3xl px-4 py-5">
-        <div v-if="loading" class="space-y-4" aria-live="polite">
+        <div v-if="loading" class="stack-y-lg" aria-live="polite">
           <p class="text-sm text-panel-text/65">正在恢复问答记录…</p>
           <div class="h-28 animate-pulse rounded-2xl bg-white/8" />
         </div>
@@ -260,26 +260,26 @@ onUnmounted(() => {
             回答只参考这款桌游的当前规则书版本。人数、轮次、阶段和当前玩家不会影响检索或结论；若问题依赖某个条件，请直接写在问题里。
           </div>
 
-          <article v-if="latestTurn" class="mt-5 overflow-hidden rounded-3xl bg-paper text-ink shadow-2xl shadow-black/20" aria-live="polite">
+          <article v-if="latestTurn" class="mt-5 overflow-hidden rounded-3xl bg-paper text-ink elevation-2xl-black" aria-live="polite">
             <div class="p-5 sm:p-7">
               <p class="text-xs font-semibold text-ink/45">你问：{{ latestTurn.question }}</p>
               <p class="mt-4 text-xs font-bold" :class="latestTurn.answer.status === 'ANSWERED' ? 'text-emerald-700' : latestTurn.answer.status === 'ANSWERED_WITH_WARNING' ? 'text-amber-700' : 'text-red-700'">{{ latestTurn.answer.status === 'ANSWERED' ? '已核对，可以继续游戏' : latestTurn.answer.status === 'ANSWERED_WITH_WARNING' ? '有依据，但请先核对提醒' : '先暂停这一步' }}</p>
               <h1 class="mt-2 font-display text-2xl font-semibold leading-9">{{ latestTurn.answer.shortVerdict }}</h1>
               <p v-if="!publishesConclusion(latestTurn.answer.status)" class="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{{ latestTurn.answer.clarification ?? '当前证据还不足以给出可靠裁定。' }}</p>
-              <div v-if="latestTurn.answer.warnings.length" class="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status"><p class="font-semibold">使用这条裁定前请留意</p><ul class="mt-1 list-disc space-y-1 pl-5"><li v-for="warning in latestTurn.answer.warnings" :key="warning.type">{{ warningMessage(warning.type) }}</li></ul></div>
+              <div v-if="latestTurn.answer.warnings.length" class="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950" role="status"><p class="font-semibold">使用这条裁定前请留意</p><ul class="mt-1 list-disc stack-y-xs pl-5"><li v-for="warning in latestTurn.answer.warnings" :key="warning.type">{{ warningMessage(warning.type) }}</li></ul></div>
               <details v-if="publishesConclusion(latestTurn.answer.status)" class="mt-5 border-t border-ink/10 pt-4">
                 <summary class="cursor-pointer font-semibold text-indigo">这条裁定如何得出？</summary>
                 <p class="mt-3 text-sm font-semibold text-copper">{{ answerBasisLabel(latestTurn.answer.answerBasis) }}</p>
                 <p class="mt-2 text-sm leading-6 text-ink/60">{{ answerBasisDescription(latestTurn.answer.answerBasis) }}</p>
                 <p class="mt-3 leading-7 text-ink/70"><span class="font-semibold text-ink">套用到当前问题：</span>{{ latestTurn.answer.explanation }}</p>
-                <ul v-if="latestTurn.answer.exceptions.length" class="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-ink/65">
+                <ul v-if="latestTurn.answer.exceptions.length" class="mt-3 list-disc stack-y-xs pl-5 text-sm leading-6 text-ink/65">
                   <li v-for="item in latestTurn.answer.exceptions" :key="item">{{ item }}</li>
                 </ul>
               </details>
             </div>
             <details v-if="latestTurn.answer.citations.length" class="border-t border-indigo/15 bg-indigo/5 p-5">
               <summary class="cursor-pointer font-semibold text-indigo">查看规则出处</summary>
-              <div class="mt-3 space-y-3">
+              <div class="mt-3 stack-y-md">
                 <div v-for="citation in latestTurn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper p-3 text-sm">
                   <p class="font-semibold">{{ citation.heading }} · {{ pages(citation) }}</p>
                   <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>
@@ -314,7 +314,7 @@ onUnmounted(() => {
 
           <details v-if="earlierTurns.length" class="mt-5 rounded-2xl border border-white/10 p-4">
             <summary class="cursor-pointer text-sm font-semibold text-panel-text/70">本次问答之前的 {{ earlierTurns.length }} 条裁定</summary>
-            <ol class="mt-3 space-y-3">
+            <ol class="mt-3 stack-y-md">
               <li v-for="turn in earlierTurns" :key="turn.id" class="border-l-2 border-amber-200/40 pl-3 text-sm">
                 <p class="text-panel-text/55">{{ turn.question }}</p>
                 <p v-if="turn.answer.status === 'ANSWERED_WITH_WARNING'" class="mt-1 text-xs font-semibold text-amber-200">带核对提醒</p>

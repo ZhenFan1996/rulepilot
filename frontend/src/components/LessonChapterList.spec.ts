@@ -48,6 +48,8 @@ describe('LessonChapterList', () => {
     expect(wrapper.get('[data-testid="mobile-chapter-directory"]').classes()).toContain('xl:hidden')
     expect(wrapper.get('[data-testid="desktop-chapter-directory"]').classes()).toEqual(expect.arrayContaining(['xl:block', 'xl:sticky', 'xl:top-24']))
     expect(wrapper.get('[data-testid="lesson-reading-column"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="mobile-chapter-directory"]').classes()).toContain('player-board')
+    expect(wrapper.findAll('.hex-token').length).toBeGreaterThanOrEqual(6)
     expect(wrapper.findAll('[data-testid="desktop-chapter-link"]')).toHaveLength(2)
     expect(wrapper.get('[data-testid="desktop-chapter-link"][aria-current="location"]').text()).toContain('摆好桌面')
 

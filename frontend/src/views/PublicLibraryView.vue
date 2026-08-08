@@ -49,7 +49,7 @@ onMounted(() => { void load() })
 
 <template>
   <AppShell>
-    <section class="mx-auto max-w-6xl px-5 py-12 sm:px-8 lg:py-16">
+    <section class="tabletop-page max-w-6xl">
       <div class="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p class="text-sm font-semibold text-copper">{{ t('library.eyebrow') }}</p>
@@ -78,7 +78,7 @@ onMounted(() => { void load() })
 
       <div v-else-if="visibleLessons.length" class="mt-8 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-5">
         <RouterLink v-for="(entry, index) in visibleLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group min-w-0">
-          <div class="relative aspect-[3/4] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition duration-200 group-hover:-translate-y-1 group-hover:shadow-lg">
+          <div class="relative aspect-[3/4] overflow-hidden rounded-xl border border-ink/10 bg-paper elevation-sm transition duration-200 group-hover:-translate-y-1 group-hover-elevation-lg">
             <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId)" :alt="t('library.cover', { title: entry.title })" :index="index" />
           </div>
           <h2 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h2>

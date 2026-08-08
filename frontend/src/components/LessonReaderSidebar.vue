@@ -66,7 +66,7 @@ const { t } = useLocale()
           <span :class="quality.status === 'READY' ? 'text-emerald-700' : quality.status === 'BLOCKED' ? 'text-red-700' : 'text-amber-700'">{{ quality.status === 'READY' ? t('lesson.sidebar.quality.ready') : quality.status === 'BLOCKED' ? t('lesson.sidebar.quality.blocked') : t('lesson.sidebar.quality.review') }}</span>
         </span>
       </summary>
-      <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
+      <ul class="mt-3 stack-y-sm border-t border-ink/10 pt-3">
         <li v-for="check in quality.checks" :key="check.type" class="text-xs leading-5">
           <p class="font-semibold"><span aria-hidden="true">{{ check.status === 'PASS' ? '✓' : check.status === 'FAIL' ? '×' : '?' }}</span> {{ check.summary }}</p>
           <p class="mt-0.5 text-ink/50">{{ check.detail }}</p>
@@ -112,7 +112,7 @@ const { t } = useLocale()
           <span :class="mediaConsistency.status === 'CONSISTENT' ? 'text-emerald-700' : 'text-red-700'">{{ mediaConsistency.status === 'CONSISTENT' ? t('lesson.sidebar.media.consistent') : t('lesson.sidebar.media.check') }}</span>
         </span>
       </summary>
-      <ul class="mt-3 space-y-2 border-t border-ink/10 pt-3">
+      <ul class="mt-3 stack-y-sm border-t border-ink/10 pt-3">
         <li v-for="check in mediaConsistency.checks" :key="check.type" class="text-xs leading-5">
           <p class="font-semibold">{{ check.status === 'PASS' ? '✓' : '×' }} {{ check.summary }}</p>
           <p class="text-ink/50">{{ check.detail }}</p>
@@ -134,7 +134,7 @@ const { t } = useLocale()
       </button>
     </div>
 
-    <ol class="mt-3 flex max-w-full gap-2 overflow-x-auto pb-2 lg:mt-5 lg:block lg:space-y-2 lg:overflow-visible">
+    <ol class="mt-3 flex max-w-full gap-2 overflow-x-auto pb-2 lg:mt-5 lg:block lg-stack-y-sm lg:overflow-visible">
       <li v-for="(section, index) in sections" :key="section.topicKey" class="shrink-0 lg:shrink">
         <button
           class="flex min-h-12 w-52 items-center gap-3 rounded-2xl px-3 py-2 text-left text-sm transition lg:w-full"

@@ -129,14 +129,14 @@ const selectedEditionContext = computed(() => {
   return null
 })
 const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
-  action: 'Agent 寻找官方规则书', loading: '正在检索出版社来源…', title: '可审阅的官方规则书候选',
+  action: '帮我找官方规则书', loading: '正在检索出版社来源…', title: '找到这些官方规则书候选',
   detail: '候选来自联网搜索；URL 与来源仍需你核对。只有确认后才会下载，规则内容也要等解析后才能成为证据。',
   unavailable: '当前模型未开启联网搜索。你仍可粘贴官方 PDF 链接或上传本地文件。',
   empty: '没有找到可信的官方 PDF 候选。请改用官方链接或本地上传。',
   error: '官方规则书搜索暂时不可用，手动入口仍可使用。', verified: '域名匹配出版社', review: '需要人工核对域名',
   use: '选择并继续核对', publisher: '出版社', language: '语言', edition: '版本',
 } : {
-  action: 'Agent: find official rulebook', loading: 'Searching publisher sources…', title: 'Reviewable official rulebook candidates',
+  action: 'Find an official rulebook', loading: 'Searching publisher sources…', title: 'Official rulebook candidates',
   detail: 'Candidates come from web search; you must still review the URL and source. Download starts only after confirmation, and content becomes evidence only after processing.',
   unavailable: 'Web search is not enabled for the current model. You can still paste an official PDF URL or upload a local file.',
   empty: 'No credible official PDF candidate was found. Use an official URL or local upload instead.',
@@ -863,11 +863,18 @@ onBeforeUnmount(() => {
 
 <template>
   <AppShell>
-    <main class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
-      <section class="mx-auto max-w-2xl text-center">
-        <p class="text-sm font-medium text-copper">{{ t('documents.heading.eyebrow') }}</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('documents.heading.title') }}</h1>
-        <p class="mx-auto mt-4 max-w-xl leading-7 text-ink/55">{{ t('documents.heading.description') }}</p>
+    <main class="tabletop-page max-w-6xl">
+      <section class="mx-auto max-w-5xl">
+        <div class="tabletop-illustrated-hero player-board grid lg:grid-cols-[1.08fr_0.92fr]">
+          <div class="relative min-h-64 overflow-hidden border-b border-ink/10 lg:min-h-full lg:border-b-0 lg:border-r" aria-hidden="true">
+            <img src="/illustrations/rulebook-reading.webp" alt="" width="1600" height="900" fetchpriority="high" class="absolute inset-0 h-full w-full object-cover object-left">
+          </div>
+          <div class="tabletop-heading self-center bg-paper/95 px-6 py-8 sm:px-9 sm:py-10 lg:min-h-full lg:justify-center">
+            <p class="tabletop-kicker">{{ t('documents.heading.eyebrow') }}</p>
+            <h1 class="tabletop-title !text-[clamp(2.2rem,4vw,3.8rem)]">{{ t('documents.heading.title') }}</h1>
+            <p class="tabletop-lede">{{ t('documents.heading.description') }}</p>
+          </div>
+        </div>
 
         <div v-if="selectedEditionContext" class="mt-7 flex items-center gap-4 rounded-xl border border-copper/20 bg-copper/5 p-4 text-left">
           <img v-if="selectedEditionContext.bggMetadata?.thumbnailUrl" :src="selectedEditionContext.bggMetadata.thumbnailUrl" :alt="t('documents.game.selectedCover', { game: selectedEditionContext.game.name })" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
@@ -886,7 +893,7 @@ onBeforeUnmount(() => {
           <section v-if="rulebookDiscoveryStatus === 'success'" class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5" aria-live="polite">
             <h2 class="font-display text-xl font-semibold">{{ rulebookDiscoveryCopy.title }}</h2>
             <p class="mt-1 text-xs leading-5 text-ink/50">{{ rulebookDiscoveryCopy.detail }}</p>
-            <ul v-if="rulebookCandidates.length" class="mt-4 space-y-3">
+            <ul v-if="rulebookCandidates.length" class="mt-4 stack-y-md">
               <li v-for="candidate in rulebookCandidates" :key="candidate.url" class="rounded-lg border border-ink/10 bg-canvas p-4">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div class="min-w-0">
@@ -904,7 +911,7 @@ onBeforeUnmount(() => {
           <p v-else-if="rulebookDiscoveryStatus === 'unavailable'" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">{{ rulebookDiscoveryCopy.unavailable }}</p>
         </div>
 
-        <form class="mt-8 rounded-xl border border-ink/10 bg-paper p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
+        <form class="tabletop-panel player-board mt-8 p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
           <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
           <div class="mt-3 grid gap-3 sm:grid-cols-3">
             <label for="rulebook-file" class="group flex min-h-32 cursor-pointer flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition hover:border-copper/60 hover:bg-copper/5">
@@ -956,7 +963,7 @@ onBeforeUnmount(() => {
 
           <details ref="officialDetails" class="mt-4 border-t border-ink/10 pt-4">
             <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
-            <div class="mt-4 space-y-4">
+            <div class="mt-4 stack-y-lg">
               <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
                 <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>

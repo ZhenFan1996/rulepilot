@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
@@ -415,8 +414,8 @@ onBeforeUnmount(() => {
 
 <template>
   <AppShell>
-    <section class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
-      <p class="text-sm font-medium text-copper">{{ t('lessons.eyebrow') }}</p>
+    <section class="tabletop-page max-w-6xl">
+      <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <h1 class="font-display text-4xl font-semibold tracking-tight">{{ t('lessons.title') }}</h1>
@@ -432,7 +431,7 @@ onBeforeUnmount(() => {
       <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
       <div v-if="plans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
         <p>{{ t('lessons.summary', { versions: plans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
-        <button v-if="plans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo/30 underline-offset-4 hover:decoration-indigo" @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: plans.length }) }}</button>
+        <button v-if="plans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: plans.length }) }}</button>
       </div>
 
       <div v-if="plans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
@@ -460,12 +459,11 @@ onBeforeUnmount(() => {
         <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">{{ t('lessons.noReadable.action') }}</button>
       </div>
 
-      <ol v-else class="mt-10 grid gap-5 md:grid-cols-2">
-        <li v-for="plan in displayedPlans" :key="plan.id" class="relative overflow-hidden rounded-3xl border border-ink/10 bg-paper p-6 shadow-[0_20px_55px_-48px_rgba(20,31,37,0.85)]" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
-          <div class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-copper via-[#d3a84f] to-indigo" aria-hidden="true" />
+      <ol v-else class="score-track mt-10 grid gap-5 md:grid-cols-2">
+        <li v-for="plan in displayedPlans" :key="plan.id" class="tabletop-panel player-board relative overflow-hidden p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
           <div class="flex items-start justify-between gap-4">
             <div class="flex min-w-0 items-start gap-3">
-              <span class="grid size-11 shrink-0 place-items-center rounded-2xl bg-ink text-canvas"><TabletopGlyph name="cards" :size="22" /></span>
+              <span class="score-token shrink-0" aria-hidden="true" />
               <div class="min-w-0">
                 <p class="text-xs font-medium text-ink/40">{{ createdLabel(plan.createdAt) }}</p>
                 <h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ displayPlanTitle(plan) }}</h2>
@@ -489,7 +487,7 @@ onBeforeUnmount(() => {
               <span>{{ t('lessons.live.modelCalls', { count: progress[plan.id]?.run?.budget.usedModelCalls ?? 0 }) }}</span>
             </div>
             <p class="mt-3 text-xs leading-5 text-ink/50">{{ remainingTimeText(plan) }} {{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.live.readNow') : t('lessons.live.background') }}</p>
-            <ol v-if="recentActivities(plan).length" class="mt-4 space-y-2 border-t border-indigo/10 pt-3" :aria-label="t('lessons.live.recent')">
+            <ol v-if="recentActivities(plan).length" class="mt-4 stack-y-sm border-t border-indigo/10 pt-3" :aria-label="t('lessons.live.recent')">
               <li v-for="activity in recentActivities(plan)" :key="activity.sequence" class="flex items-start gap-2 text-xs leading-5 text-ink/55">
                 <span class="mt-1.5 size-1.5 shrink-0 rounded-full" :class="activity.outcome === 'RUNNING' ? 'animate-pulse bg-copper' : activity.outcome === 'SUCCEEDED' ? 'bg-emerald-600' : 'bg-amber-600'" />
                 <span>{{ activityText(plan, activity) }}</span>

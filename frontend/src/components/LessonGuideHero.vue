@@ -27,8 +27,8 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
 </script>
 
 <template>
-  <header class="tabletop-hero relative overflow-hidden rounded-[2rem] border border-ink/10 px-5 shadow-[0_24px_70px_-48px_rgba(16,31,38,0.75)] sm:px-8 sm:py-8" :class="compact ? 'py-5' : 'py-6'">
-    <div class="pointer-events-none absolute -right-10 -top-12 size-44 rotate-12 rounded-[2rem] border border-paper/15" aria-hidden="true" />
+  <header class="player-board tabletop-hero relative overflow-hidden border border-ink/10 px-5 lesson-hero-shadow sm:px-8 sm:py-8" :class="compact ? 'py-5' : 'py-6'">
+    <div class="pointer-events-none absolute -right-10 -top-12 size-44 rotate-12 border border-paper/15" aria-hidden="true" />
     <div class="pointer-events-none absolute bottom-5 right-8 hidden gap-2 text-paper/20 sm:flex" aria-hidden="true">
       <TabletopGlyph name="dice" :size="28" />
       <TabletopGlyph name="meeple" :size="30" />
@@ -41,7 +41,7 @@ const initials = computed(() => props.title.trim().slice(0, 2).toLocaleUpperCase
         :href="coverHref || undefined"
         :target="coverHref ? '_blank' : undefined"
         :rel="coverHref ? 'noopener noreferrer' : undefined"
-        class="aspect-[3/4] shrink-0 place-items-center overflow-hidden rounded-2xl border border-paper/20 bg-paper/10 text-paper shadow-xl sm:grid sm:w-32"
+        class="aspect-[3/4] shrink-0 place-items-center overflow-hidden rounded-2xl border border-paper/20 bg-paper/10 text-paper elevation-xl sm:grid sm:w-32"
         :class="compact ? 'hidden' : 'grid w-24'"
       >
         <img v-if="coverUrl && !coverUnavailable" :src="coverUrl" :alt="coverAlt" class="size-full bg-paper object-contain p-1" decoding="async" @error="emit('coverError')">

@@ -66,7 +66,7 @@ function pageList(pages: number[]) {
         <figure v-if="task.visualFocus && !failedImagePages.includes(task.visualFocus.pageNumber)" class="mt-3 overflow-hidden rounded-xl border border-indigo/15 bg-canvas">
           <a :href="pageImageUrl(task.visualFocus.pageNumber)" target="_blank" rel="noopener" :title="t('lesson.comprehension.openFullPage')" class="relative block">
             <img :src="pageImageUrl(task.visualFocus.pageNumber)" :alt="t('lesson.comprehension.visual.alt', { page: task.visualFocus.pageNumber, label: task.visualFocus.label })" class="block h-auto w-full" loading="lazy" @error="imageFailed(task.visualFocus.pageNumber)">
-            <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 shadow-[0_0_0_2px_rgba(255,255,255,0.8)]" :style="visualFocusStyle(task.visualFocus)" aria-hidden="true" />
+            <span class="pointer-events-none absolute rounded-md border-2 border-copper bg-copper/10 ocr-focus-shadow" :style="visualFocusStyle(task.visualFocus)" aria-hidden="true" />
           </a>
           <figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold text-indigo">
             <span>{{ t('lesson.comprehension.visual.focus', { label: task.visualFocus.label }) }}</span><span>{{ t('lesson.comprehension.page', { page: task.visualFocus.pageNumber }) }}</span>

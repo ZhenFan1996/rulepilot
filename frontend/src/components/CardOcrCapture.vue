@@ -151,7 +151,7 @@ onUnmounted(() => {
 <template>
   <div class="fixed inset-0 z-50 grid place-items-end bg-black/55 p-0 sm:place-items-center sm:p-6" role="presentation" @click.self="close">
     <section
-      class="max-h-[92vh] w-full overflow-y-auto rounded-t-[2rem] bg-paper p-5 text-ink shadow-2xl sm:max-w-2xl sm:rounded-[2rem] sm:p-7"
+      class="max-h-[92vh] w-full overflow-y-auto rounded-t-[2rem] bg-paper p-5 text-ink elevation-2xl sm:max-w-2xl sm:rounded-[2rem] sm:p-7"
       role="dialog"
       aria-modal="true"
       aria-labelledby="card-ocr-title"

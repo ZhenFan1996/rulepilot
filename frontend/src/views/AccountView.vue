@@ -53,7 +53,7 @@ onMounted(load)
 
 <template>
   <AppShell>
-    <section class="mx-auto max-w-5xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
+    <section class="tabletop-page max-w-5xl">
       <p class="text-sm font-medium text-copper">{{ t('account.title') }}</p>
       <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('account.loading') }}</div>
       <div v-else-if="errorMessage" class="mt-8 rounded-xl bg-red-50 p-6 text-red-800" role="alert">

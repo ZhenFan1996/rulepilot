@@ -64,12 +64,9 @@ onMounted(loadShelf)
 
 <template>
   <AppShell>
-    <div class="shelf-page mx-auto max-w-7xl px-4 py-7 sm:px-8 sm:py-10 lg:px-12 lg:py-14">
-      <section class="relative overflow-hidden rounded-[2rem] border border-ink/10 bg-ink px-6 py-8 text-canvas shadow-[0_18px_42px_rgba(26,35,42,0.16)] sm:px-9 sm:py-10">
-        <div class="shelf-hero-mark" aria-hidden="true">
-          <TabletopGlyph name="meeple" :size="128" />
-        </div>
-        <div class="relative max-w-2xl">
+    <div class="shelf-page tabletop-page">
+      <section class="player-board relative grid overflow-hidden border border-ink/10 bg-ink text-canvas shelf-hero-shadow lg:grid-cols-[minmax(0,0.85fr)_minmax(24rem,1.15fr)]">
+        <div class="relative z-10 px-6 py-8 sm:px-9 sm:py-10 lg:py-14">
           <p class="text-xs font-bold uppercase tracking-[0.2em] text-copper">{{ t('shelf.eyebrow') }}</p>
           <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ t('shelf.title') }}</h1>
           <p class="mt-4 max-w-xl text-base leading-7 text-canvas/70">{{ t('shelf.description') }}</p>
@@ -81,6 +78,9 @@ onMounted(loadShelf)
               <TabletopGlyph name="library" :size="18" /> {{ t('shelf.publicGuides') }}
             </RouterLink>
           </div>
+        </div>
+        <div class="relative min-h-64 overflow-hidden border-t border-canvas/10 lg:min-h-full lg:border-l lg:border-t-0" aria-hidden="true">
+          <img src="/illustrations/game-library.webp" alt="" width="1600" height="900" loading="eager" class="absolute inset-0 h-full w-full object-cover object-right">
         </div>
       </section>
 
@@ -151,11 +151,4 @@ onMounted(loadShelf)
   background-size: 12px 12px;
 }
 
-.shelf-hero-mark {
-  position: absolute;
-  right: clamp(1.25rem, 8vw, 7rem);
-  bottom: -2.5rem;
-  color: rgba(245, 240, 232, 0.08);
-  transform: rotate(-8deg);
-}
 </style>

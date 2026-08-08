@@ -196,7 +196,7 @@ onMounted(prepare)
       <template v-else-if="state === 'review'">
         <h4 class="font-display text-lg font-semibold">{{ copy.found }}</h4>
         <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.detail }}</p>
-        <ul class="mt-4 space-y-3">
+        <ul class="mt-4 stack-y-md">
           <li v-for="candidate in candidates" :key="candidate.url" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div class="min-w-0">

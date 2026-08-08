@@ -74,8 +74,8 @@ describe('GameRecommendationsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('BGG 快照共 162,686 条记录')
-    expect(wrapper.text()).toContain('当前条件匹配 7,543 条')
+    expect(wrapper.text()).toContain('BGG 收录 162,686 条')
+    expect(wrapper.text()).toContain('当前找到 7,543 条')
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('动物')
@@ -104,7 +104,7 @@ describe('GameRecommendationsView', () => {
     const wrapper = await mountView()
     await vi.waitFor(() => expect(wrapper.text()).toContain('Wingspan'))
 
-    expect(wrapper.text()).toContain('正在后台补齐封面、人数和中文资料')
+    expect(wrapper.text()).toContain('更多封面和游戏资料正在补齐')
     expect(wrapper.text()).not.toContain('卡牌轮抽')
 
     resolveRich(Response.json({ ...catalog, total: 1, totalPages: 1 }))
@@ -145,7 +145,7 @@ describe('GameRecommendationsView', () => {
     await flushPromises()
 
     await wrapper.get('input[type="search"]').setValue('Wingspan')
-    await wrapper.findAll('form')[0]!.trigger('submit')
+    await wrapper.get('form[role="search"]').trigger('submit')
     await flushPromises()
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('q=Wingspan'))).toBe(true)
 
@@ -161,8 +161,8 @@ describe('GameRecommendationsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('全量目录还没有导入')
-    expect(wrapper.text()).toContain('不会用 11 款热榜数据伪装成全量目录')
+    expect(wrapper.text()).toContain('桌游目录还在准备')
+    expect(wrapper.text()).toContain('推荐对话、个人游戏和规则书功能')
   })
 
   it('shows a retryable error without hiding full-catalog search', async () => {
@@ -170,7 +170,7 @@ describe('GameRecommendationsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('全量目录暂时不可用')
+    expect(wrapper.text()).toContain('桌游目录暂时打不开')
     expect(wrapper.get('input[type="search"]').attributes('type')).toBe('search')
   })
 })

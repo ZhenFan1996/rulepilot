@@ -175,7 +175,7 @@ onMounted(loadConfiguration)
 
 <template>
   <AppShell>
-    <div class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:px-12 lg:py-14">
+    <div class="tabletop-page max-w-6xl">
       <div class="max-w-3xl">
         <p class="text-sm font-medium text-copper">{{ t('models.eyebrow') }}</p>
         <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ t('models.title') }}</h1>
@@ -214,7 +214,7 @@ onMounted(loadConfiguration)
               </button>
             </div>
 
-            <form class="mt-7 space-y-5" @submit.prevent="saveProvider">
+            <form class="mt-7 stack-y-xl" @submit.prevent="saveProvider">
               <div class="flex items-start justify-between gap-4">
                 <div>
                   <h2 class="font-display text-2xl font-semibold">{{ providerLabel(selectedProvider) }}</h2>
@@ -264,7 +264,7 @@ onMounted(loadConfiguration)
               {{ t('models.noVisual') }}
             </p>
 
-            <form class="mt-7 space-y-5" @submit.prevent="saveAssignments">
+            <form class="mt-7 stack-y-xl" @submit.prevent="saveAssignments">
               <label v-for="role in roleDefinitions" :key="role[0]" class="block text-sm font-semibold">
                 {{ role[1] }}
                 <select v-model="snapshot.assignments[role[0]]" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 text-ink outline-none focus:border-copper">

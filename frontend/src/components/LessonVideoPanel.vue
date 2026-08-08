@@ -34,7 +34,7 @@ function seek(event: Event) {
 
 <template>
   <section v-if="chapter && activeFrame" class="mt-7" :aria-label="t('video.aria')">
-    <div class="relative aspect-[4/3] overflow-hidden rounded-3xl bg-ink-panel text-panel-text shadow-xl sm:aspect-video">
+    <div class="relative aspect-[4/3] overflow-hidden rounded-3xl bg-ink-panel text-panel-text elevation-xl sm:aspect-video">
       <div class="relative flex h-full flex-col justify-between p-5 sm:p-8">
         <div class="flex items-start justify-between gap-4">
           <div>

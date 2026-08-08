@@ -40,7 +40,7 @@ function entryCountLabel(count: number) {
         </div>
         <span class="rounded-full bg-amber-900 px-3 py-1.5 text-xs font-semibold text-white">{{ entryCountLabel(entries.length) }}</span>
       </div>
-      <div class="mt-5 space-y-3">
+      <div class="mt-5 stack-y-md">
         <details v-for="entry in entries" :key="`${entry.question}-${entry.cachedAt}`" class="rounded-2xl border border-amber-200 bg-paper p-4">
           <summary class="cursor-pointer list-none">
             <span class="flex flex-wrap items-start justify-between gap-3">
@@ -52,7 +52,7 @@ function entryCountLabel(count: number) {
           </summary>
           <p class="mt-4 border-t border-ink/10 pt-4 font-display text-lg font-semibold leading-7">{{ entry.ruling?.shortVerdict ?? entry.answer.shortVerdict }}</p>
           <p class="mt-3 text-sm leading-7 text-ink/70">{{ entry.ruling?.explanation ?? entry.answer.explanation }}</p>
-          <ol class="mt-4 space-y-2">
+          <ol class="mt-4 stack-y-sm">
             <li v-for="citation in (entry.ruling?.citations ?? entry.answer.citations)" :key="citation.chunkId" class="rounded-xl bg-indigo/5 p-3 text-sm">
               <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
               <p class="mt-1 leading-6 text-ink/60">{{ citation.excerpt }}</p>

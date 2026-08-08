@@ -3,8 +3,9 @@ import path from 'node:path'
 
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig, type Plugin } from 'vite'
+import { type Plugin } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { defineConfig } from 'vitest/config'
 
 import { pwaNavigationFallbackDenylist } from './src/lib/pwaRouting'
 
@@ -134,5 +135,8 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    setupFiles: ['./src/test/setupLocale.ts'],
   },
 })

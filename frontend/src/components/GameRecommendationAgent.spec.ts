@@ -96,16 +96,16 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('支持 4 人游玩')
-    expect(wrapper.text()).toContain('179,737 条 BGG 快照记录')
+    expect(wrapper.text()).toContain('完整 BGG 目录')
     expect(wrapper.get('a[href="/discover/266192"]').attributes('href')).toBe('/discover/266192')
 
     await wrapper.findAll('button').find(button => button.text() === '介绍一下')!.trigger('click')
     await flushPromises()
     expect(requests[3]).toMatchObject({ focusedBggId: 266192, message: '介绍一下《展翅翱翔》' })
-    expect(wrapper.text()).toContain('联网调查')
+    expect(wrapper.text()).toContain('进一步了解')
     expect(wrapper.text()).toContain('发行商资料展示了分步教学流程')
     expect(wrapper.get('a[href="https://publisher.example/wingspan"]').attributes('rel')).toContain('noopener')
-    expect(wrapper.text()).toContain('我目前的理解')
+    expect(wrapper.text()).toContain('目前记下的偏好')
     await wrapper.findAll('button').find(button => button.text() === '换一批')!.trigger('click')
     await flushPromises()
     expect(requests).toHaveLength(5)
@@ -194,7 +194,7 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('目录浏览不受影响')
+    expect(wrapper.text()).toContain('你写下的条件还在')
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
@@ -247,14 +247,14 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找有探索感的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(wrapper.get('[role="status"]').text()).toContain('已发送请求')
+    expect(wrapper.get('[role="status"]').text()).toContain('收到，正在看看')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))
     await flushPromises()
-    expect(wrapper.get('[role="status"]').text()).toContain('模型已选择名称搜索')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
 
     await vi.advanceTimersByTimeAsync(1300)
-    expect(wrapper.get('[role="status"]').text()).toContain('模型已选择名称搜索')
+    expect(wrapper.get('[role="status"]').text()).toContain('正在桌游目录里查找')
 
     streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '还需要再确认一个偏好。',

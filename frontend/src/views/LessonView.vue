@@ -486,7 +486,7 @@ onUnmounted(() => {
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <div class="flex items-center gap-3 sm:gap-4">
             <RouterLink v-if="lesson" :to="{ name: 'public-lesson', params: { planId } }" class="text-sm font-semibold text-indigo">{{ t('lesson.reader.public') }}</RouterLink>
-            <RouterLink v-if="lesson" :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-10 items-center rounded-xl bg-indigo px-4 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
+            <RouterLink v-if="lesson" :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-10 items-center rounded-xl bg-indigo px-4 text-sm font-semibold text-white elevation-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
           </div>
         </div>
       </header>
@@ -544,7 +544,7 @@ onUnmounted(() => {
           @cover-error="catalogCoverUnavailable = true"
         >
           <template #actions>
-            <RouterLink :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] shadow-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
+            <RouterLink :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] elevation-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
             <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-paper/25 bg-paper/10 px-4 text-sm font-semibold text-paper">{{ t('lesson.reader.public') }}</RouterLink>
           </template>
         </LessonGuideHero>

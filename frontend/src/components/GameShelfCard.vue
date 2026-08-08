@@ -39,7 +39,7 @@ const rulebookTarget = computed(() => ({
 </script>
 
 <template>
-  <article class="group overflow-hidden rounded-[1.65rem] border border-ink/10 bg-paper shadow-[0_12px_32px_rgba(26,35,42,0.06)] transition duration-200 hover:-translate-y-1 hover:shadow-[0_18px_40px_rgba(26,35,42,0.12)]">
+  <article class="group overflow-hidden rounded-[1.65rem] border border-ink/10 bg-paper game-card-shadow transition duration-200 hover:-translate-y-1 ">
     <div class="relative aspect-[16/8] overflow-hidden border-b border-ink/10">
       <img v-if="item.coverUrl && !coverUnavailable" :src="item.coverUrl" :alt="t('shelf.card.coverAlt', { title: item.title })" class="size-full object-cover" referrerpolicy="no-referrer" @error="coverUnavailable = true">
       <div v-else class="shelf-cover size-full" :style="{ '--shelf-cover': tone[0], '--shelf-ink': tone[1] }">
@@ -47,7 +47,7 @@ const rulebookTarget = computed(() => ({
         <TabletopGlyph name="meeple" :size="64" class="absolute right-5 top-5 opacity-80" />
         <span class="absolute bottom-4 left-5 font-display text-4xl font-semibold tracking-tight">{{ initials }}</span>
       </div>
-      <span :class="status.className" class="absolute right-3 top-3 rounded-full px-3 py-1.5 text-xs font-bold shadow-sm">{{ status.label }}</span>
+      <span :class="status.className" class="absolute right-3 top-3 rounded-full px-3 py-1.5 text-xs font-bold elevation-sm">{{ status.label }}</span>
       <a v-if="item.coverAttributionUrl" :href="item.coverAttributionUrl" target="_blank" rel="noopener noreferrer" class="absolute bottom-2 right-3 rounded-md bg-ink/75 px-2 py-1 text-[0.65rem] font-semibold text-canvas opacity-0 transition group-hover:opacity-100 focus:opacity-100">{{ t('shelf.card.bggCover') }} ↗</a>
     </div>
 

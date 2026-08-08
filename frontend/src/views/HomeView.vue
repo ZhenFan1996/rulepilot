@@ -174,34 +174,36 @@ watch(locale, loadHotGames)
 
 <template>
   <AppShell>
-    <div class="mx-auto max-w-7xl px-5 py-6 sm:px-8 sm:py-10 lg:px-12 lg:py-12">
-      <section class="home-table relative overflow-hidden rounded-[2rem] bg-ink px-6 py-8 text-canvas shadow-xl shadow-ink/10 sm:px-10 sm:py-10 lg:px-14">
-        <div class="pointer-events-none absolute -right-6 -top-8 text-canvas/[0.07] sm:right-12"><TabletopGlyph name="meeple" :size="180" /></div>
-        <div class="relative max-w-3xl">
+    <div class="tabletop-page">
+      <section class="home-table player-board tabletop-felt relative grid overflow-hidden border border-white/8 text-[#f5f0e8] elevation-xl-ink lg:grid-cols-[minmax(0,1fr)_minmax(22rem,0.72fr)]">
+        <div class="relative z-10 px-6 py-8 sm:px-10 sm:py-10 lg:px-14 lg:py-14">
           <p class="text-sm font-semibold tracking-wide text-copper">{{ username ? t('home.personal', { username }) : t('home.greeting') }}</p>
           <h1 v-if="latestPlan" class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">{{ t('home.continueTitle') }}</h1>
           <h1 v-else class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">{{ t('home.title') }}</h1>
-          <p class="mt-4 max-w-xl text-base leading-8 text-canvas/70">{{ latestPlan ? t('home.continueDescription') : t('home.description') }}</p>
+          <p class="mt-4 max-w-xl text-base leading-8 text-white/70">{{ latestPlan ? t('home.continueDescription') : t('home.description') }}</p>
 
-          <div v-if="latestPlan" class="mt-7 flex flex-col gap-4 rounded-2xl border border-canvas/15 bg-canvas/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div v-if="latestPlan" class="mt-7 flex flex-col gap-4 rounded-2xl border border-white/15 bg-white/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between">
             <div class="min-w-0">
               <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">{{ t('home.lastOpened') }}</p>
               <h2 class="mt-2 truncate font-display text-2xl font-semibold">{{ latestPlanTitle }}</h2>
-              <p class="mt-1 text-sm text-canvas/60">{{ t('home.duration', { players: latestPlan.playerCount, minutes: latestPlan.durationMinutes }) }}</p>
+              <p class="mt-1 text-sm text-white/60">{{ t('home.duration', { players: latestPlan.playerCount, minutes: latestPlan.durationMinutes }) }}</p>
             </div>
             <RouterLink :to="{ name: 'lesson', params: { planId: latestPlan.id } }" class="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark">{{ t('home.continue') }} <TabletopGlyph name="arrow" :size="18" /></RouterLink>
           </div>
 
           <div v-else class="mt-7 flex flex-wrap gap-3">
             <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark"><TabletopGlyph name="plus" :size="18" /> {{ t('home.upload') }}</RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-canvas/25 px-5 font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="library" :size="18" /> {{ t('home.public') }}</RouterLink>
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/25 px-5 font-semibold text-white hover:bg-white/10"><TabletopGlyph name="library" :size="18" /> {{ t('home.public') }}</RouterLink>
           </div>
 
           <div v-if="latestPlan" class="mt-4 flex flex-wrap gap-3">
-            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-4 text-sm font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="plus" :size="17" /> {{ t('home.uploadNew') }}</RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-canvas/25 px-4 text-sm font-semibold text-canvas hover:bg-canvas/10"><TabletopGlyph name="library" :size="17" /> {{ t('home.public') }}</RouterLink>
+            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 text-sm font-semibold text-white hover:bg-white/10"><TabletopGlyph name="plus" :size="17" /> {{ t('home.uploadNew') }}</RouterLink>
+            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 text-sm font-semibold text-white hover:bg-white/10"><TabletopGlyph name="library" :size="17" /> {{ t('home.public') }}</RouterLink>
           </div>
-          <p class="mt-5 text-sm text-canvas/50">{{ latestPlan ? t('home.keep') : t('home.noSetup') }}</p>
+          <p class="mt-5 text-sm text-white/50">{{ latestPlan ? t('home.keep') : t('home.noSetup') }}</p>
+        </div>
+        <div class="relative min-h-64 overflow-hidden border-t border-white/10 lg:min-h-full lg:border-l lg:border-t-0" aria-hidden="true">
+          <img src="/illustrations/tabletop-night.webp" alt="" width="1600" height="900" fetchpriority="high" class="absolute inset-0 h-full w-full object-cover object-center mix-blend-normal">
         </div>
       </section>
 
@@ -215,7 +217,7 @@ watch(locale, loadHotGames)
         </div>
         <div class="-mx-5 mt-6 flex gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0">
           <RouterLink v-for="(entry, index) in featuredPublicLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group w-52 shrink-0 sm:w-auto">
-            <div class="relative aspect-[16/10] overflow-hidden rounded-xl border border-ink/10 bg-paper shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
+            <div class="relative aspect-[16/10] overflow-hidden rounded-xl border border-ink/10 bg-paper elevation-sm transition group-hover:-translate-y-1 group-hover-elevation-lg">
               <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId)" :alt="t('home.cover', { title: entry.title })" :index="index" />
             </div>
             <h3 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h3>
@@ -277,7 +279,7 @@ watch(locale, loadHotGames)
         <div v-else-if="hotGames.length" class="-mx-5 mt-6 flex snap-x gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-4 sm:overflow-visible sm:px-0 lg:grid-cols-6">
           <article v-for="game in hotGames.slice(0, 6)" :key="game.bggId" class="group w-36 shrink-0 snap-start sm:w-auto">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" :aria-label="t('home.hotInspect', { game: game.name })">
-              <div class="relative aspect-[4/5] overflow-hidden rounded-xl border border-ink/10 bg-paper p-2 shadow-sm transition group-hover:-translate-y-1 group-hover:shadow-lg">
+              <div class="relative aspect-[4/5] overflow-hidden rounded-xl border border-ink/10 bg-paper p-2 elevation-sm transition group-hover:-translate-y-1 group-hover-elevation-lg">
                 <img :src="game.thumbnailUrl" :alt="t('home.coverShort', { title: game.name })" loading="lazy" class="h-full w-full rounded-lg object-contain" @error="hideBrokenImage">
                 <span v-if="!showingPersonalShelf" class="absolute left-2 top-2 grid h-7 min-w-7 place-items-center rounded-full bg-ink px-2 text-xs font-bold text-canvas">{{ game.rank }}</span>
               </div>

@@ -37,7 +37,7 @@ function seek(event: Event) {
         <span class="text-xs">{{ chapter.supported ? t('narration.supported') : t('narration.unsupported') }}</span>
       </span>
     </summary>
-    <ol class="mt-4 space-y-3 border-t border-indigo/10 pt-4" :aria-label="t('narration.captions')">
+    <ol class="mt-4 stack-y-md border-t border-indigo/10 pt-4" :aria-label="t('narration.captions')">
       <li
         v-for="segment in chapter.segments"
         :key="segment.position"
