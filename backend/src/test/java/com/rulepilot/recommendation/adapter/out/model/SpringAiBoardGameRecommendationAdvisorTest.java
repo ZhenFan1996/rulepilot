@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.CompositionRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PlanningRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ProfileView;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
@@ -166,6 +167,34 @@ class SpringAiBoardGameRecommendationAdvisorTest {
         assertThat(result).hasValueSatisfying(slate -> assertThat(slate.choices()).singleElement().satisfies(choice ->
                 assertThat(choice.researchedReasons()).isEmpty()));
         verify(fixture.values).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    void allowsAFocusedExplanationToAnswerDirectlyWithoutForcingARecommendationChoice() {
+        Fixture fixture = fixture("""
+                {"assistantMessage":"它把工人放置和卡牌构筑连在一起：打出的卡决定能去哪里，版图行动又会买到更强的牌。",
+                 "nextQuestion":"你想继续看一轮具体怎么走吗？","choices":[]}
+                """);
+        Candidate candidate = new Candidate(
+                10, "Game 10", 2025, 1, new BigDecimal("8.5"), new BigDecimal("2.5"),
+                2, 4, 60, 45, 60, 10, 10, "Best with 4 players", "Recommended with 2–4 players",
+                2, 100, List.of("Strategy"), List.of("Deck Building", "Worker Placement"),
+                List.of(), List.of(), List.of(), "Players deploy agents and reveal cards at the end of a round.");
+
+        var result = fixture.adapter.compose(new CompositionRequest(
+                List.of(new DialogueMessage("user", "它是什么机制，具体怎么玩？")),
+                profile(),
+                new UserModel("正在了解当前游戏", List.of()),
+                List.of(candidate),
+                Research.empty(),
+                10,
+                "zh-CN",
+                DialogueAct.EXPLAIN));
+
+        assertThat(result).hasValueSatisfying(slate -> {
+            assertThat(slate.assistantMessage()).contains("工人放置", "卡牌构筑");
+            assertThat(slate.choices()).isEmpty();
+        });
     }
 
     private Fixture fixture(String response) {

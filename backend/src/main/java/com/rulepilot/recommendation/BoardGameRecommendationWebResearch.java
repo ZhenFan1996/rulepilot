@@ -18,7 +18,15 @@ public interface BoardGameRecommendationWebResearch {
         return Optional.empty();
     }
 
-    record Request(List<Candidate> candidates, String locale) {}
+    record Request(List<Candidate> candidates, String locale, String question) {
+        public Request(List<Candidate> candidates, String locale) {
+            this(candidates, locale, "");
+        }
+
+        public Request {
+            question = question == null ? "" : question.strip();
+        }
+    }
 
     record Research(List<GameResearch> games, List<Source> sources) {
         public static Research empty() {

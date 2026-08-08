@@ -127,6 +127,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 && validTranscript(request.transcript())
                 && request.profile() != null
                 && request.userModel() != null
+                && request.act() != null
                 && request.candidates() != null
                 && !request.candidates().isEmpty()
                 && request.candidates().size() <= 20
@@ -198,7 +199,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                     root.get("researchRequested").isBoolean() && root.get("researchRequested").booleanValue(),
                     optionalText(root.get("researchQuestion"), 300),
                     retrievalPlan(root, request));
-            if (!validPlan(plan)) {
+            if (!validPlan(plan, request)) {
                 LOGGER.warn("Recommendation planning failed structural validation (plan-invariants)");
                 return Optional.empty();
             }
@@ -259,7 +260,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                         discardedResearchedReasons(node.get("researchedReasons")),
                         strings(node.get("tradeoffs"), 3, 280)));
             }
-            if (choices.isEmpty()) return invalidSlate("no-choices");
+            if (choices.isEmpty() && request.act() != DialogueAct.EXPLAIN) return invalidSlate("no-choices");
             return Optional.of(new Slate(
                     boundedText(root.get("assistantMessage"), 800, false),
                     optionalText(root.get("nextQuestion"), 240),
@@ -355,28 +356,34 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
         return List.of();
     }
 
-    private boolean validPlan(Plan plan) {
+    private boolean validPlan(Plan plan, PlanningRequest request) {
         PreferencePatch patch = plan.explicitPatch();
         return (patch.players() == null || patch.players() >= 1 && patch.players() <= 12)
                 && (patch.maxMinutes() == null || patch.maxMinutes() >= 0 && patch.maxMinutes() <= 600)
                 && (patch.maxWeight() == null || patch.maxWeight().signum() >= 0
-                        && patch.maxWeight().compareTo(java.math.BigDecimal.valueOf(5)) <= 0);
+                        && patch.maxWeight().compareTo(java.math.BigDecimal.valueOf(5)) <= 0)
+                && (!plan.researchRequested()
+                        || request.focusedBggId() == null
+                        || !plan.researchQuestion().isBlank());
     }
 
     private String planningPrompt() {
         return "You are the dialogue planner and user-model component of an independent board-game recommendation Agent. "
-                + "Do more than slot extraction: infer tentative tastes from the conversation, decide whether asking or recommending "
-                + "is more useful now, and react to rejection or requests for alternatives. Never force a fixed questionnaire. "
+                + "Do more than slot extraction: infer tentative tastes from the conversation, choose the dialogue act that best answers "
+                + "the latest turn, and react to rejection or requests for alternatives. Never force a fixed questionnaire or workflow. "
                 + "Numerical players, time, and complexity are hard constraints only when explicitly stated in the latest user turn; "
                 + "otherwise return null and preserve the supplied profile. Hypotheses must be reversible, cite the user's own wording "
-                + "in basedOn, and use LOW/MEDIUM/HIGH confidence. Ask usage-oriented questions a newcomer can answer. Set act to "
-                + "RECOMMEND whenever useful context exists or the user asks for games; EXPLAIN when a focused game is supplied; ASK only "
-                + "when recommending would be arbitrary. A focused BGG ID is a verified reference to a card already returned by the "
-                + "application: never search for that title again and never claim it does not exist. Treat researchRequested and "
+                + "in basedOn, and use LOW/MEDIUM/HIGH confidence. Ask usage-oriented questions a newcomer can answer. Set act to RESPOND "
+                + "for ordinary conversation that needs no catalog facts, ASK only for a genuinely necessary clarification, RECOMMEND when "
+                + "the user asks for games or alternatives, and EXPLAIN when the user asks about the focused game. A focused BGG ID is a "
+                + "verified conversational referent, not a forced action: keep it for pronouns such as it/this game, but a request for "
+                + "alternatives is RECOMMEND. Never claim the focused game does not exist. Treat researchRequested and "
                 + "candidateDiscoveryRequested as choices of allow-listed read tools in an observe-decide-act loop. Set researchRequested "
                 + "only when current external evidence would materially improve this turn—for example subjective table experience, an "
-                + "explicit comparison, or facts absent from the supplied BGG record. A routine focused introduction can use BGG facts "
-                + "without web research. Never expose private reasoning; return only the structured decision. Return JSON with exactly: "
+                + "explicit comparison, rules flow/how-to-play, or facts absent from the supplied BGG record. Do not request research for "
+                + "BGG categories, mechanics, player count, duration, weight, rank, designer, publisher, or description. A routine focused "
+                + "introduction can use BGG facts without web research. researchQuestion must state the exact evidence gap from the latest "
+                + "turn, not a generic research topic. Never expose private reasoning; return only the structured decision. Return JSON with exactly: "
                 + "act, players, maxMinutes, maxWeight, "
                 + "type, interaction, profileSummary, hypotheses, assistantMessage, nextQuestion, researchRequested, researchQuestion, "
                 + "candidateTypes, featureConstraints, candidateDiscoveryRequested. candidateTypes contains at most two BGG ranking domains likely to "
@@ -403,12 +410,15 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
 
     private String compositionPrompt() {
         return "You are the ranking, explanation, and feedback-reflection component of an independent board-game recommendation Agent. "
-                + "Select one to five IDs only from candidates. Match the evolving user model, balance relevance with meaningful variety, "
+                + "Answer the latest user turn first. Do not force a shortlist, repeat the same introduction, or restart preference discovery. "
+                + "For RECOMMEND, select one to five IDs only from candidates, match the evolving user model with meaningful variety, "
                 + "and respond naturally to prior rejection. preferenceReasons may infer fit, but must use tentative language and must not "
                 + "invent game facts. The application attaches validated research observations after selection, so researchedReasons "
                 + "must always be an empty array. "
                 + "Do not restate BGG numeric facts; the application adds those separately. Surface honest tradeoffs. For a focused EXPLAIN "
-                + "turn, choose that game when present and explain it rather than returning a generic slate. Do not require a fixed number "
+                + "turn, answer the specific angle asked: explain categories and mechanics in plain language, and use the supplied description "
+                + "or research to describe the play loop when available. EXPLAIN choices may be empty or contain only the focused ID. "
+                + "Do not require a fixed number "
                 + "of turns; nextQuestion is optional and should invite useful feedback. Return JSON with exactly assistantMessage, "
                 + "nextQuestion, choices. Every choice has exactly bggId, preferenceReasons, researchedReasons, tradeoffs. Each "
                 + "Follow this shape: "

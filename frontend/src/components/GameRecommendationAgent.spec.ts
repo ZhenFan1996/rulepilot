@@ -149,7 +149,7 @@ describe('GameRecommendationAgent', () => {
         harness: {
           modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
           actions: focused
-            ? ['PLAN_DIALOGUE', 'LOOKUP_BGG_GAME', 'COMPOSE_RECOMMENDATIONS']
+            ? ['PLAN_DIALOGUE', 'LOOKUP_BGG_GAME', 'COMPOSE_GAME_RESPONSE']
             : ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'COMPOSE_RECOMMENDATIONS'],
         },
         games: [{ game, matches: [], tradeoffs: [] }],
@@ -164,9 +164,18 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(requests).toHaveLength(2)
+    await wrapper.get('textarea').setValue('它是什么机制，属于什么类型，具体怎么玩？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requests).toHaveLength(3)
     expect(requests[1]).toMatchObject({
       message: '能介绍一下《展翅翱翔》吗？',
+      focusedBggId: 266192,
+      excludedBggIds: [],
+    })
+    expect(requests[2]).toMatchObject({
+      message: '它是什么机制，属于什么类型，具体怎么玩？',
       focusedBggId: 266192,
       excludedBggIds: [],
     })
