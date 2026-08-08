@@ -11,6 +11,7 @@ import com.rulepilot.catalog.application.BggMetadataLocalizationService.Localize
 import com.rulepilot.catalog.application.BggCatalogImportService.DiscoveryPage;
 import com.rulepilot.catalog.application.BggCatalogImportService.RecommendationSort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.EditionImage;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
@@ -79,9 +80,31 @@ class GameCatalogControllerTest {
     void exposesReadOnlyAttributedGameSelectionDetails() {
         BggCatalogImportService bgg = mock(BggCatalogImportService.class);
         when(bgg.configured()).thenReturn(true);
-        when(bgg.gameDetails(266192)).thenReturn(new GameDetails(
-                266192, "Wingspan", "Build a bird reserve.", "https://example.test/wingspan.jpg",
-                2019, 1, 5, 70, 10));
+        when(bgg.gameDetails(266192))
+                .thenReturn(new GameDetails(
+                        266192,
+                        "Wingspan",
+                        "Build a bird reserve.",
+                        "https://example.test/wingspan.jpg",
+                        2019,
+                        1,
+                        5,
+                        70,
+                        10,
+                        "https://example.test/wingspan-large.jpg",
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of("Stonemaier Games"),
+                        List.of("展翅翱翔"),
+                        List.of(new EditionImage(
+                                7,
+                                "Simplified Chinese edition",
+                                "https://example.test/wingspan-chinese.jpg",
+                                2020,
+                                List.of("Chinese")))));
         BggMetadataLocalizationService metadata = mock(BggMetadataLocalizationService.class);
         when(metadata.localize(bgg.gameDetails(266192), "zh-CN"))
                 .thenReturn(new LocalizedMetadata(
@@ -105,6 +128,10 @@ class GameCatalogControllerTest {
         assertThat(response.categories()).containsExactly("动物");
         assertThat(response.mechanics()).containsExactly("卡牌轮抽");
         assertThat(response.minimumAge()).isEqualTo(10);
+        assertThat(response.editionImages()).singleElement().satisfies(image -> {
+            assertThat(image.versionId()).isEqualTo(7);
+            assertThat(image.languages()).containsExactly("Chinese");
+        });
         assertThat(response.bggUrl()).isEqualTo("https://boardgamegeek.com/boardgame/266192");
     }
 

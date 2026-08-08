@@ -2,6 +2,7 @@ package com.rulepilot.catalog.adapter.out.bgg;
 
 import com.rulepilot.catalog.application.BoardGameGeekCatalog;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.EditionImage;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameMatch;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import java.io.StringReader;
@@ -635,9 +636,15 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             List<String> publishers = new ArrayList<>();
             List<String> simplifiedChineseNames = new ArrayList<>();
             List<String> otherChineseNames = new ArrayList<>();
+            List<EditionImage> chineseEditionImages = new ArrayList<>();
+            List<EditionImage> otherEditionImages = new ArrayList<>();
             boolean inVersion = false;
+            Integer versionId = null;
             String versionCanonicalName = null;
             String versionLabel = null;
+            String versionImage = null;
+            Integer versionYear = null;
+            List<String> versionLanguages = new ArrayList<>();
             boolean chineseVersion = false;
             while (reader.hasNext()) {
                 int event = reader.next();
@@ -651,6 +658,13 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                                 : otherChineseNames;
                         addBoundedUnique(candidates, versionCanonicalName.strip());
                     }
+                    addEditionImage(
+                            chineseVersion ? chineseEditionImages : otherEditionImages,
+                            versionId,
+                            versionLabel,
+                            versionImage,
+                            versionYear,
+                            versionLanguages);
                     inVersion = false;
                     continue;
                 }
@@ -659,8 +673,12 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                 if ("item".equals(element)
                         && "boardgameversion".equals(reader.getAttributeValue(null, "type"))) {
                     inVersion = true;
+                    versionId = integer(reader.getAttributeValue(null, "id"));
                     versionCanonicalName = null;
                     versionLabel = null;
+                    versionImage = null;
+                    versionYear = null;
+                    versionLanguages = new ArrayList<>();
                     chineseVersion = false;
                 } else if (inVersion && "canonicalname".equals(element)) {
                     versionCanonicalName = reader.getAttributeValue(null, "value");
@@ -668,10 +686,16 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                         && "name".equals(element)
                         && "primary".equals(reader.getAttributeValue(null, "type"))) {
                     versionLabel = reader.getAttributeValue(null, "value");
+                } else if (inVersion && "image".equals(element)) {
+                    versionImage = reader.getElementText();
+                } else if (inVersion && "yearpublished".equals(element)) {
+                    versionYear = integer(reader.getAttributeValue(null, "value"));
                 } else if (inVersion && "link".equals(element)) {
-                    chineseVersion = chineseVersion
-                            || ("language".equals(reader.getAttributeValue(null, "type"))
-                                    && "Chinese".equalsIgnoreCase(reader.getAttributeValue(null, "value")));
+                    if ("language".equals(reader.getAttributeValue(null, "type"))) {
+                        String language = reader.getAttributeValue(null, "value");
+                        if (language != null) addBoundedUnique(versionLanguages, language);
+                        chineseVersion = chineseVersion || "Chinese".equalsIgnoreCase(language);
+                    }
                 } else if (inVersion) {
                     continue;
                 } else if ("name".equals(element) && "primary".equals(reader.getAttributeValue(null, "type"))) {
@@ -709,6 +733,7 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             if (name == null) throw new IllegalArgumentException("BGG game does not exist: " + expectedId);
             List<String> officialChineseNames = new ArrayList<>(simplifiedChineseNames);
             otherChineseNames.forEach(candidate -> addBoundedUnique(officialChineseNames, candidate));
+            List<EditionImage> editionImages = distinctEditionImages(chineseEditionImages, otherEditionImages, image);
             return new GameDetails(
                     expectedId,
                     name,
@@ -726,9 +751,57 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     mechanics,
                     designers,
                     publishers,
-                    officialChineseNames);
+                    officialChineseNames,
+                    editionImages);
         } catch (XMLStreamException exception) {
             throw new IllegalStateException("BGG returned invalid XML", exception);
+        }
+    }
+
+    private void addEditionImage(
+            List<EditionImage> images,
+            Integer versionId,
+            String name,
+            String imageUrl,
+            Integer publicationYear,
+            List<String> languages) {
+        if (images.size() >= 16
+                || versionId == null
+                || versionId <= 0
+                || name == null
+                || name.isBlank()
+                || !publicHttpsUrl(imageUrl)) return;
+        images.add(new EditionImage(
+                versionId,
+                name.strip(),
+                imageUrl.strip(),
+                publicationYear,
+                languages.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .map(String::strip)
+                        .filter(value -> !value.isBlank())
+                        .limit(4)
+                        .toList()));
+    }
+
+    private List<EditionImage> distinctEditionImages(
+            List<EditionImage> preferred,
+            List<EditionImage> remaining,
+            String mainImage) {
+        java.util.LinkedHashMap<String, EditionImage> images = new java.util.LinkedHashMap<>();
+        java.util.stream.Stream.concat(preferred.stream(), remaining.stream())
+                .filter(image -> !image.imageUrl().equals(mainImage))
+                .forEach(image -> images.putIfAbsent(image.imageUrl(), image));
+        return images.values().stream().limit(8).toList();
+    }
+
+    private boolean publicHttpsUrl(String value) {
+        try {
+            java.net.URI uri = java.net.URI.create(value == null ? "" : value.strip());
+            return "https".equalsIgnoreCase(uri.getScheme()) && uri.getHost() != null && uri.getUserInfo() == null
+                    && (uri.getPort() == -1 || uri.getPort() == 443);
+        } catch (IllegalArgumentException exception) {
+            return false;
         }
     }
 

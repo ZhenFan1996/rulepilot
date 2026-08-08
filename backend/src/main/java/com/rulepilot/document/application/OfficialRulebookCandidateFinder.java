@@ -8,7 +8,7 @@ public interface OfficialRulebookCandidateFinder {
 
     List<Candidate> find(Request request);
 
-    record Request(String gameName, String editionName, Integer publicationYear, String language) {}
+    record Request(int bggId, String gameName, String editionName, Integer publicationYear, String language) {}
 
     record Candidate(String title, String url, String publisher, String language, String edition) {}
 }

@@ -29,6 +29,13 @@ const details = {
   mechanicsTranslated: true,
   designers: ['Designer Name'],
   publishers: ['Publisher Name'],
+  editionImages: [{
+    versionId: 7,
+    name: 'Simplified Chinese edition',
+    imageUrl: 'https://example.test/chinese-edition.jpg',
+    publicationYear: 2025,
+    languages: ['Chinese'],
+  }],
   bggUrl: 'https://boardgamegeek.com/boardgame/42',
 }
 
@@ -59,8 +66,13 @@ describe('GameDiscoveryView', () => {
     expect(wrapper.text()).toContain('BGG 资料仅用于推荐、识别游戏和展示封面')
     expect(wrapper.text()).toContain('Designer Name')
     expect(wrapper.text()).toContain('Publisher Name')
+    expect(wrapper.text()).toContain('BGG 版本图片')
+    expect(wrapper.text()).toContain('Simplified Chinese edition')
+    expect(wrapper.text()).toContain('BGG 社区文件（用户上传，非官方）')
     expect(wrapper.text()).toContain('BGG 评分 7.8')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42"]').attributes('target')).toBe('_blank')
+    expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/images"]').attributes('target')).toBe('_blank')
+    expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/42/files"]').attributes('target')).toBe('_blank')
     expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false)
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=false', { credentials: 'include' })
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/42?locale=zh-CN&translate=true', { credentials: 'include' })

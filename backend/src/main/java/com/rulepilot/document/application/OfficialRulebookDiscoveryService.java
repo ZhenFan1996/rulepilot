@@ -40,7 +40,7 @@ public class OfficialRulebookDiscoveryService {
                 .orElseThrow(() -> new IllegalArgumentException("catalog edition does not exist or has no BGG metadata"));
         String checkedLanguage = language == null || language.isBlank() ? game.language() : language.strip();
         var request = new OfficialRulebookCandidateFinder.Request(
-                game.gameName(), game.editionName(), game.publicationYear(), checkedLanguage);
+                game.bggId(), game.gameName(), game.editionName(), game.publicationYear(), checkedLanguage);
         List<Candidate> candidates = finder.find(request).stream()
                 .limit(8)
                 .map(this::validate)

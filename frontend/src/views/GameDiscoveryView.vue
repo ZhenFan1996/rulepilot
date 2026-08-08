@@ -25,10 +25,19 @@ interface BggGameDetails {
   mechanics: string[]
   designers: string[]
   publishers: string[]
+  editionImages: BggEditionImage[]
   descriptionTranslated?: boolean
   categoriesTranslated?: boolean
   mechanicsTranslated?: boolean
   bggUrl: string
+}
+
+interface BggEditionImage {
+  versionId: number
+  name: string
+  imageUrl: string
+  publicationYear: number | null
+  languages: string[]
 }
 
 interface ImportedGame {
@@ -54,6 +63,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
   rating: (rating: number) => `BGG 评分 ${rating.toFixed(1)}`, weight: (weight: number) => `复杂度 ${weight.toFixed(1)} / 5`,
   designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别',
+  editionImages: 'BGG 版本图片', editionImagesHint: '公开 XML API 提供的版本包装图，不代表实拍图集。',
+  imageGallery: '前往 BGG 查看实拍与组件图', communityFiles: 'BGG 社区文件（用户上传，非官方）',
+  communityFilesHint: '社区文件可能包含翻译或玩家辅助；RulePilot 不会把它们自动当作官方规则书。',
 } : {
   back: 'Back to recommendations', loading: 'Loading game details', error: 'This game is unavailable right now. You can still go back and add a rulebook directly.',
   login: 'Sign in to keep this game and continue to its rulebook. Your selection is preserved.', selectError: 'This game could not be saved. Please try again shortly.',
@@ -66,6 +78,9 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
   rating: (rating: number) => `BGG rating ${rating.toFixed(1)}`, weight: (weight: number) => `Weight ${weight.toFixed(1)} / 5`,
   designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories',
+  editionImages: 'BGG edition images', editionImagesHint: 'Edition packaging from the public XML API; this is not a physical-photo gallery.',
+  imageGallery: 'See physical and component photos on BGG', communityFiles: 'BGG community files (user-contributed, unofficial)',
+  communityFilesHint: 'Community files may include translations or player aids; RulePilot never treats them as official rulebooks automatically.',
 })
 const game = ref<BggGameDetails | null>(null)
 const loading = ref(true)
@@ -98,6 +113,7 @@ function normalizeDetails(parsed: BggGameDetails): BggGameDetails {
     mechanics: parsed.mechanics ?? [],
     designers: parsed.designers ?? [],
     publishers: parsed.publishers ?? [],
+    editionImages: parsed.editionImages ?? [],
     descriptionTranslated: parsed.descriptionTranslated ?? false,
     originalName: parsed.originalName ?? parsed.name,
     officialNameLocalized: parsed.officialNameLocalized ?? false,
@@ -209,6 +225,28 @@ watch(locale, load)
               {{ selecting ? copy.selecting : copy.select }}
             </button>
             <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="min-h-12 rounded-xl border border-ink/15 px-5 py-3 text-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
+          </div>
+        </div>
+        <div class="border-t border-ink/10 pt-6 lg:col-span-2">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 class="font-display text-2xl font-semibold">{{ copy.editionImages }}</h2>
+              <p class="mt-1 text-sm text-ink/50">{{ copy.editionImagesHint }}</p>
+            </div>
+            <a :href="`${game.bggUrl}/images`" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-indigo">{{ copy.imageGallery }} ↗</a>
+          </div>
+          <ul v-if="game.editionImages.length" class="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            <li v-for="editionImage in game.editionImages" :key="editionImage.versionId" class="min-w-0 rounded-xl border border-ink/10 bg-canvas p-3">
+              <img :src="editionImage.imageUrl" :alt="editionImage.name" loading="lazy" referrerpolicy="no-referrer" class="aspect-[4/5] w-full object-contain">
+              <p class="mt-2 truncate text-sm font-semibold" :title="editionImage.name">{{ editionImage.name }}</p>
+              <p v-if="editionImage.publicationYear || editionImage.languages.length" class="mt-1 text-xs text-ink/45">
+                {{ [editionImage.publicationYear, ...editionImage.languages].filter(Boolean).join(' · ') }}
+              </p>
+            </li>
+          </ul>
+          <div class="mt-5 rounded-xl border border-ink/10 bg-canvas px-4 py-3 text-sm">
+            <a :href="`${game.bggUrl}/files`" target="_blank" rel="noopener noreferrer" class="font-semibold text-indigo">{{ copy.communityFiles }} ↗</a>
+            <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.communityFilesHint }}</p>
           </div>
         </div>
       </section>
