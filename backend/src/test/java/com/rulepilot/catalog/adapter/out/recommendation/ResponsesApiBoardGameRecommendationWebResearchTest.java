@@ -8,7 +8,12 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoverySignal;
 import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Request;
+import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -102,6 +107,59 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     assertThat(tool.path("type").asText()).isEqualTo("web_search"));
             assertThat(authorization.get()).isEqualTo("Bearer secret-test-key");
             assertThat(body.get()).doesNotContain("secret-test-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void discoversCandidateIdsFromStructuredSignalsWithoutReceivingThePrivateTranscript() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, """
+                    {
+                      "output": [
+                        {"type":"web_search_call","action":{"sources":[
+                          {"title":"BGG item","url":"https://boardgamegeek.com/boardgame/60/example"},
+                          {"title":"Review","url":"https://reviews.example/game-60"}
+                        ]}},
+                        {"type":"message","content":[{"type":"output_text","text":"{\\\"candidates\\\":[{\\\"bggId\\\":60,\\\"name\\\":\\\"Example Game\\\",\\\"fitObservation\\\":\\\"Reviews describe the requested table experience.\\\",\\\"sourceIndexes\\\":[1,2]}]}"}]}
+                      ]
+                    }
+                    """);
+        });
+        server.start();
+        try {
+            ObjectMapper json = new ObjectMapper();
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> values = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(values);
+            when(values.get(anyString())).thenReturn(null);
+            when(values.increment(anyString())).thenReturn(1L);
+            var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                    new OkHttpClient(), json, redis, true, "secret-test-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "research-model", Duration.ofDays(7), 20, 2,
+                    Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+            var result = adapter.discover(new DiscoveryRequest(
+                    List.of(new DiscoverySignal("Science Fiction", FeatureMode.REQUIRED, FeatureSource.BGG_METADATA)),
+                    List.of(GameType.THEMATIC),
+                    "zh-CN"));
+
+            assertThat(result).hasValueSatisfying(discovery -> {
+                assertThat(discovery.candidates()).singleElement().satisfies(candidate -> {
+                    assertThat(candidate.bggId()).isEqualTo(60);
+                    assertThat(candidate.fitObservation()).contains("requested table experience");
+                    assertThat(candidate.sourceIndexes()).containsExactly(1, 2);
+                });
+                assertThat(discovery.sources()).hasSize(2);
+            });
+            assertThat(body.get()).contains("Science Fiction", "THEMATIC");
+            assertThat(body.get()).doesNotContain("科幻主题", "secret-test-key");
         } finally {
             server.stop(0);
         }

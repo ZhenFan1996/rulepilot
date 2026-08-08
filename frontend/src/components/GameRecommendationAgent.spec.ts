@@ -15,7 +15,10 @@ const game = {
 
 describe('GameRecommendationAgent', () => {
   beforeEach(() => localStorage.setItem('rulepilot:locale', 'zh-CN'))
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
 
   async function mountAgent() {
     const router = createRouter({
@@ -145,5 +148,32 @@ describe('GameRecommendationAgent', () => {
 
     expect(wrapper.text()).toContain('目录浏览不受影响')
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
+  })
+
+  it('shows bounded progress stages while a recommendation turn is still running', async () => {
+    vi.useFakeTimers()
+    let finish: ((response: Response) => void) | undefined
+    const pending = new Promise<Response>(resolve => { finish = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return pending
+    }))
+    const wrapper = await mountAgent()
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('想找有探索感的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').text()).toContain('正在理解这轮需求')
+
+    await vi.advanceTimersByTimeAsync(1300)
+    expect(wrapper.get('[role="status"]').text()).toContain('正在从 BGG 目录生成候选')
+
+    finish?.(Response.json({
+      outcome: 'no_match', mode: 'model_assisted', assistantMessage: '还需要再确认一个偏好。',
+      profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 20, games: [],
+    }))
+    await flushPromises()
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 })

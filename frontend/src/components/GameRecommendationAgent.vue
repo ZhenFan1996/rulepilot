@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import type {
@@ -21,7 +21,7 @@ const copy = {
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从 {source} 条 BGG 快照记录中补齐并比较了 {count} 款候选。', agent: 'Agent 动态规划', fallback: 'BGG 安全降级', more: '换一批',
     understanding: '我目前的理解（可以随时纠正）', basedOn: '来自：“{value}”', low: '低置信', medium: '中置信', high: '高置信',
-    catalogStatus: '已查询 BGG', researchStatus: '已联网调查', rerankStatus: '已完成个性化重排',
+    catalogStatus: '已查询 BGG', discoveryStatus: '已联网发现候选并经 BGG 验证', structuredStatus: '已按明确条件完成可验证排序', researchStatus: '已联网调查', rerankStatus: '已完成个性化重排',
     starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
     type: '类型：{value}', interaction: '互动：{value}',
   },
@@ -34,10 +34,15 @@ const copy = {
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Enriched and compared {count} candidates from {source} BGG snapshot records.', agent: 'Agent-planned', fallback: 'Safe BGG fallback', more: 'Try another batch',
     understanding: 'My current understanding (correct me anytime)', basedOn: 'From: “{value}”', low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence',
-    catalogStatus: 'BGG searched', researchStatus: 'Web research complete', rerankStatus: 'Personalized reranking complete',
+    catalogStatus: 'BGG searched', discoveryStatus: 'Web candidates discovered and verified by BGG', structuredStatus: 'Verifiable constraint ranking complete', researchStatus: 'Web research complete', rerankStatus: 'Personalized reranking complete',
     starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
   },
+} as const
+
+const loadingCopy = {
+  'zh-CN': ['正在理解这轮需求…', '正在从 BGG 目录生成候选…', '正在比较匹配度，需要时会联网核对…', '仍在处理；首次查询完成后，相同资料会被缓存。'],
+  en: ['Understanding this turn…', 'Generating candidates from the BGG catalog…', 'Comparing fit and researching when useful…', 'Still working; repeated public facts will be cached after the first lookup.'],
 } as const
 
 type CopyKey = Exclude<keyof typeof copy['zh-CN'], 'starters'>
@@ -61,11 +66,15 @@ const response = ref<RecommendationAgentResponse | null>(null)
 const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text: t('initial') }])
 const draft = ref('')
 const loading = ref(false)
+const loadingStage = ref(0)
 const failed = ref(false)
 const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
+let loadingTimers: Array<ReturnType<typeof setTimeout>> = []
+
+const loadingMessage = computed(() => loadingCopy[locale.value][loadingStage.value])
 
 const profileLabels = computed(() => {
   const labels: string[] = []
@@ -81,6 +90,8 @@ const harnessLabels = computed(() => {
   const actions = response.value?.harness?.actions ?? []
   const labels: string[] = []
   if (actions.includes('SEARCH_BGG_CATALOG')) labels.push(t('catalogStatus'))
+  if (actions.includes('DISCOVER_CANDIDATES')) labels.push(t('discoveryStatus'))
+  if (actions.includes('RANK_STRUCTURED_CANDIDATES')) labels.push(t('structuredStatus'))
   if (actions.includes('RESEARCH_GAME_FIT')) labels.push(t('researchStatus'))
   if (actions.includes('COMPOSE_RECOMMENDATIONS')) labels.push(t('rerankStatus'))
   return labels
@@ -94,12 +105,28 @@ async function csrfToken() {
   return csrf
 }
 
+function beginLoading() {
+  loadingTimers.forEach(timer => clearTimeout(timer))
+  loadingTimers = []
+  loadingStage.value = 0
+  loading.value = true
+  ;[1200, 4000, 9000].forEach((delay, index) => {
+    loadingTimers.push(setTimeout(() => { loadingStage.value = index + 1 }, delay))
+  })
+}
+
+function endLoading() {
+  loadingTimers.forEach(timer => clearTimeout(timer))
+  loadingTimers = []
+  loading.value = false
+}
+
 async function sendTurn(message: string, requestProfile: RecommendationProfile, userLabel?: string, excludedBggIds: number[] = [], focusedBggId: number | null = null) {
   if (userLabel) messages.value.push({ id: ++messageId, role: 'user', text: userLabel })
   const transcript = messages.value.slice(-24).map(item => ({ ...item }))
   const pending = { message, profile: { ...requestProfile }, excludedBggIds: [...excludedBggIds], focusedBggId, transcript }
   lastRequest.value = pending
-  loading.value = true
+  beginLoading()
   failed.value = false
   try {
     const token = await csrfToken()
@@ -118,7 +145,7 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
   } catch {
     failed.value = true
   } finally {
-    loading.value = false
+    endLoading()
   }
 }
 
@@ -154,7 +181,6 @@ function introduce(bggId: number, name: string) {
 function retry() {
   const pending = lastRequest.value
   if (!pending) return
-  loading.value = true
   failed.value = false
   void sendTurn(pending.message, pending.profile, undefined, pending.excludedBggIds, pending.focusedBggId)
 }
@@ -174,6 +200,8 @@ function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
 }
 
 watch(locale, reset)
+onMounted(() => { void csrfToken().catch(() => undefined) })
+onBeforeUnmount(endLoading)
 </script>
 
 <template>
@@ -195,7 +223,7 @@ watch(locale, reset)
       <div class="min-w-0 overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm">
         <div class="max-h-[30rem] space-y-3 overflow-y-auto px-4 py-5 sm:px-6" aria-live="polite">
           <div v-for="message in messages" :key="message.id" class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'"><p class="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6" :class="message.role === 'user' ? 'bg-indigo text-white' : 'bg-canvas text-ink/70'">{{ message.text }}</p></div>
-          <p v-if="loading" class="rounded-2xl bg-canvas px-4 py-3 text-sm text-ink/55" role="status">{{ t('sending') }}</p>
+          <div v-if="loading" class="flex items-center gap-3 rounded-2xl bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
         </div>
         <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-xl border border-indigo/20 bg-indigo/5 px-4 text-sm font-semibold text-indigo hover:border-indigo/50" @click="choose(option)">{{ option.label }}</button></div></div>
         <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-ink/65 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold text-danger underline" @click="retry">{{ t('retry') }}</button></div>

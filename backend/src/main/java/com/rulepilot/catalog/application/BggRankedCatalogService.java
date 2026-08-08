@@ -9,6 +9,7 @@ import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -67,16 +68,71 @@ public class BggRankedCatalogService implements BggRankedCatalog {
         return new BrowseResult(repository.findSnapshot(), ranked.total(), page, size, checkedSort, checkedType, games);
     }
 
+    /**
+     * Generates one bounded recommendation set from multiple BGG ranking channels and
+     * enriches the union in a single details batch.
+     */
+    public BrowseResult recommendationCandidates(
+            GameType requiredType, List<GameType> suggestedTypes, int size) {
+        GameType checkedRequiredType = requiredType == null ? GameType.ALL : requiredType;
+        if (size < 3 || size > 20) {
+            throw new IllegalArgumentException("recommendation candidate size must be between 3 and 20");
+        }
+        List<GameType> channels = recommendationChannels(checkedRequiredType, suggestedTypes);
+        List<List<RankedGame>> rankedChannels = channels.stream()
+                .map(type -> repository.find(new Query("", type, Sort.RANK, 0, size, List.of())).games())
+                .toList();
+        List<RankedGame> ranked = roundRobin(rankedChannels, size);
+        Map<Integer, DiscoveryGame> details = details(ranked);
+        List<BrowseGame> games = ranked.stream()
+                .map(game -> new BrowseGame(game, null, details.get(game.bggId())))
+                .toList();
+        Optional<Snapshot> snapshot = repository.findSnapshot();
+        long total = snapshot.map(Snapshot::gameCount).orElse(0);
+        return new BrowseResult(
+                snapshot, total, 0, size, Sort.RANK, checkedRequiredType, games);
+    }
+
     public List<BrowseGame> browseIds(List<Integer> bggIds) {
         List<Integer> ids = bggIds == null
                 ? List.of()
                 : bggIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
-        if (ids.isEmpty() || ids.size() > 5 || ids.stream().anyMatch(id -> id <= 0)) {
-            throw new IllegalArgumentException("focused BGG lookup requires one to five positive ids");
+        if (ids.isEmpty() || ids.size() > 12 || ids.stream().anyMatch(id -> id <= 0)) {
+            throw new IllegalArgumentException("BGG lookup requires one to twelve positive ids");
         }
         List<RankedGame> ranked = repository.findByIds(ids);
         Map<Integer, DiscoveryGame> details = details(ranked);
         return ranked.stream().map(game -> new BrowseGame(game, null, details.get(game.bggId()))).toList();
+    }
+
+    private List<GameType> recommendationChannels(GameType requiredType, List<GameType> suggestedTypes) {
+        if (requiredType != GameType.ALL) return List.of(requiredType);
+        LinkedHashSet<GameType> channels = new LinkedHashSet<>();
+        channels.add(GameType.ALL);
+        if (suggestedTypes != null) {
+            suggestedTypes.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .filter(type -> type != GameType.ALL && type != GameType.EXPANSION)
+                    .limit(2)
+                    .forEach(channels::add);
+        }
+        return List.copyOf(channels);
+    }
+
+    private List<RankedGame> roundRobin(List<List<RankedGame>> channels, int maximum) {
+        LinkedHashMap<Integer, RankedGame> selected = new LinkedHashMap<>();
+        for (int position = 0; selected.size() < maximum; position++) {
+            boolean found = false;
+            for (List<RankedGame> channel : channels) {
+                if (position >= channel.size()) continue;
+                found = true;
+                RankedGame game = channel.get(position);
+                selected.putIfAbsent(game.bggId(), game);
+                if (selected.size() == maximum) break;
+            }
+            if (!found) break;
+        }
+        return List.copyOf(selected.values());
     }
 
     private List<HotGame> hotGames() {

@@ -42,6 +42,8 @@ test('production deployment verifies live BGG recommendations and detail enrichm
 test('production deployment enables and exercises the bounded recommendation Agent', () => {
   assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_PROVIDER=spring-ai/)
   assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true/)
+  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S/)
+  assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8/)
   assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendation-agent\?locale=zh-CN/)
   assert.match(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
 })
