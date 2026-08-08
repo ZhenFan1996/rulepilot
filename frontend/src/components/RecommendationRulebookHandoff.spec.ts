@@ -1,0 +1,150 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { readPendingRulebookLessons } from '@/lib/pendingRulebookLesson'
+
+import RecommendationRulebookHandoff from './RecommendationRulebookHandoff.vue'
+
+const game = {
+  bggId: 266192,
+  name: '展翅翱翔',
+  originalName: 'Wingspan',
+  nameLocalized: true,
+  publicationYear: 2019,
+  overallRank: 34,
+  geekRating: 7.79,
+  averageRating: 8.09,
+  usersRated: 102030,
+  thumbnailUrl: 'https://example.test/wingspan.jpg',
+  minPlayers: 1,
+  maxPlayers: 5,
+  playingTimeMinutes: 70,
+  averageWeight: 2.5,
+  categories: ['动物'],
+  mechanics: ['卡牌轮抽'],
+  bggUrl: 'https://boardgamegeek.com/boardgame/266192',
+}
+
+describe('RecommendationRulebookHandoff', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('rulepilot:locale', 'zh-CN')
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  async function mountHandoff() {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(RecommendationRulebookHandoff, {
+      props: {
+        game,
+        profile: { players: 5, maxMinutes: 90, maxWeight: 3, type: 'all', interaction: 'any' },
+      },
+      global: { plugins: [router] },
+    })
+    return { wrapper, router }
+  }
+
+  it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: 'Wingspan Rulebook',
+          url: 'https://publisher.example/files/wingspan-rulebook.pdf',
+          publisher: 'Stonemaier Games',
+          language: 'English',
+          edition: 'Base game',
+          sourceDomain: 'publisher.example',
+          officialDomainVerified: true,
+        }],
+      })
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        duplicate: false,
+        version: { id: 'version-1', status: 'EXTRACTING' },
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper, router } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已选《展翅翱翔》')
+    expect(wrapper.text()).toContain('Wingspan Rulebook')
+    expect(wrapper.text()).toContain('English')
+    expect(wrapper.text()).toContain('域名匹配出版社')
+    expect(requests.find(request => request.path === '/api/v1/bgg/games/266192/import')?.options).toMatchObject({
+      method: 'POST',
+      headers: { 'X-CSRF-TOKEN': 'csrf' },
+    })
+
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    const importButton = wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!
+    expect(importButton.attributes('disabled')).toBeDefined()
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    expect(importButton.attributes('disabled')).toBeUndefined()
+    expect(requests.some(request => request.path === '/api/v1/documents/official-imports')).toBe(false)
+
+    await importButton.trigger('click')
+    await flushPromises()
+
+    const officialImport = requests.find(request => request.path === '/api/v1/documents/official-imports')
+    expect(JSON.parse(String(officialImport?.options?.body))).toEqual({
+      editionId: 'edition-1',
+      title: 'Wingspan Rulebook',
+      sourceType: 'BASE_RULEBOOK',
+      officialSourceUrl: 'https://publisher.example/files/wingspan-rulebook.pdf',
+      rightsConfirmed: true,
+    })
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
+      versionId: 'version-1',
+      editionId: 'edition-1',
+      playerCount: 5,
+      beginnerCount: 5,
+      durationMinutes: 25,
+    }])
+    expect(router.currentRoute.value.name).toBe('teach')
+    expect(router.currentRoute.value.query).toEqual({ editionId: 'edition-1', onboarding: 'recommendation-agent' })
+  })
+
+  it('does not download when discovery is unavailable and preserves a manual edition-aware fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: true,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({ configured: false, candidates: [] })
+      return new Response(null, { status: 500 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前没有找到可直接确认的官方 PDF')
+    const fallback = wrapper.get('a')
+    expect(fallback.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
+    expect(fallback.text()).toContain('本地上传')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+  })
+})
