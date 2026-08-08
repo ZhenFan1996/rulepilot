@@ -22,7 +22,7 @@ const copy = {
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从 {source} 条 BGG 快照记录中补齐并比较了 {count} 款候选。', agent: 'Agent 动态规划', fallback: 'BGG 安全降级', more: '换一批',
     understanding: '我目前的理解（可以随时纠正）', basedOn: '来自：“{value}”', low: '低置信', medium: '中置信', high: '高置信',
-    catalogStatus: '已查询 BGG', lookupStatus: '已按 BGG ID 读取详情', discoveryStatus: '已联网发现候选并经 BGG 验证', structuredStatus: '已按明确条件完成可验证排序', researchStatus: '已联网调查', rerankStatus: '已完成个性化重排',
+    catalogStatus: '已查询 BGG', lookupStatus: '已按 BGG ID 读取详情', discoveryStatus: '已联网发现候选并经 BGG 验证', structuredStatus: '已按明确条件完成可验证排序', researchStatus: '已联网调查', questionResearchStatus: '已围绕当前问题定向查证', rerankStatus: '已完成个性化重排', responseStatus: '已结合当前问题组织回答',
     starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
     type: '类型：{value}', interaction: '互动：{value}',
   },
@@ -35,7 +35,7 @@ const copy = {
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Enriched and compared {count} candidates from {source} BGG snapshot records.', agent: 'Agent-planned', fallback: 'Safe BGG fallback', more: 'Try another batch',
     understanding: 'My current understanding (correct me anytime)', basedOn: 'From: “{value}”', low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence',
-    catalogStatus: 'BGG searched', lookupStatus: 'BGG details loaded by ID', discoveryStatus: 'Web candidates discovered and verified by BGG', structuredStatus: 'Verifiable constraint ranking complete', researchStatus: 'Web research complete', rerankStatus: 'Personalized reranking complete',
+    catalogStatus: 'BGG searched', lookupStatus: 'BGG details loaded by ID', discoveryStatus: 'Web candidates discovered and verified by BGG', structuredStatus: 'Verifiable constraint ranking complete', researchStatus: 'Web research complete', questionResearchStatus: 'Focused question researched', rerankStatus: 'Personalized reranking complete', responseStatus: 'Response shaped around this question',
     starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
   },
@@ -72,6 +72,7 @@ const failed = ref(false)
 const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
 const knownGames = ref<RecommendationGame[]>([])
+const activeFocusedBggId = ref<number | null>(null)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingTimers: Array<ReturnType<typeof setTimeout>> = []
@@ -96,7 +97,9 @@ const harnessLabels = computed(() => {
   if (actions.includes('DISCOVER_CANDIDATES')) labels.push(t('discoveryStatus'))
   if (actions.includes('RANK_STRUCTURED_CANDIDATES')) labels.push(t('structuredStatus'))
   if (actions.includes('RESEARCH_GAME_FIT')) labels.push(t('researchStatus'))
+  if (actions.includes('RESEARCH_GAME_QUESTION')) labels.push(t('questionResearchStatus'))
   if (actions.includes('COMPOSE_RECOMMENDATIONS')) labels.push(t('rerankStatus'))
+  if (actions.includes('COMPOSE_GAME_RESPONSE')) labels.push(t('responseStatus'))
   return labels
 })
 
@@ -147,6 +150,12 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
     knownGames.value = [...parsed.games.map(entry => entry.game), ...knownGames.value]
       .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
       .slice(0, 60)
+    const actions = parsed.harness?.actions ?? []
+    if (actions.includes('LOOKUP_BGG_GAME') && pending.focusedBggId !== null) {
+      activeFocusedBggId.value = pending.focusedBggId
+    } else if (actions.includes('SEARCH_BGG_CATALOG') || actions.includes('DISCOVER_CANDIDATES')) {
+      activeFocusedBggId.value = parsed.games.length === 1 ? parsed.games[0]!.game.bggId : null
+    }
     messages.value.push({ id: ++messageId, role: 'assistant', text: parsed.assistantMessage })
   } catch {
     failed.value = true
@@ -170,11 +179,14 @@ function submitMessage() {
   if (!message || loading.value) return
   draft.value = ''
   const wantsAnotherBatch = /(?:再(?:来|推荐|换|找)|换|不满意|不喜欢|太重|太轻|more|another|different)/i.test(message)
-  const focusedBggId = wantsAnotherBatch ? null : resolveKnownGameReference(message)
+  const referencedBggId = resolveKnownGameReference(message)
+  if (referencedBggId !== null) activeFocusedBggId.value = referencedBggId
+  if (wantsAnotherBatch) activeFocusedBggId.value = null
+  const focusedBggId = wantsAnotherBatch ? null : referencedBggId ?? activeFocusedBggId.value
   void sendTurn(message, profile.value, message, wantsAnotherBatch ? seenBggIds.value : [], focusedBggId)
 }
 
-function resolveKnownGameReference(message: string) {
+function resolveKnownGameReference(message: string): number | null {
   const normalizedMessage = normalizeReference(message)
   if (!normalizedMessage) return null
   const matches = knownGames.value.flatMap(game => [game.name, game.originalName]
@@ -185,7 +197,7 @@ function resolveKnownGameReference(message: string) {
   if (!matches.length) return null
   const longest = Math.max(...matches.map(match => match.length))
   const ids = [...new Set(matches.filter(match => match.length === longest).map(match => match.bggId))]
-  return ids.length === 1 ? ids[0] : null
+  return ids.length === 1 ? ids[0]! : null
 }
 
 function normalizeReference(value: string) {
@@ -199,6 +211,7 @@ function moreGames() {
 
 function introduce(bggId: number, name: string) {
   if (loading.value) return
+  activeFocusedBggId.value = bggId
   const message = locale.value === 'zh-CN' ? `介绍一下《${name}》` : `Tell me more about ${name}`
   void sendTurn(message, profile.value, message, [], bggId)
 }
@@ -219,6 +232,7 @@ function reset() {
   lastRequest.value = null
   seenBggIds.value = []
   knownGames.value = []
+  activeFocusedBggId.value = null
 }
 
 function confidenceLabel(confidence: 'low' | 'medium' | 'high') {

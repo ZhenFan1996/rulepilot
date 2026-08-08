@@ -83,9 +83,23 @@ public class BoardGameRecommendationAgent {
                         || !plan.userModel().hypotheses().isEmpty())
                 .orElse(false);
 
-        if (planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent()
-                && !turn.hasPreferenceSignal()
-                && !plannedPreferenceSignal) {
+        if (planned.filter(plan -> plan.act() == DialogueAct.RESPOND).isPresent()) {
+            Plan plan = planned.orElseThrow();
+            return response(
+                    Outcome.CONVERSATION,
+                    DecisionMode.MODEL_ASSISTED,
+                    plan.assistantMessage(),
+                    turn.profile(),
+                    null,
+                    0,
+                    0,
+                    userModel,
+                    List.of(),
+                    new HarnessTrace(modelCalls, catalogCalls, researchCalls, false, actions),
+                    List.of());
+        }
+
+        if (planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent()) {
             Plan plan = planned.orElseThrow();
             String message = !plan.assistantMessage().isBlank() ? plan.assistantMessage() : plan.nextQuestion();
             return response(
@@ -94,6 +108,26 @@ public class BoardGameRecommendationAgent {
                     message,
                     turn.profile(),
                     conversationalClarification(plan.nextQuestion()),
+                    0,
+                    0,
+                    userModel,
+                    List.of(),
+                    new HarnessTrace(modelCalls, catalogCalls, researchCalls, false, actions),
+                    List.of());
+        }
+        if (planned.filter(plan -> plan.act() == DialogueAct.EXPLAIN).isPresent()
+                && request.focusedBggId() == null) {
+            Plan plan = planned.orElseThrow();
+            String question = !plan.nextQuestion().isBlank()
+                    ? plan.nextQuestion()
+                    : chinese(locale) ? "你想继续了解刚才哪一款？" : "Which game would you like to keep discussing?";
+            String message = !plan.assistantMessage().isBlank() ? plan.assistantMessage() : question;
+            return response(
+                    Outcome.NEEDS_CLARIFICATION,
+                    DecisionMode.MODEL_ASSISTED,
+                    message,
+                    turn.profile(),
+                    conversationalClarification(question),
                     0,
                     0,
                     userModel,
@@ -122,11 +156,22 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
 
+        boolean focusedDiscussion = request.focusedBggId() != null
+                && planned.map(plan -> plan.act() == DialogueAct.EXPLAIN).orElse(true);
+        List<Integer> effectiveExcludedBggIds = focusedDiscussion || request.focusedBggId() == null
+                ? request.excludedBggIds()
+                : java.util.stream.Stream.concat(
+                                java.util.stream.Stream.of(request.focusedBggId()),
+                                request.excludedBggIds().stream())
+                        .distinct()
+                        .limit(60)
+                        .toList();
+
         List<Game> sourceGames;
         int sourceCount;
         catalogCalls++;
         CatalogObservation catalogObservation;
-        if (request.focusedBggId() != null) {
+        if (focusedDiscussion) {
             catalogObservation = tools.lookupGame(request.focusedBggId());
         } else {
             RetrievalPlan plannedRetrieval = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
@@ -144,8 +189,8 @@ public class BoardGameRecommendationAgent {
         List<Integer> discoveredBggIds = List.of();
         Research candidateDiscoveryEvidence = Research.empty();
         CandidatePool pool = selector.prepare(
-                sourceGames, turn.profile(), request.excludedBggIds(), retrievalPlan, discoveredBggIds);
-        if (request.focusedBggId() == null && shouldDiscoverCandidates(retrievalPlan, pool)
+                sourceGames, turn.profile(), effectiveExcludedBggIds, retrievalPlan, discoveredBggIds);
+        if (!focusedDiscussion && shouldDiscoverCandidates(retrievalPlan, pool)
                 && tools.webResearchConfigured()) {
             researchCalls++;
             actions.add("DISCOVER_CANDIDATES");
@@ -171,7 +216,7 @@ public class BoardGameRecommendationAgent {
                         pool = selector.prepare(
                                 sourceGames,
                                 turn.profile(),
-                                request.excludedBggIds(),
+                                effectiveExcludedBggIds,
                                 retrievalPlan,
                                 discoveredBggIds);
                     } else {
@@ -212,17 +257,20 @@ public class BoardGameRecommendationAgent {
         }
 
         Research research = candidateDiscoveryEvidence;
-        boolean researchUseful = planned.filter(plan -> researchJustified(plan, request.focusedBggId() != null))
+        boolean researchUseful = planned.filter(plan -> researchJustified(plan, focusedDiscussion))
                 .isPresent();
         if (researchUseful && research.games().isEmpty() && tools.webResearchConfigured()) {
             List<BoardGameRecommendationAdvisor.Candidate> candidates = selector.advisorCandidates(pool).stream()
                     .limit(5)
                     .toList();
             researchCalls++;
-            Optional<Research> researched = tools.researchGameFit(candidates, locale).result();
+            String researchQuestion = focusedDiscussion
+                    ? planned.map(Plan::researchQuestion).orElse("")
+                    : "";
+            Optional<Research> researched = tools.researchGameFit(candidates, locale, researchQuestion).result();
             if (researched.isPresent()) {
                 research = researched.get();
-                actions.add("RESEARCH_GAME_FIT");
+                actions.add(researchQuestion.isBlank() ? "RESEARCH_GAME_FIT" : "RESEARCH_GAME_QUESTION");
             }
         }
 
@@ -238,8 +286,11 @@ public class BoardGameRecommendationAgent {
                     selector.advisorCandidates(completedPool),
                     research,
                     request.focusedBggId(),
-                    locale));
-            if (slate.isPresent()) actions.add("COMPOSE_RECOMMENDATIONS");
+                    locale,
+                    planned.orElseThrow().act()));
+            if (slate.isPresent()) {
+                actions.add(focusedDiscussion ? "COMPOSE_GAME_RESPONSE" : "COMPOSE_RECOMMENDATIONS");
+            }
         }
         if (structuredRanking) actions.add("RANK_STRUCTURED_CANDIDATES");
 
@@ -661,6 +712,7 @@ public class BoardGameRecommendationAgent {
     }
 
     public enum Outcome {
+        CONVERSATION,
         NEEDS_CLARIFICATION,
         RECOMMENDATIONS,
         NO_MATCH,

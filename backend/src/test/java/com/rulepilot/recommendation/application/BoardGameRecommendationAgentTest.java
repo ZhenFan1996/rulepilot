@@ -172,7 +172,7 @@ class BoardGameRecommendationAgentTest {
             }
         };
         Plan plan = new Plan(
-                DialogueAct.ASK,
+                DialogueAct.RECOMMEND,
                 new PreferencePatch(null, null, null, null, null),
                 new UserModel("明确想要科幻题材", List.of()),
                 "我会先按题材找候选。",
@@ -242,6 +242,57 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void keepsAPlannerQuestionConversationalAfterPreferencesAlreadyExist() {
+        Plan plan = new Plan(
+                DialogueAct.ASK,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("已经知道是四人局，仍需确认想要的体验", List.of()),
+                "四人没问题。你们今晚更想合作解题，还是互相较量？",
+                "更想合作解题，还是互相较量？",
+                false,
+                "");
+        Fixture fixture = new Fixture(request -> Optional.of(plan), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                new RecommendationProfile(4, null, null, BggGameType.ALL, InteractionPreference.ANY),
+                "人数就是四个，先聊聊方向",
+                List.of(),
+                List.of(new DialogueMessage("user", "人数就是四个，先聊聊方向")),
+                null), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
+        assertThat(response.assistantMessage()).contains("更想合作解题");
+        assertThat(fixture.repository.queries).isEmpty();
+        assertThat(response.harness().catalogCalls()).isZero();
+    }
+
+    @Test
+    void keepsOrdinaryDialogueConversationalWithoutForcingCatalogWork() {
+        Plan plan = new Plan(
+                DialogueAct.RESPOND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("用户在回应上一轮说明", List.of()),
+                "对，就是这个意思。你可以继续问它的机制、回合流程，或者让我拿它和别的游戏比较。",
+                "",
+                false,
+                "");
+        Fixture fixture = new Fixture(request -> Optional.of(plan), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                new RecommendationProfile(4, 90, null, BggGameType.STRATEGY, InteractionPreference.ANY),
+                "明白了",
+                List.of(),
+                List.of(new DialogueMessage("user", "明白了")),
+                20), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.assistantMessage()).contains("继续问它的机制");
+        assertThat(fixture.repository.queries).isEmpty();
+        assertThat(fixture.repository.focusedIds).isEmpty();
+        assertThat(response.harness().catalogCalls()).isZero();
+    }
+
+    @Test
     void researchesAFocusedGameAndKeepsEveryClaimAttachedToAnAllowListedSource() {
         AtomicInteger researchCalls = new AtomicInteger();
         var research = new BoardGameRecommendationWebResearch() {
@@ -255,6 +306,7 @@ class BoardGameRecommendationAgentTest {
                 researchCalls.incrementAndGet();
                 assertThat(request.candidates()).extracting(BoardGameRecommendationAdvisor.Candidate::bggId)
                         .containsExactly(20);
+                assertThat(request.question()).isEqualTo("查证这款游戏的桌上节奏");
                 return Optional.of(new Research(
                         List.of(new GameResearch(20, List.of(new Observation("玩家普遍认为轮次流畅", List.of(1))))),
                         List.of(new Source(1, "Publisher guide", "https://publisher.example/game-20", "publisher.example"))));
@@ -300,6 +352,7 @@ class BoardGameRecommendationAgentTest {
             assertThat(source.url()).startsWith("https://");
         });
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().actions()).contains("RESEARCH_GAME_QUESTION");
     }
 
     @Test
@@ -325,10 +378,17 @@ class BoardGameRecommendationAgentTest {
                 "");
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
-                request -> Optional.of(new Slate(
-                        "这是刚才那款游戏的详细介绍。",
-                        "",
-                        List.of(new Choice(20, List.of("延续刚才的候选"), List.of(), List.of())))),
+                request -> {
+                    assertThat(request.act()).isEqualTo(DialogueAct.EXPLAIN);
+                    assertThat(request.candidates()).singleElement().satisfies(candidate -> {
+                        assertThat(candidate.description()).contains("回合中派遣代理人");
+                        assertThat(candidate.mechanics()).contains("Card Drafting");
+                    });
+                    return Optional.of(new Slate(
+                            "这是刚才那款游戏的详细介绍。",
+                            "",
+                            List.of(new Choice(20, List.of("延续刚才的候选"), List.of(), List.of()))));
+                },
                 research);
 
         var response = fixture.agent.converse(new ConversationRequest(
@@ -343,10 +403,41 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isZero();
         assertThat(response.harness().actions())
-                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "COMPOSE_RECOMMENDATIONS");
+                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "COMPOSE_GAME_RESPONSE");
         assertThat(response.games()).singleElement()
                 .extracting(game -> game.game().ranking().bggId())
                 .isEqualTo(20);
+    }
+
+    @Test
+    void treatsAFocusedIdAsConversationContextWhenThePlannerRequestsAlternatives() {
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, new BigDecimal("2.3"), null, null),
+                new UserModel("想以当前游戏为参照找更轻的替代", List.of()),
+                "我用它作参照，换几款更轻的。",
+                "哪一款更接近？",
+                false,
+                "");
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "这几款保留互动感，但更容易上手。",
+                        "哪一款更接近？",
+                        List.of(new Choice(30, List.of("相对更轻"), List.of(), List.of())))),
+                new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "有没有类似但更简单的？",
+                List.of(),
+                List.of(new DialogueMessage("user", "有没有类似但更简单的？")),
+                20), "zh-CN");
+
+        assertThat(fixture.repository.queries).isNotEmpty();
+        assertThat(fixture.repository.focusedIds).isEmpty();
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(30);
+        assertThat(response.harness().actions()).contains("SEARCH_BGG_CATALOG").doesNotContain("LOOKUP_BGG_GAME");
     }
 
     @Test
@@ -804,7 +895,24 @@ class BoardGameRecommendationAgentTest {
 
         @Override
         public GameDetails game(int bggId) {
-            throw new UnsupportedOperationException();
+            return new GameDetails(
+                    bggId,
+                    "Game " + bggId,
+                    "玩家在回合中派遣代理人，并通过卡牌构筑强化后续行动。",
+                    "https://example.test/" + bggId + "-thumb.jpg",
+                    2025,
+                    1,
+                    5,
+                    60,
+                    10,
+                    "https://example.test/" + bggId + ".jpg",
+                    new BigDecimal("8.5"),
+                    new BigDecimal("2.4"),
+                    List.of("Strategy"),
+                    List.of("Card Drafting", "Worker Placement"),
+                    List.of("Designer " + bggId),
+                    List.of("Publisher " + bggId),
+                    bggId == 20 ? List.of("二十号游戏") : List.of());
         }
     }
 }

@@ -144,7 +144,13 @@ class BoardGameRecommendationSelector {
                 details.mechanics(),
                 details.families(),
                 details.designers(),
-                details.publishers());
+                details.publishers(),
+                boundedDescription(details.description()));
+    }
+
+    private String boundedDescription(String value) {
+        String description = value == null ? "" : value.strip().replaceAll("\\s+", " ");
+        return description.length() <= 4_000 ? description : description.substring(0, 4_000);
     }
 
     private Comparator<Game> candidateComparator(

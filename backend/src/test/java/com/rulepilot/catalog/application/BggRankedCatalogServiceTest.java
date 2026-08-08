@@ -53,6 +53,22 @@ class BggRankedCatalogServiceTest {
         assertThat(bgg.detailIds).isEmpty();
     }
 
+    @Test
+    void loadsTheRichBggRecordForAFocusedRecommendationConversation() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.findGameById(10);
+
+        assertThat(result).hasValueSatisfying(game -> {
+            assertThat(game.details().officialChineseName()).isEqualTo("策略十号");
+            assertThat(game.details().description()).contains("deploy agents");
+            assertThat(game.details().mechanics()).contains("Worker Placement", "Deck Building");
+            assertThat(game.details().imageUrl()).isEqualTo("https://example.test/10.jpg");
+        });
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 
@@ -70,6 +86,14 @@ class BggRankedCatalogServiceTest {
                     query.page(),
                     query.size(),
                     List.of(game(10, 10), game(20, 20)));
+        }
+
+        @Override
+        public List<RankedGame> findByIds(List<Integer> bggIds) {
+            return bggIds.stream()
+                    .filter(id -> id == 10 || id == 20)
+                    .map(id -> game(id, id))
+                    .toList();
         }
 
         private RankedGame game(int id, int rank) {
@@ -143,7 +167,24 @@ class BggRankedCatalogServiceTest {
 
         @Override
         public GameDetails game(int bggId) {
-            throw new UnsupportedOperationException();
+            return new GameDetails(
+                    bggId,
+                    "Game " + bggId,
+                    "Players deploy agents and build their deck.",
+                    "https://example.test/" + bggId + "-thumb.jpg",
+                    2026,
+                    2,
+                    4,
+                    60,
+                    12,
+                    "https://example.test/" + bggId + ".jpg",
+                    new BigDecimal("8.1"),
+                    new BigDecimal("2.5"),
+                    List.of("Strategy"),
+                    List.of("Worker Placement", "Deck Building"),
+                    List.of("Designer"),
+                    List.of("Publisher"),
+                    bggId == 10 ? List.of("策略十号") : List.of());
         }
     }
 }

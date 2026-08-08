@@ -165,6 +165,47 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
         }
     }
 
+    @Test
+    void researchesOnlyTheFocusedQuestionWithoutReceivingThePrivateTranscript() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            respond(exchange, """
+                    {"output":[
+                      {"type":"web_search_call","action":{"sources":[
+                        {"title":"Publisher rules","url":"https://publisher.example/rules"}]}},
+                      {"type":"message","content":[{"type":"output_text","text":"{\\"games\\":[{\\"bggId\\":10,\\"observations\\":[{\\"text\\":\\"Each round alternates agent turns before a reveal turn.\\",\\"sourceIndexes\\":[1]}]}]}"}]}
+                    ]}
+                    """);
+        });
+        server.start();
+        try {
+            ObjectMapper json = new ObjectMapper();
+            StringRedisTemplate redis = mock(StringRedisTemplate.class);
+            @SuppressWarnings("unchecked")
+            ValueOperations<String, String> values = mock(ValueOperations.class);
+            when(redis.opsForValue()).thenReturn(values);
+            when(values.get(anyString())).thenReturn(null);
+            when(values.increment(anyString())).thenReturn(1L);
+            var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                    new OkHttpClient(), json, redis, true, "secret-test-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "research-model", Duration.ofDays(7), 20, 2,
+                    Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+            var result = adapter.research(new Request(
+                    List.of(candidate(10)), "zh-CN", "这款游戏一轮具体怎么玩？"));
+
+            assertThat(result).isPresent();
+            assertThat(body.get())
+                    .contains("这款游戏一轮具体怎么玩？", "Answer only the supplied question")
+                    .doesNotContain("我和朋友周末在家", "secret-test-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private Candidate candidate(int id) {
         return new Candidate(
                 id,

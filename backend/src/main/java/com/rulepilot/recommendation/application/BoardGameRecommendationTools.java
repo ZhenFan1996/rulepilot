@@ -49,7 +49,17 @@ public class BoardGameRecommendationTools {
     }
 
     CatalogObservation lookupGame(int bggId) {
-        return lookupGames(List.of(bggId), ToolName.LOOKUP_BGG_GAME);
+        try {
+            return new CatalogObservation(
+                    ToolStatus.SUCCESS,
+                    ToolName.LOOKUP_BGG_GAME,
+                    catalog.gameCount(),
+                    catalog.findGameById(bggId).map(List::of).orElseGet(List::of),
+                    "");
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation BGG-ID detail tool failed");
+            return CatalogObservation.error(ToolName.LOOKUP_BGG_GAME, "CATALOG_UNAVAILABLE");
+        }
     }
 
     CatalogObservation lookupCandidates(List<Integer> bggIds) {
@@ -82,10 +92,10 @@ public class BoardGameRecommendationTools {
         }
     }
 
-    ResearchObservation researchGameFit(List<Candidate> candidates, String locale) {
+    ResearchObservation researchGameFit(List<Candidate> candidates, String locale, String question) {
         if (!webResearch.configured()) return ResearchObservation.unavailable();
         try {
-            return webResearch.research(new BoardGameRecommendationWebResearch.Request(candidates, locale))
+            return webResearch.research(new BoardGameRecommendationWebResearch.Request(candidates, locale, question))
                     .map(value -> new ResearchObservation(ToolStatus.SUCCESS, value, ""))
                     .orElseGet(() -> new ResearchObservation(ToolStatus.PARTIAL, Research.empty(), "NO_RESEARCH_RESULT"));
         } catch (RuntimeException exception) {
@@ -103,7 +113,8 @@ public class BoardGameRecommendationTools {
         LOOKUP_BGG_GAME,
         LOOKUP_BGG_CANDIDATES,
         DISCOVER_CANDIDATES,
-        RESEARCH_GAME_FIT
+        RESEARCH_GAME_FIT,
+        RESEARCH_GAME_QUESTION
     }
 
     enum ToolStatus {

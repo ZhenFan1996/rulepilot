@@ -26,7 +26,27 @@ public interface BoardGameRecommendationAdvisor {
             List<Candidate> candidates,
             BoardGameRecommendationWebResearch.Research research,
             Integer focusedBggId,
-            String locale) {}
+            String locale,
+            DialogueAct act) {
+        public CompositionRequest(
+                List<DialogueMessage> transcript,
+                ProfileView profile,
+                UserModel userModel,
+                List<Candidate> candidates,
+                BoardGameRecommendationWebResearch.Research research,
+                Integer focusedBggId,
+                String locale) {
+            this(
+                    transcript,
+                    profile,
+                    userModel,
+                    candidates,
+                    research,
+                    focusedBggId,
+                    locale,
+                    focusedBggId == null ? DialogueAct.RECOMMEND : DialogueAct.EXPLAIN);
+        }
+    }
 
     record DialogueMessage(String role, String text) {}
 
@@ -73,6 +93,9 @@ public interface BoardGameRecommendationAdvisor {
         }
 
         public Plan {
+            assistantMessage = assistantMessage == null ? "" : assistantMessage;
+            nextQuestion = nextQuestion == null ? "" : nextQuestion;
+            researchQuestion = researchQuestion == null ? "" : researchQuestion;
             retrievalPlan = retrievalPlan == null ? RetrievalPlan.empty() : retrievalPlan;
         }
     }
@@ -123,7 +146,61 @@ public interface BoardGameRecommendationAdvisor {
             List<String> mechanics,
             List<String> families,
             List<String> designers,
-            List<String> publishers) {}
+            List<String> publishers,
+            String description) {
+        public Candidate(
+                int bggId,
+                String name,
+                Integer year,
+                Integer rank,
+                BigDecimal rating,
+                BigDecimal weight,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer minutes,
+                Integer minimumMinutes,
+                Integer maximumMinutes,
+                Integer minimumAge,
+                Integer suggestedMinimumAge,
+                String bestWith,
+                String recommendedWith,
+                Integer languageDependenceLevel,
+                Integer weightVotes,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> families,
+                List<String> designers,
+                List<String> publishers) {
+            this(
+                    bggId,
+                    name,
+                    year,
+                    rank,
+                    rating,
+                    weight,
+                    minPlayers,
+                    maxPlayers,
+                    minutes,
+                    minimumMinutes,
+                    maximumMinutes,
+                    minimumAge,
+                    suggestedMinimumAge,
+                    bestWith,
+                    recommendedWith,
+                    languageDependenceLevel,
+                    weightVotes,
+                    categories,
+                    mechanics,
+                    families,
+                    designers,
+                    publishers,
+                    "");
+        }
+
+        public Candidate {
+            description = description == null ? "" : description;
+        }
+    }
 
     record Slate(String assistantMessage, String nextQuestion, List<Choice> choices) {}
 
@@ -136,6 +213,7 @@ public interface BoardGameRecommendationAdvisor {
     record ResearchedReason(String text, List<Integer> sourceIndexes) {}
 
     enum DialogueAct {
+        RESPOND,
         ASK,
         RECOMMEND,
         EXPLAIN

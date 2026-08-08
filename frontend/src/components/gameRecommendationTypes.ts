@@ -48,7 +48,7 @@ export type RecommendedGame = {
 export type ResearchSource = { index: number; title: string; url: string; domain: string }
 
 export type RecommendationAgentResponse = {
-  outcome: 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
+  outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
   mode: 'deterministic' | 'model_assisted'
   assistantMessage: string
   profile: RecommendationProfile

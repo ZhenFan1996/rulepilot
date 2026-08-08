@@ -2,6 +2,7 @@ package com.rulepilot.catalog;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Optional;
 
 /** Read-only catalog capability exposed to the independent recommendation module. */
 public interface BoardGameRecommendationCatalog {
@@ -9,6 +10,10 @@ public interface BoardGameRecommendationCatalog {
     CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum);
 
     List<Game> findGamesByIds(List<Integer> bggIds);
+
+    default Optional<Game> findGameById(int bggId) {
+        return findGamesByIds(List.of(bggId)).stream().findFirst();
+    }
 
     int gameCount();
 
@@ -49,7 +54,55 @@ public interface BoardGameRecommendationCatalog {
             Integer weightVotes,
             List<String> families,
             List<String> designers,
-            List<String> publishers) {
+            List<String> publishers,
+            String description,
+            String imageUrl) {
+        public Details(
+                String name,
+                String officialChineseName,
+                String thumbnailUrl,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                BigDecimal averageWeight,
+                List<String> categories,
+                List<String> mechanics,
+                Integer minimumPlayTimeMinutes,
+                Integer maximumPlayTimeMinutes,
+                Integer minimumAge,
+                Integer suggestedMinimumAge,
+                String bestWith,
+                String recommendedWith,
+                Integer languageDependenceLevel,
+                Integer weightVotes,
+                List<String> families,
+                List<String> designers,
+                List<String> publishers) {
+            this(
+                    name,
+                    officialChineseName,
+                    thumbnailUrl,
+                    minPlayers,
+                    maxPlayers,
+                    playingTimeMinutes,
+                    averageWeight,
+                    categories,
+                    mechanics,
+                    minimumPlayTimeMinutes,
+                    maximumPlayTimeMinutes,
+                    minimumAge,
+                    suggestedMinimumAge,
+                    bestWith,
+                    recommendedWith,
+                    languageDependenceLevel,
+                    weightVotes,
+                    families,
+                    designers,
+                    publishers,
+                    "",
+                    "");
+        }
+
         public Details {
             officialChineseName = officialChineseName == null ? "" : officialChineseName;
             categories = List.copyOf(categories);
@@ -59,6 +112,8 @@ public interface BoardGameRecommendationCatalog {
             families = List.copyOf(families);
             designers = List.copyOf(designers);
             publishers = List.copyOf(publishers);
+            description = description == null ? "" : description;
+            imageUrl = imageUrl == null ? "" : imageUrl;
         }
     }
 }
