@@ -12,6 +12,7 @@ import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import com.rulepilot.catalog.application.GameCatalogService;
 import com.rulepilot.catalog.application.GameCatalogView;
+import com.rulepilot.catalog.application.SimplifiedChineseText;
 import com.rulepilot.catalog.domain.BggGameMetadata;
 import com.rulepilot.catalog.domain.Expansion;
 import com.rulepilot.catalog.domain.Game;
@@ -63,15 +64,17 @@ public class GameCatalogController {
     }
 
     @GetMapping("/bgg/search")
-    List<BggSearchResult> searchBgg(@RequestParam("q") String query) {
+    List<BggSearchResult> searchBgg(
+            @RequestParam("q") String query,
+            @RequestParam(defaultValue = "en") String locale) {
         requireBgg();
-        return bggService.search(query).stream().map(BggSearchResult::from).toList();
+        return bggService.search(query).stream().map(result -> BggSearchResult.from(result, locale)).toList();
     }
 
     @GetMapping("/bgg/hot")
-    List<BggHotGameResponse> hotBggGames() {
+    List<BggHotGameResponse> hotBggGames(@RequestParam(defaultValue = "en") String locale) {
         requireBgg();
-        return bggService.hotGames().stream().map(BggHotGameResponse::from).toList();
+        return bggService.hotGames().stream().map(game -> BggHotGameResponse.from(game, locale)).toList();
     }
 
     @GetMapping("/bgg/recommendations")
@@ -160,11 +163,22 @@ public class GameCatalogController {
 
     record BggStatus(boolean configured) {}
 
-    record BggSearchResult(int bggId, String name, Integer publicationYear, String bggUrl) {
-        static BggSearchResult from(SearchResult result) {
+    record BggSearchResult(
+            int bggId,
+            String name,
+            String originalName,
+            boolean nameLocalized,
+            Integer publicationYear,
+            String bggUrl) {
+        static BggSearchResult from(SearchResult result, String locale) {
+            String displayName = BggMetadataLocalizationService.isSimplifiedChinese(locale)
+                    ? SimplifiedChineseText.normalize(result.name())
+                    : result.name();
             return new BggSearchResult(
                     result.bggId(),
+                    displayName,
                     result.name(),
+                    false,
                     result.publicationYear(),
                     "https://boardgamegeek.com/boardgame/" + result.bggId());
         }
@@ -174,14 +188,21 @@ public class GameCatalogController {
             int rank,
             int bggId,
             String name,
+            String originalName,
+            boolean nameLocalized,
             Integer publicationYear,
             String thumbnailUrl,
             String bggUrl) {
-        static BggHotGameResponse from(HotGame game) {
+        static BggHotGameResponse from(HotGame game, String locale) {
+            String displayName = BggMetadataLocalizationService.isSimplifiedChinese(locale)
+                    ? SimplifiedChineseText.normalize(game.name())
+                    : game.name();
             return new BggHotGameResponse(
                     game.rank(),
                     game.bggId(),
+                    displayName,
                     game.name(),
+                    false,
                     game.publicationYear(),
                     game.thumbnailUrl(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
@@ -210,7 +231,11 @@ public class GameCatalogController {
             return new BggRecommendationResponse(
                     game.rank(),
                     game.bggId(),
-                    localized ? game.chineseName() : game.name(),
+                    localized
+                            ? game.chineseName()
+                            : BggMetadataLocalizationService.isSimplifiedChinese(locale)
+                                    ? SimplifiedChineseText.normalize(game.name())
+                                    : game.name(),
                     game.name(),
                     localized,
                     game.publicationYear(),

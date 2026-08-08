@@ -12,6 +12,8 @@ import com.rulepilot.catalog.application.BggCatalogImportService.DiscoveryPage;
 import com.rulepilot.catalog.application.BggCatalogImportService.RecommendationSort;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
 import com.rulepilot.catalog.application.GameCatalogService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -19,6 +21,26 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class GameCatalogControllerTest {
+
+    @Test
+    void normalizesTraditionalSourceNamesInSearchAndHotResultsWithoutClaimingOfficialLocalization() {
+        BggCatalogImportService bgg = mock(BggCatalogImportService.class);
+        when(bgg.configured()).thenReturn(true);
+        when(bgg.search("寶島")).thenReturn(List.of(new SearchResult(42, "奇幻寶島", 2026)));
+        when(bgg.hotGames()).thenReturn(List.of(new HotGame(1, 42, "奇幻寶島", 2026, "cover")));
+        GameCatalogController controller = new GameCatalogController(
+                mock(GameCatalogService.class), bgg, mock(BggMetadataLocalizationService.class));
+
+        var search = controller.searchBgg("寶島", "zh-CN").getFirst();
+        var hot = controller.hotBggGames("zh-CN").getFirst();
+
+        assertThat(search.name()).isEqualTo("奇幻宝岛");
+        assertThat(search.originalName()).isEqualTo("奇幻寶島");
+        assertThat(search.nameLocalized()).isFalse();
+        assertThat(hot.name()).isEqualTo("奇幻宝岛");
+        assertThat(hot.originalName()).isEqualTo("奇幻寶島");
+        assertThat(hot.nameLocalized()).isFalse();
+    }
 
     @Test
     void exposesAttributedPlayerFitRecommendations() {

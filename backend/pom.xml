@@ -24,6 +24,7 @@
         <okhttp.version>5.3.2</okhttp.version>
         <pdfbox.version>3.0.8</pdfbox.version>
         <jai-imageio-jpeg2000.version>1.4.0</jai-imageio-jpeg2000.version>
+        <opencc4j.version>1.14.0</opencc4j.version>
         <spring-ai.version>2.0.0</spring-ai.version>
         <jackson-2-bom.version>2.21.5</jackson-2-bom.version>
         <argLine></argLine>
@@ -132,6 +133,11 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-csv</artifactId>
             <version>1.14.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.houbb</groupId>
+            <artifactId>opencc4j</artifactId>
+            <version>${opencc4j.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.pdfbox</groupId>

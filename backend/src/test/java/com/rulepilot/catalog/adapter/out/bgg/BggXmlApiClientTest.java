@@ -51,7 +51,7 @@ class BggXmlApiClientTest {
                   <statistics><ratings><average value="8.1"/><averageweight value="2.5"/></ratings></statistics>
                   <versions>
                     <item type="boardgameversion" id="0">
-                      <canonicalname value="翼展"/>
+                      <canonicalname value="鳥翼寶島"/>
                       <name type="primary" value="Chinese edition"/>
                       <link type="language" value="Chinese"/>
                     </item>
@@ -83,7 +83,7 @@ class BggXmlApiClientTest {
         assertThat(game.mechanics()).containsExactly("Card Drafting");
         assertThat(game.designers()).containsExactly("Elizabeth Hargrave");
         assertThat(game.publishers()).containsExactly("Stonemaier Games");
-        assertThat(game.officialChineseNames()).containsExactly("展翅翱翔", "翼展");
+        assertThat(game.officialChineseNames()).containsExactly("展翅翱翔", "鸟翼宝岛");
     }
 
     @Test
@@ -121,7 +121,7 @@ class BggXmlApiClientTest {
                     <statistics><ratings><average value="7.81234"/><averageweight value="3.14"/></ratings></statistics>
                     <versions>
                       <item type="boardgameversion" id="9">
-                        <canonicalname value="热门策略游戏"/>
+                        <canonicalname value="熱門策略遊戲"/>
                         <name type="primary" value="Simplified Chinese edition"/>
                         <link type="language" value="Chinese"/>
                       </item>

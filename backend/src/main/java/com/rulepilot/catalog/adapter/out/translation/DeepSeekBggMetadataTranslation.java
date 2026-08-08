@@ -3,6 +3,7 @@ package com.rulepilot.catalog.adapter.out.translation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BggMetadataTranslation;
+import com.rulepilot.catalog.application.SimplifiedChineseText;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -237,12 +238,12 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
                 || !translated.has("description")
                 || !translated.has("categories")
                 || !translated.has("mechanics")) return Optional.empty();
-        String description = translated.path("description").asText("").strip();
+        String description = SimplifiedChineseText.normalize(translated.path("description").asText("").strip());
         Optional<List<String>> parsedCategories = strings(translated.path("categories"));
         Optional<List<String>> parsedMechanics = strings(translated.path("mechanics"));
         if (parsedCategories.isEmpty() || parsedMechanics.isEmpty()) return Optional.empty();
-        List<String> categories = parsedCategories.get();
-        List<String> mechanics = parsedMechanics.get();
+        List<String> categories = SimplifiedChineseText.normalize(parsedCategories.get());
+        List<String> mechanics = SimplifiedChineseText.normalize(parsedMechanics.get());
         if (!validDescription(description, request.description())
                 || !validTerms(categories, request.categories())
                 || !validTerms(mechanics, request.mechanics())) return Optional.empty();
@@ -300,7 +301,7 @@ public class DeepSeekBggMetadataTranslation implements BggMetadataTranslation {
     }
 
     private String cacheKey(Request request) {
-        return "rulepilot:bgg:metadata-translation:zh-CN:v2:" + request.bggId() + ":" + digest(sourceText(request));
+        return "rulepilot:bgg:metadata-translation:zh-CN:v3:" + request.bggId() + ":" + digest(sourceText(request));
     }
 
     private String digest(String value) {

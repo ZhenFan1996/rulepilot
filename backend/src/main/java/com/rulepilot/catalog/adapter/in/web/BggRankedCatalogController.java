@@ -1,6 +1,7 @@
 package com.rulepilot.catalog.adapter.in.web;
 
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
+import com.rulepilot.catalog.application.SimplifiedChineseText;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy;
 import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
@@ -159,9 +160,12 @@ public class BggRankedCatalogController {
                     && BggMetadataLocalizationService.isSimplifiedChinese(locale)
                     && !details.chineseName().isBlank();
             String sourceName = game.ranked().sourceName();
+            String displaySourceName = BggMetadataLocalizationService.isSimplifiedChinese(locale)
+                    ? SimplifiedChineseText.normalize(sourceName)
+                    : sourceName;
             return new CatalogGameResponse(
                     game.ranked().bggId(),
-                    localized ? details.chineseName() : sourceName,
+                    localized ? details.chineseName() : displaySourceName,
                     sourceName,
                     localized,
                     game.ranked().publicationYear(),

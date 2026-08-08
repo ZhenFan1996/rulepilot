@@ -52,6 +52,8 @@ interface BggMetadata {
 interface BggSearchResult {
   bggId: number
   name: string
+  originalName: string
+  nameLocalized: boolean
   publicationYear: number | null
   bggUrl: string
 }
@@ -70,7 +72,7 @@ interface BggImportResponse {
   alreadyImported: boolean
 }
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const games = ref<GameResponse[]>([])
 const selectedGameId = ref('')
 const csrf = ref<CsrfResponse | null>(null)
@@ -132,7 +134,7 @@ async function searchBgg() {
   bggError.value = ''
   importedBgg.value = null
   try {
-    const response = await fetch(`/api/v1/bgg/search?q=${encodeURIComponent(bggQuery.value.trim())}`, { credentials: 'include' })
+    const response = await fetch(`/api/v1/bgg/search?q=${encodeURIComponent(bggQuery.value.trim())}&locale=${encodeURIComponent(locale.value)}`, { credentials: 'include' })
     if (response.status === 401) {
       notifyLoginRequired()
       bggError.value = t('catalog.error.loginExpired')
