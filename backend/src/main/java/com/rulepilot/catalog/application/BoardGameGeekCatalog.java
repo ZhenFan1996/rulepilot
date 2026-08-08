@@ -168,7 +168,8 @@ public interface BoardGameGeekCatalog {
             List<String> mechanics,
             List<String> designers,
             List<String> publishers,
-            List<String> officialChineseNames) {
+            List<String> officialChineseNames,
+            List<EditionImage> editionImages) {
         public GameDetails {
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
@@ -178,6 +179,31 @@ public interface BoardGameGeekCatalog {
                     .filter(value -> !value.isBlank())
                     .distinct()
                     .toList();
+            editionImages = List.copyOf(editionImages);
+        }
+
+        public GameDetails(
+                int bggId,
+                String name,
+                String description,
+                String thumbnailUrl,
+                Integer publicationYear,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                Integer minimumAge,
+                String imageUrl,
+                BigDecimal averageRating,
+                BigDecimal averageWeight,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> designers,
+                List<String> publishers,
+                List<String> officialChineseNames) {
+            this(
+                    bggId, name, description, thumbnailUrl, publicationYear, minPlayers, maxPlayers,
+                    playingTimeMinutes, minimumAge, imageUrl, averageRating, averageWeight, categories,
+                    mechanics, designers, publishers, officialChineseNames, List.of());
         }
 
         public GameDetails(
@@ -207,7 +233,19 @@ public interface BoardGameGeekCatalog {
                     List.of(),
                     List.of(),
                     List.of(),
+                    List.of(),
                     List.of());
+        }
+    }
+
+    record EditionImage(int versionId, String name, String imageUrl, Integer publicationYear, List<String> languages) {
+        public EditionImage {
+            if (versionId <= 0 || name == null || name.isBlank() || imageUrl == null || imageUrl.isBlank()) {
+                throw new IllegalArgumentException("BGG edition image is invalid");
+            }
+            name = name.strip();
+            imageUrl = imageUrl.strip();
+            languages = List.copyOf(languages);
         }
     }
 }

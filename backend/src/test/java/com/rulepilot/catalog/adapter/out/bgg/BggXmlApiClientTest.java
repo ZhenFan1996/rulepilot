@@ -50,19 +50,22 @@ class BggXmlApiClientTest {
                   <link type="boardgamepublisher" value="Stonemaier Games"/>
                   <statistics><ratings><average value="8.1"/><averageweight value="2.5"/></ratings></statistics>
                   <versions>
-                    <item type="boardgameversion" id="0">
+                    <item type="boardgameversion" id="3">
+                      <image>https://cf.geekdo-images.com/traditional-chinese-edition.jpg</image>
                       <canonicalname value="鳥翼寶島"/>
                       <name type="primary" value="Chinese edition"/>
+                      <yearpublished value="2020"/>
                       <link type="language" value="Chinese"/>
                     </item>
                     <item type="boardgameversion" id="1">
-                      <thumbnail>https://example.test/version-only.jpg</thumbnail>
+                      <image>https://cf.geekdo-images.com/simplified-chinese-edition.jpg</image>
                       <canonicalname value="展翅翱翔"/>
                       <name type="primary" value="Simplified Chinese edition"/>
                       <link type="boardgamepublisher" value="Localized Publisher"/>
                       <link type="language" value="Chinese"/>
                     </item>
                     <item type="boardgameversion" id="2">
+                      <image>https://cf.geekdo-images.com/example-large.jpg</image>
                       <canonicalname value="Wingspan"/>
                       <name type="primary" value="English edition"/>
                       <link type="language" value="English"/>
@@ -84,6 +87,11 @@ class BggXmlApiClientTest {
         assertThat(game.designers()).containsExactly("Elizabeth Hargrave");
         assertThat(game.publishers()).containsExactly("Stonemaier Games");
         assertThat(game.officialChineseNames()).containsExactly("展翅翱翔", "鸟翼宝岛");
+        assertThat(game.editionImages())
+                .extracting(image -> image.name())
+                .containsExactly("Chinese edition", "Simplified Chinese edition");
+        assertThat(game.editionImages().getFirst().publicationYear()).isEqualTo(2020);
+        assertThat(game.editionImages().getFirst().languages()).containsExactly("Chinese");
     }
 
     @Test

@@ -323,6 +323,7 @@ public class GameCatalogController {
             List<String> mechanics,
             List<String> designers,
             List<String> publishers,
+            List<BggEditionImageResponse> editionImages,
             boolean descriptionTranslated,
             boolean categoriesTranslated,
             boolean mechanicsTranslated,
@@ -349,10 +350,24 @@ public class GameCatalogController {
                     metadata.mechanics(),
                     game.designers(),
                     game.publishers(),
+                    game.editionImages().stream().map(BggEditionImageResponse::from).toList(),
                     metadata.descriptionTranslated(),
                     metadata.categoriesTranslated(),
                     metadata.mechanicsTranslated(),
                     "https://boardgamegeek.com/boardgame/" + game.bggId());
+        }
+    }
+
+    record BggEditionImageResponse(
+            int versionId,
+            String name,
+            String imageUrl,
+            Integer publicationYear,
+            List<String> languages) {
+        static BggEditionImageResponse from(
+                com.rulepilot.catalog.application.BoardGameGeekCatalog.EditionImage image) {
+            return new BggEditionImageResponse(
+                    image.versionId(), image.name(), image.imageUrl(), image.publicationYear(), image.languages());
         }
     }
 

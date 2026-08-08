@@ -46,6 +46,11 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page).toHaveURL('/discover/42')
   await expect(page.getByRole('heading', { name: 'Catalog Game' })).toBeVisible()
   await expect(page.getByText(/BGG 资料仅用于推荐、识别游戏和展示封面/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'BGG 版本图片' })).toBeVisible()
+  await expect(page.getByText('Simplified Chinese edition')).toBeVisible()
+  await expect(page.getByRole('link', { name: /BGG 社区文件（用户上传，非官方）/ })).toHaveAttribute(
+    'href', 'https://boardgamegeek.com/boardgame/42/files',
+  )
   await page.getByRole('button', { name: '选择这款桌游并找规则书' }).click()
   await expect(page).toHaveURL(/\/teach\?editionId=edition-1&onboarding=selected-game/)
   expect(bggImportCount).toBe(1)
@@ -134,6 +139,13 @@ async function mockOnboardingApis(page: Page, options: {
         ...hotGame,
         description: 'A game selected from recommendations.',
         minimumAge: 10,
+        editionImages: [{
+          versionId: 7,
+          name: 'Simplified Chinese edition',
+          imageUrl: 'https://example.test/chinese-edition.jpg',
+          publicationYear: 2024,
+          languages: ['Chinese'],
+        }],
       } })
     }
     if (path === '/api/v1/bgg/games/42/import' && request.method() === 'POST') {

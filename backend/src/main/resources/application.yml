@@ -265,7 +265,10 @@ rulepilot:
         hourly-limit: ${BGG_RECOMMENDATION_WEB_RESEARCH_HOURLY_LIMIT:60}
         provider-concurrency: ${BGG_RECOMMENDATION_WEB_RESEARCH_PROVIDER_CONCURRENCY:2}
   rulebook-discovery:
-    model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
+    enabled: ${RULEBOOK_DISCOVERY_ENABLED:${QWEN_ENABLED:false}}
+    api-key: ${RULEBOOK_DISCOVERY_API_KEY:${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}}
+    base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
+    model: ${RULEBOOK_DISCOVERY_MODEL:${WEB_SEARCH_MODEL:qwen3.5-plus}}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
     allowed-domains: ${RULEBOOK_OFFICIAL_DOMAINS:}
   embedding:
