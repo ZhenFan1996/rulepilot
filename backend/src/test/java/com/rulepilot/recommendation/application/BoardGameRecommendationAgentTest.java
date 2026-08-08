@@ -322,18 +322,14 @@ class BoardGameRecommendationAgentTest {
         Plan plan = new Plan(
                 DialogueAct.RECOMMEND,
                 new PreferencePatch(4, 90, null, null, InteractionPreference.COOPERATIVE),
-                new UserModel("四人合作局，希望容易进入状态", List.of()),
+                new UserModel("四人合作局", List.of()),
                 "我会先核对 BGG 候选。",
                 "还想调整什么？",
                 false,
                 "",
                 new RetrievalPlan(
                         List.of(BggGameType.STRATEGY),
-                        List.of(new FeatureConstraint(
-                                "easy to teach",
-                                FeatureMode.PREFERRED,
-                                FeatureSource.EXPERIENCE,
-                                "容易进入状态")),
+                        List.of(),
                         true));
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
@@ -346,9 +342,9 @@ class BoardGameRecommendationAgentTest {
 
         var response = fixture.agent.converse(new ConversationRequest(
                 RecommendationProfile.empty(),
-                "4 人，90 分钟，想玩容易上手的合作游戏",
+                "4 人，90 分钟，想玩合作游戏",
                 List.of(),
-                List.of(new DialogueMessage("user", "4 人，90 分钟，想玩容易上手的合作游戏")),
+                List.of(new DialogueMessage("user", "4 人，90 分钟，想玩合作游戏")),
                 null), "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);

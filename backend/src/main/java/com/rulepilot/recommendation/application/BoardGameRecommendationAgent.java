@@ -96,7 +96,8 @@ public class BoardGameRecommendationAgent {
                 locale);
         UserModel userModel = planned.map(Plan::userModel).orElse(emptyUserModel());
         RetrievalPlan retrievalPlan = planned
-                .map(plan -> queryCoverage.preserveUncoveredExpression(plan.retrievalPlan(), request.message()))
+                .map(plan -> queryCoverage.preserveUncoveredExpression(
+                        plan.retrievalPlan(), request.message(), turn.profile()))
                 .orElseGet(RetrievalPlan::empty);
         boolean plannedPreferenceSignal = planned.isPresent()
                 && (!retrievalPlan.features().isEmpty()
