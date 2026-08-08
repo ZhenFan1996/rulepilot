@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import GameRecommendationAgent from '@/components/GameRecommendationAgent.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
 
@@ -51,11 +50,11 @@ interface CatalogResponse {
 const { locale } = useLocale()
 const copy = {
   'zh-CN': {
-    eyebrow: '发现',
-    title: '找一款真正想开的桌游',
-    description: '可以先聊聊今晚的场景，也可以按热度、评分和类型直接浏览。只有 BGG 版本资料明确收录的官方中文名才会显示为中文。',
+    eyebrow: '桌游目录',
+    title: '按自己的节奏慢慢挑',
+    description: '搜索 BGG 收录的桌游，按热度、玩家评分和细分类型浏览。只有 BGG 版本资料明确收录的官方中文名才会显示为中文。',
+    assistant: '让推荐助手帮我挑', assistantDescription: '如果还没有明确目标，可以回到对话里说人数、时间和想要的感觉。',
     searchLabel: '搜索桌游', searchPlaceholder: '输入桌游名或原版名', search: '搜索', searching: '搜索中…', searchValidation: '请至少输入 2 个字符。',
-    quickBrowse: '快速浏览', openCatalog: '查看完整目录',
     browseEyebrow: '游戏目录', browseTitle: '浏览全部桌游',
     sortLabel: '排序', sortHot: '当前热榜优先', sortRating: '玩家评分优先', sortRank: 'BGG 总榜优先',
     typeLabel: 'BGG 类型榜', apply: '应用', clear: '重置',
@@ -69,10 +68,10 @@ const copy = {
     loadMore: '再看一批', loadingMore: '正在取下一批…', shown: '已展示 {shown} 款', enriching: '更多封面和游戏资料正在补齐…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
   },
   en: {
-    eyebrow: 'Discover', title: 'Find a game you will actually want to play',
-    description: 'Talk through tonight\'s plans or browse by heat, rating, and category. Localized titles appear only when an official BGG edition records them.',
+    eyebrow: 'Game catalog', title: 'Browse at your own pace',
+    description: 'Search BGG games and browse by heat, player rating, and detailed type. Localized titles appear only when an official BGG edition records them.',
+    assistant: 'Ask the recommendation assistant', assistantDescription: 'If you do not have a precise target yet, return to the conversation and share the group, time, and mood.',
     searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…', searchValidation: 'Enter at least 2 characters.',
-    quickBrowse: 'Quick browse', openCatalog: 'Open full catalog',
     browseEyebrow: 'Game catalog', browseTitle: 'Browse every game',
     sortLabel: 'Sort', sortHot: 'Current heat first', sortRating: 'Player rating first', sortRank: 'BGG rank first', typeLabel: 'BGG ranking family', apply: 'Apply', clear: 'Reset',
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
@@ -227,55 +226,20 @@ watch(locale, () => void loadCatalog(false))
 <template>
   <AppShell>
     <main class="tabletop-page">
-      <header class="pb-3">
+      <header class="grid gap-7 pb-8 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-end">
         <div class="tabletop-heading">
           <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
           <h1 class="tabletop-title">{{ t('title') }}</h1>
           <p class="tabletop-lede">{{ t('description') }}</p>
         </div>
+        <RouterLink :to="{ name: 'game-recommendations' }" class="game-tile player-board p-5">
+          <strong class="font-display text-xl">{{ t('assistant') }}</strong>
+          <span class="mt-2 block text-xs leading-5 text-ink/55">{{ t('assistantDescription') }}</span>
+          <span class="mt-3 block text-sm font-semibold text-felt">← {{ t('assistant') }}</span>
+        </RouterLink>
       </header>
 
-      <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_23rem] xl:items-start">
-        <GameRecommendationAgent class="min-w-0" />
-
-        <aside class="tabletop-panel player-board overflow-hidden xl:sticky xl:top-6" aria-labelledby="quick-browse-title">
-          <div class="border-b border-ink/10 p-4 sm:p-5">
-            <p class="tabletop-kicker">{{ t('browseEyebrow') }}</p>
-            <h2 id="quick-browse-title" class="mt-1 font-display text-2xl font-semibold">{{ t('quickBrowse') }}</h2>
-            <form class="mt-4" role="search" @submit.prevent="searchGames">
-              <label for="bgg-catalog-search" class="sr-only">{{ t('searchLabel') }}</label>
-              <div class="flex gap-2">
-                <input id="bgg-catalog-search" v-model="searchQuery" type="search" maxlength="120" :placeholder="t('searchPlaceholder')" class="min-h-11 min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-3 text-sm outline-none focus:border-copper">
-                <button type="submit" :disabled="loading" class="min-h-11 shrink-0 rounded-lg bg-felt px-3 text-sm font-semibold text-white disabled:opacity-50">{{ t('search') }}</button>
-              </div>
-              <p v-if="searchValidation" class="mt-2 text-xs text-red-700" role="alert">{{ t('searchValidation') }}</p>
-            </form>
-            <form class="mt-3 grid grid-cols-2 gap-2" @submit.prevent="applyFilters">
-              <label class="grid gap-1 text-[0.68rem] font-semibold text-ink/55">{{ t('sortLabel') }}
-                <select v-model="sort" class="min-h-10 rounded-lg border border-ink/15 bg-canvas px-2 text-xs outline-none"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
-              </label>
-              <label class="grid gap-1 text-[0.68rem] font-semibold text-ink/55">{{ t('typeLabel') }}
-                <select v-model="type" class="min-h-10 rounded-lg border border-ink/15 bg-canvas px-2 text-xs outline-none"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
-              </label>
-              <button type="submit" :disabled="loading" class="col-span-2 min-h-10 rounded-lg border border-ink/15 text-xs font-semibold text-ink/70 hover:border-copper/50 disabled:opacity-50">{{ t('apply') }}</button>
-            </form>
-          </div>
-          <div v-if="games.length" class="grid grid-cols-2 gap-px bg-ink/10">
-            <RouterLink v-for="game in games.slice(0, 6)" :key="`quick-${game.bggId}`" :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="group min-w-0 bg-paper p-3 hover:bg-canvas">
-              <div class="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-canvas p-1.5">
-                <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="t('coverAlt', { game: game.name })" loading="lazy" class="size-full object-contain" @error="hideBrokenImage">
-                <TabletopGlyph v-else name="cards" :size="28" class="text-ink/25" />
-              </div>
-              <h3 class="mt-2 line-clamp-2 font-display text-sm font-semibold leading-4">{{ game.name }}</h3>
-              <p class="mt-1 text-[0.65rem] text-ink/45">{{ game.overallRank ? t('rank', { rank: game.overallRank }) : t('rating', { rating: game.averageRating.toFixed(1) }) }}</p>
-            </RouterLink>
-          </div>
-          <div v-else class="p-5 text-sm leading-6 text-ink/50">{{ loading ? t('loading') : t('errorDescription') }}</div>
-          <a href="#game-catalog" class="flex min-h-12 items-center justify-between border-t border-ink/10 px-5 text-sm font-semibold text-felt">{{ t('openCatalog') }} <span aria-hidden="true">↓</span></a>
-        </aside>
-      </div>
-
-      <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 py-9">
+      <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 pt-8">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p class="tabletop-kicker">{{ t('browseEyebrow') }}</p>
@@ -286,7 +250,25 @@ watch(locale, () => void loadCatalog(false))
           </a>
         </div>
 
-        <button v-if="filterActive" type="button" class="mt-5 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
+        <div class="tabletop-panel player-board mt-6 grid gap-4 p-5 lg:grid-cols-[minmax(18rem,1.4fr)_minmax(11rem,0.7fr)_minmax(11rem,0.7fr)_auto] lg:items-end">
+          <form class="lg:contents" role="search" @submit.prevent="searchGames">
+            <label class="grid gap-2 text-xs font-semibold text-ink/55" for="bgg-catalog-search">{{ t('searchLabel') }}
+              <input id="bgg-catalog-search" v-model="searchQuery" type="search" maxlength="120" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-normal outline-none focus:border-copper">
+            </label>
+            <button type="submit" :disabled="loading" class="min-h-12 rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-50 lg:order-last">{{ t('search') }}</button>
+          </form>
+          <form data-testid="catalog-filter-form" class="contents" @submit.prevent="applyFilters">
+            <label class="grid gap-2 text-xs font-semibold text-ink/55">{{ t('sortLabel') }}
+              <select v-model="sort" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
+            </label>
+            <label class="grid gap-2 text-xs font-semibold text-ink/55">{{ t('typeLabel') }}
+              <select v-model="type" class="min-h-12 rounded-xl border border-ink/15 bg-canvas px-3 text-sm font-normal outline-none" @change="applyFilters"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
+            </label>
+            <button type="submit" :disabled="loading" class="sr-only">{{ t('apply') }}</button>
+          </form>
+        </div>
+        <p v-if="searchValidation" class="mt-2 text-xs text-red-700" role="alert">{{ t('searchValidation') }}</p>
+        <button v-if="filterActive" type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
 
         <p v-if="ready" class="mt-4 text-sm text-ink/50">
           {{ t('scope', { sourceCount: sourceCount.toLocaleString(), total: total.toLocaleString() }) }}

@@ -187,11 +187,16 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         for (UUID observedId : observedIds) {
             RuleEvidenceHit source = hydratedById.get(observedId);
             if (source == null) continue;
-            HybridEvidenceHit candidate = new HybridEvidenceHit(source, source.score(), 1, null, false);
             HybridEvidenceHit existing = merged.get(source.chunkId());
+            HybridEvidenceHit canonical = new HybridEvidenceHit(source, source.score(), 1, null, false);
             if (existing != null && !sameCanonicalIdentity(existing.evidence(), source)) {
                 return new AnswerEvidenceRetriever.Result(List.of(), AnswerEvidenceRetriever.State.CONFLICTING);
             }
+            HybridEvidenceHit candidate = existing != null
+                            && AnswerEvidencePolicy.isVisualPlaceholder(canonical)
+                            && !AnswerEvidencePolicy.isVisualPlaceholder(existing)
+                    ? existing
+                    : canonical;
             merged.put(source.chunkId(), candidate);
             observed.add(candidate);
         }

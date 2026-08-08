@@ -40,6 +40,17 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationAdvisor.class);
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
+    private static final java.util.regex.Pattern PLAYER_EVIDENCE = java.util.regex.Pattern.compile(
+            "(?iu)(?:1[0-2]|[1-9]|[一二两三四五六七八九十]{1,3})\\s*(?:个?人|位|玩家|players?|people)");
+    private static final java.util.regex.Pattern DURATION_EVIDENCE = java.util.regex.Pattern.compile(
+            "(?iu)(?:\\d+(?:\\.\\d+)?|[一二两三四五六七八九十百]{1,5})\\s*(?:分钟|小时|mins?|minutes?|hours?|hrs?)|"
+                    + "半小时|时长不限|时间不限|no time limit|any duration");
+    private static final java.util.regex.Pattern REJECTS_COOPERATION = java.util.regex.Pattern.compile(
+            "(?iu)(?:不\\s*(?:要|想|玩|喜欢|接受)?\\s*(?:合作|协作)|别\\s*(?:玩)?\\s*(?:合作|协作)|"
+                    + "非\\s*(?:合作|协作)|拒绝\\s*(?:合作|协作)|"
+                    + "(?:not|no|without)\\s+(?:a\\s+)?(?:cooperative|co-op|coop|cooperation))");
+    private static final java.util.regex.Pattern EXPLICIT_MUST_HAVE = java.util.regex.Pattern.compile(
+            "(?iu)(?:必须|一定要|非.+不可|缺一不可|硬性|不能没有|\\b(?:must|required|non[- ]negotiable)\\b)");
 
     private final RuntimeModelConfiguration models;
     private final ObjectMapper json;
@@ -315,9 +326,12 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
             }
             String basedOn = boundedText(value.get("basedOn"), 120, false);
             if (!quotedByUser(request.transcript(), basedOn)) continue;
+            FeatureMode requestedMode = requiredEnum(value.get("mode"), FeatureMode.class);
             FeatureConstraint feature = new FeatureConstraint(
                     boundedText(value.get("term"), 80, false),
-                    requiredEnum(value.get("mode"), FeatureMode.class),
+                    requestedMode == FeatureMode.REQUIRED && !EXPLICIT_MUST_HAVE.matcher(basedOn).find()
+                            ? FeatureMode.PREFERRED
+                            : requestedMode,
                     requiredEnum(value.get("source"), FeatureSource.class),
                     basedOn);
             if (features.stream().noneMatch(existing -> existing.term().equalsIgnoreCase(feature.term())
@@ -397,7 +411,8 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 + "from a genre, theme, category, family, or mechanic request. USER_EXPRESSION preserves the user's short exact qualitative "
                 + "phrase when you cannot confidently map it to a canonical English BGG field; it always requires candidate discovery. "
                 + "Every explicit qualitative constraint must appear in featureConstraints: a broad candidate type or interaction value does "
-                + "not replace a requested theme, mechanism, family, or table quality. Do not name or recommend games in assistantMessage "
+                + "not replace a requested theme, mechanism, family, or table quality. assistantMessage is a short, natural acknowledgement "
+                + "that may be shown directly above verified result cards, so reflect the latest request without naming or recommending a game "
                 + "before the catalog tools have returned verified candidates. mode is REQUIRED only for an explicit must-have, PREFERRED for a "
                 + "soft taste, or AVOID for an explicit dislike. source is BGG_METADATA or EXPERIENCE. basedOn must be a short exact quote "
                 + "from a user message. For example, "
@@ -448,11 +463,11 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private Integer guardedPlayers(Integer value, String text) {
-        return value != null && text.matches(".*\\d.*") ? value : null;
+        return value != null && PLAYER_EVIDENCE.matcher(text).find() ? value : null;
     }
 
     private Integer guardedMinutes(Integer value, String text) {
-        return value != null && text.matches(".*(?:\\d|半小时|不限|no limit|any duration).*") ? value : null;
+        return value != null && DURATION_EVIDENCE.matcher(text).find() ? value : null;
     }
 
     private java.math.BigDecimal guardedWeight(java.math.BigDecimal value, String text) {
@@ -479,10 +494,11 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
 
     private InteractionPreference guardedInteraction(InteractionPreference value, String text) {
         if (value == null) return null;
+        boolean rejectsCooperation = REJECTS_COOPERATION.matcher(text).find();
         return switch (value) {
-            case COOPERATIVE -> containsAny(text, "合作", "cooperative", "co-op", "coop") ? value : null;
+            case COOPERATIVE -> !rejectsCooperation && containsAny(text, "合作", "cooperative", "co-op", "coop") ? value : null;
             case TEAM -> containsAny(text, "组队", "团队", "team-based", "team based") ? value : null;
-            case COMPETITIVE -> containsAny(text, "对抗", "竞争", "competitive") ? value : null;
+            case COMPETITIVE -> rejectsCooperation || containsAny(text, "对抗", "竞争", "competitive") ? value : null;
             case ANY -> containsAny(text, "互动不限", "any interaction") ? value : null;
         };
     }
@@ -520,7 +536,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private String cacheKey(String operation, String userContent) {
-        return "rulepilot:bgg:recommendation-advisor:v10:" + operation + ":" + digest(userContent);
+        return "rulepilot:bgg:recommendation-advisor:v13:" + operation + ":" + digest(userContent);
     }
 
     private boolean acquireHourlyAllowance() {

@@ -486,7 +486,6 @@ onUnmounted(() => {
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
           <div class="flex items-center gap-3 sm:gap-4">
             <RouterLink v-if="lesson" :to="{ name: 'public-lesson', params: { planId } }" class="text-sm font-semibold text-indigo">{{ t('lesson.reader.public') }}</RouterLink>
-            <RouterLink v-if="lesson" :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-10 items-center rounded-xl bg-indigo px-4 text-sm font-semibold text-white elevation-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
           </div>
         </div>
       </header>
@@ -544,7 +543,6 @@ onUnmounted(() => {
           @cover-error="catalogCoverUnavailable = true"
         >
           <template #actions>
-            <RouterLink :to="{ name: 'lesson-questions', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] elevation-sm transition hover:-translate-y-0.5">{{ t('questions.open') }}</RouterLink>
             <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-paper/25 bg-paper/10 px-4 text-sm font-semibold text-paper">{{ t('lesson.reader.public') }}</RouterLink>
           </template>
         </LessonGuideHero>
@@ -574,6 +572,18 @@ onUnmounted(() => {
           @revisit-chapter="selectSection"
         />
       </article>
+
+      <RouterLink
+        v-if="lesson"
+        :to="{ name: 'lesson-questions', params: { planId } }"
+        class="group fixed bottom-5 right-4 z-30 flex min-h-14 max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-indigo/20 bg-indigo px-4 py-3 text-left text-white shadow-[0_14px_40px_rgba(32,37,44,0.24)] transition hover:-translate-y-1 hover:bg-[#304ea9] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/50 sm:bottom-7 sm:right-7"
+      >
+        <span class="grid size-9 shrink-0 place-items-center rounded-xl bg-gold text-xl text-ink" aria-hidden="true">?</span>
+        <span class="min-w-0">
+          <span class="block text-sm font-bold">{{ t('questions.floatingTitle') }}</span>
+          <span class="hidden text-xs text-white/70 sm:block">{{ t('questions.floatingHint') }}</span>
+        </span>
+      </RouterLink>
     </div>
   </AppShell>
 </template>

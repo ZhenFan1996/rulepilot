@@ -25,9 +25,20 @@ class BoardGameRecommendationQueryCoverageTest {
         assertThat(completed.candidateDiscoveryRequested()).isTrue();
         assertThat(completed.features()).singleElement().satisfies(feature -> {
             assertThat(feature.term()).isEqualTo("区控");
-            assertThat(feature.mode()).isEqualTo(FeatureMode.REQUIRED);
+            assertThat(feature.mode()).isEqualTo(FeatureMode.PREFERRED);
             assertThat(feature.source()).isEqualTo(FeatureSource.USER_EXPRESSION);
             assertThat(feature.basedOn()).isEqualTo("推荐一些适合4人、2小时左右的区控游戏");
+        });
+    }
+
+    @Test
+    void onlyTurnsAnUnmappedPhraseIntoAHardGateWhenTheUserMarksItNonNegotiable() {
+        RetrievalPlan completed = coverage.preserveUncoveredExpression(
+                RetrievalPlan.empty(), "必须有明显的阵营背叛感，其他都能商量");
+
+        assertThat(completed.features()).singleElement().satisfies(feature -> {
+            assertThat(feature.mode()).isEqualTo(FeatureMode.REQUIRED);
+            assertThat(feature.source()).isEqualTo(FeatureSource.USER_EXPRESSION);
         });
     }
 

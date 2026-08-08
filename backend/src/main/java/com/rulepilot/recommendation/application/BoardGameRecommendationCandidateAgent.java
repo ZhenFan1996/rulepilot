@@ -119,6 +119,22 @@ class BoardGameRecommendationCandidateAgent {
                 legalIds.addAll(outcome.discoveredIds());
                 if (!outcome.games().isEmpty()) verified = outcome.games();
                 messages.add(Message.tool(call, outcome.observation()));
+                if (SEARCH_TOOL.equals(call.name()) && !outcome.discoveredIds().isEmpty()) {
+                    if (toolCalls == MAX_TOOL_CALLS) {
+                        return new Result(false, modelCalls, toolCalls, actions, verified);
+                    }
+                    stepListener.accept(Step.LOOKING_UP_DETAILS);
+                    toolCalls++;
+                    CatalogObservation lookup = tools.lookupCandidates(
+                            outcome.discoveredIds().stream().limit(12).toList());
+                    actions.add("LOOKUP_BGG_CANDIDATES");
+                    if (lookup.succeeded() && !lookup.games().isEmpty()) {
+                        return new Result(true, modelCalls, toolCalls, actions, lookup.games());
+                    }
+                    messages.add(Message.tool(
+                            new ToolCall("application-lookup", LOOKUP_TOOL, "{}"),
+                            "{\"status\":\"ERROR\",\"code\":\"CATALOG_UNAVAILABLE\"}"));
+                }
             }
             if (!verified.isEmpty()) {
                 return new Result(true, modelCalls, toolCalls, actions, verified);
@@ -157,6 +173,7 @@ class BoardGameRecommendationCandidateAgent {
                 result.matches().size());
         Set<Integer> ids = result.matches().stream()
                 .map(match -> match.bggId())
+                .limit(12)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         String observation = json.writeValueAsString(Map.of(
                 "status", result.succeeded() ? "SUCCESS" : "ERROR",
@@ -229,8 +246,13 @@ class BoardGameRecommendationCandidateAgent {
         return "You are the candidate-retrieval policy for a board-game recommendation Agent. "
                 + "Choose which exposed tool call best advances the current observation. Never claim that a game matches from "
                 + "memory. For search_bgg_by_name, supply diverse likely original or English BGG game titles, one title per item; "
-                + "never pass a mechanism, category, translated user wording, or generic query as a title. lookup_bgg_games is "
-                + "authorized only for IDs already returned by a tool observation. The application validates every final constraint. "
+                + "never pass a mechanism, category, translated user wording, or generic query as a title. "
+                + "Use all eight title slots when possible. Treat player count, maximum duration, and maximum weight as hard gates: "
+                + "only name games you reasonably expect to pass them. Cover distinct designs instead of editions, sequels, or near-duplicates, "
+                + "and prefer scenario fit over fame or BGG rank. For COMPETITIVE requests, avoid fully cooperative games. "
+                + "After a successful title "
+                + "search the application immediately looks up the observed IDs, so do not spend another model turn requesting lookup. "
+                + "lookup_bgg_games remains authorized only for IDs already returned by a tool observation. The application validates every final constraint. "
                 + "Do not expose hidden reasoning and do not produce recommendations before a successful lookup.";
     }
 
@@ -262,7 +284,7 @@ class BoardGameRecommendationCandidateAgent {
             List<Game> games,
             String observation) {
         private ToolOutcome {
-            discoveredIds = Set.copyOf(discoveredIds);
+            discoveredIds = java.util.Collections.unmodifiableSet(new LinkedHashSet<>(discoveredIds));
             games = List.copyOf(games);
         }
 

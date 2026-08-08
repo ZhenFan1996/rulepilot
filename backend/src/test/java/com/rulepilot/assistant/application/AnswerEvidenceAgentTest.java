@@ -284,6 +284,40 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void preservesPageBoundVisualFactsWhenTheCanonicalSourceIsOnlyAVisualPlaceholder() {
+        UUID chunkId = UUID.randomUUID();
+        HybridEvidenceHit visuallyEnriched = hit(
+                chunkId,
+                "Visual rulebook page 5",
+                "Visual page facts (verify against the cited rulebook page).\nVisible facts: Draft one point card or two vegetable cards.");
+        RuleEvidenceHit placeholder = source(
+                chunkId,
+                "Visual rulebook page 5",
+                "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.");
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(completed(chunkId)),
+                (documentVersionId, chunkIds) -> List.of(placeholder),
+                scopes(),
+                limiter);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("What can I draft, and what happens next?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(visuallyEnriched));
+
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().excerpt())
+                .contains(visuallyEnriched.evidence().excerpt())
+                .doesNotContain(placeholder.excerpt());
+    }
+
+    @Test
     void rejectsAnObservedChunkWhoseImmutableCoordinatesDisagreeWithTheExistingEvidence() {
         UUID chunkId = UUID.randomUUID();
         HybridEvidenceHit existing = hit(chunkId, "Game end", "End the game immediately.");

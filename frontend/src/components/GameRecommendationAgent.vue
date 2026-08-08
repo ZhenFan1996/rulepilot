@@ -25,6 +25,8 @@ const copy = {
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
+    toolTrail: '本轮实际调用', toolUnderstand: '理解这段对话', toolCatalog: '完整目录条件筛选',
+    toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证',
     starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
     type: '类型：{value}', interaction: '互动：{value}',
   },
@@ -37,6 +39,8 @@ const copy = {
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
+    toolTrail: 'Tools used this turn', toolUnderstand: 'Understand the conversation', toolCatalog: 'Filter the full catalog',
+    toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience',
     starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
   },
@@ -107,6 +111,19 @@ const profileLabels = computed(() => {
   if (profile.value.maxWeight !== null) labels.push(profile.value.maxWeight === 0 ? t('weightAny') : t('weight', { value: profile.value.maxWeight }))
   if (profile.value.type !== 'all') labels.push(t('type', { value: profile.value.type }))
   if (profile.value.interaction !== 'any') labels.push(t('interaction', { value: profile.value.interaction }))
+  return labels
+})
+
+const toolLabels = computed(() => {
+  const actions = response.value?.harness?.actions ?? []
+  const labels: string[] = []
+  const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
+  if (actions.includes('PLAN_DIALOGUE')) add(t('toolUnderstand'))
+  if (actions.includes('SEARCH_BGG_CATALOG')) add(t('toolCatalog'))
+  if (actions.includes('SEARCH_BGG_BY_NAME')) add(t('toolNames'))
+  if (actions.some(action => action === 'LOOKUP_BGG_CANDIDATES' || action === 'LOOKUP_BGG_GAME')) add(t('toolDetails'))
+  if (actions.includes('DISCOVER_CANDIDATES')) add(t('toolDiscover'))
+  if (actions.some(action => action === 'RESEARCH_GAME_FIT' || action === 'RESEARCH_GAME_QUESTION')) add(t('toolResearch'))
   return labels
 })
 
@@ -296,7 +313,13 @@ onBeforeUnmount(() => {
 
     <div v-if="response?.games.length" class="mt-8">
       <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <p class="max-w-3xl text-sm leading-6 text-ink/48">{{ t('source', { source: response.sourceCount.toLocaleString(), count: response.candidatesEvaluated }) }}</p>
+        <div>
+          <p class="max-w-3xl text-sm leading-6 text-ink/48">{{ t('source', { source: response.sourceCount.toLocaleString(), count: response.candidatesEvaluated }) }}</p>
+          <div v-if="toolLabels.length" class="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink/48" aria-label="recommendation tool trail">
+            <span class="font-semibold text-ink/58">{{ t('toolTrail') }}</span>
+            <span v-for="label in toolLabels" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
+          </div>
+        </div>
         <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40" @click="moreGames">{{ t('more') }}</button>
       </div>
       <TransitionGroup tag="div" name="tile" class="mt-4 grid gap-4 md:grid-cols-3"><RecommendationGameCard v-for="entry in response.games" :key="entry.game.bggId" :entry="entry" :sources="response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" /></TransitionGroup>

@@ -226,7 +226,9 @@ public class BoardGameRecommendationAgent {
                         || retrievalPlan.features().stream().anyMatch(feature ->
                                 feature.mode() == BoardGameRecommendationAdvisor.FeatureMode.REQUIRED))
                 && tools.webResearchConfigured();
-        boolean nativeCandidateDiscovery = !focusedDiscussion && candidateAgent.configured();
+        boolean nativeCandidateDiscovery = !focusedDiscussion
+                && candidateAgent.configured()
+                && needsNativeCandidateDiscovery(retrievalPlan);
         boolean nativeCandidateSucceeded = false;
         if (nativeCandidateDiscovery) {
             progress.accept(ProgressStage.SELECTING_TOOLS);
@@ -288,9 +290,28 @@ public class BoardGameRecommendationAgent {
         }
         CandidatePool pool = selector.prepare(
                 sourceGames, turn.profile(), effectiveExcludedBggIds, retrievalPlan, discoveredBggIds);
+        if (nativeCandidateSucceeded && pool.candidates().size() < properties.resultCount()) {
+            progress.accept(ProgressStage.SEARCHING_BGG_CATALOG);
+            catalogCalls++;
+            CatalogObservation catalogBackfill = tools.searchCatalog(
+                    turn.profile().type(), retrievalPlan.candidateTypes(), properties.modelCandidateLimit());
+            actions.add("SEARCH_BGG_CATALOG_BACKFILL");
+            if (catalogBackfill.succeeded()) {
+                sourceCount = catalogBackfill.sourceCount();
+                sourceGames = mergeCandidates(
+                        sourceGames,
+                        catalogBackfill.games(),
+                        Math.min(20, properties.modelCandidateLimit() * 2));
+                pool = selector.prepare(
+                        sourceGames,
+                        turn.profile(),
+                        effectiveExcludedBggIds,
+                        retrievalPlan,
+                        discoveredBggIds);
+            }
+        }
         boolean nativeCandidatesComplete = nativeCandidateSucceeded
-                && pool.status() == SelectionStatus.READY
-                && !requiresExternalCandidateEvidence(retrievalPlan);
+                && pool.status() == SelectionStatus.READY;
         if (!featureFirstDiscovery
                 && !focusedDiscussion
                 && (referenceGame != null
@@ -384,7 +405,8 @@ public class BoardGameRecommendationAgent {
         }
 
         Research research = candidateDiscoveryEvidence;
-        boolean researchUseful = planned.filter(plan -> researchJustified(plan, focusedDiscussion))
+        boolean researchUseful = planned.filter(plan -> researchJustified(
+                        plan, focusedDiscussion, nativeCandidatesComplete, request.message()))
                 .isPresent();
         if (researchUseful && research.games().isEmpty() && tools.webResearchConfigured()) {
             progress.accept(ProgressStage.RESEARCHING_GAME_FIT);
@@ -405,7 +427,11 @@ public class BoardGameRecommendationAgent {
         CandidatePool completedPool = pool;
         Game completedReferenceGame = referenceGame;
         RetrievalPlan completedRetrievalPlan = retrievalPlan;
-        boolean structuredRanking = canUseStructuredRanking(
+        boolean fastNativeResponse = nativeCandidatesComplete
+                && !focusedDiscussion
+                && !researchUseful;
+        boolean evidenceBoundFocusedResponse = focusedDiscussion && !researchUseful;
+        boolean structuredRanking = fastNativeResponse || evidenceBoundFocusedResponse || canUseStructuredRanking(
                 request, planned, completedRetrievalPlan, research, researchUseful);
         Optional<Slate> slate = Optional.empty();
         if (planned.isPresent() && !structuredRanking) {
@@ -428,17 +454,24 @@ public class BoardGameRecommendationAgent {
         if (structuredRanking) actions.add("RANK_STRUCTURED_CANDIDATES");
 
         Research completedResearch = research;
-        List<RecommendedGame> games = slate
+        List<RecommendedGame> selectedGames = slate
                 .map(value -> selector.fromSlate(
                         completedPool, value, turn.profile(), chinese(locale), completedResearch))
                 .filter(value -> !value.isEmpty())
                 .orElseGet(() -> selector.fallback(
                         completedPool, turn.profile(), chinese(locale), completedResearch));
+        int requestedResultCount = requestedResultCount(request.message(), selectedGames.size());
+        List<RecommendedGame> games = selectedGames.stream().limit(requestedResultCount).toList();
+        String fastNativeSummary = quickRecommendationSummary(locale, games);
         boolean fallback = slate.isEmpty() && !structuredRanking;
         String assistantMessage = slate.map(Slate::assistantMessage)
                 .filter(value -> !value.isBlank())
                 .orElseGet(() -> structuredRanking
-                        ? structuredSummary(locale, completedRetrievalPlan)
+                        ? fastNativeResponse
+                                ? fastNativeSummary
+                                : evidenceBoundFocusedResponse
+                                        ? focusedGameSummary(locale, games, request.message())
+                                        : structuredSummary(locale, completedRetrievalPlan)
                         : fallbackSummary(locale, turn.clarification()));
         String nextQuestion = slate.map(Slate::nextQuestion)
                 .filter(value -> !value.isBlank())
@@ -524,8 +557,20 @@ public class BoardGameRecommendationAgent {
                 .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
     }
 
-    private boolean researchJustified(Plan plan, boolean focusedGame) {
-        return focusedGame ? plan.researchRequested() : experienceResearchJustified(plan);
+    private boolean researchJustified(
+            Plan plan,
+            boolean focusedGame,
+            boolean nativeCandidatesComplete,
+            String latestMessage) {
+        if (focusedGame) return plan.researchRequested();
+        if (nativeCandidatesComplete && !explicitResearchRequest(latestMessage)) return false;
+        return experienceResearchJustified(plan);
+    }
+
+    private boolean explicitResearchRequest(String message) {
+        String normalized = message == null ? "" : message.toLowerCase(java.util.Locale.ROOT);
+        return normalized.matches(".*(?:查(?:一下|查)?|搜(?:一下)?|口碑|评价|测评|真实体验|玩家怎么说|"
+                + "\\bresearch\\b|\\breviews?\\b|\\blook (?:it )?up\\b|\\bwhat do players say\\b).*");
     }
 
     private boolean shouldDiscoverCandidates(RetrievalPlan retrievalPlan, CandidatePool pool) {
@@ -539,10 +584,8 @@ public class BoardGameRecommendationAgent {
         return experienceDriven;
     }
 
-    private boolean requiresExternalCandidateEvidence(RetrievalPlan retrievalPlan) {
-        return retrievalPlan.features().stream().anyMatch(feature ->
-                feature.mode() == BoardGameRecommendationAdvisor.FeatureMode.REQUIRED
-                        && feature.source() != BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA);
+    private boolean needsNativeCandidateDiscovery(RetrievalPlan retrievalPlan) {
+        return retrievalPlan.candidateDiscoveryRequested() || !retrievalPlan.features().isEmpty();
     }
 
     private RetrievalPlan similarityRetrievalPlan(RetrievalPlan planned, Game reference) {
@@ -797,6 +840,75 @@ public class BoardGameRecommendationAgent {
                 ? "I filtered BGG metadata by your explicit constraints; tell me what to adjust next."
                 : "I strictly filtered BGG metadata for “" + evidence
                         + "”; every result matches that condition, and you can steer the next round.";
+    }
+
+    private String quickRecommendationSummary(String locale, List<RecommendedGame> games) {
+        String titles = games.stream()
+                .limit(3)
+                .map(game -> quickRecommendationTitle(game, locale))
+                .collect(java.util.stream.Collectors.joining(chinese(locale) ? "、" : ", "));
+        if (titles.isBlank()) return structuredSummary(locale, RetrievalPlan.empty());
+        return chinese(locale)
+                ? "条件我记住了。这轮先看" + titles
+                        + "；为什么适合、哪里可能不合口味，我都放在卡片里。你不用重新报条件，直接说哪款太重、太安静或不够对抗，我就沿着你的反馈继续换。"
+                : "I kept your constraints. Start with " + titles
+                        + "; each card explains the fit and the tradeoffs. You do not need to repeat yourself—tell me which option feels too heavy, too quiet, or not interactive enough, and I will adjust from there.";
+    }
+
+    private String quickRecommendationTitle(RecommendedGame game, String locale) {
+        if (chinese(locale)
+                && game.game().details() != null
+                && game.game().details().officialChineseName() != null
+                && !game.game().details().officialChineseName().isBlank()) {
+            return "《" + game.game().details().officialChineseName() + "》";
+        }
+        String sourceName = game.game().ranking().sourceName();
+        return chinese(locale) ? "《" + sourceName + "》" : sourceName;
+    }
+
+    private int requestedResultCount(String message, int available) {
+        if (available <= 0) return 0;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
+                        "(?iu)(?:换|推荐|找|来|给(?:我)?)(?:\\s*(?:一批|一组))?\\s*([一二两三四五1-5])\\s*款|"
+                                + "\\b(?:give|show|find|recommend|try)\\s+(one|two|three|four|five|[1-5])\\s+(?:more\\s+)?(?:games?|options?)\\b")
+                .matcher(message == null ? "" : message);
+        if (!matcher.find()) return available;
+        String value = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
+        int requested = switch (value.toLowerCase(java.util.Locale.ROOT)) {
+            case "一", "one" -> 1;
+            case "二", "两", "two" -> 2;
+            case "三", "three" -> 3;
+            case "四", "four" -> 4;
+            case "五", "five" -> 5;
+            default -> Integer.parseInt(value);
+        };
+        return Math.min(requested, available);
+    }
+
+    private String focusedGameSummary(String locale, List<RecommendedGame> games, String latestMessage) {
+        if (games.isEmpty()) return structuredSummary(locale, RetrievalPlan.empty());
+        RecommendedGame game = games.getFirst();
+        String title = quickRecommendationTitle(game, locale);
+        String facts = game.matches().stream()
+                .filter(value -> !value.contains("总榜") && !value.contains("overall rank"))
+                .limit(3)
+                .collect(java.util.stream.Collectors.joining(chinese(locale) ? "；" : "; "));
+        boolean asksForRules = (latestMessage == null ? "" : latestMessage).matches(
+                "(?is).*(?:怎么玩|怎么进行|规则|回合|流程|how (?:do you )?play|turn|rules?).*");
+        if (chinese(locale)) {
+            String verified = facts.isBlank() ? "我目前只能确认它的 BGG 目录资料" : facts;
+            return asksForRules
+                    ? "先把能确认的说清楚：" + title + "——" + verified
+                            + "。至于具体回合和卡牌效果，BGG 简介不能代替规则书；选中这款后导入官方规则书，答疑会按页给你讲，不会把简介猜成规则。"
+                    : title + "目前能确认的适配点是：" + verified
+                            + "。卡片里列出了玩法标签和取舍；如果要追问具体回合，请进入规则书答疑，我会按页回答。";
+        }
+        String verified = facts.isBlank() ? "I can currently verify only its BGG catalog metadata" : facts;
+        return asksForRules
+                ? "Here is what I can verify about " + title + ": " + verified
+                        + ". A BGG description is not a rulebook, so import the official rulebook for a page-cited turn walkthrough instead of a guessed rules explanation."
+                : "Here is the verified fit for " + title + ": " + verified
+                        + ". The card shows its play tags and tradeoffs; use rulebook Q&A for a page-cited turn explanation.";
     }
 
     private DecisionMode mode(Optional<Plan> planned) {

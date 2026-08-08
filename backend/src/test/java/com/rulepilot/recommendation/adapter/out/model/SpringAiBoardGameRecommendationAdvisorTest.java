@@ -13,6 +13,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.CompositionRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PlanningRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ProfileView;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
@@ -93,6 +94,36 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     }
 
     @Test
+    void downgradesAnUnsupportedRequiredFeatureUnlessTheUserCalledItNonNegotiable() {
+        Fixture soft = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"想要强互动","hypotheses":[],
+                 "assistantMessage":"我按强互动来找。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"candidateTypes":[],
+                 "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"希望有明显互动"}],
+                 "candidateDiscoveryRequested":true}
+                """);
+        Fixture hard = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"必须强互动","hypotheses":[],
+                 "assistantMessage":"我会把强互动作为硬条件。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"candidateTypes":[],
+                 "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"必须有明显互动"}],
+                 "candidateDiscoveryRequested":true}
+                """);
+
+        var softPlan = soft.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "希望有明显互动")), profile(), null, "zh-CN"));
+        var hardPlan = hard.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "必须有明显互动")), profile(), null, "zh-CN"));
+
+        assertThat(softPlan).hasValueSatisfying(plan ->
+                assertThat(plan.retrievalPlan().features().getFirst().mode()).isEqualTo(FeatureMode.PREFERRED));
+        assertThat(hardPlan).hasValueSatisfying(plan ->
+                assertThat(plan.retrievalPlan().features().getFirst().mode()).isEqualTo(FeatureMode.REQUIRED));
+    }
+
+    @Test
     void removesInventedNumericHardConstraintsWhenTheLatestTurnContainsNoNumericEvidence() {
         Fixture fixture = fixture("""
                 {"act":"RECOMMEND","players":4,"maxMinutes":90,"maxWeight":2.3,
@@ -112,6 +143,29 @@ class SpringAiBoardGameRecommendationAdvisorTest {
             assertThat(plan.explicitPatch().players()).isNull();
             assertThat(plan.explicitPatch().maxMinutes()).isNull();
             assertThat(plan.explicitPatch().maxWeight()).isNull();
+        });
+    }
+
+    @Test
+    void preservesModelSlotsWhenTheLatestTurnUsesChineseNumberWords() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","players":5,"maxMinutes":90,"maxWeight":null,
+                 "type":null,"interaction":"COMPETITIVE","profileSummary":"五人九十分钟竞争局",
+                 "hypotheses":[],"assistantMessage":"明白，按五人九十分钟来找。","nextQuestion":"",
+                 "researchRequested":false,"researchQuestion":"",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
+                """);
+
+        var result = fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "我们五个人，最多九十分钟，明确不要合作")),
+                profile(),
+                null,
+                "zh-CN"));
+
+        assertThat(result).hasValueSatisfying(plan -> {
+            assertThat(plan.explicitPatch().players()).isEqualTo(5);
+            assertThat(plan.explicitPatch().maxMinutes()).isEqualTo(90);
+            assertThat(plan.explicitPatch().interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
         });
     }
 

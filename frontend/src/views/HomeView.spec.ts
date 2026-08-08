@@ -14,6 +14,7 @@ describe('HomeView', () => {
         { path: '/read/:planId', name: 'public-lesson', component: { template: '<div />' } },
         { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
         { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
+        { path: '/discover/catalog', name: 'game-catalog-browse', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
         { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
@@ -35,16 +36,15 @@ describe('HomeView', () => {
   it('presents the real tabletop tasks without implementation copy', async () => {
     const wrapper = await mountHome()
 
+    expect(wrapper.text()).toContain('帮我挑一款适合这桌的游戏')
+    expect(wrapper.text()).toContain('浏览桌游目录')
+    expect(wrapper.get('a[href="/discover/catalog"]').text()).toContain('人数、时长和类型')
     expect(wrapper.text()).toContain('上传规则书')
-    expect(wrapper.text()).toContain('读公开讲解')
     expect(wrapper.text()).toContain('不用先创建游戏')
     expect(wrapper.text()).not.toContain('Agent')
     expect(wrapper.text()).not.toContain('FROM RULEBOOK')
-    expect(wrapper.get('img[src="/illustrations/tabletop-night.webp"]').attributes('alt')).toBe('')
-    expect(wrapper.get('section.home-table').classes()).toContain('player-board')
-    const attribution = wrapper.get('a[href="https://boardgamegeek.com/hotness"]')
-    expect(attribution.get('img').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
-    expect(attribution.get('img').attributes('alt')).toBe('Powered by BoardGameGeek')
+    expect(wrapper.get('section.start-board').attributes('aria-labelledby')).toBe('home-title')
+    expect(wrapper.text()).not.toContain('看看热门桌游')
   })
 
   it('updates the accessible theme toggle label', async () => {
@@ -62,25 +62,6 @@ describe('HomeView', () => {
   it('lets a signed-in player continue the latest teaching plan from home', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
-      if (path.includes('/api/v1/bgg/recommendations')) {
-        return new Response(JSON.stringify([{
-          rank: 1,
-          bggId: 266192,
-          name: '展翅翱翔',
-          originalName: 'Wingspan',
-          nameLocalized: true,
-          publicationYear: 2019,
-          thumbnailUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
-          bggUrl: 'https://boardgamegeek.com/boardgame/266192',
-          minPlayers: 1,
-          maxPlayers: 5,
-          playingTimeMinutes: 70,
-          averageRating: 8.1,
-          averageWeight: 2.5,
-          categories: ['Animals'],
-          mechanics: ['Card Drafting'],
-        }]), { status: 200, headers: { 'Content-Type': 'application/json' } })
-      }
       if (path.includes('/api/v1/teaching-plans')) {
         return new Response(JSON.stringify([{
           id: 'plan-1',
@@ -107,43 +88,9 @@ describe('HomeView', () => {
     expect(wrapper.text()).toContain('继续这一局')
     expect(wrapper.text()).toContain('CATAN')
     expect(wrapper.text()).not.toContain('Corpus Replay')
-    expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toBe('继续阅读')
-    expect(wrapper.get('img[alt="展翅翱翔 封面"]').attributes('src')).toContain('wingspan.jpg')
-    expect(wrapper.get('a[href="/discover/266192"]').attributes('aria-label')).toContain('展翅翱翔')
-    expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').text()).toContain('BGG 资料')
-    expect(wrapper.text()).toContain('1–5 人')
-    expect(wrapper.text()).toContain('复杂度 2.5 / 5')
-  })
-
-  it('requests bounded player-fit filters and explains an empty hot set', async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json([])
-      return new Response(null, { status: 404 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    const wrapper = await mountHome()
-    await flushPromises()
-    const filters = wrapper.findAll('select')
-    await filters[0]!.setValue('4')
-    await filters[1]!.setValue('90')
-    await filters[2]!.setValue('3')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('players=4&maxMinutes=90&maxWeight=3'))).toBe(true)
-    expect(wrapper.text()).toContain('没有同时满足条件的结果')
-  })
-
-  it('shows a recovery action when BGG and the personal catalog both return errors', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
-
-    const wrapper = await mountHome()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('暂时没有热门桌游资料')
-    expect(wrapper.findAll('a[href="/catalog"]').some(link => link.text().includes('搜索桌游'))).toBe(true)
+    expect(wrapper.get('a[href="/lessons/plan-1"]').text()).toContain('继续阅读')
+    expect(wrapper.findAll('a[href="/discover"]').some(link => link.text().includes('换一款桌游'))).toBe(true)
+    expect(wrapper.findAll('a[href="/teach"]').some(link => link.text().includes('上传规则书'))).toBe(true)
   })
 
   it('puts a public lesson alongside the first upload action', async () => {
@@ -162,7 +109,7 @@ describe('HomeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('公开讲解')
-    expect(wrapper.get('a[href="/read/public-plan-1"]').text()).toContain('Wingspan')
+    expect(wrapper.get('a[href="/library"]').text()).toContain('公开讲解')
   })
 
   it('groups repeated continuation names on the compact home list without deleting plans', async () => {
@@ -178,7 +125,7 @@ describe('HomeView', () => {
     const wrapper = await mountHome()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('2 份讲解')
+    expect(wrapper.text()).toContain('我的 1 份讲解')
     expect(wrapper.text()).not.toContain('Corpus Replay')
   })
 })
