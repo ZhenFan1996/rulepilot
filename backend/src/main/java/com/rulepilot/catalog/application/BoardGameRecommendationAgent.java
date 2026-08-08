@@ -195,8 +195,9 @@ public class BoardGameRecommendationAgent {
             if (slate.isPresent()) actions.add("COMPOSE_RECOMMENDATIONS");
         }
 
+        Research completedResearch = research;
         List<RecommendedGame> games = slate
-                .map(value -> selector.fromSlate(pool, value, turn.profile(), chinese(locale)))
+                .map(value -> selector.fromSlate(pool, value, turn.profile(), chinese(locale), completedResearch))
                 .filter(value -> !value.isEmpty())
                 .orElseGet(() -> selector.fallback(pool, turn.profile(), chinese(locale)));
         boolean fallback = slate.isEmpty();
