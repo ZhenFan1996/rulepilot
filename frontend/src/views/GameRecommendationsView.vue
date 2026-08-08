@@ -51,32 +51,34 @@ interface CatalogResponse {
 const { locale } = useLocale()
 const copy = {
   'zh-CN': {
-    eyebrow: 'BGG 全量桌游目录',
-    title: '从整个 BGG 目录找到下一款桌游',
-    description: '按当前热度、评分或总榜排名浏览，使用 BGG 类型榜筛选，也可以直接在全量快照中搜索名称。进入详情后会补齐人数、时长、机制、类型和可核验的官方中文名。',
-    searchLabel: '搜索整个目录', searchPlaceholder: '输入英文名或原版名', search: '搜索', searching: '搜索中…', searchValidation: '请至少输入 2 个字符。',
-    browseEyebrow: '服务端分页目录', browseTitle: '不止当前热门的 11 款',
+    eyebrow: '发现',
+    title: '找一款真正想开的桌游',
+    description: '可以先聊聊今晚的场景，也可以按热度、评分和类型直接浏览。只有 BGG 版本资料明确收录的官方中文名才会显示为中文。',
+    searchLabel: '搜索桌游', searchPlaceholder: '输入桌游名或原版名', search: '搜索', searching: '搜索中…', searchValidation: '请至少输入 2 个字符。',
+    quickBrowse: '快速浏览', openCatalog: '查看完整目录',
+    browseEyebrow: '游戏目录', browseTitle: '浏览全部桌游',
     sortLabel: '排序', sortHot: '当前热榜优先', sortRating: '玩家评分优先', sortRank: 'BGG 总榜优先',
     typeLabel: 'BGG 类型榜', apply: '应用', clear: '重置',
     all: '全部基础游戏', abstract: '抽象策略', customizable: '可定制游戏', children: '儿童游戏', family: '家庭游戏', party: '聚会游戏', strategy: '策略游戏', thematic: '主题游戏', war: '战争游戏', expansion: '扩展',
-    scope: 'BGG 快照共 {sourceCount} 条记录，当前条件匹配 {total} 条。', sourceDate: '快照日期 {date}',
-    loading: '正在读取 BGG 全量目录', unavailableTitle: '全量目录还没有导入', unavailableDescription: '需要先导入 BGG 官方 boardgames_ranks.zip；系统不会用 11 款热榜数据伪装成全量目录。',
-    errorTitle: '全量目录暂时不可用', errorDescription: '筛选条件仍然保留，可以稍后重试。', retry: '再试一次',
+    scope: 'BGG 收录 {sourceCount} 条，当前找到 {total} 条。', sourceDate: '资料更新于 {date}',
+    loading: '正在读取 BGG 桌游目录', unavailableTitle: '桌游目录还在准备', unavailableDescription: '暂时可以继续使用推荐对话、个人游戏和规则书功能。',
+    errorTitle: '桌游目录暂时打不开', errorDescription: '筛选条件已经保留，可以稍后重试。', retry: '再试一次',
     players: '{min}–{max} 人', minutes: '约 {minutes} 分钟', rating: '玩家评分 {rating}', geekRating: 'Geek 评分 {rating}', votes: '{count} 人评分', weight: '复杂度 {weight} / 5',
     rank: '总榜 #{rank}', hotRank: '热榜 #{rank}', noRank: '尚未进入总榜', detailPending: '详细资料将在打开游戏时继续读取',
     categoriesAria: '游戏类型和机制', coverAlt: '{game} 的 BGG 封面', emptyTitle: '没有匹配的桌游', emptyDescription: '试试减少搜索词或选择其他 BGG 类型榜。',
-    loadMore: '再看一批', loadingMore: '正在取下一批…', shown: '已展示 {shown} 款', enriching: '正在后台补齐封面、人数和中文资料…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
+    loadMore: '再看一批', loadingMore: '正在取下一批…', shown: '已展示 {shown} 款', enriching: '更多封面和游戏资料正在补齐…', officialSource: '数据由 BoardGameGeek 提供', taxonomyFallback: '机制和类型暂时保留 BGG 原文',
   },
   en: {
-    eyebrow: 'Full BGG game catalog', title: 'Find your next game across the BGG catalog',
-    description: 'Browse by current heat, rating, or overall rank, filter with BGG ranking families, or search the complete server snapshot by title. Game details add player fit, mechanisms, categories, and verified official localized titles.',
+    eyebrow: 'Discover', title: 'Find a game you will actually want to play',
+    description: 'Talk through tonight\'s plans or browse by heat, rating, and category. Localized titles appear only when an official BGG edition records them.',
     searchLabel: 'Search the full catalog', searchPlaceholder: 'Enter a title or original name', search: 'Search', searching: 'Searching…', searchValidation: 'Enter at least 2 characters.',
-    browseEyebrow: 'Server-paginated catalog', browseTitle: 'Beyond the current 11 hot games',
+    quickBrowse: 'Quick browse', openCatalog: 'Open full catalog',
+    browseEyebrow: 'Game catalog', browseTitle: 'Browse every game',
     sortLabel: 'Sort', sortHot: 'Current heat first', sortRating: 'Player rating first', sortRank: 'BGG rank first', typeLabel: 'BGG ranking family', apply: 'Apply', clear: 'Reset',
     all: 'All base games', abstract: 'Abstract', customizable: 'Customizable', children: "Children's", family: 'Family', party: 'Party', strategy: 'Strategy', thematic: 'Thematic', war: 'War', expansion: 'Expansions',
-    scope: 'The BGG snapshot contains {sourceCount} records; {total} match these filters.', sourceDate: 'Snapshot dated {date}', loading: 'Loading the full BGG catalog',
-    unavailableTitle: 'The full catalog has not been imported', unavailableDescription: 'Import the official BGG boardgames_ranks.zip first. RulePilot will not present an 11-game hot list as a full catalog.',
-    errorTitle: 'The full catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again',
+    scope: 'BGG lists {sourceCount} records; {total} match these filters.', sourceDate: 'Updated {date}', loading: 'Loading the BGG catalog',
+    unavailableTitle: 'The game catalog is still being prepared', unavailableDescription: 'Recommendations, your games, and rulebooks are still available.',
+    errorTitle: 'The game catalog is unavailable', errorDescription: 'Your filters are still here. Try again later.', retry: 'Try again',
     players: '{min}–{max} players', minutes: 'About {minutes} min', rating: 'Player rating {rating}', geekRating: 'Geek rating {rating}', votes: '{count} ratings', weight: 'Complexity {weight} / 5',
     rank: 'Overall #{rank}', hotRank: 'Hot #{rank}', noRank: 'Not yet ranked', detailPending: 'Rich details will continue loading when you open the game', categoriesAria: 'Game types and mechanisms', coverAlt: '{game} BGG cover',
     emptyTitle: 'No games match', emptyDescription: 'Try fewer title words or another BGG ranking family.', loadMore: 'Show another batch', loadingMore: 'Loading another batch…', shown: '{shown} games shown', enriching: 'Adding covers, player fit, and localized details in the background…', officialSource: 'Data provided by BoardGameGeek', taxonomyFallback: 'Showing BGG source taxonomy',
@@ -224,29 +226,59 @@ watch(locale, () => void loadCatalog(false))
 
 <template>
   <AppShell>
-    <main class="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12 lg:px-12">
-      <header class="grid gap-6 border-b border-ink/10 pb-8 lg:grid-cols-[1fr_22rem] lg:items-end">
-        <div class="max-w-3xl">
-          <p class="text-sm font-semibold text-copper">{{ t('eyebrow') }}</p>
-          <h1 class="mt-2 font-display text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">{{ t('title') }}</h1>
-          <p class="mt-4 max-w-3xl text-base leading-8 text-ink/60">{{ t('description') }}</p>
+    <main class="tabletop-page">
+      <header class="pb-3">
+        <div class="tabletop-heading">
+          <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
+          <h1 class="tabletop-title">{{ t('title') }}</h1>
+          <p class="tabletop-lede">{{ t('description') }}</p>
         </div>
-        <form class="rounded-2xl border border-ink/10 bg-paper p-4 shadow-sm" role="search" @submit.prevent="searchGames">
-          <label for="bgg-catalog-search" class="text-xs font-bold uppercase tracking-[0.12em] text-ink/55">{{ t('searchLabel') }}</label>
-          <div class="mt-2 flex gap-2">
-            <input id="bgg-catalog-search" v-model="searchQuery" type="search" maxlength="120" :placeholder="t('searchPlaceholder')" class="min-h-12 min-w-0 flex-1 rounded-xl border border-ink/15 bg-canvas px-3 text-sm outline-none focus:border-copper">
-            <button type="submit" :disabled="loading" class="min-h-12 shrink-0 rounded-xl bg-indigo px-4 text-sm font-semibold text-white disabled:opacity-50">{{ loading ? t('searching') : t('search') }}</button>
-          </div>
-          <p v-if="searchValidation" class="mt-2 text-xs text-danger" role="alert">{{ t('searchValidation') }}</p>
-        </form>
       </header>
 
-      <GameRecommendationAgent />
+      <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_23rem] xl:items-start">
+        <GameRecommendationAgent class="min-w-0" />
 
-      <section class="py-8">
+        <aside class="tabletop-panel player-board overflow-hidden xl:sticky xl:top-6" aria-labelledby="quick-browse-title">
+          <div class="border-b border-ink/10 p-4 sm:p-5">
+            <p class="tabletop-kicker">{{ t('browseEyebrow') }}</p>
+            <h2 id="quick-browse-title" class="mt-1 font-display text-2xl font-semibold">{{ t('quickBrowse') }}</h2>
+            <form class="mt-4" role="search" @submit.prevent="searchGames">
+              <label for="bgg-catalog-search" class="sr-only">{{ t('searchLabel') }}</label>
+              <div class="flex gap-2">
+                <input id="bgg-catalog-search" v-model="searchQuery" type="search" maxlength="120" :placeholder="t('searchPlaceholder')" class="min-h-11 min-w-0 flex-1 rounded-lg border border-ink/15 bg-canvas px-3 text-sm outline-none focus:border-copper">
+                <button type="submit" :disabled="loading" class="min-h-11 shrink-0 rounded-lg bg-felt px-3 text-sm font-semibold text-white disabled:opacity-50">{{ t('search') }}</button>
+              </div>
+              <p v-if="searchValidation" class="mt-2 text-xs text-red-700" role="alert">{{ t('searchValidation') }}</p>
+            </form>
+            <form class="mt-3 grid grid-cols-2 gap-2" @submit.prevent="applyFilters">
+              <label class="grid gap-1 text-[0.68rem] font-semibold text-ink/55">{{ t('sortLabel') }}
+                <select v-model="sort" class="min-h-10 rounded-lg border border-ink/15 bg-canvas px-2 text-xs outline-none"><option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option></select>
+              </label>
+              <label class="grid gap-1 text-[0.68rem] font-semibold text-ink/55">{{ t('typeLabel') }}
+                <select v-model="type" class="min-h-10 rounded-lg border border-ink/15 bg-canvas px-2 text-xs outline-none"><option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option></select>
+              </label>
+              <button type="submit" :disabled="loading" class="col-span-2 min-h-10 rounded-lg border border-ink/15 text-xs font-semibold text-ink/70 hover:border-copper/50 disabled:opacity-50">{{ t('apply') }}</button>
+            </form>
+          </div>
+          <div v-if="games.length" class="grid grid-cols-2 gap-px bg-ink/10">
+            <RouterLink v-for="game in games.slice(0, 6)" :key="`quick-${game.bggId}`" :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="group min-w-0 bg-paper p-3 hover:bg-canvas">
+              <div class="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-md bg-canvas p-1.5">
+                <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="t('coverAlt', { game: game.name })" loading="lazy" class="size-full object-contain" @error="hideBrokenImage">
+                <TabletopGlyph v-else name="cards" :size="28" class="text-ink/25" />
+              </div>
+              <h3 class="mt-2 line-clamp-2 font-display text-sm font-semibold leading-4">{{ game.name }}</h3>
+              <p class="mt-1 text-[0.65rem] text-ink/45">{{ game.overallRank ? t('rank', { rank: game.overallRank }) : t('rating', { rating: game.averageRating.toFixed(1) }) }}</p>
+            </RouterLink>
+          </div>
+          <div v-else class="p-5 text-sm leading-6 text-ink/50">{{ loading ? t('loading') : t('errorDescription') }}</div>
+          <a href="#game-catalog" class="flex min-h-12 items-center justify-between border-t border-ink/10 px-5 text-sm font-semibold text-felt">{{ t('openCatalog') }} <span aria-hidden="true">↓</span></a>
+        </aside>
+      </div>
+
+      <section id="game-catalog" class="scroll-mt-6 border-t border-ink/10 py-9">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p class="text-sm font-semibold text-copper">{{ t('browseEyebrow') }}</p>
+            <p class="tabletop-kicker">{{ t('browseEyebrow') }}</p>
             <h2 class="mt-1 font-display text-3xl font-semibold">{{ t('browseTitle') }}</h2>
           </div>
           <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-12 items-center" :aria-label="t('officialSource')">
@@ -254,24 +286,7 @@ watch(locale, () => void loadCatalog(false))
           </a>
         </div>
 
-        <form class="mt-6 grid gap-3 rounded-2xl border border-ink/10 bg-paper p-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end" @submit.prevent="applyFilters">
-          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
-            {{ t('sortLabel') }}
-            <select v-model="sort" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm outline-none focus:border-copper">
-              <option value="hot">{{ t('sortHot') }}</option><option value="rating">{{ t('sortRating') }}</option><option value="rank">{{ t('sortRank') }}</option>
-            </select>
-          </label>
-          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
-            {{ t('typeLabel') }}
-            <select v-model="type" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm outline-none focus:border-copper">
-              <option v-for="item in typeOptions" :key="item" :value="item">{{ t(item) }}</option>
-            </select>
-          </label>
-          <div class="flex gap-2">
-            <button type="submit" :disabled="loading" class="min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas disabled:opacity-50">{{ t('apply') }}</button>
-            <button v-if="filterActive" type="button" class="min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
-          </div>
-        </form>
+        <button v-if="filterActive" type="button" class="mt-5 min-h-11 rounded-lg border border-ink/15 px-4 text-sm font-semibold text-ink/60" @click="clearFilters">{{ t('clear') }}</button>
 
         <p v-if="ready" class="mt-4 text-sm text-ink/50">
           {{ t('scope', { sourceCount: sourceCount.toLocaleString(), total: total.toLocaleString() }) }}
@@ -289,10 +304,10 @@ watch(locale, () => void loadCatalog(false))
           <h3 class="font-display text-2xl font-semibold">{{ t('unavailableTitle') }}</h3><p class="mt-2 max-w-2xl text-sm leading-6 text-ink/60">{{ t('unavailableDescription') }}</p>
         </div>
         <p v-if="enriching && games.length" class="mt-4 text-xs font-medium text-copper" role="status">{{ t('enriching') }}</p>
-        <div v-if="games.length" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
-          <article v-for="game in games" :key="game.bggId" class="group min-w-0 rounded-2xl border border-ink/10 bg-paper p-3 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+        <TransitionGroup v-if="games.length" tag="div" name="tile" class="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" :class="loading ? 'opacity-70' : ''">
+          <article v-for="game in games" :key="game.bggId" class="game-tile group min-w-0 p-3">
             <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="block">
-              <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-canvas p-3 text-ink/25">
+              <div class="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-ink/6 bg-canvas p-3 text-ink/25">
                 <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="t('coverAlt', { game: game.name })" loading="lazy" class="h-full w-full object-contain" @error="hideBrokenImage">
                 <TabletopGlyph v-else name="cards" :size="48" />
                 <span v-if="game.hotRank" class="absolute left-2 top-2 rounded-full bg-copper px-2.5 py-1 text-xs font-bold text-white">{{ t('hotRank', { rank: game.hotRank }) }}</span>
@@ -305,15 +320,15 @@ watch(locale, () => void loadCatalog(false))
             <p v-if="playerTime(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTime(game) }}<span v-if="game.averageWeight !== null"> · {{ t('weight', { weight: game.averageWeight.toFixed(1) }) }}</span></p>
             <p v-else class="mt-1 text-xs leading-5 text-ink/40">{{ t('detailPending') }}</p>
             <ul v-if="game.categories.length || game.mechanics.length" class="mt-3 flex flex-wrap gap-1.5" :aria-label="t('categoriesAria')">
-              <li v-for="item in [...game.categories, ...game.mechanics].slice(0, 3)" :key="item" class="rounded-full bg-indigo/8 px-2 py-1 text-[0.68rem] font-medium text-indigo">{{ item }}</li>
+              <li v-for="item in [...game.categories, ...game.mechanics].slice(0, 3)" :key="item" class="tabletop-chip">{{ item }}</li>
             </ul>
           </article>
-        </div>
+        </TransitionGroup>
         <div v-else-if="ready && !loading" class="mt-7 rounded-2xl border border-dashed border-ink/15 bg-paper p-7 text-center"><h3 class="font-display text-2xl font-semibold">{{ t('emptyTitle') }}</h3><p class="mt-2 text-sm text-ink/55">{{ t('emptyDescription') }}</p><button type="button" class="mt-4 min-h-11 rounded-lg border border-ink/15 px-5 text-sm font-semibold" @click="clearFilters">{{ t('clear') }}</button></div>
 
         <nav v-if="ready && games.length" class="mt-8 flex flex-col items-center gap-3" :aria-label="t('shown', { shown: games.length })">
           <span class="text-sm text-ink/55">{{ t('shown', { shown: games.length }) }}</span>
-          <button v-if="games.length < total" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold shadow-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
+          <button v-if="games.length < total" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold elevation-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
         </nav>
       </section>
     </main>

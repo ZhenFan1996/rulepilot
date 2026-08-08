@@ -2,7 +2,6 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { useLocale } from '@/lib/locale'
-import TabletopGlyph from '@/components/TabletopGlyph.vue'
 
 interface VisualFocus {
   pageNumber: number
@@ -147,7 +146,7 @@ function stepKindLabel(kind: string) {
 
 <template>
   <div class="mt-7 xl:grid xl:grid-cols-[15rem_minmax(0,1fr)] xl:items-start xl:gap-12">
-    <nav data-testid="mobile-chapter-directory" class="sticky top-16 z-10 -mx-2 flex gap-2 overflow-x-auto rounded-2xl border border-ink/10 bg-canvas/90 p-2 shadow-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
+    <nav data-testid="mobile-chapter-directory" class="player-board sticky top-16 z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
       <a
         v-for="section in sections"
         :key="section.position"
@@ -155,17 +154,17 @@ function stepKindLabel(kind: string) {
         data-testid="mobile-chapter-link"
         :href="`#${chapterId(section.position)}`"
         class="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold transition focus:outline-none focus:ring-4 focus:ring-indigo/15"
-        :class="section.position === activePosition ? 'bg-ink-panel text-panel-text shadow-sm' : 'text-ink/65 hover:bg-paper hover:text-indigo'"
+        :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-ink/65 hover:bg-paper hover:text-indigo'"
         :aria-current="section.position === activePosition ? 'location' : undefined"
         @click="activateChapter(section.position)"
       >
-        <span class="grid size-7 place-items-center rounded-full text-xs" :class="section.position === activePosition ? 'bg-paper/10 text-copper' : 'bg-copper/12 text-copper'">{{ section.position }}</span>
+        <span class="hex-token size-7 text-copper"><span>{{ section.position }}</span></span>
         {{ section.title }}
       </a>
     </nav>
 
     <aside data-testid="desktop-chapter-directory" class="hidden min-w-0 xl:sticky xl:top-24 xl:block xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto" :aria-label="t('lesson.reader.chapterDirectory')">
-      <nav class="rounded-3xl border border-ink/10 bg-paper/75 p-3 shadow-[0_22px_55px_-45px_rgba(20,31,37,0.75)] backdrop-blur">
+      <nav class="tabletop-panel player-board bg-paper/75 p-3 backdrop-blur">
         <div class="flex items-end justify-between gap-3 border-b border-ink/10 px-2 pb-3 pt-1">
           <div>
             <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">{{ t('lesson.sidebar.directory') }}</p>
@@ -173,17 +172,17 @@ function stepKindLabel(kind: string) {
           </div>
           <span class="shrink-0 text-xs font-semibold text-ink/45">{{ activeChapterNumber }} / {{ sections.length }}</span>
         </div>
-        <ol class="mt-3 space-y-1.5">
+        <ol class="mt-3 stack-y-s">
           <li v-for="section in sections" :key="section.position">
             <a
               :href="`#${chapterId(section.position)}`"
               data-testid="desktop-chapter-link"
               class="group flex min-h-14 w-full items-start gap-3 rounded-2xl px-3 py-3 text-left text-sm transition focus:outline-none focus:ring-4 focus:ring-indigo/15"
-              :class="section.position === activePosition ? 'bg-ink-panel text-panel-text shadow-sm' : 'text-ink/65 hover:bg-canvas hover:text-ink'"
+              :class="section.position === activePosition ? 'bg-ink-panel text-panel-text elevation-sm' : 'text-ink/65 hover:bg-canvas hover:text-ink'"
               :aria-current="section.position === activePosition ? 'location' : undefined"
               @click="activateChapter(section.position)"
             >
-              <span class="grid size-7 shrink-0 place-items-center rounded-full border text-xs font-bold" :class="section.position === activePosition ? 'border-panel-text/15 bg-paper/10 text-copper' : 'border-copper/20 bg-copper/[0.08] text-copper'">{{ section.position }}</span>
+              <span class="hex-token size-7 shrink-0 text-copper"><span class="text-xs font-bold">{{ section.position }}</span></span>
               <span class="min-w-0 break-words font-semibold leading-5">{{ section.title }}</span>
             </a>
           </li>
@@ -200,9 +199,7 @@ function stepKindLabel(kind: string) {
         class="scroll-mt-32 border-b border-ink/10 py-10 first:pt-8 last:border-b-0 lg:grid lg:grid-cols-[5.5rem_minmax(0,1fr)] lg:gap-7 lg:py-14 lg:first:pt-1"
       >
         <div class="mb-4 lg:mb-0">
-          <div class="grid size-14 place-items-center rounded-2xl border border-copper/25 bg-copper/[0.08] text-copper shadow-sm">
-            <TabletopGlyph name="meeple" :size="23" />
-          </div>
+          <div class="hex-token size-14 text-copper elevation-sm"><span class="font-display text-xl font-bold">{{ section.position }}</span></div>
           <p class="mt-2 text-xs font-bold uppercase tracking-[0.12em] text-copper">{{ t('public.chapter', { position: section.position }) }}</p>
         </div>
 
@@ -211,7 +208,7 @@ function stepKindLabel(kind: string) {
           <p v-if="section.visualCaption" class="mt-3 max-w-2xl leading-7 text-ink/60">{{ section.visualCaption }}</p>
 
           <ol class="mt-7 grid gap-4">
-            <li v-for="step in section.steps" :key="step.position" :data-testid="stepTestId || undefined" class="rounded-2xl border p-5 shadow-[0_16px_45px_-40px_rgba(20,31,37,0.8)] sm:p-6" :class="stepTone(step.kind)">
+            <li v-for="step in section.steps" :key="step.position" :data-testid="stepTestId || undefined" class="rounded-2xl border p-5 lesson-step-shadow sm:p-6" :class="stepTone(step.kind)">
               <div class="flex gap-4">
                 <span class="grid size-8 shrink-0 place-items-center rounded-xl bg-ink text-sm font-bold text-canvas">{{ step.position }}</span>
                 <div class="min-w-0 flex-1">

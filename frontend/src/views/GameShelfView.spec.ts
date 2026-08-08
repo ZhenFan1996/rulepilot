@@ -54,6 +54,7 @@ describe('GameShelfView', () => {
     expect(wrapper.text()).toContain('90 分钟')
     expect(wrapper.text()).toContain('继续讲解')
     expect(wrapper.text()).not.toContain('不属于我的测试游戏')
+    expect(wrapper.get('img[src="/illustrations/game-library.webp"]').attributes('alt')).toBe('')
     expect(wrapper.get('img[alt="Root 的游戏封面"]').attributes('src')).toBe('https://images.example/root.jpg')
     expect(wrapper.get('a[href="/lesson/plan-root"]')).toBeTruthy()
 

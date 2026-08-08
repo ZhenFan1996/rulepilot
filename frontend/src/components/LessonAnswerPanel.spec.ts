@@ -85,6 +85,8 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.text()).toContain('这条答案如何得出')
     expect(wrapper.text()).toContain('这不是额外规则')
     expect(wrapper.text()).toContain('直接核对规则依据')
+    expect(wrapper.get('form').element.parentElement?.className).toContain('lg:sticky')
+    expect(wrapper.get('article[aria-live="polite"]').element.parentElement?.className).toContain('min-w-0')
 
     await wrapper.findAll('button').find((button) => button.text() === '编辑裁定')!.trigger('click')
     expect(wrapper.emitted('update:editing-ruling')).toEqual([[true]])

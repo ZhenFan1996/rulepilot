@@ -303,14 +303,14 @@ onUnmounted(() => {
       <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">{{ t('questions.offline') }}</p>
       <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />
 
-      <main class="mx-auto max-w-4xl px-5 py-9 sm:px-8 lg:py-14">
+      <main class="tabletop-page max-w-4xl">
         <div v-if="loading" aria-live="polite">
           <div class="h-4 w-32 animate-pulse rounded bg-ink/10" />
           <div class="mt-4 h-12 w-3/5 animate-pulse rounded bg-ink/10" />
           <div class="mt-8 h-96 animate-pulse rounded-3xl bg-paper" />
         </div>
 
-        <section v-else-if="errorMessage || !lesson" class="rounded-3xl border border-red-200 bg-paper p-7 text-center shadow-sm" role="alert">
+        <section v-else-if="errorMessage || !lesson" class="rounded-3xl border border-red-200 bg-paper p-7 text-center elevation-sm" role="alert">
           <p class="font-display text-2xl font-semibold">{{ t('questions.errorTitle') }}</p>
           <p class="mt-3 text-sm leading-6 text-ink/60">{{ errorMessage || t('questions.error') }}</p>
           <button type="button" class="mt-5 min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white" @click="loadWorkspace">{{ t('lesson.reader.state.error.retry') }}</button>

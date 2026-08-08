@@ -250,51 +250,52 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-60">
-    <aside class="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-ink/10 bg-paper px-5 py-6 lg:flex">
-      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')">
+  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-[17.5rem]">
+    <aside class="drawer-shelf fixed inset-y-0 left-0 z-30 hidden w-[17.5rem] flex-col overflow-hidden border-r border-white/8 bg-ink-panel px-5 py-6 text-[#f5f0e8]  lg:flex">
+      <div class="pointer-events-none absolute -right-12 -top-14 size-36 rotate-12 border border-white/7" aria-hidden="true" />
+      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-1 rounded-xl focus-visible:outline-offset-4">
         <ProductMark />
       </RouterLink>
 
-      <nav class="mt-10 space-y-1" :aria-label="t('shell.primaryNav')">
+      <nav class="relative mt-9 stack-y-sm" :aria-label="t('shell.primaryNav')">
         <RouterLink
           v-for="item in navigation"
           :key="item.name"
           :to="item.path"
-          class="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors"
-          :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
+          class="drawer-link group flex min-h-12 items-center gap-3 px-3 text-sm font-semibold transition-[color,background-color,translate]"
+          :class="currentNavigationName === item.name ? 'border-[#f5f0e8]/40 bg-[#f5f0e8] text-[#1a232a] drawer-link-active -translate-x-0.5' : 'border-white/5 bg-white/[0.035] text-[#f5f0e8]/62 hover:translate-x-0.5 hover:bg-white/8 hover:text-[#f5f0e8]'"
         >
-          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" />
+          <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-[#f5f0e8]/48 group-hover:text-[#f5f0e8]'" />
           <span>{{ t(item.labelKey) }}</span>
           <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
         </RouterLink>
         <RouterLink
           v-if="isAdmin"
           :to="{ name: 'agent-audit' }"
-          class="flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors"
-          :class="currentNavigationName === 'agent-audit' ? 'bg-ink text-canvas' : 'text-ink/60 hover:bg-ink/5 hover:text-ink'"
+          class="drawer-link flex min-h-12 items-center gap-3 px-3 text-sm font-semibold transition-colors"
+          :class="currentNavigationName === 'agent-audit' ? 'bg-[#f5f0e8] text-[#1a232a]' : 'text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
         >
           <TabletopGlyph name="rulebook" :size="19" class="shrink-0" />
           <span>{{ t('nav.agentAudit') }}</span>
         </RouterLink>
       </nav>
 
-      <div class="mt-auto border-t border-ink/10 pt-5">
-        <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-lg bg-ink/5 px-3 text-sm font-semibold">
-          <span class="grid h-7 w-7 place-items-center rounded-full bg-ink text-xs text-canvas">{{ username.slice(0, 1).toUpperCase() }}</span>
+      <div class="relative mt-auto border-t border-white/10 pt-5">
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-xl bg-white/6 px-3 text-sm font-semibold hover:bg-white/10">
+          <span class="grid h-7 w-7 place-items-center rounded-full bg-copper text-xs text-white">{{ username.slice(0, 1).toUpperCase() }}</span>
           <span class="truncate">{{ username }}</span>
         </RouterLink>
         <div class="mb-2 px-1"><LanguageSwitcher /></div>
-        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
+        <button class="flex min-h-10 w-full items-center justify-between rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" @click="toggleTheme">
           <span>{{ isDark ? t('shell.theme.light') : t('shell.theme.dark') }}</span>
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
         </button>
-        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink" @click="logout">{{ t('shell.signOut') }}</button>
-        <RouterLink v-else :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-ink/55 hover:bg-ink/5 hover:text-ink">{{ t('shell.signIn') }}</RouterLink>
+        <button v-if="username" class="mt-1 flex min-h-10 w-full items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]" @click="logout">{{ t('shell.signOut') }}</button>
+        <RouterLink v-else :to="loginTarget" class="mt-1 flex min-h-10 items-center rounded-lg px-3 text-sm text-[#f5f0e8]/55 hover:bg-white/7 hover:text-[#f5f0e8]">{{ t('shell.signIn') }}</RouterLink>
       </div>
     </aside>
 
-    <header class="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-ink/10 bg-canvas/95 px-4 backdrop-blur lg:hidden">
+    <header class="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-4 elevation-sm backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[360px]:hidden">{{ username }}</RouterLink>
@@ -320,7 +321,7 @@ onBeforeUnmount(() => {
       <slot />
     </main>
 
-    <aside v-if="backgroundStatusVisible && (completedTeaching.length || activeTeaching.length)" class="fixed bottom-20 left-4 right-4 z-30 rounded-xl border border-ink/10 bg-paper p-4 shadow-lg shadow-ink/10 sm:left-auto sm:max-w-md lg:bottom-6 lg:right-6" :aria-live="completedTeaching.length ? 'polite' : 'off'">
+    <aside v-if="backgroundStatusVisible && (completedTeaching.length || activeTeaching.length)" class="fixed bottom-20 left-4 right-4 z-30 rounded-xl border border-ink/10 bg-paper p-4 elevation-lg-ink sm:left-auto sm:max-w-md lg:bottom-6 lg:right-6" :aria-live="completedTeaching.length ? 'polite' : 'off'">
       <div v-if="completedTeaching.length" class="flex items-start gap-3">
         <div class="min-w-0 flex-1">
           <p class="font-semibold">{{ completedTeachingText }}</p>
@@ -338,13 +339,13 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
+    <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
         v-for="item in mobileNavigation"
         :key="item.name"
         :to="item.path"
-        class="flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-center text-[0.65rem] font-medium"
-        :class="currentNavigationName === item.name ? 'bg-ink text-canvas' : 'text-ink/55'"
+        class="flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1.5 text-center text-[0.65rem] font-semibold"
+        :class="currentNavigationName === item.name ? 'bg-felt text-white' : 'text-ink/55'"
       >
         <TabletopGlyph :name="item.icon" :size="18" />
         <span>{{ t(item.labelKey) }}</span>

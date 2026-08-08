@@ -5,8 +5,8 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-copper text-white shadow-[0_10px_24px_-12px_rgba(170,91,49,0.8)] hover:bg-copper-dark',
-        secondary: 'bg-ink-panel text-canvas shadow-[0_10px_24px_-12px_rgba(26,35,42,0.55)] hover:bg-ink-panel/90',
+        primary: 'bg-copper text-white action-shadow-copper hover:bg-copper-dark',
+        secondary: 'bg-ink-panel text-canvas action-shadow-ink hover:bg-ink-panel/90',
         outline: 'border border-ink/15 bg-paper/60 text-ink hover:border-copper/60 hover:bg-copper/10',
         ghost: 'text-ink/70 hover:bg-ink/5 hover:text-ink',
       },

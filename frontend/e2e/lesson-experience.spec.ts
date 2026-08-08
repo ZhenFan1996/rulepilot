@@ -66,7 +66,7 @@ test('uses one tabletop reading language for private and public guides without r
 
   await page.goto('/read/plan-1')
   await expect(page.locator('header.tabletop-hero')).toBeVisible()
-  await expect(page.locator('.agent-workspace')).toBeVisible()
+  await expect(page.locator('section[aria-labelledby="public-question-title"].player-board')).toBeVisible()
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
   if (process.env.RULEPILOT_VISUAL_QA) {
     await page.screenshot({ path: testInfo.outputPath('public-guide.png'), fullPage: true })
@@ -102,7 +102,7 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   await expect(page.locator('header.tabletop-hero')).toBeVisible()
   await expect(page.getByRole('heading', { name: '向《Catalog Game》规则书提问' })).toBeVisible()
   await expect(page.getByText('桌游资料由 BoardGameGeek 提供')).toBeVisible()
-  await expect(page.locator('.agent-workspace')).toBeVisible()
+  await expect(page.locator('#lesson-question-panel .tabletop-panel.player-board')).toBeVisible()
   await expect(page.getByRole('textbox', { name: '向规则书提问' })).toBeVisible()
   await page.getByRole('textbox', { name: '向规则书提问' }).fill('灯塔牌放在哪里？')
   await page.getByRole('button', { name: '提交问题' }).click()

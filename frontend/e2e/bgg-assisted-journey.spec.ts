@@ -58,7 +58,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: 'Agent 寻找官方规则书' }).click()
+  await page.getByRole('button', { name: '帮我找官方规则书' }).click()
   await expect(page.getByText('publisher.example')).toBeVisible()
   await page.getByRole('button', { name: '选择并继续核对' }).click()
   const officialButton = page.getByRole('button', { name: '下载并生成讲解' })

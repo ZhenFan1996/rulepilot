@@ -48,7 +48,7 @@ watch(() => route.query.runId, (value) => {
 
 <template>
   <AppShell>
-    <div class="min-h-screen bg-canvas px-5 py-10 text-ink sm:px-8">
+    <div class="tabletop-page min-h-screen max-w-5xl text-ink">
       <main class="mx-auto max-w-6xl">
         <header class="max-w-3xl">
           <p class="text-xs font-semibold uppercase tracking-[0.14em] text-copper">{{ t('agentAudit.eyebrow') }}</p>
@@ -75,12 +75,12 @@ watch(() => route.query.runId, (value) => {
 
           <section class="mt-8" aria-labelledby="audit-activities-title">
             <h2 id="audit-activities-title" class="font-display text-2xl font-semibold">{{ t('agentAudit.activities') }}</h2>
-            <ol class="mt-4 space-y-3"><li v-for="activity in audit.activities" :key="activity.sequence" class="rounded-2xl border border-ink/10 bg-paper p-4"><div class="flex flex-wrap items-center gap-2 text-xs font-semibold"><span class="rounded-full bg-indigo/8 px-2 py-1 text-indigo">{{ activity.type }}</span><span class="rounded-full bg-ink/6 px-2 py-1">{{ activity.outcome }}</span><span class="text-ink/45">#{{ activity.sequence }} · {{ activity.latencyMs }} ms</span></div><p class="mt-3 break-all font-mono text-sm">{{ activity.operation }}</p><p class="mt-2 text-sm leading-6 text-ink/65">{{ activity.summary }}</p><p class="mt-2 text-xs text-ink/40">tokens {{ activity.estimatedInputTokens }} → {{ activity.estimatedOutputTokens }}</p></li></ol>
+            <ol class="mt-4 stack-y-md"><li v-for="activity in audit.activities" :key="activity.sequence" class="rounded-2xl border border-ink/10 bg-paper p-4"><div class="flex flex-wrap items-center gap-2 text-xs font-semibold"><span class="rounded-full bg-indigo/8 px-2 py-1 text-indigo">{{ activity.type }}</span><span class="rounded-full bg-ink/6 px-2 py-1">{{ activity.outcome }}</span><span class="text-ink/45">#{{ activity.sequence }} · {{ activity.latencyMs }} ms</span></div><p class="mt-3 break-all font-mono text-sm">{{ activity.operation }}</p><p class="mt-2 text-sm leading-6 text-ink/65">{{ activity.summary }}</p><p class="mt-2 text-xs text-ink/40">tokens {{ activity.estimatedInputTokens }} → {{ activity.estimatedOutputTokens }}</p></li></ol>
           </section>
 
           <section class="mt-8" aria-labelledby="audit-steps-title">
             <h2 id="audit-steps-title" class="font-display text-2xl font-semibold">{{ t('agentAudit.steps') }}</h2>
-            <ol class="mt-4 space-y-2 text-sm"><li v-for="step in audit.steps" :key="step.sequence" class="rounded-xl bg-paper px-4 py-3"><span class="font-mono text-xs text-ink/45">#{{ step.sequence }}</span> <span class="font-semibold">{{ step.fromState }} → {{ step.toState }}</span><p class="mt-1 text-ink/60">{{ step.summary }}</p></li></ol>
+            <ol class="mt-4 stack-y-sm text-sm"><li v-for="step in audit.steps" :key="step.sequence" class="rounded-xl bg-paper px-4 py-3"><span class="font-mono text-xs text-ink/45">#{{ step.sequence }}</span> <span class="font-semibold">{{ step.fromState }} → {{ step.toState }}</span><p class="mt-1 text-ink/60">{{ step.summary }}</p></li></ol>
           </section>
         </template>
       </main>

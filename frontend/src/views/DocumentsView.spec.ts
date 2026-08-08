@@ -68,10 +68,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('正在为这款桌游找规则书')
+    expect(wrapper.get('img[src="/illustrations/rulebook-reading.webp"]').attributes('alt')).toBe('')
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
     expect(wrapper.get('select').element.value).toBe('edition-1')
-    await wrapper.findAll('button').find(button => button.text().includes('Agent 寻找官方规则书'))!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('帮我找官方规则书'))!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Catalog Game Rules')
     expect(wrapper.text()).toContain('域名匹配出版社')

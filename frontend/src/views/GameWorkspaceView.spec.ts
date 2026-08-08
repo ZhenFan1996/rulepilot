@@ -41,9 +41,11 @@ describe('GameWorkspaceView', () => {
     expect(wrapper.text()).toContain('Designer')
     expect(wrapper.text()).toContain('First Edition')
     expect(wrapper.text()).toContain('Official Rules')
+    expect(wrapper.findAll('section.player-board')).toHaveLength(1)
+    expect(wrapper.findAll('article.player-board')).toHaveLength(1)
     expect(wrapper.get('a[href="/lesson/plan-1"]').text()).toContain('打开讲解')
     expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('规则答疑')
-    const discoveryLink = wrapper.findAll('a').find(link => link.text().includes('Agent 找规则书'))!
+    const discoveryLink = wrapper.findAll('a').find(link => link.text().includes('找规则书'))!
     expect(discoveryLink.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=selected-game')
   })
 })

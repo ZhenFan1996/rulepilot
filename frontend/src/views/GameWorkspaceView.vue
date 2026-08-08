@@ -41,13 +41,13 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回我的游戏', eyebrow: '桌游工作区', error: '暂时无法读取这款桌游。', notFound: '这款桌游不在你的目录中。', retry: '重试',
   rating: 'BGG 评分', weight: '复杂度', designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别',
   evidence: 'BGG 信息用于识别、推荐与展示；规则讲解和答疑只引用已处理的规则书。', editions: '版本、规则书与讲解',
-  editionEmpty: '这个版本还没有规则书。', addRulebook: 'Agent 找规则书', processing: '规则书处理中', failed: '规则书需要处理', ready: '规则书可用',
+  editionEmpty: '这个版本还没有规则书。', addRulebook: '找规则书', processing: '规则书处理中', failed: '规则书需要处理', ready: '规则书可用',
   openGuide: '打开讲解', ask: '规则答疑', generate: '开始讲解', source: '官方来源', bgg: '查看 BGG 原始资料',
 } : {
   back: 'Back to my games', eyebrow: 'Game workspace', error: 'This game is unavailable right now.', notFound: 'This game is not in your catalog.', retry: 'Try again',
   rating: 'BGG rating', weight: 'Complexity', designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories',
   evidence: 'BGG data supports identification, recommendations, and presentation. Teaching and Q&A cite only processed rulebooks.', editions: 'Editions, rulebooks, and guides',
-  editionEmpty: 'This edition has no rulebook yet.', addRulebook: 'Agent: find rulebook', processing: 'Processing rulebook', failed: 'Rulebook needs attention', ready: 'Rulebook ready',
+  editionEmpty: 'This edition has no rulebook yet.', addRulebook: 'Find rulebook', processing: 'Processing rulebook', failed: 'Rulebook needs attention', ready: 'Rulebook ready',
   openGuide: 'Open guide', ask: 'Ask rules', generate: 'Start teaching', source: 'Official source', bgg: 'View original BGG data',
 })
 
@@ -103,7 +103,7 @@ onMounted(load)
 
 <template>
   <AppShell>
-    <main class="mx-auto max-w-6xl px-5 py-8 sm:px-8 lg:px-12 lg:py-14">
+    <main class="tabletop-page max-w-6xl">
       <RouterLink :to="{ name: 'catalog' }" class="text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
       <div v-if="loading" class="mt-8 h-96 animate-pulse rounded-2xl bg-ink/8" aria-live="polite" />
@@ -115,7 +115,7 @@ onMounted(load)
       </section>
 
       <template v-else>
-        <section class="mt-8 grid gap-7 overflow-hidden rounded-[2rem] border border-ink/10 bg-paper p-5 shadow-sm sm:p-8 lg:grid-cols-[16rem_1fr]">
+        <section class="tabletop-panel player-board mt-8 grid gap-7 overflow-hidden p-5 sm:p-8 lg:grid-cols-[16rem_1fr]">
           <div class="rounded-2xl bg-canvas p-4">
             <img v-if="details?.imageUrl || game.bggMetadata?.thumbnailUrl" :src="details?.imageUrl || game.bggMetadata?.thumbnailUrl" :alt="game.game.name" class="mx-auto aspect-[4/5] size-full object-contain" referrerpolicy="no-referrer">
             <TabletopGlyph v-else name="meeple" :size="96" class="mx-auto my-16 text-copper" />
@@ -127,7 +127,7 @@ onMounted(load)
               <span v-if="details.averageRating" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.rating }} {{ details.averageRating.toFixed(1) }}</span>
               <span v-if="details.averageWeight" class="rounded-full bg-canvas px-3 py-1.5">{{ copy.weight }} {{ details.averageWeight.toFixed(1) }} / 5</span>
             </div>
-            <p v-if="details?.description" class="mt-5 line-clamp-5 leading-7 text-ink/65">{{ details.description }}</p>
+            <p v-if="details?.description" class="mt-5 whitespace-pre-line leading-7 text-ink/65">{{ details.description }}</p>
             <dl v-if="details" class="mt-5 grid gap-3 text-sm sm:grid-cols-2">
               <div v-if="details.designers?.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd>{{ details.designers.join('、') }}</dd></div>
               <div v-if="details.publishers?.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd>{{ details.publishers.join('、') }}</dd></div>
@@ -141,14 +141,14 @@ onMounted(load)
 
         <section class="mt-10">
           <h2 class="font-display text-3xl font-semibold">{{ copy.editions }}</h2>
-          <div class="mt-5 space-y-5">
-            <article v-for="edition in game.editions" :key="edition.id" class="rounded-2xl border border-ink/10 bg-paper p-5 sm:p-6">
+          <div class="mt-5 stack-y-xl">
+            <article v-for="edition in game.editions" :key="edition.id" class="tabletop-panel player-board p-5 sm:p-6">
               <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div><h3 class="font-display text-2xl font-semibold">{{ edition.name }}</h3><p class="mt-1 text-sm text-ink/45">{{ edition.language }}<span v-if="edition.publicationYear"> · {{ edition.publicationYear }}</span></p></div>
                 <RouterLink :to="{ name: 'teach', query: { editionId: edition.id, onboarding: 'selected-game' } }" class="inline-flex min-h-11 items-center justify-center rounded-xl bg-copper px-5 text-sm font-semibold text-white">{{ copy.addRulebook }}</RouterLink>
               </div>
               <p v-if="editionDocuments(edition.id).length === 0" class="mt-5 rounded-xl bg-canvas px-4 py-5 text-sm text-ink/55">{{ copy.editionEmpty }}</p>
-              <ul v-else class="mt-5 space-y-3">
+              <ul v-else class="mt-5 stack-y-md">
                 <li v-for="document in editionDocuments(edition.id)" :key="document.document.id" class="rounded-xl border border-ink/10 bg-canvas p-4">
                   <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div><p class="font-semibold">{{ document.document.title }}</p><p class="mt-1 text-xs text-ink/45">{{ statusLabel(document.latestVersion.status) }}</p></div>

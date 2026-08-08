@@ -69,7 +69,7 @@ describe('PublicLessonView', () => {
     const sidebar = wrapper.get('aside.fixed')
     expect(sidebar.classes()).toContain('lg:flex')
     expect(wrapper.find('header.tabletop-hero').exists()).toBe(true)
-    expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-ink'))).toBe(true)
+    expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-[#f5f0e8]'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.text()).toContain('放置玩家板')

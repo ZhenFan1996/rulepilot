@@ -60,7 +60,7 @@ async function login() {
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>
       <p class="mt-3 leading-7 text-ink/55">{{ t('auth.login.description') }}</p>
 
-      <form class="mt-8 space-y-5" @submit.prevent="login">
+      <form class="mt-8 stack-y-xl" @submit.prevent="login">
         <label class="block text-sm font-semibold">
           {{ t('auth.username') }}
           <input v-model="username" name="username" autocomplete="username" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">

@@ -54,11 +54,11 @@ const { locale } = useLocale()
 const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回推荐', loading: '正在读取桌游资料', error: '暂时无法读取这款桌游。你仍然可以返回并直接添加规则书。',
   login: '登录后即可保留这款桌游，并继续查找规则书。当前选择不会丢失。', selectError: '暂时无法保存这款桌游，请稍后重试。',
-  eyebrow: '桌游推荐 · BGG 资料', unknownYear: '发行年份未知', stats: '游戏信息',
+  eyebrow: '桌游资料', unknownYear: '发行年份未知', stats: '游戏信息',
   evidenceBoundary: 'BGG 资料仅用于推荐、识别游戏和展示封面。后续讲解与答疑只会引用你确认的规则书。',
   select: '选择这款桌游并找规则书', selecting: '正在准备…', source: '查看 BGG 原始资料', retry: '重新读取',
-  translation: 'AI 翻译 · 基于 BGG 原文', translating: '原文已就绪，正在后台补齐中文…',
-  officialName: '官方中文名 · BGG 版本资料', metadataTranslation: 'AI 翻译',
+  translation: '译自 BGG 原文', translating: '原文已就绪，中文版本正在补齐…',
+  officialName: 'BGG 版本资料收录的官方中文名', metadataTranslation: '中文对照',
   cover: (gameName: string) => `${gameName} 封面`, players: (min: number, max: number) => `${min}–${max} 人`,
   minutes: (minutes: number) => `约 ${minutes} 分钟`, age: (age: number) => `${age} 岁以上`,
   rating: (rating: number) => `BGG 评分 ${rating.toFixed(1)}`, weight: (weight: number) => `复杂度 ${weight.toFixed(1)} / 5`,
@@ -69,11 +69,11 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
 } : {
   back: 'Back to recommendations', loading: 'Loading game details', error: 'This game is unavailable right now. You can still go back and add a rulebook directly.',
   login: 'Sign in to keep this game and continue to its rulebook. Your selection is preserved.', selectError: 'This game could not be saved. Please try again shortly.',
-  eyebrow: 'Game recommendation · BGG data', unknownYear: 'Publication year unavailable', stats: 'Game details',
+  eyebrow: 'Game details', unknownYear: 'Publication year unavailable', stats: 'Game details',
   evidenceBoundary: 'BGG data is used only for recommendations, game identification, and cover art. Teaching and Q&A cite only the rulebook you confirm.',
   select: 'Choose this game and find its rulebook', selecting: 'Preparing…', source: 'View original BGG data', retry: 'Try again',
-  translation: 'AI translation · based on the BGG source', translating: 'Source details are ready; localized metadata is being added…',
-  officialName: 'Official Chinese name · BGG edition data', metadataTranslation: 'AI translation',
+  translation: 'Translated from the BGG source', translating: 'Source details are ready; localized metadata is being added…',
+  officialName: 'Official Chinese name recorded by a BGG edition', metadataTranslation: 'Localized terms',
   cover: (gameName: string) => `${gameName} cover`, players: (min: number, max: number) => `${min}–${max} players`,
   minutes: (minutes: number) => `About ${minutes} min`, age: (age: number) => `Ages ${age}+`,
   rating: (rating: number) => `BGG rating ${rating.toFixed(1)}`, weight: (weight: number) => `Weight ${weight.toFixed(1)} / 5`,
@@ -191,28 +191,28 @@ watch(locale, load)
 
 <template>
   <AppShell>
-    <main class="mx-auto max-w-5xl px-5 py-8 sm:px-8 lg:px-12 lg:py-14">
-      <RouterLink :to="{ name: 'home' }" class="text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
+    <main class="tabletop-page max-w-6xl">
+      <RouterLink to="/discover" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
       <div v-if="loading" class="mt-8 animate-pulse rounded-2xl border border-ink/10 bg-paper p-6" :aria-label="copy.loading">
         <div class="h-72 rounded-xl bg-ink/8 sm:h-96" />
       </div>
 
-      <section v-else-if="game" class="mt-8 grid gap-8 rounded-2xl border border-ink/10 bg-paper p-5 shadow-sm sm:p-8 lg:grid-cols-[18rem_1fr]">
-        <div class="rounded-xl bg-canvas p-4">
+      <section v-else-if="game" class="tabletop-panel player-board mt-5 grid gap-8 p-4 sm:p-7 lg:grid-cols-[19rem_1fr]">
+        <div class="rounded-xl border border-ink/8 bg-canvas p-4">
           <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
         </div>
         <div class="min-w-0 self-center">
-          <p class="text-sm font-semibold text-copper">{{ copy.eyebrow }}</p>
+          <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
           <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ game.name }}</h1>
           <p v-if="game.officialNameLocalized" class="mt-2 text-sm font-medium text-copper">{{ game.originalName }} · {{ copy.officialName }}</p>
           <p class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
           <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
-            <li v-for="stat in stats" :key="stat" class="rounded-full bg-canvas px-3 py-1.5 text-sm font-medium text-ink/65">{{ stat }}</li>
+            <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li>
           </ul>
           <p v-if="translating" class="mt-6 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
           <p v-else-if="game.descriptionTranslated" class="mt-6 text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : 'mt-6'" class="whitespace-pre-line leading-7 text-ink/65">{{ game.description }}</p>
+          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : 'mt-6'" class="whitespace-pre-line text-[0.95rem] leading-8 text-ink/68">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>
@@ -221,22 +221,25 @@ watch(locale, load)
           </dl>
           <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
           <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <button type="button" :disabled="selecting" class="min-h-12 rounded-xl bg-copper px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" @click="selectGame">
+            <button type="button" :disabled="selecting" class="min-h-12 rounded-xl bg-felt px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" @click="selectGame">
               {{ selecting ? copy.selecting : copy.select }}
             </button>
             <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="min-h-12 rounded-xl border border-ink/15 px-5 py-3 text-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
           </div>
         </div>
         <div class="border-t border-ink/10 pt-6 lg:col-span-2">
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 class="font-display text-2xl font-semibold">{{ copy.editionImages }}</h2>
               <p class="mt-1 text-sm text-ink/50">{{ copy.editionImagesHint }}</p>
             </div>
-            <a :href="`${game.bggUrl}/images`" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-indigo">{{ copy.imageGallery }} ↗</a>
+            <div class="flex flex-col items-start gap-2 sm:items-end">
+              <a :href="`${game.bggUrl}/images`" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-indigo">{{ copy.imageGallery }} ↗</a>
+              <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
+            </div>
           </div>
-          <ul v-if="game.editionImages.length" class="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            <li v-for="editionImage in game.editionImages" :key="editionImage.versionId" class="min-w-0 rounded-xl border border-ink/10 bg-canvas p-3">
+          <ul v-if="game.editionImages.length" class="-mx-4 mt-5 flex snap-x gap-4 overflow-x-auto px-4 pb-3 sm:mx-0 sm:px-0">
+            <li v-for="editionImage in game.editionImages" :key="editionImage.versionId" class="game-tile w-40 shrink-0 snap-start bg-canvas p-3 sm:w-44">
               <img :src="editionImage.imageUrl" :alt="editionImage.name" loading="lazy" referrerpolicy="no-referrer" class="aspect-[4/5] w-full object-contain">
               <p class="mt-2 truncate text-sm font-semibold" :title="editionImage.name">{{ editionImage.name }}</p>
               <p v-if="editionImage.publicationYear || editionImage.languages.length" class="mt-1 text-xs text-ink/45">

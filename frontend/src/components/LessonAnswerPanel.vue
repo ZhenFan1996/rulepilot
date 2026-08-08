@@ -233,7 +233,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
 
 <template>
   <section id="lesson-question-panel" class="mt-8 scroll-mt-6" aria-labelledby="lesson-question-title">
-    <div class="agent-workspace rounded-[2rem] border border-indigo/15 p-4 sm:p-7">
+    <div class="tabletop-panel player-board p-4 sm:p-7">
       <AgentWorkspaceHeader
         :eyebrow="t('lesson.answer.eyebrow')"
         :title="t('lesson.answer.title')"
@@ -246,7 +246,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
         <button type="button" :disabled="answerLoading" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink/55 hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
       </div>
 
-      <ol v-if="previousAnswerTurns.length" class="mt-3 space-y-3" :aria-label="t('lesson.answer.thread')">
+      <ol v-if="previousAnswerTurns.length" class="mt-3 stack-y-md" :aria-label="t('lesson.answer.thread')">
         <li v-for="(turn, index) in previousAnswerTurns" :key="`${index}-${turn.question}`" class="rounded-2xl border border-ink/8 bg-canvas p-4">
           <div class="flex flex-wrap items-center gap-2">
             <p class="text-xs font-semibold text-ink/45">{{ turn.learningIntent ? learningIntentLabel(turn.learningIntent) : t('lesson.answer.youAsked') }}</p>
@@ -259,18 +259,18 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
             class="mt-3 border-t border-ink/8 pt-3"
           >
             <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.history.open') }}</summary>
-            <div class="mt-3 space-y-3 text-sm leading-6 text-ink/65">
+            <div class="mt-3 stack-y-md text-sm leading-6 text-ink/65">
               <p v-if="turn.answer.clarification" class="rounded-xl bg-amber-50 px-3 py-2 text-amber-950">{{ turn.answer.clarification }}</p>
               <p v-else-if="turn.answer.explanation">{{ turn.answer.explanation }}</p>
               <div v-if="turn.answer.calculations?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}</p>
-                <ul class="mt-1 space-y-1 font-mono text-xs text-indigo">
+                <ul class="mt-1 stack-y-xs font-mono text-xs text-indigo">
                   <li v-for="calculation in turn.answer.calculations" :key="`${calculation.expression}-${calculation.result}`">{{ calculation.expression }} = {{ calculation.result }}</li>
                 </ul>
               </div>
               <div v-if="turn.answer.situationChecks?.length" class="rounded-xl border border-ink/10 bg-paper px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.situation.title') }}</p>
-                <ul class="mt-2 space-y-2">
+                <ul class="mt-2 stack-y-sm">
                   <li v-for="check in turn.answer.situationChecks" :key="`${check.requirement}-${check.status}`">
                     <span :class="situationStatusClasses(check.status)" class="rounded-full px-2 py-0.5 text-xs font-semibold">{{ situationStatusLabel(check.status) }}</span>
                     <span class="ml-2">{{ check.requirement }}</span>
@@ -280,7 +280,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               </div>
               <div v-if="turn.answer.walkthroughSteps?.length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
-                <ol class="mt-2 space-y-2">
+                <ol class="mt-2 stack-y-sm">
                   <li v-for="(step, stepIndex) in turn.answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-2">
                     <span class="font-semibold text-copper">{{ stepIndex + 1 }}.</span>
                     <div><p class="font-medium text-ink">{{ step.instruction }}</p><p class="text-xs text-ink/50">{{ step.explanation }}</p></div>
@@ -289,7 +289,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               </div>
               <div v-if="turn.answer.decisionBranches?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.decision.title') }}</p>
-                <ul class="mt-2 space-y-2">
+                <ul class="mt-2 stack-y-sm">
                   <li v-for="branch in turn.answer.decisionBranches" :key="`${branch.condition}-${branch.outcome}`" class="rounded-lg bg-canvas px-3 py-2">
                     <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ decisionBasisLabel(branch.basis) }}</span>
                     <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：</span>{{ branch.condition }}</p>
@@ -300,7 +300,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               <div v-if="turn.answer.exceptionClauses?.length" class="rounded-xl border border-copper/20 bg-copper/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.exception.title') }}</p>
                 <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.exception.description') }}</p>
-                <ul class="mt-2 space-y-2">
+                <ul class="mt-2 stack-y-sm">
                   <li v-for="clause in turn.answer.exceptionClauses" :key="`${clause.condition}-${clause.effect}`" class="rounded-lg bg-canvas px-3 py-2">
                     <p><span class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：</span>{{ clause.condition }}</p>
                     <p class="text-ink/60">→ {{ clause.effect }}</p>
@@ -310,7 +310,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               <div v-if="turn.answer.termDefinitions?.length" class="rounded-xl border border-indigo/15 bg-indigo/[0.04] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.definition.title') }}</p>
                 <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.description') }}</p>
-                <dl class="mt-2 space-y-2">
+                <dl class="mt-2 stack-y-sm">
                   <div v-for="definition in turn.answer.termDefinitions" :key="definition.term" class="rounded-lg bg-canvas px-3 py-2">
                     <dt class="font-semibold text-indigo">{{ definition.term }}</dt><dd>{{ definition.definition }}</dd>
                     <dd v-if="definition.boundary" class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
@@ -349,7 +349,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
                 <div v-for="item in turn.answer.tieResolutions" :key="`${item.tieContext}-${item.finalOutcome}`" class="mt-2 rounded-lg bg-canvas px-3 py-2">
                   <span class="text-xs font-semibold text-indigo">{{ tieBasisLabel(item.basis) }}</span>
                   <p><span class="font-semibold text-ink">{{ t('lesson.answer.tie.context') }}：</span>{{ item.tieContext }}</p>
-                  <ol class="mt-1 list-decimal space-y-1 pl-5"><li v-for="step in item.resolutionSteps" :key="step">{{ step }}</li></ol>
+                  <ol class="mt-1 list-decimal stack-y-xs pl-5"><li v-for="step in item.resolutionSteps" :key="step">{{ step }}</li></ol>
                   <p><span class="font-semibold text-ink">{{ t('lesson.answer.tie.final') }}：</span>{{ item.finalOutcome }}</p>
                 </div>
               </div>
@@ -375,7 +375,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               <div v-if="turn.answer.ruleOptions?.length" class="rounded-xl border border-copper/20 bg-copper/[0.05] px-3 py-2">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p>
                 <p class="mt-1 text-xs text-ink/55"><span class="font-semibold">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ turn.answer.ruleOptions[0]?.selectionRule }}</p>
-                <ol class="mt-2 space-y-2">
+                <ol class="mt-2 stack-y-sm">
                   <li v-for="(item, optionIndex) in turn.answer.ruleOptions" :key="`${item.optionName}-${optionIndex}`" class="rounded-lg bg-canvas px-3 py-2">
                     <span class="text-xs font-semibold text-copper">{{ optionBasisLabel(item.basis) }}</span>
                     <p class="font-semibold text-ink">{{ optionIndex + 1 }}. {{ item.optionName }}</p>
@@ -386,19 +386,19 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               </div>
               <div v-if="turn.answer.warnings.length" class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
                 <p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p>
-                <ul class="mt-1 list-disc space-y-1 pl-5">
+                <ul class="mt-1 list-disc stack-y-xs pl-5">
                   <li v-for="warning in turn.answer.warnings" :key="warning.type">{{ warningMessage(warning) }}</li>
                 </ul>
               </div>
               <div v-if="turn.answer.exceptions.length">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.intent.exceptions') }}</p>
-                <ul class="mt-1 list-disc space-y-1 pl-5">
+                <ul class="mt-1 list-disc stack-y-xs pl-5">
                   <li v-for="exception in turn.answer.exceptions" :key="exception">{{ exception }}</li>
                 </ul>
               </div>
               <div v-if="turn.answer.citations.length">
                 <p class="font-semibold text-ink">{{ t('lesson.answer.history.sources') }}</p>
-                <ol class="mt-2 space-y-2">
+                <ol class="mt-2 stack-y-sm">
                   <li v-for="citation in turn.answer.citations" :key="citation.chunkId" class="rounded-xl bg-paper px-3 py-2">
                     <p class="font-semibold text-indigo">{{ citation.heading }} · {{ citationPages(citation) }}</p>
                     <p class="mt-1 text-xs leading-5 text-ink/55">{{ citation.excerpt }}</p>
@@ -410,344 +410,352 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
         </li>
       </ol>
 
-      <form class="mt-5" @submit.prevent="emit('ask')">
-        <div class="mb-3 flex flex-wrap items-start gap-3">
-          <button
-            type="button"
-            class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
-            :disabled="answerLoading || !online"
-            @click="emit('openCardOcr')"
-          >
-            {{ t('lesson.answer.cardOcr') }}
-          </button>
-          <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="emit('voiceTranscript', $event)" />
-        </div>
-        <label for="lesson-question" class="sr-only">{{ t('lesson.answer.questionLabel') }}</label>
-        <textarea
-          id="lesson-question"
-          ref="questionInput"
-          v-model="questionModel"
-          rows="3"
-          maxlength="800"
-          :disabled="answerLoading || !online"
-          :placeholder="t('lesson.answer.placeholder')"
-          class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
-        />
-        <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p class="text-xs text-ink/45">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
-          <button
-            type="submit"
-            :disabled="answerLoading || !online || !question.trim()"
-            class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {{ answerLoading ? t('lesson.answer.loading') : online ? t('lesson.answer.submit') : t('lesson.answer.offline') }}
-          </button>
-        </div>
-      </form>
+      <div class="mt-5 grid gap-5 lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6">
+        <div class="min-w-0 lg:sticky lg:top-24">
+          <form class="rounded-2xl border border-ink/10 bg-canvas p-4" @submit.prevent="emit('ask')">
+            <div class="mb-3 flex flex-wrap items-start gap-3">
+              <button
+                type="button"
+                class="min-h-11 rounded-xl border border-indigo/25 bg-indigo/5 px-4 text-sm font-semibold text-indigo transition hover:bg-indigo/10 disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="answerLoading || !online"
+                @click="emit('openCardOcr')"
+              >
+                {{ t('lesson.answer.cardOcr') }}
+              </button>
+              <VoiceQuestionCapture :disabled="answerLoading || !online" @transcript="emit('voiceTranscript', $event)" />
+            </div>
+            <label for="lesson-question" class="sr-only">{{ t('lesson.answer.questionLabel') }}</label>
+            <textarea
+              id="lesson-question"
+              ref="questionInput"
+              v-model="questionModel"
+              rows="3"
+              maxlength="800"
+              :disabled="answerLoading || !online"
+              :placeholder="t('lesson.answer.placeholder')"
+              class="w-full resize-y rounded-2xl border border-ink/15 bg-canvas px-4 py-3 leading-7 outline-none transition placeholder:text-ink/35 focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:cursor-not-allowed disabled:opacity-55"
+            />
+            <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p class="text-xs text-ink/45">{{ t('lesson.answer.counter', { count: question.length }) }}</p>
+              <button
+                type="submit"
+                :disabled="answerLoading || !online || !question.trim()"
+                class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {{ answerLoading ? t('lesson.answer.loading') : online ? t('lesson.answer.submit') : t('lesson.answer.offline') }}
+              </button>
+            </div>
+          </form>
 
-      <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
-      <div v-else-if="answerLoading" class="mt-5 space-y-3 rounded-2xl border border-ink/8 p-5" aria-live="polite">
-        <div class="flex items-center gap-3">
-          <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
-          <p class="text-sm font-semibold">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
-        </div>
-        <ol v-if="agentTrace.length" class="space-y-2 text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
-          <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
-            <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
-            <span>{{ item.label }}</span>
-          </li>
-        </ol>
-        <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ t('lesson.answer.waitingForTrace') }}</p>
-        <p class="text-xs leading-5 text-ink/50">{{ t('lesson.answer.foreignLanguage') }}</p>
-        <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
-        <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
-        <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-ink/65 hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
-      </div>
-
-      <article v-else-if="answer" class="mt-5 overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
-        <div class="p-5 sm:p-6">
-          <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
-          <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
-            <span :class="confidenceClasses(answer.confidence)" :data-confidence="answer.confidence" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
-            <span v-if="publishesConclusion(answer.status)" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
-            <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? t('lesson.answer.source.confirmed') : answer.official ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
-          </div>
-          <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
-
-          <div v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-            <p>{{ answer.clarification }}</p>
-            <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="prepareClarificationReply">{{ t('lesson.answer.clarification.action') }}</button>
-          </div>
-          <p v-else-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
-
-          <div v-if="answer.status === 'INSUFFICIENT_EVIDENCE'" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm leading-6 text-amber-950">
-            <p class="font-semibold">{{ t('lesson.answer.refine.title') }}</p>
-            <p class="mt-1">{{ t('lesson.answer.refine.description') }}</p>
-            <ul class="mt-2 list-disc space-y-1 pl-5">
-              <li>{{ t('lesson.answer.refine.object') }}</li>
-              <li>{{ t('lesson.answer.refine.timing') }}</li>
-              <li>{{ t('lesson.answer.refine.single') }}</li>
-            </ul>
-            <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="focusQuestionForMoreDetail">{{ t('lesson.answer.refine.action') }}</button>
-          </div>
-
-          <div v-if="answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
-            <p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p>
-            <ul class="mt-1 list-disc space-y-1 pl-5">
-              <li v-for="warning in answer.warnings" :key="warning.type">{{ warningMessage(warning) }}</li>
-            </ul>
-          </div>
-
-          <div v-if="publishesConclusion(answer.status)" class="mt-5 border-t border-ink/10 pt-4">
-            <p class="text-sm font-semibold text-indigo">{{ t('public.answer.trace') }}</p>
-            <ol class="mt-3 space-y-3 text-sm leading-6 text-ink/70">
-              <li class="rounded-2xl bg-indigo/[0.045] p-3"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(answer.answerBasis) }}</li>
-              <li class="rounded-2xl bg-paper p-3"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ answer.explanation }}</li>
-              <li v-if="answer.calculations?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <span class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}：</span>
-                <span class="ml-1 text-xs text-ink/50">{{ t('lesson.answer.calculationDescription') }}</span>
-                <ul class="mt-2 space-y-1 font-mono text-sm text-indigo">
-                  <li v-for="calculation in answer.calculations" :key="`${calculation.expression}-${calculation.result}`">{{ calculation.expression }} = {{ calculation.result }}</li>
-                </ul>
-              </li>
-              <li v-if="answer.situationChecks?.length" class="rounded-2xl border border-ink/10 bg-paper p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.situation.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.situation.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="check in answer.situationChecks" :key="`${check.requirement}-${check.status}`" class="rounded-xl bg-canvas px-3 py-2">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span :class="situationStatusClasses(check.status)" class="rounded-full px-2 py-0.5 text-xs font-semibold">{{ situationStatusLabel(check.status) }}</span>
-                      <span class="font-medium text-ink">{{ check.requirement }}</span>
-                    </div>
-                    <p v-if="check.playerFact" class="mt-1 text-xs text-ink/55">{{ t('lesson.answer.situation.playerFact') }}：{{ check.playerFact }}</p>
-                    <button v-else type="button" class="mt-2 min-h-9 rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-900" @click="prepareSituationReply(check.requirement)">{{ t('lesson.answer.situation.addFact') }}</button>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.walkthroughSteps?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.walkthrough.description') }}</p>
-                <ol class="mt-3 space-y-3">
-                  <li v-for="(step, stepIndex) in answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
-                    <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ stepIndex + 1 }}</span>
-                    <div>
-                      <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-ink/55">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
-                      <p class="mt-1 text-sm text-ink/60">{{ step.explanation }}</p>
-                    </div>
-                  </li>
-                </ol>
-              </li>
-              <li v-if="answer.decisionBranches?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.decision.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.decision.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="branch in answer.decisionBranches" :key="`${branch.condition}-${branch.outcome}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ decisionBasisLabel(branch.basis) }}</span><p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ branch.condition }}</p></div>
-                    <p class="mt-2 border-l-2 border-indigo/30 pl-3 text-sm text-ink/65">{{ branch.outcome }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.exceptionClauses?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.exception.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.exception.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="clause in answer.exceptionClauses" :key="`${clause.condition}-${clause.effect}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ clause.condition }}</p>
-                    <p class="mt-2 border-l-2 border-copper/30 pl-3 text-sm text-ink/65">{{ clause.effect }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.termDefinitions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.definition.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.description') }}</p>
-                <dl class="mt-3 space-y-3">
-                  <div v-for="definition in answer.termDefinitions" :key="definition.term" class="rounded-xl bg-canvas px-3 py-3">
-                    <dt class="font-semibold text-indigo">{{ definition.term }}</dt><dd class="mt-1 text-sm text-ink/70">{{ definition.definition }}</dd>
-                    <dd v-if="definition.boundary" class="mt-2 border-l-2 border-indigo/30 pl-3 text-xs text-ink/55">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
-                  </div>
-                </dl>
-              </li>
-              <li v-if="answer.workedExamples?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.example.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.example.description') }}</p>
-                <ol class="mt-3 space-y-3">
-                  <li v-for="(example, exampleIndex) in answer.workedExamples" :key="`${exampleIndex}-${example.setup}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ workedExampleBasisLabel(example.basis) }}</span>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.example.setup') }}：</span>{{ example.setup }}</p>
-                    <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.example.action') }}：</span>{{ example.action }}</p>
-                    <p class="mt-1 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.example.outcome') }}：</span>{{ example.outcome }}</p>
-                  </li>
-                </ol>
-              </li>
-              <li v-if="answer.priorityResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.priority.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.priority.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="item in answer.priorityResolutions" :key="`${item.baseRule}-${item.competingRule}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ priorityBasisLabel(item.basis) }}</span>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.base') }}：</span>{{ item.baseRule }}</p>
-                    <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.competing') }}：</span>{{ item.competingRule }}</p>
-                    <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.result') }}：</span>{{ item.resolution }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.timingResolutions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.timing.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.timing.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="item in answer.timingResolutions" :key="`${item.timingContext}-${item.resolutionOrder}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ timingBasisLabel(item.basis) }}</span>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.context') }}：</span>{{ item.timingContext }}</p>
-                    <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.order') }}：</span>{{ item.resolutionOrder }}</p>
-                    <p class="mt-2 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.source') }}：</span>{{ item.orderSource }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.tieResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.tie.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.tie.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="item in answer.tieResolutions" :key="`${item.tieContext}-${item.finalOutcome}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ tieBasisLabel(item.basis) }}</span>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.tie.context') }}：</span>{{ item.tieContext }}</p>
-                    <ol class="mt-2 list-decimal space-y-1 pl-5"><li v-for="step in item.resolutionSteps" :key="step">{{ step }}</li></ol>
-                    <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.tie.final') }}：</span>{{ item.finalOutcome }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.scopeResolutions?.length" class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.scope.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.scope.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="item in answer.scopeResolutions" :key="`${item.ruleContext}-${item.currentSituation}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{{ scopeStatusLabel(item.matchStatus) }} · {{ scopeBasisLabel(item.basis) }}</span>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.rule') }}：</span>{{ item.ruleContext }}</p>
-                    <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.condition') }}：</span>{{ item.governingCondition }}</p>
-                    <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.situation') }}：</span>{{ item.currentSituation }}</p>
-                    <p class="mt-2 border-l-2 border-emerald-300 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.effect') }}：</span>{{ item.effect }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.conceptComparisons?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.comparison.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.comparison.description') }}</p>
-                <ul class="mt-3 space-y-3">
-                  <li v-for="item in answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ comparisonBasisLabel(item.basis) }}</span>
-                    <div class="mt-3 grid gap-3 sm:grid-cols-2"><div class="rounded-lg bg-paper p-3"><p class="font-semibold text-indigo">{{ item.leftConcept }}</p><p class="mt-1">{{ item.leftDefinition }}</p></div><div class="rounded-lg bg-paper p-3"><p class="font-semibold text-indigo">{{ item.rightConcept }}</p><p class="mt-1">{{ item.rightDefinition }}</p></div></div>
-                    <p class="mt-3"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.common') }}：</span>{{ item.commonGround }}</p>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p>
-                    <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p>
-                  </li>
-                </ul>
-              </li>
-              <li v-if="answer.ruleOptions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.05] p-3">
-                <p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p>
-                <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.options.description') }}</p>
-                <p class="mt-3 rounded-xl bg-paper px-3 py-2"><span class="font-semibold text-ink">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ answer.ruleOptions[0]?.selectionRule }}</p>
-                <ol class="mt-3 grid gap-3 sm:grid-cols-2">
-                  <li v-for="(item, index) in answer.ruleOptions" :key="`${item.optionName}-${index}`" class="rounded-xl bg-canvas px-3 py-3">
-                    <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ optionBasisLabel(item.basis) }}</span>
-                    <p class="mt-2 font-semibold text-ink">{{ index + 1 }}. {{ item.optionName }}</p>
-                    <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.options.availability') }}：</span>{{ item.availabilityCondition }}</p>
-                    <p class="mt-2 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.options.result') }}：</span>{{ item.result }}</p>
-                  </li>
-                </ol>
-              </li>
-              <li v-if="answer.exceptions.length" class="rounded-2xl bg-copper/[0.07] p-3"><span class="font-semibold text-ink">{{ t('lesson.answer.intent.exceptions') }}：</span><ul class="mt-1 list-disc space-y-1 pl-5"><li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li></ul></li>
-            </ol>
-          </div>
-
-          <details v-if="agentTrace.length" class="mt-5 border-t border-ink/10 pt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.agentTrace') }}</summary>
-            <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('lesson.answer.agentTraceBoundary') }}</p>
-            <p v-if="answerRunId" class="mt-2 text-xs leading-5 text-ink/50">{{ t('lesson.answer.runId') }} <code class="select-all rounded bg-ink/5 px-1.5 py-0.5">{{ answerRunId }}</code></p>
-            <ol class="mt-3 space-y-2 text-sm leading-6 text-ink/65">
-              <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2 rounded-xl bg-paper px-3 py-2">
-                <span :class="item.status === 'done' ? 'bg-emerald-500' : item.status === 'running' ? 'bg-copper' : 'bg-amber-500'" class="mt-2 size-2 shrink-0 rounded-full" aria-hidden="true" />
+          <p v-if="answerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ answerError }}</p>
+          <div v-else-if="answerLoading" class="mt-5 stack-y-md rounded-2xl border border-ink/8 p-5" aria-live="polite">
+            <div class="flex items-center gap-3">
+              <span class="size-3 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
+              <p class="text-sm font-semibold">{{ activeLearningIntent ? t('lesson.answer.workingIntent', { intent: learningIntentLabel(activeLearningIntent) }) : t('lesson.answer.working') }}</p>
+            </div>
+            <ol v-if="agentTrace.length" class="stack-y-sm text-xs leading-5 text-ink/60" :aria-label="t('lesson.answer.agentTrace')">
+              <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2">
+                <span :class="item.status === 'running' ? 'animate-pulse bg-copper' : item.status === 'done' ? 'bg-emerald-500' : 'bg-amber-500'" class="mt-1.5 size-2 shrink-0 rounded-full" aria-hidden="true" />
                 <span>{{ item.label }}</span>
               </li>
             </ol>
-          </details>
-
-          <div v-if="publishesConclusion(answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
-            <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
-            <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
-            <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
-            <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXCEPTIONS')">{{ t('lesson.answer.intent.exceptions') }}</button>
-            <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
-          </div>
-
-          <div v-if="publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-ink/10 bg-paper p-4">
-            <p class="text-sm font-semibold text-ink">{{ t('lesson.answer.feedback.title') }}</p>
-            <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.feedback.description') }}</p>
-            <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
-            <div v-else class="mt-3 flex flex-wrap gap-2">
-              <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
-              <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="emit('requestHelp', 'SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
-              <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="emit('requestHelp', 'VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
-            </div>
+            <p v-else class="rounded-xl bg-paper px-3 py-2 text-xs leading-5 text-ink/55">{{ t('lesson.answer.waitingForTrace') }}</p>
+            <p class="text-xs leading-5 text-ink/50">{{ t('lesson.answer.foreignLanguage') }}</p>
+            <div class="h-4 w-4/5 animate-pulse rounded bg-ink/10" />
+            <div class="h-4 w-3/5 animate-pulse rounded bg-ink/10" />
+            <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-ink/65 hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
           </div>
         </div>
+        <div class="min-w-0">
+          <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
+            <div class="p-5 sm:p-6">
+              <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
+              <div class="flex flex-wrap items-center gap-2 text-xs font-semibold">
+                <span :class="confidenceClasses(answer.confidence)" :data-confidence="answer.confidence" class="rounded-full px-3 py-1.5">{{ confidenceLabel(answer.confidence) }}</span>
+                <span v-if="publishesConclusion(answer.status)" class="rounded-full bg-copper/[0.12] px-3 py-1.5 text-copper">{{ answerBasisLabel(answer.answerBasis) }}</span>
+                <span class="rounded-full bg-ink/6 px-3 py-1.5 text-ink/60">{{ answer.confirmedRulingId ? t('lesson.answer.source.confirmed') : answer.official ? t('lesson.answer.source.official') : t('lesson.answer.source.uploaded') }}</span>
+              </div>
+              <p class="mt-4 font-display text-xl font-semibold leading-8">{{ answer.shortVerdict }}</p>
 
-        <section v-if="primaryCitation" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6" aria-labelledby="lesson-answer-evidence-title">
-          <p id="lesson-answer-evidence-title" class="font-semibold text-indigo">{{ t('lesson.answer.evidence.title') }}</p>
-          <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.evidence.description') }}</p>
-          <article class="mt-4 rounded-2xl border border-indigo/20 bg-paper p-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="font-semibold">{{ primaryCitation.heading }}</p>
-              <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
-            </div>
-            <p class="mt-2 text-sm leading-6 text-ink/65">{{ primaryCitation.excerpt }}</p>
-          </article>
-          <details v-if="additionalCitations.length" class="mt-4">
-            <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
-            <ol class="mt-3 space-y-3">
-              <li v-for="citation in additionalCitations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                  <p class="font-semibold">{{ citation.heading }}</p>
-                  <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
+              <div v-if="answer.status === 'CLARIFICATION_REQUIRED'" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
+                <p>{{ answer.clarification }}</p>
+                <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="prepareClarificationReply">{{ t('lesson.answer.clarification.action') }}</button>
+              </div>
+              <p v-else-if="!publishesConclusion(answer.status)" class="mt-4 rounded-2xl bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">{{ answerFailureMessage(answer.status) }}</p>
+
+              <div v-if="answer.status === 'INSUFFICIENT_EVIDENCE'" class="mt-3 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm leading-6 text-amber-950">
+                <p class="font-semibold">{{ t('lesson.answer.refine.title') }}</p>
+                <p class="mt-1">{{ t('lesson.answer.refine.description') }}</p>
+                <ul class="mt-2 list-disc stack-y-xs pl-5">
+                  <li>{{ t('lesson.answer.refine.object') }}</li>
+                  <li>{{ t('lesson.answer.refine.timing') }}</li>
+                  <li>{{ t('lesson.answer.refine.single') }}</li>
+                </ul>
+                <button type="button" class="mt-3 min-h-10 rounded-xl border border-amber-400 bg-paper px-3 font-semibold" @click="focusQuestionForMoreDetail">{{ t('lesson.answer.refine.action') }}</button>
+              </div>
+
+              <div v-if="answer.warnings.length" class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="status">
+                <p class="font-semibold">{{ t('lesson.answer.warning.title') }}</p>
+                <ul class="mt-1 list-disc stack-y-xs pl-5">
+                  <li v-for="warning in answer.warnings" :key="warning.type">{{ warningMessage(warning) }}</li>
+                </ul>
+              </div>
+
+              <div v-if="publishesConclusion(answer.status)" class="mt-5 border-t border-ink/10 pt-4">
+                <p class="text-sm font-semibold text-indigo">{{ t('public.answer.trace') }}</p>
+                <ol class="mt-3 stack-y-md text-sm leading-6 text-ink/70">
+                  <li class="rounded-2xl bg-indigo/[0.045] p-3"><span class="font-semibold text-ink">{{ t('public.answer.ruleBasis') }}：</span>{{ answerBasisDescription(answer.answerBasis) }}</li>
+                  <li class="rounded-2xl bg-paper p-3"><span class="font-semibold text-ink">{{ t('public.answer.application') }}：</span>{{ answer.explanation }}</li>
+                  <li v-if="answer.calculations?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <span class="font-semibold text-ink">{{ t('lesson.answer.calculationTitle') }}：</span>
+                    <span class="ml-1 text-xs text-ink/50">{{ t('lesson.answer.calculationDescription') }}</span>
+                    <ul class="mt-2 stack-y-xs font-mono text-sm text-indigo">
+                      <li v-for="calculation in answer.calculations" :key="`${calculation.expression}-${calculation.result}`">{{ calculation.expression }} = {{ calculation.result }}</li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.situationChecks?.length" class="rounded-2xl border border-ink/10 bg-paper p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.situation.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.situation.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="check in answer.situationChecks" :key="`${check.requirement}-${check.status}`" class="rounded-xl bg-canvas px-3 py-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span :class="situationStatusClasses(check.status)" class="rounded-full px-2 py-0.5 text-xs font-semibold">{{ situationStatusLabel(check.status) }}</span>
+                          <span class="font-medium text-ink">{{ check.requirement }}</span>
+                        </div>
+                        <p v-if="check.playerFact" class="mt-1 text-xs text-ink/55">{{ t('lesson.answer.situation.playerFact') }}：{{ check.playerFact }}</p>
+                        <button v-else type="button" class="mt-2 min-h-9 rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-900" @click="prepareSituationReply(check.requirement)">{{ t('lesson.answer.situation.addFact') }}</button>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.walkthroughSteps?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.walkthrough.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.walkthrough.description') }}</p>
+                    <ol class="mt-3 stack-y-md">
+                      <li v-for="(step, stepIndex) in answer.walkthroughSteps" :key="`${stepIndex}-${step.instruction}`" class="flex gap-3 rounded-xl bg-canvas px-3 py-3">
+                        <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-copper/15 text-sm font-bold text-copper">{{ stepIndex + 1 }}</span>
+                        <div>
+                          <div class="flex flex-wrap items-center gap-2"><p class="font-semibold text-ink">{{ step.instruction }}</p><span class="rounded-full bg-ink/6 px-2 py-0.5 text-[11px] font-semibold text-ink/55">{{ walkthroughBasisLabel(step.orderBasis) }}</span></div>
+                          <p class="mt-1 text-sm text-ink/60">{{ step.explanation }}</p>
+                        </div>
+                      </li>
+                    </ol>
+                  </li>
+                  <li v-if="answer.decisionBranches?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.decision.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.decision.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="branch in answer.decisionBranches" :key="`${branch.condition}-${branch.outcome}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <div class="flex flex-wrap items-center gap-2"><span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ decisionBasisLabel(branch.basis) }}</span><p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ branch.condition }}</p></div>
+                        <p class="mt-2 border-l-2 border-indigo/30 pl-3 text-sm text-ink/65">{{ branch.outcome }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.exceptionClauses?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.exception.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.exception.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="clause in answer.exceptionClauses" :key="`${clause.condition}-${clause.effect}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <p class="font-semibold text-ink">{{ t('lesson.answer.decision.when') }}：{{ clause.condition }}</p>
+                        <p class="mt-2 border-l-2 border-copper/30 pl-3 text-sm text-ink/65">{{ clause.effect }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.termDefinitions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.definition.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.definition.description') }}</p>
+                    <dl class="mt-3 stack-y-md">
+                      <div v-for="definition in answer.termDefinitions" :key="definition.term" class="rounded-xl bg-canvas px-3 py-3">
+                        <dt class="font-semibold text-indigo">{{ definition.term }}</dt><dd class="mt-1 text-sm text-ink/70">{{ definition.definition }}</dd>
+                        <dd v-if="definition.boundary" class="mt-2 border-l-2 border-indigo/30 pl-3 text-xs text-ink/55">{{ t('lesson.answer.definition.boundary') }}：{{ definition.boundary }}</dd>
+                      </div>
+                    </dl>
+                  </li>
+                  <li v-if="answer.workedExamples?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.example.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.example.description') }}</p>
+                    <ol class="mt-3 stack-y-md">
+                      <li v-for="(example, exampleIndex) in answer.workedExamples" :key="`${exampleIndex}-${example.setup}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ workedExampleBasisLabel(example.basis) }}</span>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.example.setup') }}：</span>{{ example.setup }}</p>
+                        <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.example.action') }}：</span>{{ example.action }}</p>
+                        <p class="mt-1 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.example.outcome') }}：</span>{{ example.outcome }}</p>
+                      </li>
+                    </ol>
+                  </li>
+                  <li v-if="answer.priorityResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.priority.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.priority.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="item in answer.priorityResolutions" :key="`${item.baseRule}-${item.competingRule}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ priorityBasisLabel(item.basis) }}</span>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.base') }}：</span>{{ item.baseRule }}</p>
+                        <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.competing') }}：</span>{{ item.competingRule }}</p>
+                        <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.priority.result') }}：</span>{{ item.resolution }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.timingResolutions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.timing.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.timing.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="item in answer.timingResolutions" :key="`${item.timingContext}-${item.resolutionOrder}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ timingBasisLabel(item.basis) }}</span>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.context') }}：</span>{{ item.timingContext }}</p>
+                        <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.order') }}：</span>{{ item.resolutionOrder }}</p>
+                        <p class="mt-2 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.timing.source') }}：</span>{{ item.orderSource }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.tieResolutions?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.tie.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.tie.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="item in answer.tieResolutions" :key="`${item.tieContext}-${item.finalOutcome}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ tieBasisLabel(item.basis) }}</span>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.tie.context') }}：</span>{{ item.tieContext }}</p>
+                        <ol class="mt-2 list-decimal stack-y-xs pl-5"><li v-for="step in item.resolutionSteps" :key="step">{{ step }}</li></ol>
+                        <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.tie.final') }}：</span>{{ item.finalOutcome }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.scopeResolutions?.length" class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.scope.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.scope.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="item in answer.scopeResolutions" :key="`${item.ruleContext}-${item.currentSituation}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{{ scopeStatusLabel(item.matchStatus) }} · {{ scopeBasisLabel(item.basis) }}</span>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.rule') }}：</span>{{ item.ruleContext }}</p>
+                        <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.condition') }}：</span>{{ item.governingCondition }}</p>
+                        <p class="mt-1"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.situation') }}：</span>{{ item.currentSituation }}</p>
+                        <p class="mt-2 border-l-2 border-emerald-300 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.scope.effect') }}：</span>{{ item.effect }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.conceptComparisons?.length" class="rounded-2xl border border-indigo/15 bg-indigo/[0.04] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.comparison.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.comparison.description') }}</p>
+                    <ul class="mt-3 stack-y-md">
+                      <li v-for="item in answer.conceptComparisons" :key="`${item.leftConcept}-${item.rightConcept}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-indigo/10 px-2 py-0.5 text-[11px] font-semibold text-indigo">{{ comparisonBasisLabel(item.basis) }}</span>
+                        <div class="mt-3 grid gap-3 sm:grid-cols-2"><div class="rounded-lg bg-paper p-3"><p class="font-semibold text-indigo">{{ item.leftConcept }}</p><p class="mt-1">{{ item.leftDefinition }}</p></div><div class="rounded-lg bg-paper p-3"><p class="font-semibold text-indigo">{{ item.rightConcept }}</p><p class="mt-1">{{ item.rightDefinition }}</p></div></div>
+                        <p class="mt-3"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.common') }}：</span>{{ item.commonGround }}</p>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.keyDifference') }}：</span>{{ item.keyDifference }}</p>
+                        <p class="mt-2 border-l-2 border-indigo/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.comparison.boundary') }}：</span>{{ item.practicalBoundary }}</p>
+                      </li>
+                    </ul>
+                  </li>
+                  <li v-if="answer.ruleOptions?.length" class="rounded-2xl border border-copper/20 bg-copper/[0.05] p-3">
+                    <p class="font-semibold text-ink">{{ t('lesson.answer.options.title') }}</p>
+                    <p class="mt-1 text-xs text-ink/50">{{ t('lesson.answer.options.description') }}</p>
+                    <p class="mt-3 rounded-xl bg-paper px-3 py-2"><span class="font-semibold text-ink">{{ t('lesson.answer.options.selectionRule') }}：</span>{{ answer.ruleOptions[0]?.selectionRule }}</p>
+                    <ol class="mt-3 grid gap-3 sm:grid-cols-2">
+                      <li v-for="(item, index) in answer.ruleOptions" :key="`${item.optionName}-${index}`" class="rounded-xl bg-canvas px-3 py-3">
+                        <span class="rounded-full bg-copper/10 px-2 py-0.5 text-[11px] font-semibold text-copper">{{ optionBasisLabel(item.basis) }}</span>
+                        <p class="mt-2 font-semibold text-ink">{{ index + 1 }}. {{ item.optionName }}</p>
+                        <p class="mt-2"><span class="font-semibold text-ink">{{ t('lesson.answer.options.availability') }}：</span>{{ item.availabilityCondition }}</p>
+                        <p class="mt-2 border-l-2 border-copper/30 pl-3"><span class="font-semibold text-ink">{{ t('lesson.answer.options.result') }}：</span>{{ item.result }}</p>
+                      </li>
+                    </ol>
+                  </li>
+                  <li v-if="answer.exceptions.length" class="rounded-2xl bg-copper/[0.07] p-3"><span class="font-semibold text-ink">{{ t('lesson.answer.intent.exceptions') }}：</span><ul class="mt-1 list-disc stack-y-xs pl-5"><li v-for="exception in answer.exceptions" :key="exception">{{ exception }}</li></ul></li>
+                </ol>
+              </div>
+
+              <details v-if="agentTrace.length" class="mt-5 border-t border-ink/10 pt-4">
+                <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.agentTrace') }}</summary>
+                <p class="mt-2 text-xs leading-5 text-ink/45">{{ t('lesson.answer.agentTraceBoundary') }}</p>
+                <p v-if="answerRunId" class="mt-2 text-xs leading-5 text-ink/50">{{ t('lesson.answer.runId') }} <code class="select-all rounded bg-ink/5 px-1.5 py-0.5">{{ answerRunId }}</code></p>
+                <ol class="mt-3 stack-y-sm text-sm leading-6 text-ink/65">
+                  <li v-for="item in agentTrace" :key="item.sequence" class="flex items-start gap-2 rounded-xl bg-paper px-3 py-2">
+                    <span :class="item.status === 'done' ? 'bg-emerald-500' : item.status === 'running' ? 'bg-copper' : 'bg-amber-500'" class="mt-2 size-2 shrink-0 rounded-full" aria-hidden="true" />
+                    <span>{{ item.label }}</span>
+                  </li>
+                </ol>
+              </details>
+
+              <div v-if="publishesConclusion(answer.status)" class="mt-5 flex flex-wrap gap-2 border-t border-ink/10 pt-4" :aria-label="t('lesson.answer.followUps')">
+                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'DEFINE')">{{ t('lesson.answer.intent.define') }}</button>
+                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'WHY')">{{ t('lesson.answer.intent.why') }}</button>
+                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXAMPLE')">{{ t('lesson.answer.intent.example') }}</button>
+                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'EXCEPTIONS')">{{ t('lesson.answer.intent.exceptions') }}</button>
+                <button type="button" :disabled="answerLoading || !online" class="min-h-10 rounded-xl border border-ink/12 px-3 text-sm font-semibold hover:bg-paper disabled:opacity-40" @click="emit('requestHelp', 'SOURCE')">{{ t('lesson.answer.intent.source') }}</button>
+              </div>
+
+              <div v-if="publishesConclusion(answer.status)" class="mt-4 rounded-2xl border border-ink/10 bg-paper p-4">
+                <p class="text-sm font-semibold text-ink">{{ t('lesson.answer.feedback.title') }}</p>
+                <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.feedback.description') }}</p>
+                <p v-if="answerResolved" class="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800" role="status">{{ t('lesson.answer.feedback.resolvedStatus') }}</p>
+                <div v-else class="mt-3 flex flex-wrap gap-2">
+                  <button type="button" class="min-h-11 rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800" @click="markAnswerResolved">{{ t('lesson.answer.feedback.resolved') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-copper/30 bg-copper/[0.06] px-3 text-sm font-semibold text-copper disabled:opacity-40" @click="emit('requestHelp', 'SIMPLIFY')">{{ t('lesson.answer.feedback.unclear') }}</button>
+                  <button type="button" :disabled="answerLoading || !online" class="min-h-11 rounded-xl border border-amber-400 bg-amber-50 px-3 text-sm font-semibold text-amber-950 disabled:opacity-40" @click="emit('requestHelp', 'VERIFY')">{{ t('lesson.answer.feedback.incorrect') }}</button>
                 </div>
-                <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
-              </li>
-            </ol>
-          </details>
-        </section>
+              </div>
+            </div>
 
-        <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
-          <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
-          <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
-            <p class="font-semibold text-amber-950">{{ t('lesson.answer.ruling.conflictTitle') }}</p>
-            <p class="mt-1 text-sm leading-6 text-amber-900">{{ t('lesson.answer.ruling.conflictDescription') }}</p>
-            <button class="mt-3 min-h-11 rounded-xl bg-amber-900 px-4 text-sm font-semibold text-white" :disabled="rulingSaving" @click="emit('reloadRuling')">{{ t('lesson.answer.ruling.reload') }}</button>
+            <section v-if="primaryCitation" class="border-t border-indigo/15 bg-indigo/5 p-5 sm:p-6" aria-labelledby="lesson-answer-evidence-title">
+              <p id="lesson-answer-evidence-title" class="font-semibold text-indigo">{{ t('lesson.answer.evidence.title') }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('lesson.answer.evidence.description') }}</p>
+              <article class="mt-4 rounded-2xl border border-indigo/20 bg-paper p-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <p class="font-semibold">{{ primaryCitation.heading }}</p>
+                  <span class="text-xs font-semibold text-indigo">{{ citationPages(primaryCitation) }}</span>
+                </div>
+                <p class="mt-2 text-sm leading-6 text-ink/65">{{ primaryCitation.excerpt }}</p>
+              </article>
+              <details v-if="additionalCitations.length" class="mt-4">
+                <summary class="cursor-pointer text-sm font-semibold text-indigo">{{ t('lesson.answer.evidence.more', { count: additionalCitations.length }) }}</summary>
+                <ol class="mt-3 stack-y-md">
+                  <li v-for="citation in additionalCitations" :key="citation.chunkId" class="rounded-2xl border border-indigo/15 bg-paper p-4">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <p class="font-semibold">{{ citation.heading }}</p>
+                      <span class="text-xs font-semibold text-indigo">{{ citationPages(citation) }}</span>
+                    </div>
+                    <p class="mt-2 text-sm leading-6 text-ink/65">{{ citation.excerpt }}</p>
+                  </li>
+                </ol>
+              </details>
+            </section>
+
+            <div v-if="answer.status === 'ANSWERED'" class="border-t border-ink/10 p-5 sm:p-6">
+              <p v-if="rulingError" class="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ rulingError }}</p>
+              <div v-if="rulingConflict" class="rounded-2xl border border-amber-300 bg-amber-50 p-4" role="alert">
+                <p class="font-semibold text-amber-950">{{ t('lesson.answer.ruling.conflictTitle') }}</p>
+                <p class="mt-1 text-sm leading-6 text-amber-900">{{ t('lesson.answer.ruling.conflictDescription') }}</p>
+                <button class="mt-3 min-h-11 rounded-xl bg-amber-900 px-4 text-sm font-semibold text-white" :disabled="rulingSaving" @click="emit('reloadRuling')">{{ t('lesson.answer.ruling.reload') }}</button>
+              </div>
+
+              <div v-else-if="ruling && editingRuling" class="stack-y-lg">
+                <div>
+                  <label for="ruling-verdict" class="text-sm font-semibold">{{ t('lesson.answer.ruling.verdict') }}</label>
+                  <textarea id="ruling-verdict" v-model="editedVerdictModel" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                </div>
+                <div>
+                  <label for="ruling-explanation" class="text-sm font-semibold">{{ t('lesson.answer.ruling.explanation') }}</label>
+                  <textarea id="ruling-explanation" v-model="editedExplanationModel" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
+                </div>
+                <div class="flex flex-wrap gap-3">
+                  <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="emit('saveRulingRevision')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.save') }}</button>
+                  <button class="min-h-11 rounded-xl border border-ink/15 px-5 text-sm font-semibold" :disabled="rulingSaving" @click="emit('update:editing-ruling', false)">{{ t('lesson.answer.ruling.cancel') }}</button>
+                </div>
+              </div>
+
+              <div v-else-if="ruling" class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-emerald-50 p-4">
+                <div>
+                  <p class="font-semibold text-emerald-900">{{ t('lesson.answer.ruling.confirmed') }}</p>
+                  <p class="mt-1 text-xs text-emerald-800">{{ t('lesson.answer.ruling.version', { version: ruling.version, count: ruling.citations.length }) }}</p>
+                </div>
+                <button class="min-h-11 rounded-xl border border-emerald-700 px-4 text-sm font-semibold text-emerald-900" @click="emit('update:editing-ruling', true)">{{ t('lesson.answer.ruling.edit') }}</button>
+              </div>
+
+              <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="emit('confirmRuling')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.confirm') }}</button>
+            </div>
+          </article>
+          <div v-else-if="!answerLoading && !answerError" class="player-board relative grid min-h-64 place-items-center border border-dashed border-ink/15 bg-canvas p-8 text-center text-ink/45">
+            <div><span class="hex-token mx-auto size-12 text-copper"><span>?</span></span><p class="mt-4 text-sm leading-6">{{ t('lesson.answer.description') }}</p></div>
           </div>
-
-          <div v-else-if="ruling && editingRuling" class="space-y-4">
-            <div>
-              <label for="ruling-verdict" class="text-sm font-semibold">{{ t('lesson.answer.ruling.verdict') }}</label>
-              <textarea id="ruling-verdict" v-model="editedVerdictModel" rows="2" maxlength="2000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
-            </div>
-            <div>
-              <label for="ruling-explanation" class="text-sm font-semibold">{{ t('lesson.answer.ruling.explanation') }}</label>
-              <textarea id="ruling-explanation" v-model="editedExplanationModel" rows="5" maxlength="20000" class="mt-2 w-full rounded-2xl border border-ink/15 bg-paper px-4 py-3 outline-none focus:border-indigo" />
-            </div>
-            <div class="flex flex-wrap gap-3">
-              <button class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-40" :disabled="rulingSaving || !editedVerdict.trim() || !editedExplanation.trim()" @click="emit('saveRulingRevision')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.save') }}</button>
-              <button class="min-h-11 rounded-xl border border-ink/15 px-5 text-sm font-semibold" :disabled="rulingSaving" @click="emit('update:editing-ruling', false)">{{ t('lesson.answer.ruling.cancel') }}</button>
-            </div>
-          </div>
-
-          <div v-else-if="ruling" class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-emerald-50 p-4">
-            <div>
-              <p class="font-semibold text-emerald-900">{{ t('lesson.answer.ruling.confirmed') }}</p>
-              <p class="mt-1 text-xs text-emerald-800">{{ t('lesson.answer.ruling.version', { version: ruling.version, count: ruling.citations.length }) }}</p>
-            </div>
-            <button class="min-h-11 rounded-xl border border-emerald-700 px-4 text-sm font-semibold text-emerald-900" @click="emit('update:editing-ruling', true)">{{ t('lesson.answer.ruling.edit') }}</button>
-          </div>
-
-          <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="emit('confirmRuling')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.confirm') }}</button>
         </div>
-      </article>
+      </div>
     </div>
   </section>
 </template>

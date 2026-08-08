@@ -67,7 +67,7 @@ function pageLabel(pageNumbers: number[]) {
 </script>
 
 <template>
-  <section class="mt-8 overflow-hidden rounded-3xl border border-ink/10 bg-paper shadow-sm" aria-labelledby="icon-glossary-title">
+  <section class="mt-8 overflow-hidden rounded-3xl border border-ink/10 bg-paper elevation-sm" aria-labelledby="icon-glossary-title">
     <details :open="Boolean(glossary?.icons.length) || loading || generating || Boolean(errorMessage)">
       <summary class="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 marker:hidden sm:px-7">
         <span class="min-w-0">
@@ -101,7 +101,7 @@ function pageLabel(pageNumbers: number[]) {
             <p class="mt-1 text-xs leading-5 text-ink/45">{{ t('iconGlossary.generating.safeToLeave') }}</p>
           </div>
 
-          <div v-if="glossary.warnings.length" class="mt-5 space-y-2" role="status">
+          <div v-if="glossary.warnings.length" class="mt-5 stack-y-sm" role="status">
             <p v-for="warning in glossary.warnings" :key="warning" class="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
               {{ warningMessage(warning) }}
             </p>
