@@ -7,17 +7,20 @@ import type { RecommendedGame, ResearchSource } from '@/components/gameRecommend
 import { useLocale } from '@/lib/locale'
 
 const props = defineProps<{ entry: RecommendedGame; sources: ResearchSource[]; loading: boolean }>()
-defineEmits<{ introduce: [bggId: number, name: string] }>()
+defineEmits<{
+  introduce: [bggId: number, name: string]
+  select: [game: RecommendedGame['game']]
+}>()
 
 const { locale } = useLocale()
 const labels = computed(() => locale.value === 'zh-CN'
   ? {
       bgg: 'BGG 资料', inferred: '根据你的表达（推测）', researched: '联网调查', tradeoff: '选择前留意',
-      introduce: '介绍一下', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
+      introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
     }
   : {
       bgg: 'BGG facts', inferred: 'Inferred from your words', researched: 'Web research', tradeoff: 'Worth checking',
-      introduce: 'Tell me more', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
+      introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
     })
 
 const groupedReasons = computed(() => {
@@ -75,6 +78,7 @@ function hideBrokenImage(event: Event) {
     <div v-if="entry.tradeoffs.length" class="mt-3 rounded-lg bg-copper/7 p-3"><p class="text-xs font-bold text-copper">{{ labels.tradeoff }}</p><p class="mt-1 text-xs leading-5 text-ink/60">{{ entry.tradeoffs.join('；') }}</p></div>
 
     <div class="mt-3 flex flex-wrap gap-3">
+      <button type="button" :disabled="loading" class="min-h-11 rounded-lg bg-copper px-4 text-sm font-semibold text-white disabled:opacity-40" @click="$emit('select', entry.game)">{{ labels.select }}</button>
       <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-copper disabled:opacity-40" @click="$emit('introduce', entry.game.bggId, entry.game.name)">{{ labels.introduce }}</button>
       <RouterLink :to="{ name: 'game-discovery', params: { bggId: entry.game.bggId } }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">{{ labels.details }} →</RouterLink>
     </div>

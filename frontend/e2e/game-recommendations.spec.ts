@@ -37,8 +37,10 @@ const catalog = {
   }],
 }
 
-async function mockPublicDiscovery(page: import('@playwright/test').Page) {
-  await page.route('**/api/auth/session', route => route.fulfill({ status: 401 }))
+async function mockPublicDiscovery(page: import('@playwright/test').Page, authenticated = false) {
+  await page.route('**/api/auth/session', route => authenticated
+    ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
+    : route.fulfill({ status: 401 }))
   await page.route('**/api/auth/csrf', route => route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } }))
   await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
     const body = route.request().postDataJSON() as {
@@ -125,6 +127,35 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page) {
       },
     })
   })
+  await page.route('**/api/v1/bgg/games/266192/import', route => route.fulfill({ json: {
+    game: { id: 'game-1', name: '展翅翱翔' },
+    edition: { id: 'edition-1', name: 'BGG 基础版' },
+    alreadyImported: false,
+  } }))
+  await page.route('**/api/v1/documents/rulebook-candidates?*', route => route.fulfill({ json: {
+    configured: true,
+    candidates: [{
+      title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf',
+      publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
+      sourceDomain: 'publisher.example', officialDomainVerified: true,
+    }],
+  } }))
+  await page.route('**/api/v1/documents/official-imports', route => route.fulfill({ status: 201, json: {
+    duplicate: false, version: { id: 'version-1', status: 'EXTRACTING' },
+  } }))
+  await page.route('**/api/v1/games', route => route.fulfill({ json: [{
+    game: { id: 'game-1', name: '展翅翱翔' },
+    editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
+    expansions: [],
+  }] }))
+  await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
+    providers: [{ id: 'qwen', configured: true, visionCapable: true }],
+    assignments: { teaching: 'qwen', visual: 'qwen' },
+  } }))
+  await page.route('**/api/v1/documents', route => route.fulfill({ json: [{
+    document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Wingspan Rulebook', officialSourceUrl: 'https://publisher.example/wingspan.pdf' },
+    latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'EXTRACTING' },
+  }] }))
 }
 
 test('sorts, filters, and searches the full server-side BGG snapshot', async ({ page }) => {
@@ -187,4 +218,37 @@ test('keeps full-catalog discovery usable without horizontal overflow at 390 px'
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
+})
+
+test('selects a recommendation, reviews an official rulebook, and hands recovery to teaching', async ({ page }) => {
+  await mockPublicDiscovery(page, true)
+  await page.goto('/discover')
+
+  await page.getByRole('button', { name: '朋友聚会想热闹一点', exact: true }).click()
+  await page.getByRole('button', { name: '90 分钟内' }).click()
+  await page.getByRole('button', { name: '中等策略' }).click()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+
+  await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()
+  await expect(page.getByText('Wingspan Rulebook')).toBeVisible()
+  await expect(page.getByText('域名匹配出版社')).toBeVisible()
+  await page.getByRole('button', { name: '选择这份' }).click()
+  const handoff = page.getByRole('button', { name: '下载规则书并生成讲解' })
+  await expect(handoff).toBeDisabled()
+  await page.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+
+  const officialImport = page.waitForRequest(request => request.url().endsWith('/api/v1/documents/official-imports'))
+  await handoff.click()
+  const request = await officialImport
+  expect(request.postDataJSON()).toEqual({
+    editionId: 'edition-1',
+    title: 'Wingspan Rulebook',
+    sourceType: 'BASE_RULEBOOK',
+    officialSourceUrl: 'https://publisher.example/wingspan.pdf',
+    rightsConfirmed: true,
+  })
+  await expect(page).toHaveURL(/\/teach\?editionId=edition-1&onboarding=recommendation-agent/)
+  await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
+  await expect(page.getByText('Wingspan Rulebook', { exact: true })).toBeVisible()
+  await expect(page.getByText(/正在重新连接；后台处理不会停止/)).toBeVisible()
 })
