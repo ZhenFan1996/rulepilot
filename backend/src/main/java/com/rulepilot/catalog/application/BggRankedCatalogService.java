@@ -135,9 +135,13 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
         }
         LinkedHashMap<Integer, RankedGame> matches = new LinkedHashMap<>();
         for (String name : checked) {
-            repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of()))
-                    .games()
-                    .forEach(game -> matches.putIfAbsent(game.bggId(), game));
+            List<RankedGame> candidates =
+                    repository.find(new Query(name, BggGameType.ALL, Sort.RANK, 0, 5, List.of())).games();
+            candidates.stream()
+                    .filter(game -> normalizedTitle(game.sourceName()).equals(normalizedTitle(name)))
+                    .findFirst()
+                    .or(() -> candidates.stream().findFirst())
+                    .ifPresent(game -> matches.putIfAbsent(game.bggId(), game));
         }
         return matches.values().stream().map(this::recommendationRanking).toList();
     }
@@ -302,6 +306,14 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
             throw new IllegalArgumentException("search must contain 2 to 120 characters");
         }
         return checked;
+    }
+
+    private String normalizedTitle(String value) {
+        return java.text.Normalizer.normalize(value == null ? "" : value, java.text.Normalizer.Form.NFKC)
+                .toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[^\\p{L}\\p{N}]+", " ")
+                .strip()
+                .replaceAll("\\s+", " ");
     }
 
     public record BrowseResult(

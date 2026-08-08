@@ -36,13 +36,16 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await page.setViewportSize({ width: 1440, height: 900 })
 
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '看看热门桌游' })).toBeVisible()
-  await expect(page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' })).toBeVisible()
+  await page.getByRole('link', { name: '找桌游', exact: true }).click()
+  await page.getByRole('link', { name: /打开完整桌游目录/ }).click()
+  await expect(page).toHaveURL('/discover/catalog')
+  await expect(page.getByRole('heading', { name: '浏览全部桌游' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Catalog Game/ })).toBeVisible()
   await expect(page.getByText('1–5 人 · 约 60 分钟')).toBeVisible()
-  const bggAttribution = page.locator('a[href="https://boardgamegeek.com/hotness"]')
+  const bggAttribution = page.locator('a[href="https://boardgamegeek.com"]')
   await expect(bggAttribution.getByRole('img', { name: 'Powered by BoardGameGeek' })).toBeVisible()
 
-  await page.getByRole('link', { name: '查看 Catalog Game 并准备规则书' }).click()
+  await page.getByRole('link', { name: /Catalog Game/ }).click()
   await expect(page).toHaveURL('/discover/42')
   await expect(page.getByRole('heading', { name: 'Catalog Game' })).toBeVisible()
   await expect(page.getByText(/BGG 资料仅用于推荐、识别游戏和展示封面/)).toBeVisible()
@@ -99,8 +102,13 @@ test('keeps manual onboarding and the ready guide usable when BGG fails on mobil
   await page.setViewportSize({ width: 390, height: 844 })
 
   await page.goto('/')
-  await expect(page.getByText('暂时没有热门桌游资料。你仍然可以直接上传规则书，或从 BGG 搜索游戏。')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '今晚，从哪一步开始？' })).toBeVisible()
   await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
+  expect(await hasHorizontalOverflow(page)).toBe(false)
+
+  await page.getByRole('link', { name: /浏览桌游目录/ }).click()
+  await expect(page.getByText('桌游目录暂时打不开')).toBeVisible()
+  await expect(page.getByText('筛选条件已经保留，可以稍后重试。')).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
   await page.goto('/teach')
@@ -133,6 +141,35 @@ async function mockOnboardingApis(page: Page, options: {
       return options.recommendations === null
         ? route.fulfill({ status: 503 })
         : route.fulfill({ json: options.recommendations })
+    }
+    if (path === '/api/v1/bgg/catalog') {
+      if (options.recommendations === null) return route.fulfill({ status: 503 })
+      const enriched = url.searchParams.get('enrich') === 'true'
+      return route.fulfill({ json: {
+        ready: true,
+        sourceCount: 1,
+        total: 1,
+        page: 0,
+        size: 20,
+        totalPages: 1,
+        sort: 'rank',
+        type: 'all',
+        sourceDate: '2026-08-09',
+        taxonomyTranslated: enriched,
+        games: [{
+          ...hotGame,
+          originalName: hotGame.name,
+          nameLocalized: false,
+          overallRank: 1,
+          hotRank: 1,
+          geekRating: 7.5,
+          usersRated: 1000,
+          expansion: false,
+          types: ['strategy'],
+          detailsAvailable: enriched,
+          thumbnailUrl: hotGame.thumbnailUrl,
+        }],
+      } })
     }
     if (path === '/api/v1/bgg/games/42' && request.method() === 'GET') {
       return route.fulfill({ json: {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
@@ -42,7 +42,7 @@ const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   eyebrow: '从推荐到讲解', title: `已选《${props.game.name}》`, preparing: '正在保存桌游并寻找可审阅的官方规则书…',
-  finding: '桌游已保存，正在检索出版社来源…', found: '选择一份规则书', detail: '候选来自联网搜索，下载前请核对来源、语言和版本。语言不必与讲解语言一致，后续讲解会本地化。',
+  finding: '桌游已保存，正在检索出版社来源（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: '候选来自联网搜索，下载前请核对来源、语言和版本。语言不必与讲解语言一致，后续讲解会本地化。',
   verified: '域名匹配出版社', review: '需要人工核对域名', publisher: '出版社', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择',
   consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
   import: '下载规则书并生成讲解', importing: '正在安全下载并准备讲解…', manual: '改用官方链接或本地上传',
@@ -51,7 +51,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', retry: '重试', close: '换一款',
 } : {
   eyebrow: 'From recommendation to guide', title: `${props.game.name} selected`, preparing: 'Saving the game and finding reviewable official rulebooks…',
-  finding: 'Game saved. Searching publisher sources…', found: 'Choose a rulebook', detail: 'Candidates come from web search. Review the source, language, and edition before download. The guide can be localized later.',
+  finding: 'Game saved. Searching publisher sources ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'Candidates come from web search. Review the source, language, and edition before download. The guide can be localized later.',
   verified: 'Domain matches publisher', review: 'Review domain manually', publisher: 'Publisher', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected',
   consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
   import: 'Download and generate guide', importing: 'Downloading safely and preparing the guide…', manual: 'Use an official URL or local upload',
@@ -65,10 +65,13 @@ const candidates = ref<RulebookCandidate[]>([])
 const selected = ref<RulebookCandidate | null>(null)
 const consent = ref(false)
 const state = ref<'preparing' | 'finding' | 'review' | 'unavailable' | 'login' | 'error' | 'importing'>('preparing')
+const findingSeconds = ref(0)
 let csrf: CsrfResponse | null = null
 let sequence = 0
+let findingClock: ReturnType<typeof setInterval> | null = null
 
 const canImport = computed(() => selected.value !== null && consent.value && state.value === 'review')
+const findingText = computed(() => copy.value.finding.replace('{seconds}', String(findingSeconds.value)))
 const manualRoute = computed(() => ({
   name: 'teach' as const,
   query: imported.value ? { editionId: imported.value.edition.id, onboarding: 'recommendation-agent' } : {},
@@ -111,6 +114,9 @@ async function prepare() {
 async function discover(request = sequence) {
   if (!imported.value || request !== sequence) return
   state.value = 'finding'
+  findingSeconds.value = 0
+  if (findingClock) clearInterval(findingClock)
+  findingClock = setInterval(() => { findingSeconds.value += 1 }, 1000)
   try {
     const parameters = new URLSearchParams({ editionId: imported.value.edition.id, language: locale.value })
     const response = await fetch(`/api/v1/documents/rulebook-candidates?${parameters.toString()}`, { credentials: 'include' })
@@ -122,6 +128,11 @@ async function discover(request = sequence) {
     state.value = result.configured && result.candidates.length ? 'review' : 'unavailable'
   } catch {
     if (request === sequence) state.value = 'error'
+  } finally {
+    if (request === sequence && findingClock) {
+      clearInterval(findingClock)
+      findingClock = null
+    }
   }
 }
 
@@ -173,6 +184,10 @@ async function importAndTeach() {
 
 watch(() => props.game.bggId, prepare)
 onMounted(prepare)
+onBeforeUnmount(() => {
+  sequence += 1
+  if (findingClock) clearInterval(findingClock)
+})
 </script>
 
 <template>
@@ -190,7 +205,7 @@ onMounted(prepare)
     <div class="p-4 sm:p-5">
       <p v-if="state === 'preparing' || state === 'finding' || state === 'importing'" class="flex items-center gap-3 text-sm text-ink/65" role="status">
         <span class="size-2 animate-pulse rounded-full bg-copper" aria-hidden="true" />
-        {{ state === 'preparing' ? copy.preparing : state === 'finding' ? copy.finding : copy.importing }}
+        {{ state === 'preparing' ? copy.preparing : state === 'finding' ? findingText : copy.importing }}
       </p>
 
       <template v-else-if="state === 'review'">

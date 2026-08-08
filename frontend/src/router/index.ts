@@ -38,6 +38,11 @@ const router = createRouter({
     {
       path: '/discover',
       name: 'game-recommendations',
+      component: () => import('@/views/GameRecommendationChatView.vue'),
+    },
+    {
+      path: '/discover/catalog',
+      name: 'game-catalog-browse',
       component: () => import('@/views/GameRecommendationsView.vue'),
     },
     {

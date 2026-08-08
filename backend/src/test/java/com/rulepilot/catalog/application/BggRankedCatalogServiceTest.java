@@ -69,6 +69,16 @@ class BggRankedCatalogServiceTest {
         });
     }
 
+    @Test
+    void keepsOneBestTitleMatchPerAgentSuggestionInsteadOfFillingThePoolWithVariants() {
+        MemoryRepository repository = new MemoryRepository();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, new FakeBgg());
+
+        var result = service.searchByNames(List.of("Game 20", "Game 10"));
+
+        assertThat(result).extracting(game -> game.bggId()).containsExactly(20, 10);
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 

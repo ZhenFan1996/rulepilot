@@ -158,17 +158,37 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
   }] }))
 }
 
-test('sorts, filters, and searches the full server-side BGG snapshot', async ({ page }) => {
+test('keeps full-catalog browsing separate from the conversational recommendation journey', async ({ page }) => {
   await mockPublicDiscovery(page)
-  await page.goto('/discover')
+  await page.goto('/discover/catalog')
 
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('找一款真正想开的桌游')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('按自己的节奏慢慢挑')
   await expect(page.getByText('BGG 收录 162,686 条')).toBeVisible()
   await expect(page.locator('#game-catalog').getByRole('heading', { level: 3, name: 'Wingspan' })).toBeVisible()
   await expect(page.getByText('更多封面和游戏资料正在补齐')).toBeVisible()
   await expect(page.locator('#game-catalog').getByText('展翅翱翔')).toBeVisible()
   await expect(page.locator('#game-catalog li', { hasText: '卡牌轮抽' })).toBeVisible()
   await expect(page.getByRole('link', { name: '数据由 BoardGameGeek 提供' }).locator('img')).toHaveAttribute('src', '/powered-by-bgg-rgb.svg')
+
+  await page.getByRole('combobox', { name: '排序' }).selectOption('rating')
+  const filteredRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
+    && request.url().includes('sort=rating') && request.url().includes('type=strategy'))
+  await page.getByRole('combobox', { name: /BGG 类型榜/ }).selectOption('strategy')
+  await filteredRequest
+
+  await page.getByLabel('搜索桌游').fill('Wingspan')
+  const searchRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
+    && request.url().includes('q=Wingspan'))
+  await page.getByRole('button', { name: '搜索', exact: true }).click()
+  await searchRequest
+  await expect(page.locator('#game-catalog').getByRole('link', { name: /展翅翱翔/ })).toHaveAttribute('href', '/discover/266192')
+  await expect(page.getByText('第 1 / 378 页')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '再看一批' })).toBeVisible()
+
+  await page.getByRole('link', { name: /让推荐助手帮我挑/ }).click()
+  await expect(page).toHaveURL('/discover')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('先聊聊今晚想玩什么')
+  await expect(page.locator('#game-catalog')).toHaveCount(0)
 
   const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
     && request.headers()['x-csrf-token'] === 'csrf')
@@ -188,28 +208,12 @@ test('sorts, filters, and searches the full server-side BGG snapshot', async ({ 
   await expect(page.getByText('发行商资料提供了分步教学流程')).toBeVisible()
   await expect(page.getByRole('link', { name: /publisher\.example/ })).toHaveAttribute('rel', /noopener/)
   await expect(page.getByText('目前记下的偏好')).toBeVisible()
-
-  await page.getByRole('combobox', { name: '排序' }).selectOption('rating')
-  await page.getByRole('combobox', { name: /BGG 类型榜/ }).selectOption('strategy')
-  const filteredRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
-    && request.url().includes('sort=rating') && request.url().includes('type=strategy'))
-  await page.getByRole('button', { name: '应用' }).click()
-  await filteredRequest
-
-  await page.getByLabel('搜索桌游').fill('Wingspan')
-  const searchRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/catalog?')
-    && request.url().includes('q=Wingspan'))
-  await page.getByRole('button', { name: '搜索', exact: true }).click()
-  await searchRequest
-  await expect(page.locator('#game-catalog').getByRole('link', { name: /展翅翱翔/ })).toHaveAttribute('href', '/discover/266192')
-  await expect(page.getByText('第 1 / 378 页')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '再看一批' })).toBeVisible()
 })
 
 test('keeps full-catalog discovery usable without horizontal overflow at 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockPublicDiscovery(page)
-  await page.goto('/discover')
+  await page.goto('/discover/catalog')
 
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
   await expect(page.getByRole('navigation', { name: '主要导航' })).toBeVisible()

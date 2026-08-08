@@ -69,7 +69,7 @@ const mobileNavigation = navigation.filter((item) => item.name !== 'account' && 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'
   if (route.name === 'public-lesson') return 'public-library'
-  if (route.name === 'game-discovery') return 'game-recommendations'
+  if (route.name === 'game-discovery' || route.name === 'game-catalog-browse') return 'game-recommendations'
   return route.name
 })
 const isAdmin = computed(() => roles.value.includes('ADMIN') || roles.value.includes('ROLE_ADMIN'))

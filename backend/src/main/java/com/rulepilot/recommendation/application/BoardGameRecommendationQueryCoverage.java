@@ -40,6 +40,8 @@ class BoardGameRecommendationQueryCoverage {
             Pattern.compile("(?iu)(?:中度|中等复杂|\\b(?:medium weight|medium complexity)\\b)");
     private static final Pattern HEAVY_WEIGHT =
             Pattern.compile("(?iu)(?:重度|烧脑|\\b(?:heavy game|heavyweight)\\b)");
+    private static final Pattern EXPLICIT_MUST_HAVE = Pattern.compile(
+            "(?iu)(?:必须|一定要|非.+不可|缺一不可|硬性|不能没有|\\b(?:must|required|non[- ]negotiable)\\b)");
 
     RetrievalPlan preserveUncoveredExpression(RetrievalPlan planned, String message) {
         return preserveUncoveredExpression(planned, message, RecommendationProfile.empty());
@@ -55,7 +57,9 @@ class BoardGameRecommendationQueryCoverage {
         List<FeatureConstraint> features = new ArrayList<>(source.features());
         features.add(new FeatureConstraint(
                 uncovered,
-                FeatureMode.REQUIRED,
+                EXPLICIT_MUST_HAVE.matcher(message == null ? "" : message).find()
+                        ? FeatureMode.REQUIRED
+                        : FeatureMode.PREFERRED,
                 FeatureSource.USER_EXPRESSION,
                 bounded(message == null ? "" : message.strip(), 120)));
         return new RetrievalPlan(source.candidateTypes(), features.stream().limit(8).toList(), true);

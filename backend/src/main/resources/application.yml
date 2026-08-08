@@ -268,8 +268,9 @@ rulepilot:
     enabled: ${RULEBOOK_DISCOVERY_ENABLED:${QWEN_ENABLED:false}}
     api-key: ${RULEBOOK_DISCOVERY_API_KEY:${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}}
     base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
-    model: ${RULEBOOK_DISCOVERY_MODEL:${WEB_SEARCH_MODEL:qwen3.5-plus}}
+    model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
+    cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
     allowed-domains: ${RULEBOOK_OFFICIAL_DOMAINS:}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}

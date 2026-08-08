@@ -53,7 +53,8 @@ describe('GameRecommendationsView', () => {
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
-        { path: '/discover', name: 'game-recommendations', component: GameRecommendationsView },
+        { path: '/discover', name: 'game-recommendations', component: { template: '<div />' } },
+        { path: '/discover/catalog', name: 'game-catalog-browse', component: GameRecommendationsView },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
@@ -63,7 +64,7 @@ describe('GameRecommendationsView', () => {
         { path: '/login', name: 'login', component: { template: '<div />' } },
       ],
     })
-    await router.push('/discover')
+    await router.push('/discover/catalog')
     await router.isReady()
     return mount(GameRecommendationsView, { global: { plugins: [router] } })
   }
@@ -122,7 +123,7 @@ describe('GameRecommendationsView', () => {
     const selects = wrapper.findAll('select')
     await selects[0]!.setValue('rating')
     await selects[1]!.setValue('strategy')
-    await wrapper.findAll('form')[2]!.trigger('submit')
+    await wrapper.get('[data-testid="catalog-filter-form"]').trigger('submit')
     await flushPromises()
 
     expect(fetchMock.mock.calls.some(([input]) => {

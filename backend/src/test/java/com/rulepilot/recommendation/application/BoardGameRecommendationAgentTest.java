@@ -101,6 +101,56 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void treatsAnExplicitCooperationRejectionAsCompetitiveInsteadOfMatchingTheKeyword() {
+        Fixture fixture = new Fixture(request -> Optional.empty(), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "5 人，90 分钟，想要谈判和一点背刺，不要合作，规则别太复杂"), "zh-CN");
+
+        assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
+        assertThat(response.profile().players()).isEqualTo(5);
+        assertThat(response.profile().maxMinutes()).isEqualTo(90);
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
+                .doesNotContain(10, 11, 40);
+    }
+
+    @Test
+    void treatsConversationalDontCooperateWordingAsCompetitive() {
+        Fixture fixture = new Fixture(request -> Optional.empty(), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "两个人，45 分钟，互动强一点，但别合作"), "zh-CN");
+
+        assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
+    }
+
+    @Test
+    void honorsAnExplicitSmallRecommendationCount() {
+        Fixture fixture = new Fixture(request -> Optional.empty(), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "给我两款适合4人的游戏"), "zh-CN");
+
+        assertThat(response.games()).hasSize(2);
+    }
+
+    @Test
+    void treatsNotTooThinkyAndBeginnerLanguageAsALightweightCeiling() {
+        Fixture fixture = new Fixture(request -> Optional.empty(), request -> Optional.empty(), new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "今晚两个人，四十五分钟内，互动强但别太烧脑，新手也要快速上手"), "zh-CN");
+
+        assertThat(response.profile().players()).isEqualTo(2);
+        assertThat(response.profile().maxMinutes()).isEqualTo(45);
+        assertThat(response.profile().maxWeight()).isEqualByComparingTo("2.3");
+    }
+
+    @Test
     void usesThePlannerUserModelAndCandidateBoundComposerInsteadOfMechanicalClassification() {
         UserModel model = new UserModel(
                 "新手家庭局，可能在意讲解负担和共同参与",
@@ -354,8 +404,12 @@ class BoardGameRecommendationAgentTest {
                         "MODEL_SELECT_TOOLS",
                         "SEARCH_BGG_BY_NAME",
                         "LOOKUP_BGG_CANDIDATES",
-                        "COMPOSE_RECOMMENDATIONS")
+                        "RANK_STRUCTURED_CANDIDATES")
                 .doesNotContain("DISCOVER_CANDIDATES");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.assistantMessage())
+                .contains("合作十号", "Game 11", "不用重新报条件")
+                .doesNotContain("我会先核对");
     }
 
     @Test
@@ -522,15 +576,7 @@ class BoardGameRecommendationAgentTest {
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
-                    assertThat(request.act()).isEqualTo(DialogueAct.EXPLAIN);
-                    assertThat(request.candidates()).singleElement().satisfies(candidate -> {
-                        assertThat(candidate.description()).contains("回合中派遣代理人");
-                        assertThat(candidate.mechanics()).contains("Card Drafting");
-                    });
-                    return Optional.of(new Slate(
-                            "这是刚才那款游戏的详细介绍。",
-                            "",
-                            List.of(new Choice(20, List.of("延续刚才的候选"), List.of(), List.of()))));
+                    throw new AssertionError("unresearched focused prose must stay bound to deterministic BGG facts");
                 },
                 research);
 
@@ -546,7 +592,8 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isZero();
         assertThat(response.harness().actions())
-                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "COMPOSE_GAME_RESPONSE");
+                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "RANK_STRUCTURED_CANDIDATES");
+        assertThat(response.assistantMessage()).contains("BGG 目录资料", "规则书答疑");
         assertThat(response.clarification()).isNull();
         assertThat(response.games()).singleElement()
                 .extracting(game -> game.game().ranking().bggId())

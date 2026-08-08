@@ -58,6 +58,29 @@ class AnswerTieResolverTest {
                 "ORDERED_TIEBREAKERS", List.of(citationId));
         assertThatThrownBy(() -> resolver.resolve(request("Who wins a tie?"), draft(oneStep)))
                 .hasMessageContaining("at least two");
+
+        RuleTieRequest expressedAsActionAndResult = new RuleTieRequest(
+                "Players tie on total score.",
+                List.of("Compare the tied players' turn-order positions.", "Identify which tied player acted later."),
+                "That later player wins.",
+                "SINGLE_TIEBREAKER",
+                List.of(citationId));
+        assertThat(resolver.resolve(request("同分时谁获胜？"), draft(expressedAsActionAndResult)))
+                .singleElement().extracting(resolution -> resolution.basis())
+                .isEqualTo(TieResolutionBasis.SINGLE_TIEBREAKER);
+
+        RuleTieRequest threePlayerFacingActions = new RuleTieRequest(
+                "Players tie on total score.",
+                List.of(
+                        "Identify all tied players.",
+                        "Compare their positions in turn order.",
+                        "Identify which tied player acted later."),
+                "That later player wins.",
+                "SINGLE_TIEBREAKER",
+                List.of(citationId));
+        assertThat(resolver.resolve(request("同分时谁获胜？"), draft(threePlayerFacingActions)))
+                .singleElement().extracting(resolution -> resolution.resolutionSteps())
+                .asList().hasSize(3);
     }
 
     @Test
@@ -81,6 +104,19 @@ class AnswerTieResolverTest {
         assertThat(resolver.resolve(request("If the scores are tied, who wins?"), draft(positional)))
                 .singleElement().extracting(resolution -> resolution.basis())
                 .isEqualTo(TieResolutionBasis.POSITIONAL_PRIORITY);
+
+        RuleTieRequest directPositionalRule = new RuleTieRequest(
+                "Players are tied on total victory points.",
+                List.of("Compare the tied players' positions in turn order."),
+                "The tied player who played later in turn order wins.",
+                "POSITIONAL_PRIORITY",
+                List.of(citationId));
+        assertThat(resolver.resolve(request("同分时谁获胜？"), draft(directPositionalRule)))
+                .singleElement().satisfies(resolution -> {
+                    assertThat(resolution.basis()).isEqualTo(TieResolutionBasis.POSITIONAL_PRIORITY);
+                    assertThat(resolution.resolutionSteps()).hasSize(1);
+                    assertThat(resolution.finalOutcome()).contains("later in turn order");
+                });
 
         RuleTieRequest duplicatedPosition = new RuleTieRequest(
                 "Players remain tied.",

@@ -20,9 +20,19 @@ import org.springframework.stereotype.Component;
 class BoardGamePreferenceDialogue {
 
     private static final Pattern PLAYERS_ZH = Pattern.compile("(?<!\\d)(1[0-2]|[1-9])\\s*(?:个?人|位)");
+    private static final Pattern PLAYERS_ZH_WORD = Pattern.compile("([一二两三四五六七八九十]{1,3})\\s*(?:个?人|位)");
     private static final Pattern PLAYERS_EN = Pattern.compile("(?i)(?<!\\d)(1[0-2]|[1-9])\\s*(?:players?|people)");
     private static final Pattern MINUTES = Pattern.compile("(?i)(?<!\\d)(1[5-9]|[2-9]\\d|[1-5]\\d{2}|600)\\s*(?:分钟|mins?|minutes?)");
+    private static final Pattern MINUTES_ZH_WORD = Pattern.compile("([一二两三四五六七八九十百]{1,5})\\s*分钟");
     private static final Pattern HOURS = Pattern.compile("(?i)(?<![\\d.])(0\\.5|1(?:\\.5)?|2(?:\\.5)?|3|4|5|6|7|8|9|10)\\s*(?:小时|hours?|hrs?)");
+    private static final Pattern HOURS_ZH_WORD = Pattern.compile("([一二两三四五六七八九十]{1,3})\\s*小时");
+    private static final Pattern REJECTS_COOPERATION = Pattern.compile(
+            "(?iu)(?:不\\s*(?:要|想|玩|喜欢|接受)?\\s*(?:合作|协作)|别\\s*(?:玩)?\\s*(?:合作|协作)|"
+                    + "非\\s*(?:合作|协作)|拒绝\\s*(?:合作|协作)|"
+                    + "(?:not|no|without)\\s+(?:a\\s+)?(?:cooperative|co-op|coop|cooperation))");
+    private static final Pattern REJECTS_HIGH_COMPLEXITY = Pattern.compile(
+            "(?iu)(?:别|不要|不想|不能|不希望)\\s*(?:太|很)?\\s*(?:烧脑|复杂|难|重度)|"
+                    + "(?:not|nothing|no)\\s+(?:too\\s+)?(?:complex|heavy|difficult|thinky)");
     private static final int MAX_MESSAGE_LENGTH = 500;
 
     ResolvedTurn resolve(
@@ -91,15 +101,23 @@ class BoardGamePreferenceDialogue {
         String normalized = message.strip().toLowerCase(Locale.ROOT);
         Integer players = firstInteger(PLAYERS_ZH, normalized);
         if (players == null) players = firstInteger(PLAYERS_EN, normalized);
+        if (players == null) players = firstChineseInteger(PLAYERS_ZH_WORD, normalized);
         Integer minutes = firstInteger(MINUTES, normalized);
+        if (minutes == null) minutes = firstChineseInteger(MINUTES_ZH_WORD, normalized);
         if (minutes == null) {
             Matcher hours = HOURS.matcher(normalized);
             if (hours.find()) minutes = (int) Math.round(Double.parseDouble(hours.group(1)) * 60);
         }
+        if (minutes == null) {
+            Matcher hours = HOURS_ZH_WORD.matcher(normalized);
+            if (hours.find()) minutes = chineseInteger(hours.group(1)) * 60;
+        }
         if (containsAny(normalized, "时长不限", "时间不限", "no time limit", "any duration")) minutes = 0;
 
         BigDecimal weight = null;
-        if (containsAny(normalized, "轻度", "简单", "轻策", "lightweight", "light game", "easy to learn")) {
+        if (REJECTS_HIGH_COMPLEXITY.matcher(normalized).find()
+                || containsAny(normalized, "轻度", "简单", "轻策", "新手", "快速上手", "容易上手",
+                        "lightweight", "light game", "easy to learn", "beginner-friendly")) {
             weight = new BigDecimal("2.3");
         } else if (containsAny(normalized, "中度", "中等复杂", "medium weight", "medium complexity")) {
             weight = new BigDecimal("3.2");
@@ -118,7 +136,8 @@ class BoardGamePreferenceDialogue {
         else if (containsAny(normalized, "抽象游戏", "抽象策略", "abstract game")) type = BggGameType.ABSTRACT;
 
         InteractionPreference interaction = null;
-        if (containsAny(normalized, "合作", "cooperative", "co-op", "coop")) interaction = InteractionPreference.COOPERATIVE;
+        if (REJECTS_COOPERATION.matcher(normalized).find()) interaction = InteractionPreference.COMPETITIVE;
+        else if (containsAny(normalized, "合作", "cooperative", "co-op", "coop")) interaction = InteractionPreference.COOPERATIVE;
         else if (containsAny(normalized, "组队", "团队", "team-based", "team based")) interaction = InteractionPreference.TEAM;
         else if (containsAny(normalized, "对抗", "竞争", "competitive")) interaction = InteractionPreference.COMPETITIVE;
         else if (containsAny(normalized, "互动不限", "any interaction")) interaction = InteractionPreference.ANY;
@@ -179,6 +198,31 @@ class BoardGamePreferenceDialogue {
     private Integer firstInteger(Pattern pattern, String message) {
         Matcher matcher = pattern.matcher(message);
         return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+    }
+
+    private Integer firstChineseInteger(Pattern pattern, String message) {
+        Matcher matcher = pattern.matcher(message);
+        return matcher.find() ? chineseInteger(matcher.group(1)) : null;
+    }
+
+    private int chineseInteger(String value) {
+        String normalized = value.replace('两', '二');
+        int result = 0;
+        int digit = 0;
+        for (int index = 0; index < normalized.length(); index++) {
+            char current = normalized.charAt(index);
+            int number = "一二三四五六七八九".indexOf(current) + 1;
+            if (number > 0) {
+                digit = number;
+            } else if (current == '十') {
+                result += (digit == 0 ? 1 : digit) * 10;
+                digit = 0;
+            } else if (current == '百') {
+                result += (digit == 0 ? 1 : digit) * 100;
+                digit = 0;
+            }
+        }
+        return result + digit;
     }
 
     private boolean containsAny(String value, String... candidates) {

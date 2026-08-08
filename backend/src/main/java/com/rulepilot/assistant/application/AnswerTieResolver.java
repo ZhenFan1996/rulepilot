@@ -11,10 +11,13 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Accepts a tie ruling only when every ordered step and its terminal outcome remain cited. */
 final class AnswerTieResolver {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(AnswerTieResolver.class);
     private static final int MAX_RESOLUTIONS = 3;
     private static final Pattern TIE_REQUEST = Pattern.compile(
             "(?iu)\\b(?:tie|tied|tiebreak|tie-break|same score|equal score|same strength|"
@@ -43,7 +46,18 @@ final class AnswerTieResolver {
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         Set<UUID> answerCitations = Set.copyOf(draft.citationIds());
         return draft.tieResolutions().stream()
-                .map(item -> resolveOne(item, availableEvidence, answerCitations))
+                .map(item -> {
+                    try {
+                        return resolveOne(item, availableEvidence, answerCitations);
+                    } catch (IllegalArgumentException exception) {
+                        LOGGER.warn(
+                                "Tie resolution rejected safely ({}; basis={}; steps={})",
+                                exception.getMessage(),
+                                item == null ? "null" : item.basis(),
+                                item == null || item.resolutionSteps() == null ? 0 : item.resolutionSteps().size());
+                        throw exception;
+                    }
+                })
                 .toList();
     }
 
@@ -89,9 +103,8 @@ final class AnswerTieResolver {
                 + request.finalOutcome();
         switch (basis) {
             case SINGLE_TIEBREAKER -> {
-                if (request.resolutionSteps().size() != 1) {
-                    throw new IllegalArgumentException("single tie-breaker requires exactly one explicit step");
-                }
+                // One cited criterion may still require several player-facing actions: identify the tie,
+                // compare the stated value or position, then apply the winner outcome.
             }
             case ORDERED_TIEBREAKERS -> {
                 if (request.resolutionSteps().size() < 2) {
@@ -104,10 +117,12 @@ final class AnswerTieResolver {
                 }
             }
             case POSITIONAL_PRIORITY -> {
-                if (!POSITIONAL.matcher(request.finalOutcome()).find()) {
+                if (!POSITIONAL.matcher(all).find()) {
                     throw new IllegalArgumentException("positional tie outcome does not name its explicit priority");
                 }
-                if (request.resolutionSteps().stream().anyMatch(step -> POSITIONAL.matcher(step).find())) {
+                boolean positionAppearsInSteps = request.resolutionSteps().stream()
+                        .anyMatch(step -> POSITIONAL.matcher(step).find());
+                if (positionAppearsInSteps && request.resolutionSteps().size() != 1) {
                     throw new IllegalArgumentException("positional fallback must be the final outcome, not a duplicated step");
                 }
             }

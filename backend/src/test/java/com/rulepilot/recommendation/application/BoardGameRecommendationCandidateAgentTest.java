@@ -32,7 +32,6 @@ class BoardGameRecommendationCandidateAgentTest {
 
     @Test
     void letsTheModelSearchTheFullNameSnapshotThenLookupOnlyObservedBggIds() {
-        AtomicInteger turns = new AtomicInteger();
         BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
             @Override
             public boolean configured() {
@@ -41,17 +40,10 @@ class BoardGameRecommendationCandidateAgentTest {
 
             @Override
             public Turn next(Request request) {
-                if (turns.getAndIncrement() == 0) {
-                    return new Turn("", List.of(new ToolCall(
-                            "search-1",
-                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
-                            "{\"names\":[\"Kemet\",\"Inis\"]}")));
-                }
-                assertThat(request.messages().getLast().content()).contains("Kemet", "60");
                 return new Turn("", List.of(new ToolCall(
-                        "lookup-1",
-                        BoardGameRecommendationCandidateAgent.LOOKUP_TOOL,
-                        "{\"bggIds\":[60]}")));
+                        "search-1",
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Kemet\",\"Inis\"]}")));
             }
         };
         var agent = agent(model, new FakeCatalog());
@@ -60,22 +52,19 @@ class BoardGameRecommendationCandidateAgentTest {
         var result = agent.discover(areaControl(), profile(), "zh-CN", steps::add);
 
         assertThat(result.succeeded()).isTrue();
-        assertThat(result.modelCalls()).isEqualTo(2);
+        assertThat(result.modelCalls()).isEqualTo(1);
         assertThat(result.toolCalls()).isEqualTo(2);
         assertThat(result.actions())
                 .containsExactly(
                         "MODEL_SELECT_TOOLS",
                         "SEARCH_BGG_BY_NAME",
-                        "MODEL_SELECT_TOOLS",
                         "LOOKUP_BGG_CANDIDATES");
-        assertThat(result.games()).singleElement().satisfies(game -> {
-            assertThat(game.ranking().bggId()).isEqualTo(60);
-            assertThat(game.details().mechanics()).contains("Area Control");
-        });
+        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(60);
+        assertThat(result.games()).allSatisfy(game ->
+                assertThat(game.details().mechanics()).contains("Area Control"));
         assertThat(steps).containsExactly(
                 BoardGameRecommendationCandidateAgent.Step.MODEL_SELECTING,
                 BoardGameRecommendationCandidateAgent.Step.SEARCHING_NAMES,
-                BoardGameRecommendationCandidateAgent.Step.MODEL_SELECTING,
                 BoardGameRecommendationCandidateAgent.Step.LOOKING_UP_DETAILS);
     }
 
@@ -109,7 +98,7 @@ class BoardGameRecommendationCandidateAgentTest {
     }
 
     @Test
-    void rejectsAnIdenticalRepeatedToolCallInsteadOfSpendingAnotherCatalogRequest() {
+    void completesAfterTheFirstSearchInsteadOfSpendingAnotherModelTurn() {
         AtomicInteger turns = new AtomicInteger();
         BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
             @Override
@@ -120,21 +109,19 @@ class BoardGameRecommendationCandidateAgentTest {
             @Override
             public Turn next(Request request) {
                 int turn = turns.getAndIncrement();
-                if (turn < 2) {
-                    return new Turn("", List.of(new ToolCall(
-                            "search-" + turn,
-                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
-                            "{\"names\":[\"Kemet\",\"Inis\"]}")));
-                }
-                assertThat(request.messages().getLast().content()).contains("REPEATED_TOOL_CALL");
-                return new Turn("cannot continue", List.of());
+                return new Turn("", List.of(new ToolCall(
+                        "search-" + turn,
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Kemet\",\"Inis\"]}")));
             }
         };
 
         var result = agent(model, new FakeCatalog()).discover(areaControl(), profile(), "zh-CN");
 
-        assertThat(result.succeeded()).isFalse();
-        assertThat(result.actions()).containsSubsequence("SEARCH_BGG_BY_NAME", "REJECTED_TOOL_CALL");
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.modelCalls()).isEqualTo(1);
+        assertThat(turns).hasValue(1);
+        assertThat(result.actions()).doesNotContain("REJECTED_TOOL_CALL");
     }
 
     private BoardGameRecommendationCandidateAgent agent(
@@ -188,7 +175,7 @@ class BoardGameRecommendationCandidateAgentTest {
 
         @Override
         public List<Game> findGamesByIds(List<Integer> bggIds) {
-            assertThat(bggIds).containsExactly(60);
+            assertThat(bggIds).containsExactly(60, 61);
             return List.of(new Game(
                     ranking(60, "Kemet"),
                     new Details(

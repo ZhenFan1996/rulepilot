@@ -1,97 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import PublicLessonCover from '@/components/PublicLessonCover.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
-import {
-  deduplicatePublicLessons,
-  groupPlansForReading,
-  playerFacingTitle,
-} from '@/lib/lessonPresentation'
-import { publicCoverUrl } from '@/lib/publicCover'
+import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 
 interface TeachingPlan {
   id: string
   gameTitle: string
-  premise: string
   playerCount: number
   durationMinutes: number
   createdAt: string
 }
 
-interface HotGame {
-  rank: number
-  bggId: number
-  name: string
-  originalName?: string
-  nameLocalized?: boolean
-  publicationYear: number | null
-  thumbnailUrl: string
-  bggUrl: string
-  minPlayers: number | null
-  maxPlayers: number | null
-  playingTimeMinutes: number | null
-  averageRating: number | null
-  averageWeight: number | null
-  categories: string[]
-  mechanics: string[]
-}
-
-interface PublicLessonPreview {
-  teachingPlanId: string
-  rulebookTitle: string
-  gameCover: { gameName: string; imageUrl: string } | null
-  sectionCount: number
-  stepCount: number
-}
-
 const username = ref('')
-const { locale, t } = useLocale()
 const plans = ref<TeachingPlan[]>([])
+const { t } = useLocale()
 const latestPlan = computed(() => plans.value[0] ?? null)
 const latestPlanTitle = computed(() => latestPlan.value ? playerFacingTitle(latestPlan.value.gameTitle) : '')
-const recentPlans = computed(() => groupPlansForReading(plans.value).slice(0, 3))
-const hotGames = ref<HotGame[]>([])
-const hotGamesLoading = ref(true)
-const hotGamesUnavailable = ref(false)
-const showingPersonalShelf = ref(false)
-const playerFilter = ref('')
-const durationFilter = ref('')
-const weightFilter = ref('')
-const filtersActive = computed(() => Boolean(playerFilter.value || durationFilter.value || weightFilter.value))
-const publicLessons = ref<PublicLessonPreview[]>([])
-const featuredPublicLessons = computed(() => deduplicatePublicLessons(publicLessons.value).slice(0, 3))
-
-function createdLabel(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(locale.value, { month: 'short', day: 'numeric' }).format(date)
-}
-
-function hideBrokenImage(event: Event) {
-  const image = event.currentTarget as HTMLImageElement
-  image.hidden = true
-}
-
-function playerTimeLabel(game: HotGame) {
-  const parts: string[] = []
-  if (game.minPlayers !== null && game.maxPlayers !== null) {
-    parts.push(t('home.hotPlayers', { min: game.minPlayers, max: game.maxPlayers }))
-  }
-  if (game.playingTimeMinutes !== null) {
-    parts.push(t('home.hotMinutes', { minutes: game.playingTimeMinutes }))
-  }
-  return parts.join(' · ')
-}
-
-function ratingWeightLabel(game: HotGame) {
-  const parts: string[] = []
-  if (game.averageRating !== null) parts.push(t('home.hotRating', { rating: game.averageRating.toFixed(1) }))
-  if (game.averageWeight !== null) parts.push(t('home.hotWeight', { weight: game.averageWeight.toFixed(1) }))
-  return parts.join(' · ')
-}
+const recentPlanCount = computed(() => groupPlansForReading(plans.value).length)
 
 async function loadPersonalHome() {
   try {
@@ -105,228 +34,271 @@ async function loadPersonalHome() {
   }
 }
 
-async function loadHotGames() {
-  hotGamesLoading.value = true
-  hotGamesUnavailable.value = false
-  showingPersonalShelf.value = false
-  try {
-    const parameters = new URLSearchParams()
-    if (playerFilter.value) parameters.set('players', playerFilter.value)
-    if (durationFilter.value) parameters.set('maxMinutes', durationFilter.value)
-    if (weightFilter.value) parameters.set('maxWeight', weightFilter.value)
-    parameters.set('locale', locale.value)
-    const query = `?${parameters.toString()}`
-    const response = await fetch(`/api/v1/bgg/recommendations${query}`, { credentials: 'include' })
-    if (response.ok) {
-      hotGames.value = await response.json() as HotGame[]
-      hotGamesUnavailable.value = hotGames.value.length === 0 && !filtersActive.value
-    } else if (!filtersActive.value) {
-      const catalogResponse = await fetch('/api/v1/games', { credentials: 'include' })
-      if (catalogResponse.ok) {
-        const catalog = await catalogResponse.json() as Array<{
-          game: { name: string }
-          bggMetadata: null | { bggId: number; thumbnailUrl: string; bggUrl: string }
-        }>
-        hotGames.value = catalog
-          .filter(entry => Boolean(entry.bggMetadata?.thumbnailUrl))
-          .map((entry, index) => ({
-            rank: index + 1,
-            bggId: entry.bggMetadata!.bggId,
-            name: entry.game.name,
-            publicationYear: null,
-            thumbnailUrl: entry.bggMetadata!.thumbnailUrl,
-            bggUrl: entry.bggMetadata!.bggUrl,
-            minPlayers: null,
-            maxPlayers: null,
-            playingTimeMinutes: null,
-            averageRating: null,
-            averageWeight: null,
-            categories: [],
-            mechanics: [],
-          }))
-        showingPersonalShelf.value = hotGames.value.length > 0
-      }
-      hotGamesUnavailable.value = hotGames.value.length === 0
-    } else {
-      hotGames.value = []
-      hotGamesUnavailable.value = true
-    }
-  } catch {
-    hotGames.value = []
-    hotGamesUnavailable.value = true
-  } finally {
-    hotGamesLoading.value = false
-  }
-}
-
-async function loadPublicLessons() {
-  try {
-    const response = await fetch('/api/public/lessons?limit=12')
-    if (response.ok) publicLessons.value = await response.json() as PublicLessonPreview[]
-  } catch {
-    publicLessons.value = []
-  }
-}
-
-onMounted(() => Promise.all([loadPersonalHome(), loadHotGames(), loadPublicLessons()]))
-watch(locale, loadHotGames)
+onMounted(loadPersonalHome)
 </script>
 
 <template>
   <AppShell>
-    <div class="tabletop-page">
-      <section class="home-table player-board tabletop-felt relative grid overflow-hidden border border-white/8 text-[#f5f0e8] elevation-xl-ink lg:grid-cols-[minmax(0,1fr)_minmax(22rem,0.72fr)]">
-        <div class="relative z-10 px-6 py-8 sm:px-10 sm:py-10 lg:px-14 lg:py-14">
-          <p class="text-sm font-semibold tracking-wide text-copper">{{ username ? t('home.personal', { username }) : t('home.greeting') }}</p>
-          <h1 v-if="latestPlan" class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">{{ t('home.continueTitle') }}</h1>
-          <h1 v-else class="mt-3 font-display text-4xl font-semibold leading-tight tracking-[-0.03em] sm:text-5xl">{{ t('home.title') }}</h1>
-          <p class="mt-4 max-w-xl text-base leading-8 text-white/70">{{ latestPlan ? t('home.continueDescription') : t('home.description') }}</p>
-
-          <div v-if="latestPlan" class="mt-7 flex flex-col gap-4 rounded-2xl border border-white/15 bg-white/[0.06] p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div class="min-w-0">
-              <p class="text-xs font-bold uppercase tracking-[0.14em] text-copper">{{ t('home.lastOpened') }}</p>
-              <h2 class="mt-2 truncate font-display text-2xl font-semibold">{{ latestPlanTitle }}</h2>
-              <p class="mt-1 text-sm text-white/60">{{ t('home.duration', { players: latestPlan.playerCount, minutes: latestPlan.durationMinutes }) }}</p>
-            </div>
-            <RouterLink :to="{ name: 'lesson', params: { planId: latestPlan.id } }" class="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark">{{ t('home.continue') }} <TabletopGlyph name="arrow" :size="18" /></RouterLink>
-          </div>
-
-          <div v-else class="mt-7 flex flex-wrap gap-3">
-            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl bg-copper px-5 font-semibold text-white hover:bg-copper-dark"><TabletopGlyph name="plus" :size="18" /> {{ t('home.upload') }}</RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-12 items-center gap-2 rounded-xl border border-white/25 px-5 font-semibold text-white hover:bg-white/10"><TabletopGlyph name="library" :size="18" /> {{ t('home.public') }}</RouterLink>
-          </div>
-
-          <div v-if="latestPlan" class="mt-4 flex flex-wrap gap-3">
-            <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 text-sm font-semibold text-white hover:bg-white/10"><TabletopGlyph name="plus" :size="17" /> {{ t('home.uploadNew') }}</RouterLink>
-            <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/25 px-4 text-sm font-semibold text-white hover:bg-white/10"><TabletopGlyph name="library" :size="17" /> {{ t('home.public') }}</RouterLink>
-          </div>
-          <p class="mt-5 text-sm text-white/50">{{ latestPlan ? t('home.keep') : t('home.noSetup') }}</p>
+    <main class="home-stage tabletop-page">
+      <section class="start-board" aria-labelledby="home-title">
+        <div class="start-board__path" aria-hidden="true">
+          <span class="path-token path-token--one">1</span>
+          <span class="path-token path-token--two">2</span>
+          <span class="path-token path-token--three">3</span>
         </div>
-        <div class="relative min-h-64 overflow-hidden border-t border-white/10 lg:min-h-full lg:border-l lg:border-t-0" aria-hidden="true">
-          <img src="/illustrations/tabletop-night.webp" alt="" width="1600" height="900" fetchpriority="high" class="absolute inset-0 h-full w-full object-cover object-center mix-blend-normal">
-        </div>
-      </section>
 
-      <section v-if="featuredPublicLessons.length" class="border-b border-ink/10 py-12">
-        <div class="flex items-end justify-between gap-4">
-          <div>
-            <p class="text-sm font-medium text-copper">{{ t('home.publicEyebrow') }}</p>
-            <h2 class="mt-2 font-display text-3xl font-semibold">{{ t('home.publicTitle') }}</h2>
-          </div>
-          <RouterLink :to="{ name: 'public-library' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('home.allGuides') }}</RouterLink>
-        </div>
-        <div class="-mx-5 mt-6 flex gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0">
-          <RouterLink v-for="(entry, index) in featuredPublicLessons" :key="entry.lesson.teachingPlanId" :to="{ name: 'public-lesson', params: { planId: entry.lesson.teachingPlanId } }" class="group w-52 shrink-0 sm:w-auto">
-            <div class="relative aspect-[16/10] overflow-hidden rounded-xl border border-ink/10 bg-paper elevation-sm transition group-hover:-translate-y-1 group-hover-elevation-lg">
-              <PublicLessonCover :title="entry.title" :image-url="publicCoverUrl(entry.lesson.teachingPlanId)" :alt="t('home.cover', { title: entry.title })" :index="index" />
-            </div>
-            <h3 class="mt-3 line-clamp-2 font-semibold leading-5">{{ entry.title }}</h3>
-            <p class="mt-1 text-xs text-ink/45">{{ t('home.guideSize', { sections: entry.lesson.sectionCount, steps: entry.lesson.stepCount }) }}</p>
+        <header class="relative z-10 max-w-3xl">
+          <p class="home-kicker">{{ username ? t('home.personal', { username }) : t('home.greeting') }}</p>
+          <h1 id="home-title" class="home-title">{{ latestPlan ? t('home.continueTitle') : t('home.startTitle') }}</h1>
+          <p class="home-lede">{{ latestPlan ? t('home.continueDescription') : t('home.startDescription') }}</p>
+        </header>
+
+        <div class="relative z-10 mt-9 grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(17rem,0.55fr)]">
+          <RouterLink
+            v-if="latestPlan"
+            :to="{ name: 'lesson', params: { planId: latestPlan.id } }"
+            class="primary-card group"
+          >
+            <span class="primary-card__number" aria-hidden="true">01</span>
+            <span class="primary-card__label">{{ t('home.lastOpened') }}</span>
+            <strong class="primary-card__title">{{ latestPlanTitle }}</strong>
+            <span class="primary-card__meta">{{ t('home.duration', { players: latestPlan.playerCount, minutes: latestPlan.durationMinutes }) }}</span>
+            <span class="primary-card__action">{{ t('home.continue') }} <TabletopGlyph name="arrow" :size="20" /></span>
           </RouterLink>
-        </div>
-      </section>
 
-      <section class="border-b border-ink/10 py-12">
-        <div class="flex items-end justify-between gap-4">
-          <div>
-            <p class="text-sm font-medium text-copper">{{ showingPersonalShelf ? t('home.shelfEyebrow') : t('home.hotEyebrow') }}</p>
-            <h2 class="mt-2 font-display text-3xl font-semibold">{{ showingPersonalShelf ? t('home.shelfTitle') : t('home.hotTitle') }}</h2>
-          </div>
-          <div v-if="!showingPersonalShelf" class="flex shrink-0 flex-col items-end gap-1">
-            <RouterLink :to="{ name: 'game-recommendations' }" class="text-sm font-semibold text-indigo">{{ t('home.exploreGames') }} →</RouterLink>
-            <a href="https://boardgamegeek.com/hotness" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-8 items-center" :aria-label="t('home.hotSource')">
-              <img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76">
-            </a>
-          </div>
-        </div>
+          <RouterLink v-else :to="{ name: 'game-recommendations' }" class="primary-card group">
+            <span class="primary-card__number" aria-hidden="true">01</span>
+            <span class="primary-card__label">{{ t('home.primaryEyebrow') }}</span>
+            <strong class="primary-card__title">{{ t('home.primaryTitle') }}</strong>
+            <span class="primary-card__meta">{{ t('home.primaryDescription') }}</span>
+            <span class="primary-card__action">{{ t('home.primaryAction') }} <TabletopGlyph name="arrow" :size="20" /></span>
+          </RouterLink>
 
-        <form v-if="!showingPersonalShelf" class="mt-5 grid gap-3 rounded-xl border border-ink/10 bg-paper p-4 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end" @submit.prevent="loadHotGames">
-          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
-            {{ t('home.hotPlayerFilter') }}
-            <select v-model="playerFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
-              <option value="">{{ t('home.hotAnyPlayers') }}</option>
-              <option v-for="players in [1, 2, 3, 4, 5, 6]" :key="players" :value="String(players)">{{ t('home.hotPlayersExact', { players }) }}</option>
-            </select>
-          </label>
-          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
-            {{ t('home.hotDurationFilter') }}
-            <select v-model="durationFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
-              <option value="">{{ t('home.hotAnyDuration') }}</option>
-              <option value="30">{{ t('home.hotWithinMinutes', { minutes: 30 }) }}</option>
-              <option value="60">{{ t('home.hotWithinMinutes', { minutes: 60 }) }}</option>
-              <option value="90">{{ t('home.hotWithinMinutes', { minutes: 90 }) }}</option>
-              <option value="120">{{ t('home.hotWithinMinutes', { minutes: 120 }) }}</option>
-            </select>
-          </label>
-          <label class="grid gap-1.5 text-xs font-semibold text-ink/60">
-            {{ t('home.hotWeightFilter') }}
-            <select v-model="weightFilter" class="min-h-11 rounded-lg border border-ink/15 bg-canvas px-3 text-sm text-ink outline-none focus:border-copper">
-              <option value="">{{ t('home.hotAnyWeight') }}</option>
-              <option value="2">{{ t('home.hotMaxWeight', { weight: '2.0' }) }}</option>
-              <option value="3">{{ t('home.hotMaxWeight', { weight: '3.0' }) }}</option>
-              <option value="4">{{ t('home.hotMaxWeight', { weight: '4.0' }) }}</option>
-            </select>
-          </label>
-          <button type="submit" :disabled="hotGamesLoading" class="min-h-11 rounded-lg bg-ink px-5 text-sm font-semibold text-canvas disabled:opacity-50">{{ t('home.hotApply') }}</button>
-        </form>
-
-        <div v-if="hotGamesLoading" class="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6" :aria-label="t('home.hotLoading')">
-          <div v-for="index in 6" :key="index" class="animate-pulse">
-            <div class="aspect-[4/5] rounded-xl bg-ink/8" />
-            <div class="mt-3 h-4 w-3/4 rounded bg-ink/8" />
-          </div>
-        </div>
-        <div v-else-if="hotGames.length" class="-mx-5 mt-6 flex snap-x gap-4 overflow-x-auto px-5 pb-3 sm:mx-0 sm:grid sm:grid-cols-4 sm:overflow-visible sm:px-0 lg:grid-cols-6">
-          <article v-for="game in hotGames.slice(0, 6)" :key="game.bggId" class="group w-36 shrink-0 snap-start sm:w-auto">
-            <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" :aria-label="t('home.hotInspect', { game: game.name })">
-              <div class="relative aspect-[4/5] overflow-hidden rounded-xl border border-ink/10 bg-paper p-2 elevation-sm transition group-hover:-translate-y-1 group-hover-elevation-lg">
-                <img :src="game.thumbnailUrl" :alt="t('home.coverShort', { title: game.name })" loading="lazy" class="h-full w-full rounded-lg object-contain" @error="hideBrokenImage">
-                <span v-if="!showingPersonalShelf" class="absolute left-2 top-2 grid h-7 min-w-7 place-items-center rounded-full bg-ink px-2 text-xs font-bold text-canvas">{{ game.rank }}</span>
-              </div>
-              <h3 class="mt-3 line-clamp-2 text-sm font-semibold leading-5">{{ game.name }}</h3>
+          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+            <RouterLink :to="{ name: latestPlan ? 'game-recommendations' : 'game-catalog-browse' }" class="side-card side-card--blue group">
+              <span class="side-card__token"><TabletopGlyph name="meeple" :size="22" /></span>
+              <span>
+                <strong>{{ latestPlan ? t('home.discoverAnother') : t('home.browseCatalog') }}</strong>
+                <small>{{ latestPlan ? t('home.discoverHint') : t('home.browseCatalogHint') }}</small>
+              </span>
+              <TabletopGlyph name="arrow" :size="18" class="ml-auto transition-transform group-hover:translate-x-1" />
             </RouterLink>
-            <p v-if="game.nameLocalized && game.originalName" class="mt-1 line-clamp-1 text-xs text-ink/40">{{ game.originalName }}</p>
-            <p class="mt-1 text-xs text-ink/40">{{ game.publicationYear ?? t('home.unknownYear') }}</p>
-            <p v-if="playerTimeLabel(game)" class="mt-1 text-xs leading-5 text-ink/55">{{ playerTimeLabel(game) }}</p>
-            <p v-if="ratingWeightLabel(game)" class="text-xs leading-5 text-ink/45">{{ ratingWeightLabel(game) }}</p>
-            <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block text-xs font-semibold text-indigo">{{ t('home.hotSource') }} ↗</a>
-          </article>
-        </div>
-        <div v-else-if="filtersActive && !hotGamesUnavailable" class="mt-6 rounded-xl border border-dashed border-ink/15 bg-paper px-5 py-6">
-          <p class="text-sm leading-6 text-ink/55">{{ t('home.hotNoMatch') }}</p>
-        </div>
-        <div v-else-if="hotGamesUnavailable" class="mt-6 flex flex-col gap-3 rounded-xl border border-dashed border-ink/15 bg-paper px-5 py-6 sm:flex-row sm:items-center sm:justify-between">
-          <p class="text-sm leading-6 text-ink/55">{{ t('home.hotMissing') }}</p>
-          <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('home.searchGames') }}</RouterLink>
-        </div>
-      </section>
-
-      <section v-if="recentPlans.length" class="border-b border-ink/10 py-10">
-        <div class="flex items-center justify-between gap-4">
-          <h2 class="font-display text-2xl font-semibold">{{ t('home.recent') }}</h2>
-          <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">{{ t('home.viewAll') }}</RouterLink>
-        </div>
-        <ol class="mt-5 divide-y divide-ink/10 border-y border-ink/10">
-          <li v-for="entry in recentPlans" :key="entry.plan.id">
-            <RouterLink :to="{ name: 'lesson', params: { planId: entry.plan.id } }" class="group grid gap-1 py-4 sm:grid-cols-[1fr_auto] sm:items-center">
-              <span class="font-semibold">{{ entry.title }}<span v-if="entry.count > 1" class="ml-2 text-xs font-medium text-ink/45">· {{ t('home.guideCount', { count: entry.count }) }}</span></span>
-              <span class="text-sm text-ink/45">{{ t('home.meta', { players: entry.plan.playerCount, minutes: entry.plan.durationMinutes, date: createdLabel(entry.plan.createdAt) }) }}</span>
+            <RouterLink :to="{ name: 'teach' }" class="side-card side-card--yellow group">
+              <span class="side-card__token"><TabletopGlyph name="rulebook" :size="22" /></span>
+              <span>
+                <strong>{{ t('home.upload') }}</strong>
+                <small>{{ t('home.uploadHint') }}</small>
+              </span>
+              <TabletopGlyph name="arrow" :size="18" class="ml-auto transition-transform group-hover:translate-x-1" />
             </RouterLink>
-          </li>
-        </ol>
-      </section>
+          </div>
+        </div>
 
-      <footer class="flex flex-col gap-2 border-t border-ink/10 py-7 text-xs leading-5 text-ink/40 sm:flex-row sm:items-center sm:justify-between">
-        <p>{{ t('home.footer') }}</p>
-        <RouterLink :to="{ name: 'catalog' }" class="hover:text-ink">{{ t('home.organize') }}</RouterLink>
-      </footer>
-    </div>
+        <footer class="relative z-10 mt-7 flex flex-col gap-3 border-t border-ink/12 pt-5 text-sm text-ink/55 sm:flex-row sm:items-center sm:justify-between">
+          <p>{{ latestPlan ? t('home.keep') : t('home.noSetup') }}</p>
+          <div class="flex flex-wrap gap-x-5 gap-y-2 font-semibold text-indigo">
+            <RouterLink :to="{ name: 'public-library' }">{{ t('home.public') }} →</RouterLink>
+            <RouterLink v-if="recentPlanCount" :to="{ name: 'lessons' }">{{ t('home.allMine', { count: recentPlanCount }) }} →</RouterLink>
+          </div>
+        </footer>
+      </section>
+    </main>
   </AppShell>
 </template>
 
 <style scoped>
-.home-table {
-  background-image: radial-gradient(rgba(245, 240, 232, 0.08) 0.7px, transparent 0.7px);
-  background-size: 13px 13px;
+.home-stage {
+  display: grid;
+  min-height: calc(100vh - 3rem);
+  align-items: center;
+}
+
+.start-board {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-ink) 14%, transparent);
+  border-radius: 2rem;
+  padding: clamp(1.5rem, 4.5vw, 4.75rem);
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--color-paper) 98%, transparent) 0 64%, color-mix(in srgb, var(--color-indigo) 10%, var(--color-paper)) 64% 100%);
+  box-shadow: 0 30px 90px -58px rgb(24 34 67 / 65%);
+}
+
+.start-board::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0.75rem;
+  height: 100%;
+  background: var(--color-copper);
+  content: '';
+}
+
+.home-kicker {
+  color: var(--color-copper);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.home-title {
+  max-width: 13ch;
+  margin-top: 0.75rem;
+  font-family: var(--font-display);
+  font-size: clamp(2.7rem, 6.5vw, 5.6rem);
+  font-weight: 650;
+  line-height: 0.94;
+  letter-spacing: -0.055em;
+}
+
+.home-lede {
+  max-width: 37rem;
+  margin-top: 1.25rem;
+  color: color-mix(in srgb, var(--color-ink) 62%, transparent);
+  font-size: 1rem;
+  line-height: 1.8;
+}
+
+.start-board__path {
+  position: absolute;
+  z-index: -1;
+  top: -4rem;
+  right: -2rem;
+  width: min(38vw, 31rem);
+  aspect-ratio: 1;
+  border: 5rem solid color-mix(in srgb, var(--color-indigo) 10%, transparent);
+  border-radius: 50%;
+}
+
+.path-token {
+  position: absolute;
+  display: grid;
+  width: 3.25rem;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 4px solid var(--color-paper);
+  border-radius: 50%;
+  color: #20252c;
+  background: var(--color-gold);
+  box-shadow: 0 6px 0 rgb(32 37 44 / 12%);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.path-token--one { bottom: -1.3rem; left: 2rem; }
+.path-token--two { right: 1rem; bottom: 5rem; color: white; background: var(--color-copper); }
+.path-token--three { top: 2rem; left: 1rem; color: white; background: var(--color-indigo); }
+
+.primary-card {
+  position: relative;
+  display: flex;
+  min-height: 20rem;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 1.5rem 1.5rem 3.5rem 1.5rem;
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  color: #fffaf2;
+  background: var(--color-ink-panel);
+  box-shadow: 0 18px 0 color-mix(in srgb, var(--color-indigo) 28%, transparent);
+  transition: translate 180ms ease, box-shadow 180ms ease;
+}
+
+.primary-card:hover {
+  box-shadow: 0 22px 0 color-mix(in srgb, var(--color-indigo) 38%, transparent);
+  translate: 0 -4px;
+}
+
+.primary-card::after {
+  position: absolute;
+  right: -2.4rem;
+  bottom: -3.2rem;
+  width: 12rem;
+  aspect-ratio: 1;
+  border: 2.3rem solid var(--color-indigo);
+  border-radius: 50%;
+  content: '';
+}
+
+.primary-card__number {
+  position: absolute;
+  top: 1.4rem;
+  right: 1.6rem;
+  color: var(--color-gold);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+}
+
+.primary-card__label {
+  color: var(--color-gold);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.primary-card__title {
+  position: relative;
+  z-index: 1;
+  max-width: 15ch;
+  margin-top: 1.2rem;
+  font-family: var(--font-display);
+  font-size: clamp(2.1rem, 4vw, 3.8rem);
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+.primary-card__meta {
+  position: relative;
+  z-index: 1;
+  max-width: 34rem;
+  margin-top: 1rem;
+  color: rgb(255 250 242 / 62%);
+  line-height: 1.6;
+}
+
+.primary-card__action {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: auto;
+  padding-top: 2rem;
+  font-weight: 750;
+}
+
+.side-card {
+  display: flex;
+  min-height: 9.5rem;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid rgb(32 37 44 / 12%);
+  border-radius: 1.25rem;
+  padding: 1.25rem;
+  color: #20252c;
+  transition: translate 180ms ease, box-shadow 180ms ease;
+}
+
+.side-card:hover { box-shadow: -8px 8px 0 rgb(32 37 44 / 8%); translate: 4px 0; }
+.side-card--blue { background: color-mix(in srgb, var(--color-indigo) 18%, #fffaf2); }
+.side-card--yellow { background: color-mix(in srgb, var(--color-gold) 54%, #fffaf2); }
+.side-card__token { display: grid; width: 3rem; aspect-ratio: 1; flex: none; place-items: center; border-radius: 50%; color: white; background: var(--color-indigo); }
+.side-card--yellow .side-card__token { background: var(--color-copper); }
+.side-card strong { display: block; font-family: var(--font-display); font-size: 1.2rem; }
+.side-card small { display: block; margin-top: 0.35rem; color: rgb(32 37 44 / 58%); line-height: 1.45; }
+
+@media (max-width: 47.99rem) {
+  .start-board { border-radius: 1.3rem; }
+  .start-board__path { width: 16rem; opacity: 0.65; }
+  .primary-card { min-height: 17rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primary-card,
+  .side-card { transition: none; }
 }
 </style>
