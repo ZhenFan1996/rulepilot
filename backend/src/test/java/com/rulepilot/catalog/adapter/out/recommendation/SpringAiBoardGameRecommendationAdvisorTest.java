@@ -61,7 +61,10 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                  "profileSummary":"四人聚会，可能更重视共同讨论和故事感",
                  "hypotheses":[{"text":"可能喜欢共同决策","confidence":"MEDIUM","basedOn":"想一起讨论剧情"}],
                  "assistantMessage":"我大概抓到方向了，先看看几款。","nextQuestion":null,
-                 "researchRequested":false,"researchQuestion":null}
+                 "researchRequested":false,"researchQuestion":null,
+                 "candidateTypes":["THEMATIC","Science Fiction"],
+                 "featureConstraints":[{"term":"Adventure","mode":"PREFERRED","source":"BGG_METADATA","basedOn":"讨论剧情"}],
+                 "candidateDiscoveryRequested":true}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(
@@ -77,6 +80,12 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 assertThat(hypothesis.text()).contains("共同决策");
                 assertThat(hypothesis.basedOn()).isEqualTo("想一起讨论剧情");
             });
+            assertThat(plan.retrievalPlan().candidateTypes()).containsExactly(GameType.THEMATIC);
+            assertThat(plan.retrievalPlan().candidateDiscoveryRequested()).isTrue();
+            assertThat(plan.retrievalPlan().features()).singleElement().satisfies(feature -> {
+                assertThat(feature.term()).isEqualTo("Adventure");
+                assertThat(feature.basedOn()).isEqualTo("讨论剧情");
+            });
         });
         verify(fixture.models).modelFor(Role.RECOMMENDATION);
     }
@@ -87,7 +96,8 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 {"act":"RECOMMEND","players":4,"maxMinutes":90,"maxWeight":2.3,
                  "type":"FAMILY","interaction":null,"profileSummary":"第一次带家人玩",
                  "hypotheses":[],"assistantMessage":"先试几款。","nextQuestion":"",
-                 "researchRequested":false,"researchQuestion":""}
+                 "researchRequested":false,"researchQuestion":"",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(

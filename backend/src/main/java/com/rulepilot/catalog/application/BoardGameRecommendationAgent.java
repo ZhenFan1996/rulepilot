@@ -5,12 +5,15 @@ import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueAct;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Plan;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.ProfileView;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.RetrievalPlan;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.UserModel;
 import com.rulepilot.catalog.BoardGameRecommendationWebResearch;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoverySignal;
 import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseGame;
 import com.rulepilot.catalog.application.BggRankedCatalogService.BrowseResult;
 import com.rulepilot.catalog.application.BoardGamePreferenceDialogue.ResolvedTurn;
@@ -78,8 +81,14 @@ public class BoardGameRecommendationAgent {
                 planned.map(Plan::explicitPatch).orElse(null),
                 locale);
         UserModel userModel = planned.map(Plan::userModel).orElse(emptyUserModel());
+        boolean plannedPreferenceSignal = planned
+                .map(plan -> !plan.retrievalPlan().features().isEmpty()
+                        || !plan.userModel().hypotheses().isEmpty())
+                .orElse(false);
 
-        if (planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent() && !turn.hasPreferenceSignal()) {
+        if (planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent()
+                && !turn.hasPreferenceSignal()
+                && !plannedPreferenceSignal) {
             Plan plan = planned.orElseThrow();
             String message = !plan.assistantMessage().isBlank() ? plan.assistantMessage() : plan.nextQuestion();
             return response(
@@ -98,7 +107,10 @@ public class BoardGameRecommendationAgent {
         boolean modelWantsCandidateWork = planned
                 .map(plan -> plan.act() == DialogueAct.RECOMMEND || plan.act() == DialogueAct.EXPLAIN)
                 .orElse(false);
-        if (!turn.hasPreferenceSignal() && request.focusedBggId() == null && !modelWantsCandidateWork) {
+        if (!turn.hasPreferenceSignal()
+                && !plannedPreferenceSignal
+                && request.focusedBggId() == null
+                && !modelWantsCandidateWork) {
             return response(
                     Outcome.NEEDS_CLARIFICATION,
                     DecisionMode.DETERMINISTIC,
@@ -124,8 +136,9 @@ public class BoardGameRecommendationAgent {
                 source = null;
                 sourceCount = Optional.ofNullable(catalog.snapshot()).map(BggRankedCatalog.Snapshot::gameCount).orElse(0);
             } else {
-                source = catalog.browse(
-                        "", turn.profile().type(), Sort.RANK, 0, properties.candidatePoolSize(), true);
+                RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
+                source = catalog.recommendationCandidates(
+                        turn.profile().type(), retrievalPlan.candidateTypes(), properties.candidatePoolSize());
                 sourceGames = source.games();
                 sourceCount = source.snapshot().map(BggRankedCatalog.Snapshot::gameCount).orElse(0);
             }
@@ -134,7 +147,44 @@ public class BoardGameRecommendationAgent {
             return unavailable(turn, locale, userModel, modelCalls, catalogCalls, researchCalls, actions);
         }
 
-        CandidatePool pool = selector.prepare(sourceGames, turn.profile(), request.excludedBggIds());
+        RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
+        List<Integer> discoveredBggIds = List.of();
+        Research candidateDiscoveryEvidence = Research.empty();
+        CandidatePool pool = selector.prepare(
+                sourceGames, turn.profile(), request.excludedBggIds(), retrievalPlan, discoveredBggIds);
+        if (request.focusedBggId() == null && shouldDiscoverCandidates(retrievalPlan, pool)
+                && webResearch.configured()) {
+            researchCalls++;
+            Optional<CandidateDiscovery> discovery = safeDiscovery(discoveryRequest(retrievalPlan, locale));
+            if (discovery.isPresent()) {
+                CandidateDiscovery completedDiscovery = discovery.orElseThrow();
+                discoveredBggIds = completedDiscovery.candidates().stream()
+                        .map(BoardGameRecommendationWebResearch.CandidateLead::bggId)
+                        .distinct()
+                        .limit(12)
+                        .toList();
+                if (!discoveredBggIds.isEmpty()) {
+                    try {
+                        catalogCalls++;
+                        List<BrowseGame> discoveredGames = catalog.browseIds(discoveredBggIds);
+                        candidateDiscoveryEvidence = discoveryEvidence(
+                                completedDiscovery, discoveredGames, retrievalPlan);
+                        sourceGames = mergeCandidates(discoveredGames, sourceGames, properties.candidatePoolSize());
+                        actions.add("DISCOVER_CANDIDATES");
+                        actions.add("LOOKUP_BGG_CANDIDATES");
+                        if (!candidateDiscoveryEvidence.games().isEmpty()) actions.add("RESEARCH_GAME_FIT");
+                        pool = selector.prepare(
+                                sourceGames,
+                                turn.profile(),
+                                request.excludedBggIds(),
+                                retrievalPlan,
+                                discoveredBggIds);
+                    } catch (RuntimeException exception) {
+                        LOGGER.warn("Discovered BGG candidate lookup failed; keeping structured catalog candidates");
+                    }
+                }
+            }
+        }
         if (pool.status() == SelectionStatus.NO_DETAILS) {
             return response(
                     Outcome.UNAVAILABLE,
@@ -166,9 +216,10 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
 
-        Research research = Research.empty();
-        boolean researchUseful = request.focusedBggId() != null || planned.filter(Plan::researchRequested).isPresent();
-        if (researchUseful && webResearch.configured()) {
+        Research research = candidateDiscoveryEvidence;
+        boolean researchUseful = request.focusedBggId() != null
+                || planned.filter(this::experienceResearchJustified).isPresent();
+        if (researchUseful && research.games().isEmpty() && webResearch.configured()) {
             List<BoardGameRecommendationAdvisor.Candidate> candidates = selector.advisorCandidates(pool).stream()
                     .limit(5)
                     .toList();
@@ -181,29 +232,35 @@ public class BoardGameRecommendationAgent {
             }
         }
 
+        CandidatePool completedPool = pool;
+        boolean structuredRanking = canUseStructuredRanking(request, planned, research, researchUseful);
         Optional<Slate> slate = Optional.empty();
-        if (planned.isPresent()) {
+        if (planned.isPresent() && !structuredRanking) {
             modelCalls++;
             slate = safeCompose(new BoardGameRecommendationAdvisor.CompositionRequest(
                     request.transcript(),
                     profile(turn.profile()),
                     userModel,
-                    selector.advisorCandidates(pool),
+                    selector.advisorCandidates(completedPool),
                     research,
                     request.focusedBggId(),
                     locale));
             if (slate.isPresent()) actions.add("COMPOSE_RECOMMENDATIONS");
         }
+        if (structuredRanking) actions.add("RANK_STRUCTURED_CANDIDATES");
 
         Research completedResearch = research;
         List<RecommendedGame> games = slate
-                .map(value -> selector.fromSlate(pool, value, turn.profile(), chinese(locale), completedResearch))
+                .map(value -> selector.fromSlate(
+                        completedPool, value, turn.profile(), chinese(locale), completedResearch))
                 .filter(value -> !value.isEmpty())
-                .orElseGet(() -> selector.fallback(pool, turn.profile(), chinese(locale)));
-        boolean fallback = slate.isEmpty();
+                .orElseGet(() -> selector.fallback(completedPool, turn.profile(), chinese(locale)));
+        boolean fallback = slate.isEmpty() && !structuredRanking;
         String assistantMessage = slate.map(Slate::assistantMessage)
                 .filter(value -> !value.isBlank())
-                .orElseGet(() -> fallbackSummary(locale, turn.clarification()));
+                .orElseGet(() -> structuredRanking
+                        ? structuredSummary(locale, retrievalPlan)
+                        : fallbackSummary(locale, turn.clarification()));
         String nextQuestion = slate.map(Slate::nextQuestion)
                 .filter(value -> !value.isBlank())
                 .orElse("");
@@ -254,6 +311,81 @@ public class BoardGameRecommendationAgent {
             LOGGER.warn("Recommendation web research failed; continuing with catalog and user-model evidence");
             return Optional.empty();
         }
+    }
+
+    private Optional<CandidateDiscovery> safeDiscovery(DiscoveryRequest request) {
+        try {
+            return webResearch.discover(request);
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation candidate discovery failed; keeping structured catalog candidates");
+            return Optional.empty();
+        }
+    }
+
+    private boolean canUseStructuredRanking(
+            ConversationRequest request,
+            Optional<Plan> planned,
+            Research research,
+            boolean researchUseful) {
+        if (planned.isEmpty()
+                || request.focusedBggId() != null
+                || !request.excludedBggIds().isEmpty()
+                || !research.games().isEmpty()) return false;
+        RetrievalPlan retrievalPlan = planned.orElseThrow().retrievalPlan();
+        boolean requiredMetadata = retrievalPlan.features().stream().anyMatch(feature ->
+                feature.source() == BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA
+                        && feature.mode() == BoardGameRecommendationAdvisor.FeatureMode.REQUIRED);
+        boolean experienceSignal = retrievalPlan.features().stream()
+                .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
+        return requiredMetadata && !experienceSignal && !researchUseful;
+    }
+
+    private boolean experienceResearchJustified(Plan plan) {
+        return plan.researchRequested() && plan.retrievalPlan().features().stream()
+                .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
+    }
+
+    private boolean shouldDiscoverCandidates(RetrievalPlan retrievalPlan, CandidatePool pool) {
+        if (!retrievalPlan.candidateDiscoveryRequested() || retrievalPlan.features().isEmpty()) return false;
+        boolean experienceDriven = retrievalPlan.features().stream()
+                .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
+        return experienceDriven
+                || pool.status() != SelectionStatus.READY
+                || pool.candidates().size() < Math.min(properties.modelCandidateLimit(), properties.resultCount() * 2);
+    }
+
+    private DiscoveryRequest discoveryRequest(RetrievalPlan retrievalPlan, String locale) {
+        List<DiscoverySignal> signals = retrievalPlan.features().stream()
+                .map(feature -> new DiscoverySignal(feature.term(), feature.mode(), feature.source()))
+                .toList();
+        return new DiscoveryRequest(signals, retrievalPlan.candidateTypes(), locale);
+    }
+
+    private List<BrowseGame> mergeCandidates(
+            List<BrowseGame> discovered, List<BrowseGame> structured, int maximum) {
+        java.util.LinkedHashMap<Integer, BrowseGame> merged = new java.util.LinkedHashMap<>();
+        java.util.stream.Stream.concat(discovered.stream(), structured.stream())
+                .forEach(game -> merged.putIfAbsent(game.ranked().bggId(), game));
+        return merged.values().stream().limit(maximum).toList();
+    }
+
+    private Research discoveryEvidence(
+            CandidateDiscovery discovery, List<BrowseGame> verifiedGames, RetrievalPlan retrievalPlan) {
+        boolean experienceDriven = retrievalPlan.features().stream()
+                .anyMatch(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.EXPERIENCE);
+        if (!experienceDriven) return Research.empty();
+        java.util.Set<Integer> verifiedIds = verifiedGames.stream()
+                .map(game -> game.ranked().bggId())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        List<BoardGameRecommendationWebResearch.GameResearch> games = discovery.candidates().stream()
+                .filter(lead -> verifiedIds.contains(lead.bggId()))
+                .filter(lead -> !lead.fitObservation().isBlank() && !lead.sourceIndexes().isEmpty())
+                .map(lead -> new BoardGameRecommendationWebResearch.GameResearch(
+                        lead.bggId(),
+                        List.of(new BoardGameRecommendationWebResearch.Observation(
+                                lead.fitObservation(), lead.sourceIndexes()))))
+                .toList();
+        return games.isEmpty() ? Research.empty() : new Research(games, discovery.sources());
     }
 
     private ConversationRequest validate(ConversationRequest input) {
@@ -375,6 +507,24 @@ public class BoardGameRecommendationAgent {
                 ? "先给你几款方向不同的候选。推荐 Agent 暂时没有完成个性化重排，下面是基于 BGG 条件与排名的稳妥结果。"
                 : "Here are several different directions. The recommendation Agent did not complete personalized reranking, so these are safe BGG constraint-and-rank results.";
         return clarification == null ? result : result + " " + clarification.prompt();
+    }
+
+    private String structuredSummary(String locale, RetrievalPlan retrievalPlan) {
+        String evidence = retrievalPlan.features().stream()
+                .filter(feature -> feature.source() == BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA)
+                .filter(feature -> feature.mode() == BoardGameRecommendationAdvisor.FeatureMode.REQUIRED)
+                .map(BoardGameRecommendationAdvisor.FeatureConstraint::basedOn)
+                .findFirst()
+                .orElse("");
+        if (chinese(locale)) {
+            return evidence.isBlank()
+                    ? "我先按你明确的条件从 BGG 资料中筛出几款，再根据你的反馈继续调整。"
+                    : "我先用 BGG 元数据严格筛选了“" + evidence + "”，下面这些都实际命中这个条件；你可以继续告诉我哪里不合适。";
+        }
+        return evidence.isBlank()
+                ? "I filtered BGG metadata by your explicit constraints; tell me what to adjust next."
+                : "I strictly filtered BGG metadata for “" + evidence
+                        + "”; every result matches that condition, and you can steer the next round.";
     }
 
     private DecisionMode mode(Optional<Plan> planned) {

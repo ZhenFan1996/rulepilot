@@ -138,7 +138,7 @@ jobs:
           found=false
           qwen_enabled=false
           qwen_key_present=false
-          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED WEB_SEARCH_MODEL '
+          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -166,7 +166,9 @@ jobs:
             'BGG_RECOMMENDATION_AGENT_ENABLED=true' \
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
             'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
+            'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
+            'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
             'WEB_SEARCH_MODEL=qwen3.5-plus' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"

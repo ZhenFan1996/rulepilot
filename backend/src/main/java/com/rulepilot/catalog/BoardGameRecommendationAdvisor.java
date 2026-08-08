@@ -51,7 +51,51 @@ public interface BoardGameRecommendationAdvisor {
             String assistantMessage,
             String nextQuestion,
             boolean researchRequested,
-            String researchQuestion) {}
+            String researchQuestion,
+            RetrievalPlan retrievalPlan) {
+        public Plan(
+                DialogueAct act,
+                PreferencePatch explicitPatch,
+                UserModel userModel,
+                String assistantMessage,
+                String nextQuestion,
+                boolean researchRequested,
+                String researchQuestion) {
+            this(
+                    act,
+                    explicitPatch,
+                    userModel,
+                    assistantMessage,
+                    nextQuestion,
+                    researchRequested,
+                    researchQuestion,
+                    RetrievalPlan.empty());
+        }
+
+        public Plan {
+            retrievalPlan = retrievalPlan == null ? RetrievalPlan.empty() : retrievalPlan;
+        }
+    }
+
+    record RetrievalPlan(
+            List<GameType> candidateTypes,
+            List<FeatureConstraint> features,
+            boolean candidateDiscoveryRequested) {
+        public RetrievalPlan(List<GameType> candidateTypes, List<FeatureConstraint> features) {
+            this(candidateTypes, features, false);
+        }
+
+        public RetrievalPlan {
+            candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);
+            features = features == null ? List.of() : List.copyOf(features);
+        }
+
+        public static RetrievalPlan empty() {
+            return new RetrievalPlan(List.of(), List.of(), false);
+        }
+    }
+
+    record FeatureConstraint(String term, FeatureMode mode, FeatureSource source, String basedOn) {}
 
     record UserModel(String summary, List<PreferenceHypothesis> hypotheses) {}
 
@@ -101,5 +145,16 @@ public interface BoardGameRecommendationAdvisor {
         LOW,
         MEDIUM,
         HIGH
+    }
+
+    enum FeatureMode {
+        REQUIRED,
+        PREFERRED,
+        AVOID
+    }
+
+    enum FeatureSource {
+        BGG_METADATA,
+        EXPERIENCE
     }
 }

@@ -8,13 +8,19 @@ import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Choice;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Confidence;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueAct;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureConstraint;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Plan;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PreferenceHypothesis;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PreferencePatch;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.ResearchedReason;
+import com.rulepilot.catalog.BoardGameRecommendationAdvisor.RetrievalPlan;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
 import com.rulepilot.catalog.BoardGameRecommendationAdvisor.UserModel;
 import com.rulepilot.catalog.BoardGameRecommendationWebResearch;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateLead;
 import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
@@ -137,6 +143,76 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void retrievesAndEnforcesExplicitMetadataFeaturesBeforeModelReranking() {
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch discovery = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                discoveryCalls.incrementAndGet();
+                assertThat(request.signals()).singleElement().satisfies(signal -> {
+                    assertThat(signal.term()).isEqualTo("Science Fiction");
+                    assertThat(signal.source()).isEqualTo(FeatureSource.BGG_METADATA);
+                });
+                return Optional.of(new CandidateDiscovery(
+                        List.of(new CandidateLead(60, "Game 60", List.of(1))),
+                        List.of(new Source(1, "BGG item", "https://boardgamegeek.com/boardgame/60", "boardgamegeek.com"))));
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("experience research was not requested");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.ASK,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("明确想要科幻题材", List.of()),
+                "我会先按题材找候选。",
+                "你更喜欢太空探索还是叙事冒险？",
+                true,
+                "查更多资料",
+                new RetrievalPlan(
+                        List.of(GameType.THEMATIC, GameType.STRATEGY),
+                        List.of(new FeatureConstraint(
+                                "Science Fiction", FeatureMode.REQUIRED, FeatureSource.BGG_METADATA, "科幻主题")),
+                        true));
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    throw new AssertionError("an explicit verified metadata constraint should not pay for composition");
+                },
+                discovery);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "我想玩科幻主题的桌游",
+                List.of(),
+                List.of(new DialogueMessage("user", "我想玩科幻主题的桌游")),
+                null), "zh-CN");
+
+        assertThat(fixture.repository.queries)
+                .extracting(Query::type)
+                .containsExactly(GameType.ALL, GameType.THEMATIC, GameType.STRATEGY);
+        assertThat(discoveryCalls).hasValue(1);
+        assertThat(response.harness().actions())
+                .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RANK_STRUCTURED_CANDIDATES")
+                .doesNotContain("COMPOSE_RECOMMENDATIONS");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().fallbackUsed()).isFalse();
+        assertThat(response.games()).singleElement().satisfies(game -> {
+            assertThat(game.game().ranked().bggId()).isEqualTo(60);
+            assertThat(game.game().details().categories()).contains("Science Fiction");
+            assertThat(game.matches()).contains("BGG 元数据命中你提到的“科幻主题”");
+        });
+    }
+
+    @Test
     void asksAUsageQuestionWithoutSearchingWhenThePlannerSaysARecommendationWouldBeArbitrary() {
         Plan plan = new Plan(
                 DialogueAct.ASK,
@@ -249,7 +325,15 @@ class BoardGameRecommendationAgentTest {
                 "我会把真实教学体验也纳入选择。",
                 "",
                 true,
-                "查证候选的教学摩擦和第一次开局体验");
+                "查证候选的教学摩擦和第一次开局体验",
+                new RetrievalPlan(
+                        List.of(),
+                        List.of(new FeatureConstraint(
+                                "low teach friction",
+                                FeatureMode.PREFERRED,
+                                FeatureSource.EXPERIENCE,
+                                "担心讲太久")),
+                        false));
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
@@ -310,6 +394,81 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(2);
         assertThat(response.harness().catalogCalls()).isLessThanOrEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isLessThanOrEqualTo(1);
+    }
+
+    @Test
+    void turnsAUserCritiqueIntoCandidateDiscoveryAndThenResearchesTheDiscoveredFit() {
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch tools = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                discoveryCalls.incrementAndGet();
+                assertThat(request.signals()).singleElement().satisfies(signal -> {
+                    assertThat(signal.term()).isEqualTo("narrative exploration at the table");
+                    assertThat(signal.source()).isEqualTo(FeatureSource.EXPERIENCE);
+                });
+                return Optional.of(new CandidateDiscovery(
+                        List.of(new CandidateLead(
+                                40,
+                                "Game 40",
+                                "体验资料强调了叙事推进和探索抉择",
+                                List.of(1))),
+                        List.of(new Source(1, "Review", "https://review.example/game-40", "review.example"))));
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("candidate discovery already returned source-grounded fit evidence");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("上一批过于干燥，开始偏向有叙事推进和探索感的体验", List.of()),
+                "我会按你的反馈换一个检索方向。",
+                "这次的叙事浓度更接近吗？",
+                true,
+                "核对候选是否真的有叙事推进与探索抉择",
+                new RetrievalPlan(
+                        List.of(GameType.THEMATIC),
+                        List.of(new FeatureConstraint(
+                                "narrative exploration at the table",
+                                FeatureMode.PREFERRED,
+                                FeatureSource.EXPERIENCE,
+                                "更有叙事和探索感")),
+                        true));
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "我避开了上一批偏干的方向，并核对了实际体验。",
+                        "这次的叙事浓度更接近吗？",
+                        List.of(new Choice(40, List.of("可能更接近你修正后的偏好"), List.of(), List.of())))),
+                tools);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "上一批太干了，我想要更有叙事和探索感的",
+                List.of(10, 20),
+                List.of(new DialogueMessage("user", "上一批太干了，我想要更有叙事和探索感的")),
+                null), "zh-CN");
+
+        assertThat(discoveryCalls).hasValue(1);
+        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+        assertThat(response.harness().actions())
+                .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RESEARCH_GAME_FIT");
+        assertThat(response.games()).singleElement().satisfies(game -> {
+            assertThat(game.game().ranked().bggId()).isEqualTo(40);
+            assertThat(game.reasons()).anySatisfy(reason -> {
+                assertThat(reason.kind()).isEqualTo(ReasonKind.WEB_RESEARCH);
+                assertThat(reason.text()).contains("叙事推进");
+            });
+        });
     }
 
     @Test
@@ -435,7 +594,7 @@ class BoardGameRecommendationAgentTest {
                 }
             };
             var service = new BggRankedCatalogService(repository, new FakeBgg());
-            var properties = new BoardGameRecommendationProperties(20, 3, new BigDecimal("0.66"));
+            var properties = new BoardGameRecommendationProperties(20, 8, 3, new BigDecimal("0.66"));
             agent = new BoardGameRecommendationAgent(
                     service,
                     new BoardGamePreferenceDialogue(),
@@ -492,7 +651,8 @@ class BoardGameRecommendationAgentTest {
                     ranked(20, 3, "8.6"),
                     ranked(30, 4, "8.5"),
                     ranked(40, 5, "8.4"),
-                    ranked(50, 6, "8.3"));
+                    ranked(50, 6, "8.3"),
+                    ranked(60, 7, "8.2"));
         }
 
         private RankedGame ranked(int id, int rank, String rating) {
@@ -553,6 +713,7 @@ class BoardGameRecommendationAgentTest {
                 case 20 -> game(id, 1, 5, 60, "2.4", List.of("Animals"), List.of("Card Drafting"));
                 case 30 -> game(id, 1, 2, 45, "2.0", List.of("Abstract"), List.of("Grid Movement"));
                 case 40 -> game(id, 3, 6, 150, "3.0", List.of("Thematic"), List.of("Team-Based Game"));
+                case 60 -> game(id, 1, 4, 120, "3.2", List.of("Science Fiction"), List.of("Area Control"));
                 default -> game(id, 2, 5, 90, "2.8", List.of("Economic"), List.of("Worker Placement"));
             };
         }
