@@ -318,7 +318,49 @@ jobs:
           node --input-type=module <<'NODE'
           const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
           let lastFailure = 'public verification did not run'
-          for (let attempt = 1; attempt <= 20; attempt += 1) {
+          const readRecommendationStream = async (response, startedAt) => {
+            if (!response.ok || !response.body) {
+              throw new Error(`recommendation stream returned HTTP ${response.status}`)
+            }
+            const reader = response.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
+            let firstProgressMillis = null
+            let result = null
+            while (true) {
+              const next = await reader.read()
+              buffer += decoder.decode(next.value ?? new Uint8Array(), { stream: !next.done })
+              let separator = buffer.match(/\r?\n\r?\n/)
+              while (separator?.index != null) {
+                const block = buffer.slice(0, separator.index)
+                buffer = buffer.slice(separator.index + separator[0].length)
+                let event = 'message'
+                const data = []
+                for (const line of block.split(/\r?\n/)) {
+                  if (line.startsWith('event:')) event = line.slice(6).trim()
+                  if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+                }
+                if (data.length > 0) {
+                  const payload = JSON.parse(data.join('\n'))
+                  if (event === 'progress' && firstProgressMillis == null) {
+                    firstProgressMillis = Date.now() - startedAt
+                  } else if (event === 'result') {
+                    result = payload
+                  } else if (event === 'error') {
+                    throw new Error(`recommendation stream failed: ${payload.message ?? 'unknown error'}`)
+                  }
+                }
+                separator = buffer.match(/\r?\n\r?\n/)
+              }
+              if (next.done) break
+            }
+            if (firstProgressMillis == null || firstProgressMillis > 20_000) {
+              throw new Error(`recommendation stream first progress took ${firstProgressMillis ?? 'no'} ms`)
+            }
+            if (result == null) throw new Error('recommendation stream completed without a result event')
+            return { result, firstProgressMillis }
+          }
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
             try {
               const page = await fetch(`${process.env.RULEPILOT_PUBLIC_URL}/`, {
                 signal: AbortSignal.timeout(10_000),
@@ -338,12 +380,14 @@ jobs:
                 ? csrf.headers.getSetCookie()
                 : [csrf.headers.get('set-cookie')].filter(Boolean)
               const cookie = setCookies.map((value) => value.split(';', 1)[0]).join('; ')
+              const agentStartedAt = Date.now()
               const agent = await fetch(
-                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent?locale=zh-CN`,
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent/stream?locale=zh-CN`,
                 {
                   method: 'POST',
                   headers: {
                     'content-type': 'application/json',
+                    accept: 'text/event-stream',
                     [payload.headerName]: payload.token,
                     cookie,
                   },
@@ -354,10 +398,11 @@ jobs:
                     transcript: [{ role: 'user', text: '4 人，60 分钟，想玩合作游戏' }],
                     focusedBggId: null,
                   }),
-                  signal: AbortSignal.timeout(60_000),
+                  signal: AbortSignal.timeout(120_000),
                 },
               )
-              const agentResult = await agent.json()
+              const streamed = await readRecommendationStream(agent, agentStartedAt)
+              const agentResult = streamed.result
               const agentActions = agentResult.harness?.actions
               const completedRecommendation = Array.isArray(agentActions)
                 && (agentActions.includes('COMPOSE_RECOMMENDATIONS')
@@ -366,7 +411,7 @@ jobs:
                 && agentActions.includes('MODEL_SELECT_TOOLS')
                 && agentActions.includes('SEARCH_BGG_BY_NAME')
                 && agentActions.includes('LOOKUP_BGG_CANDIDATES')
-              if (!agent.ok || agentResult.mode !== 'model_assisted'
+              if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
                   || !completedRecommendation || !usedNativeBggTools) {
                 throw new Error(`recommendation Agent returned an invalid HTTP ${agent.status} response`)
@@ -394,12 +439,12 @@ jobs:
                 throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
               }
               console.log(
-                `Verified public frontend, recommendation Agent, BGG API, and game detail on attempt ${attempt}`,
+                `Verified public frontend, recommendation SSE (${streamed.firstProgressMillis} ms first progress), BGG API, and game detail on attempt ${attempt}`,
               )
               process.exit(0)
             } catch (error) {
               lastFailure = error instanceof Error ? error.message : String(error)
-              if (attempt < 20) await pause(3_000)
+              if (attempt < 3) await pause(3_000)
             }
           }
           throw new Error(`Public production verification failed: ${lastFailure}`)
