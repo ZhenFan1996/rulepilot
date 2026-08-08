@@ -404,6 +404,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().webResearchCalls()).isZero();
         assertThat(response.harness().actions())
                 .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "COMPOSE_GAME_RESPONSE");
+        assertThat(response.clarification()).isNull();
         assertThat(response.games()).singleElement()
                 .extracting(game -> game.game().ranking().bggId())
                 .isEqualTo(20);
@@ -421,10 +422,17 @@ class BoardGameRecommendationAgentTest {
                 "");
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
-                request -> Optional.of(new Slate(
-                        "这几款保留互动感，但更容易上手。",
-                        "哪一款更接近？",
-                        List.of(new Choice(30, List.of("相对更轻"), List.of(), List.of())))),
+                request -> {
+                    assertThat(request.referenceGame()).isNotNull();
+                    assertThat(request.referenceGame().bggId()).isEqualTo(20);
+                    assertThat(request.referenceGame().mechanics()).contains("Card Drafting", "Worker Placement");
+                    assertThat(request.candidates()).extracting(BoardGameRecommendationAdvisor.Candidate::bggId)
+                            .doesNotContain(20);
+                    return Optional.of(new Slate(
+                            "这几款保留互动感，但更容易上手。",
+                            "哪一款更接近？",
+                            List.of(new Choice(30, List.of("相对更轻"), List.of(), List.of()))));
+                },
                 new NoResearch());
 
         var response = fixture.agent.converse(new ConversationRequest(
@@ -435,9 +443,11 @@ class BoardGameRecommendationAgentTest {
                 20), "zh-CN");
 
         assertThat(fixture.repository.queries).isNotEmpty();
-        assertThat(fixture.repository.focusedIds).isEmpty();
+        assertThat(fixture.repository.focusedIds).containsExactly(20);
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(30);
-        assertThat(response.harness().actions()).contains("SEARCH_BGG_CATALOG").doesNotContain("LOOKUP_BGG_GAME");
+        assertThat(response.harness().actions())
+                .contains("LOOKUP_REFERENCE_GAME", "SEARCH_BGG_CATALOG")
+                .doesNotContain("LOOKUP_BGG_GAME");
     }
 
     @Test

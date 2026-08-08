@@ -168,12 +168,22 @@ public class BoardGameRecommendationAgent {
                         .toList();
 
         List<Game> sourceGames;
+        Game referenceGame = null;
         int sourceCount;
-        catalogCalls++;
         CatalogObservation catalogObservation;
         if (focusedDiscussion) {
+            catalogCalls++;
             catalogObservation = tools.lookupGame(request.focusedBggId());
         } else {
+            if (request.focusedBggId() != null) {
+                catalogCalls++;
+                CatalogObservation referenceObservation = tools.lookupGame(request.focusedBggId());
+                actions.add("LOOKUP_REFERENCE_GAME");
+                if (referenceObservation.succeeded() && !referenceObservation.games().isEmpty()) {
+                    referenceGame = referenceObservation.games().getFirst();
+                }
+            }
+            catalogCalls++;
             RetrievalPlan plannedRetrieval = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
             catalogObservation = tools.searchCatalog(
                     turn.profile().type(), plannedRetrieval.candidateTypes(), properties.candidatePoolSize());
@@ -185,12 +195,15 @@ public class BoardGameRecommendationAgent {
         sourceGames = catalogObservation.games();
         sourceCount = catalogObservation.sourceCount();
 
-        RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
+        RetrievalPlan retrievalPlan = referenceGame == null
+                ? planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty)
+                : similarityRetrievalPlan(
+                        planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty), referenceGame);
         List<Integer> discoveredBggIds = List.of();
         Research candidateDiscoveryEvidence = Research.empty();
         CandidatePool pool = selector.prepare(
                 sourceGames, turn.profile(), effectiveExcludedBggIds, retrievalPlan, discoveredBggIds);
-        if (!focusedDiscussion && shouldDiscoverCandidates(retrievalPlan, pool)
+        if (!focusedDiscussion && (referenceGame != null || shouldDiscoverCandidates(retrievalPlan, pool))
                 && tools.webResearchConfigured()) {
             researchCalls++;
             actions.add("DISCOVER_CANDIDATES");
@@ -275,6 +288,7 @@ public class BoardGameRecommendationAgent {
         }
 
         CandidatePool completedPool = pool;
+        Game completedReferenceGame = referenceGame;
         boolean structuredRanking = canUseStructuredRanking(request, planned, research, researchUseful);
         Optional<Slate> slate = Optional.empty();
         if (planned.isPresent() && !structuredRanking) {
@@ -287,7 +301,8 @@ public class BoardGameRecommendationAgent {
                     research,
                     request.focusedBggId(),
                     locale,
-                    planned.orElseThrow().act()));
+                    planned.orElseThrow().act(),
+                    completedReferenceGame == null ? null : selector.advisorCandidate(completedReferenceGame)));
             if (slate.isPresent()) {
                 actions.add(focusedDiscussion ? "COMPOSE_GAME_RESPONSE" : "COMPOSE_RECOMMENDATIONS");
             }
@@ -309,10 +324,12 @@ public class BoardGameRecommendationAgent {
         String nextQuestion = slate.map(Slate::nextQuestion)
                 .filter(value -> !value.isBlank())
                 .orElse("");
-        if (nextQuestion.isBlank() && planned.isPresent()) nextQuestion = planned.orElseThrow().nextQuestion();
+        if (nextQuestion.isBlank() && planned.isPresent() && !focusedDiscussion) {
+            nextQuestion = planned.orElseThrow().nextQuestion();
+        }
         Clarification responseClarification = !nextQuestion.isBlank()
                 ? conversationalClarification(nextQuestion)
-                : turn.clarification();
+                : focusedDiscussion ? null : turn.clarification();
         return response(
                 Outcome.RECOMMENDATIONS,
                 mode(planned),
@@ -383,6 +400,31 @@ public class BoardGameRecommendationAgent {
         return experienceDriven
                 || pool.status() != SelectionStatus.READY
                 || pool.candidates().size() < Math.min(properties.modelCandidateLimit(), properties.resultCount() * 2);
+    }
+
+    private RetrievalPlan similarityRetrievalPlan(RetrievalPlan planned, Game reference) {
+        if (reference.details() == null) return planned;
+        List<BoardGameRecommendationAdvisor.FeatureConstraint> derived = java.util.stream.Stream.concat(
+                        reference.details().categories().stream().limit(4),
+                        reference.details().mechanics().stream().limit(4))
+                .filter(value -> value != null && !value.isBlank())
+                .map(value -> new BoardGameRecommendationAdvisor.FeatureConstraint(
+                        value,
+                        BoardGameRecommendationAdvisor.FeatureMode.PREFERRED,
+                        BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA,
+                        "current game: " + reference.ranking().sourceName()))
+                .toList();
+        List<BoardGameRecommendationAdvisor.FeatureConstraint> merged = java.util.stream.Stream.concat(
+                        planned.features().stream(), derived.stream())
+                .filter(feature -> feature != null)
+                .collect(java.util.stream.Collectors.collectingAndThen(
+                        java.util.stream.Collectors.toMap(
+                                feature -> feature.term().toLowerCase(java.util.Locale.ROOT) + ":" + feature.mode(),
+                                java.util.function.Function.identity(),
+                                (left, right) -> left,
+                                java.util.LinkedHashMap::new),
+                        values -> values.values().stream().limit(8).toList()));
+        return new RetrievalPlan(planned.candidateTypes(), merged, true);
     }
 
     private DiscoveryRequest discoveryRequest(RetrievalPlan retrievalPlan, String locale) {

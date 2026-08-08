@@ -27,7 +27,20 @@ public interface BoardGameRecommendationAdvisor {
             BoardGameRecommendationWebResearch.Research research,
             Integer focusedBggId,
             String locale,
-            DialogueAct act) {
+            DialogueAct act,
+            Candidate referenceGame) {
+        public CompositionRequest(
+                List<DialogueMessage> transcript,
+                ProfileView profile,
+                UserModel userModel,
+                List<Candidate> candidates,
+                BoardGameRecommendationWebResearch.Research research,
+                Integer focusedBggId,
+                String locale,
+                DialogueAct act) {
+            this(transcript, profile, userModel, candidates, research, focusedBggId, locale, act, null);
+        }
+
         public CompositionRequest(
                 List<DialogueMessage> transcript,
                 ProfileView profile,
@@ -44,7 +57,8 @@ public interface BoardGameRecommendationAdvisor {
                     research,
                     focusedBggId,
                     locale,
-                    focusedBggId == null ? DialogueAct.RECOMMEND : DialogueAct.EXPLAIN);
+                    focusedBggId == null ? DialogueAct.RECOMMEND : DialogueAct.EXPLAIN,
+                    null);
         }
     }
 

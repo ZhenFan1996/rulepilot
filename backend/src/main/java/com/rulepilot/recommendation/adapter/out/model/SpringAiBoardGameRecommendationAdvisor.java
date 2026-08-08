@@ -132,6 +132,8 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 && !request.candidates().isEmpty()
                 && request.candidates().size() <= 20
                 && request.research() != null
+                && (request.referenceGame() == null
+                        || request.focusedBggId() != null && request.referenceGame().bggId() == request.focusedBggId())
                 && validLocale(request.locale());
     }
 
@@ -416,8 +418,13 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 + "invent game facts. The application attaches validated research observations after selection, so researchedReasons "
                 + "must always be an empty array. "
                 + "Do not restate BGG numeric facts; the application adds those separately. Surface honest tradeoffs. For a focused EXPLAIN "
-                + "turn, answer the specific angle asked: explain categories and mechanics in plain language, and use the supplied description "
-                + "or research to describe the play loop when available. EXPLAIN choices may be empty or contain only the focused ID. "
+                + "turn, answer every explicit subquestion separately in natural prose: identify the game type from categories, explain how "
+                + "its principal mechanisms interact, and walk through the turn/round loop when asked. Do not reuse sentences or the same "
+                + "generic introduction from an earlier assistant turn. Use the supplied description or research when available. Never ask "
+                + "for player count, duration, or generic preferences during EXPLAIN; nextQuestion may only deepen the current game's topic. "
+                + "EXPLAIN choices may be empty or contain only the focused ID. For a comparison or alternative request, referenceGame is "
+                + "the verified current game: compare candidates against its metadata and do not claim similarity without a concrete shared "
+                + "category, mechanism, or cited experience. "
                 + "Do not require a fixed number "
                 + "of turns; nextQuestion is optional and should invite useful feedback. Return JSON with exactly assistantMessage, "
                 + "nextQuestion, choices. Every choice has exactly bggId, preferenceReasons, researchedReasons, tradeoffs. Each "
