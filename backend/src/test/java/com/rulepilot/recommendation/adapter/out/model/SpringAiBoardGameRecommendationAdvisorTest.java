@@ -1,4 +1,4 @@
-package com.rulepilot.catalog.adapter.out.recommendation;
+package com.rulepilot.recommendation.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -9,18 +9,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.CompositionRequest;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PlanningRequest;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.ProfileView;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.UserModel;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.GameResearch;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Observation;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Research;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Source;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.CompositionRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PlanningRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ProfileView;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.GameResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Observation;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import java.math.BigDecimal;
@@ -80,7 +80,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 assertThat(hypothesis.text()).contains("共同决策");
                 assertThat(hypothesis.basedOn()).isEqualTo("想一起讨论剧情");
             });
-            assertThat(plan.retrievalPlan().candidateTypes()).containsExactly(GameType.THEMATIC);
+            assertThat(plan.retrievalPlan().candidateTypes()).containsExactly(BggGameType.THEMATIC);
             assertThat(plan.retrievalPlan().candidateDiscoveryRequested()).isTrue();
             assertThat(plan.retrievalPlan().features()).singleElement().satisfies(feature -> {
                 assertThat(feature.term()).isEqualTo("Adventure");
@@ -195,7 +195,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     }
 
     private ProfileView profile() {
-        return new ProfileView(null, null, null, GameType.ALL, InteractionPreference.ANY);
+        return new ProfileView(null, null, null, BggGameType.ALL, InteractionPreference.ANY);
     }
 
     private record Fixture(

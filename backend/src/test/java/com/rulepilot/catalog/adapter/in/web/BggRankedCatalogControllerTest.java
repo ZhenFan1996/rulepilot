@@ -7,7 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
@@ -42,7 +42,7 @@ class BggRankedCatalogControllerTest {
                 new BigDecimal("8.09"),
                 102_030,
                 false,
-                Map.of(GameType.STRATEGY, 88));
+                Map.of(BggGameType.STRATEGY, 88));
         DiscoveryGame details = new DiscoveryGame(
                 1,
                 266192,
@@ -59,9 +59,9 @@ class BggRankedCatalogControllerTest {
                 List.of("Card Drafting"));
         Snapshot snapshot = new Snapshot(
                 Instant.parse("2026-08-07T08:00:00Z"), LocalDate.parse("2026-08-07"), 162_686, "a".repeat(64));
-        when(catalog.browse("", GameType.STRATEGY, Sort.RATING, 0, 20, true))
+        when(catalog.browse("", BggGameType.STRATEGY, Sort.RATING, 0, 20, true))
                 .thenReturn(new BrowseResult(
-                        Optional.of(snapshot), 7_543, 0, 20, Sort.RATING, GameType.STRATEGY,
+                        Optional.of(snapshot), 7_543, 0, 20, Sort.RATING, BggGameType.STRATEGY,
                         List.of(new BrowseGame(ranked, 2, details))));
         when(localization.localizeDiscoveryTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
                 .thenReturn(new LocalizedDiscoveryTaxonomy(
@@ -96,9 +96,9 @@ class BggRankedCatalogControllerTest {
                 new BigDecimal("7.5"),
                 100,
                 false,
-                Map.of(GameType.FAMILY, 1));
-        when(catalog.browse("", GameType.ALL, Sort.RANK, 0, 20, false))
-                .thenReturn(new BrowseResult(Optional.empty(), 1, 0, 20, Sort.RANK, GameType.ALL,
+                Map.of(BggGameType.FAMILY, 1));
+        when(catalog.browse("", BggGameType.ALL, Sort.RANK, 0, 20, false))
+                .thenReturn(new BrowseResult(Optional.empty(), 1, 0, 20, Sort.RANK, BggGameType.ALL,
                         List.of(new BrowseGame(ranked, null, null))));
         when(localization.localizeDiscoveryTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedDiscoveryTaxonomy(Map.of(), Map.of(), false));

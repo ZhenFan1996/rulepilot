@@ -158,6 +158,21 @@ class BggMetadataLocalizationServiceTest {
     }
 
     @Test
+    void exposesOnlyTheBoundedPresentationPortToTheRecommendationModule() {
+        when(translations.translate(any())).thenReturn(Optional.of(new Translation(
+                "", List.of("动物"), List.of("卡牌轮抽"))));
+        var presentation = new BggRecommendationPresentationService(service);
+
+        var taxonomy = presentation.localizeTaxonomy(
+                List.of("Animals"), List.of("Card Drafting"), "zh-CN");
+
+        assertThat(presentation.usesSimplifiedChinese("zh-Hans")).isTrue();
+        assertThat(presentation.normalizeSourceName("遊戲說明")).isEqualTo("游戏说明");
+        assertThat(taxonomy.categories()).containsEntry("Animals", "动物");
+        assertThat(taxonomy.mechanics()).containsEntry("Card Drafting", "卡牌轮抽");
+    }
+
+    @Test
     void chunksALargeRankedCatalogTaxonomyAndPublishesItOnlyWhenEveryChunkIsValid() {
         List<String> mechanics = java.util.stream.IntStream.rangeClosed(1, 51)
                 .mapToObj(index -> "Mechanic " + index)

@@ -1,43 +1,46 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Choice;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Confidence;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueAct;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.DialogueMessage;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureConstraint;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Plan;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PreferenceHypothesis;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PreferencePatch;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.ResearchedReason;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.RetrievalPlan;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Slate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.UserModel;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateDiscovery;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.CandidateLead;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Choice;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Confidence;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureConstraint;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Plan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PreferenceHypothesis;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PreferencePatch;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ResearchedReason;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Slate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
+import com.rulepilot.catalog.application.BggRankedCatalogRepository;
+import com.rulepilot.catalog.application.BggRankedCatalogService;
+import com.rulepilot.catalog.application.BoardGameGeekCatalog;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.DiscoveryGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameDetails;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.GameMatch;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.HotGame;
 import com.rulepilot.catalog.application.BoardGameGeekCatalog.SearchResult;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ConversationRequest;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.DecisionMode;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.Outcome;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.PreferenceField;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ReasonKind;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -59,7 +62,7 @@ class BoardGameRecommendationAgentTest {
 
         var first = fixture.agent.converse(new ConversationRequest(RecommendationProfile.empty(), ""), "zh-CN");
         var second = fixture.agent.converse(new ConversationRequest(
-                new RecommendationProfile(4, null, null, GameType.ALL, InteractionPreference.ANY), ""), "zh-CN");
+                new RecommendationProfile(4, null, null, BggGameType.ALL, InteractionPreference.ANY), ""), "zh-CN");
 
         assertThat(first.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
         assertThat(first.clarification().field()).isEqualTo(PreferenceField.PLAYERS);
@@ -80,13 +83,13 @@ class BoardGameRecommendationAgentTest {
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
         assertThat(response.sourceCount()).isEqualTo(179_737);
-        assertThat(response.profile().type()).isEqualTo(GameType.STRATEGY);
+        assertThat(response.profile().type()).isEqualTo(BggGameType.STRATEGY);
         assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.COOPERATIVE);
         assertThat(fixture.repository.queries).singleElement().satisfies(query -> {
-            assertThat(query.type()).isEqualTo(GameType.STRATEGY);
+            assertThat(query.type()).isEqualTo(BggGameType.STRATEGY);
             assertThat(query.size()).isEqualTo(20);
         });
-        assertThat(response.games()).extracting(game -> game.game().ranked().bggId())
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .contains(10, 20)
                 .doesNotContain(30, 40);
         assertThat(response.games().getFirst().matches()).contains("BGG 标注了合作游戏机制");
@@ -99,7 +102,7 @@ class BoardGameRecommendationAgentTest {
                 List.of(new PreferenceHypothesis("可能偏好低教学摩擦", Confidence.MEDIUM, "不想讲半天规则")));
         Plan plan = new Plan(
                 DialogueAct.RECOMMEND,
-                new PreferencePatch(null, null, null, GameType.FAMILY, null),
+                new PreferencePatch(null, null, null, BggGameType.FAMILY, null),
                 model,
                 "我先给你几个方向。",
                 "哪种桌上气氛更接近你们？",
@@ -125,13 +128,13 @@ class BoardGameRecommendationAgentTest {
                 null), "zh-CN");
 
         assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_ASSISTED);
-        assertThat(response.profile().type()).isEqualTo(GameType.ALL);
+        assertThat(response.profile().type()).isEqualTo(BggGameType.ALL);
         assertThat(response.userModel().summary()).contains("讲解负担");
         assertThat(response.userModel().hypotheses()).singleElement()
                 .extracting(BoardGameRecommendationAgent.PreferenceHypothesisView::confidence)
                 .isEqualTo("MEDIUM");
         assertThat(response.games()).singleElement().satisfies(game -> {
-            assertThat(game.game().ranked().bggId()).isEqualTo(20);
+            assertThat(game.game().ranking().bggId()).isEqualTo(20);
             assertThat(game.reasons()).anySatisfy(reason -> {
                 assertThat(reason.kind()).isEqualTo(ReasonKind.PREFERENCE_INFERENCE);
                 assertThat(reason.text()).contains("轻松进入状态");
@@ -177,7 +180,7 @@ class BoardGameRecommendationAgentTest {
                 true,
                 "查更多资料",
                 new RetrievalPlan(
-                        List.of(GameType.THEMATIC, GameType.STRATEGY),
+                        List.of(BggGameType.THEMATIC, BggGameType.STRATEGY),
                         List.of(new FeatureConstraint(
                                 "Science Fiction", FeatureMode.REQUIRED, FeatureSource.BGG_METADATA, "科幻主题")),
                         true));
@@ -197,7 +200,7 @@ class BoardGameRecommendationAgentTest {
 
         assertThat(fixture.repository.queries)
                 .extracting(Query::type)
-                .containsExactly(GameType.ALL, GameType.THEMATIC, GameType.STRATEGY);
+                .containsExactly(BggGameType.ALL, BggGameType.THEMATIC, BggGameType.STRATEGY);
         assertThat(discoveryCalls).hasValue(1);
         assertThat(response.harness().actions())
                 .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RANK_STRUCTURED_CANDIDATES")
@@ -206,7 +209,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().fallbackUsed()).isFalse();
         assertThat(response.games()).singleElement().satisfies(game -> {
-            assertThat(game.game().ranked().bggId()).isEqualTo(60);
+            assertThat(game.game().ranking().bggId()).isEqualTo(60);
             assertThat(game.game().details().categories()).contains("Science Fiction");
             assertThat(game.matches()).contains("BGG 元数据命中你提到的“科幻主题”");
         });
@@ -263,8 +266,8 @@ class BoardGameRecommendationAgentTest {
                 new UserModel("想判断是否适合家庭局", List.of()),
                 "我查一下实际体验。",
                 "",
-                false,
-                "");
+                true,
+                "查证这款游戏的桌上节奏");
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> Optional.of(new Slate(
@@ -297,6 +300,53 @@ class BoardGameRecommendationAgentTest {
             assertThat(source.url()).startsWith("https://");
         });
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void looksUpAFocusedGameByIdWithoutBroadSearchOrUnrequestedResearch() {
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("focused BGG facts do not require unrequested web research");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.EXPLAIN,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("正在了解刚才展示的候选", List.of()),
+                "我直接介绍刚才那款。",
+                "",
+                false,
+                "");
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "这是刚才那款游戏的详细介绍。",
+                        "",
+                        List.of(new Choice(20, List.of("延续刚才的候选"), List.of(), List.of())))),
+                research);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "介绍一下刚才那款",
+                List.of(),
+                List.of(new DialogueMessage("user", "介绍一下刚才那款")),
+                20), "zh-CN");
+
+        assertThat(fixture.repository.queries).isEmpty();
+        assertThat(fixture.repository.focusedIds).containsExactly(20);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
+        assertThat(response.harness().webResearchCalls()).isZero();
+        assertThat(response.harness().actions())
+                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "COMPOSE_RECOMMENDATIONS");
+        assertThat(response.games()).singleElement()
+                .extracting(game -> game.game().ranking().bggId())
+                .isEqualTo(20);
     }
 
     @Test
@@ -381,7 +431,7 @@ class BoardGameRecommendationAgentTest {
                         List.of(new Choice(40, List.of("方向不同"), List.of(), List.of())))),
                 new NoResearch());
         RecommendationProfile open = new RecommendationProfile(
-                4, 0, BigDecimal.ZERO, GameType.ALL, InteractionPreference.ANY);
+                4, 0, BigDecimal.ZERO, BggGameType.ALL, InteractionPreference.ANY);
 
         var response = fixture.agent.converse(new ConversationRequest(
                 open,
@@ -390,7 +440,7 @@ class BoardGameRecommendationAgentTest {
                 List.of(new DialogueMessage("user", "这几个太重了，换轻松一点")),
                 null), "zh-CN");
 
-        assertThat(response.games()).extracting(game -> game.game().ranked().bggId()).doesNotContain(10, 20);
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).doesNotContain(10, 20);
         assertThat(response.harness().modelCalls()).isLessThanOrEqualTo(2);
         assertThat(response.harness().catalogCalls()).isLessThanOrEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isLessThanOrEqualTo(1);
@@ -435,7 +485,7 @@ class BoardGameRecommendationAgentTest {
                 true,
                 "核对候选是否真的有叙事推进与探索抉择",
                 new RetrievalPlan(
-                        List.of(GameType.THEMATIC),
+                        List.of(BggGameType.THEMATIC),
                         List.of(new FeatureConstraint(
                                 "narrative exploration at the table",
                                 FeatureMode.PREFERRED,
@@ -463,7 +513,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().actions())
                 .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RESEARCH_GAME_FIT");
         assertThat(response.games()).singleElement().satisfies(game -> {
-            assertThat(game.game().ranked().bggId()).isEqualTo(40);
+            assertThat(game.game().ranking().bggId()).isEqualTo(40);
             assertThat(game.reasons()).anySatisfy(reason -> {
                 assertThat(reason.kind()).isEqualTo(ReasonKind.WEB_RESEARCH);
                 assertThat(reason.text()).contains("叙事推进");
@@ -537,7 +587,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.ANY);
         assertThat(response.userModel().summary()).contains("不希望体验只剩直接攻击");
         assertThat(response.games()).singleElement().satisfies(game -> {
-            assertThat(game.game().ranked().bggId()).isEqualTo(30);
+            assertThat(game.game().ranking().bggId()).isEqualTo(30);
             assertThat(game.reasons()).anyMatch(reason -> reason.kind() == ReasonKind.PREFERENCE_INFERENCE);
         });
     }
@@ -596,11 +646,10 @@ class BoardGameRecommendationAgentTest {
             var service = new BggRankedCatalogService(repository, new FakeBgg());
             var properties = new BoardGameRecommendationProperties(20, 8, 3, new BigDecimal("0.66"));
             agent = new BoardGameRecommendationAgent(
-                    service,
+                    new BoardGameRecommendationTools(service, research),
                     new BoardGamePreferenceDialogue(),
                     new BoardGameRecommendationSelector(properties),
                     advisor,
-                    research,
                     properties);
         }
     }
@@ -665,7 +714,7 @@ class BoardGameRecommendationAgentTest {
                     new BigDecimal(rating).add(new BigDecimal("0.2")),
                     10_000 - id,
                     false,
-                    Map.of(GameType.STRATEGY, rank));
+                    Map.of(BggGameType.STRATEGY, rank));
         }
 
         @Override

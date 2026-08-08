@@ -2,7 +2,7 @@ package com.rulepilot.catalog.adapter.out.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
@@ -62,27 +62,27 @@ class PostgresBggRankedCatalogTest {
     void atomicallyPublishesAndQueriesHotRatingTypeAndTitleOrders() {
         UUID importId = UUID.randomUUID();
         repository.stage(importId, List.of(
-                game(10, "Strategy 100%", 10, "8.0", false, Map.of(GameType.STRATEGY, 3)),
-                game(20, "Family Game", 20, "9.0", false, Map.of(GameType.FAMILY, 2)),
-                game(30, "Expansion", null, "10.0", true, Map.of(GameType.EXPANSION, 1))));
+                game(10, "Strategy 100%", 10, "8.0", false, Map.of(BggGameType.STRATEGY, 3)),
+                game(20, "Family Game", 20, "9.0", false, Map.of(BggGameType.FAMILY, 2)),
+                game(30, "Expansion", null, "10.0", true, Map.of(BggGameType.EXPANSION, 1))));
         Snapshot snapshot = new Snapshot(
                 Instant.parse("2026-08-07T08:00:00Z"), LocalDate.parse("2026-08-07"), 3, "a".repeat(64));
         repository.publish(importId, snapshot);
 
         assertThat(repository.findSnapshot()).contains(snapshot);
-        assertThat(repository.find(new Query("", GameType.ALL, Sort.HOT, 0, 20, List.of(20))).games())
+        assertThat(repository.find(new Query("", BggGameType.ALL, Sort.HOT, 0, 20, List.of(20))).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(20, 10);
-        assertThat(repository.find(new Query("", GameType.ALL, Sort.RATING, 0, 20, List.of())).games())
+        assertThat(repository.find(new Query("", BggGameType.ALL, Sort.RATING, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(20, 10);
-        assertThat(repository.find(new Query("", GameType.STRATEGY, Sort.RANK, 0, 20, List.of())).games())
+        assertThat(repository.find(new Query("", BggGameType.STRATEGY, Sort.RANK, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(10);
-        assertThat(repository.find(new Query("100%", GameType.ALL, Sort.RANK, 0, 20, List.of())).games())
+        assertThat(repository.find(new Query("100%", BggGameType.ALL, Sort.RANK, 0, 20, List.of())).games())
                 .extracting(RankedGame::sourceName)
                 .containsExactly("Strategy 100%");
-        assertThat(repository.find(new Query("", GameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())
+        assertThat(repository.find(new Query("", BggGameType.EXPANSION, Sort.RATING, 0, 20, List.of())).games())
                 .extracting(RankedGame::bggId)
                 .containsExactly(30);
     }
@@ -93,7 +93,7 @@ class PostgresBggRankedCatalogTest {
             Integer rank,
             String rating,
             boolean expansion,
-            Map<GameType, Integer> types) {
+            Map<BggGameType, Integer> types) {
         return new RankedGame(
                 id,
                 name,

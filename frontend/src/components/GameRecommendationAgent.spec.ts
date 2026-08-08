@@ -135,6 +135,44 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('8 人')
   })
 
+  it('resolves a natural follow-up mentioning a previously shown official title to its BGG id', async () => {
+    const requests: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      requests.push(body)
+      const focused = body.focusedBggId === game.bggId
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted',
+        assistantMessage: focused ? '这是刚才那款游戏的详细介绍。' : '先看这款是否接近你的想法。',
+        profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        harness: {
+          modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
+          actions: focused
+            ? ['PLAN_DIALOGUE', 'LOOKUP_BGG_GAME', 'COMPOSE_RECOMMENDATIONS']
+            : ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'COMPOSE_RECOMMENDATIONS'],
+        },
+        games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    }))
+    const wrapper = await mountAgent()
+
+    await wrapper.get('textarea').setValue('想找一款自然主题的游戏')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('能介绍一下《展翅翱翔》吗？')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toMatchObject({
+      message: '能介绍一下《展翅翱翔》吗？',
+      focusedBggId: 266192,
+      excludedBggIds: [],
+    })
+    expect(wrapper.text()).toContain('这是刚才那款游戏的详细介绍')
+  })
+
   it('keeps retry and catalog-safe error copy when a turn fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
       String(input) === '/api/auth/csrf'

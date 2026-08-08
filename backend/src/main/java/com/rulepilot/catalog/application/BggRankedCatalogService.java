@@ -1,6 +1,8 @@
 package com.rulepilot.catalog.application;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog;
+import com.rulepilot.catalog.BoardGameRecommendationCatalog.CandidateSet;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -20,7 +22,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
-public class BggRankedCatalogService implements BggRankedCatalog {
+public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecommendationCatalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BggRankedCatalogService.class);
     private final BggRankedCatalogRepository repository;
@@ -41,14 +43,14 @@ public class BggRankedCatalogService implements BggRankedCatalog {
         return repository.find(query);
     }
 
-    public BrowseResult browse(String search, GameType type, Sort sort, int page, int size) {
+    public BrowseResult browse(String search, BggGameType type, Sort sort, int page, int size) {
         return browse(search, type, sort, page, size, true);
     }
 
     public BrowseResult browse(
-            String search, GameType type, Sort sort, int page, int size, boolean includeDetails) {
+            String search, BggGameType type, Sort sort, int page, int size, boolean includeDetails) {
         String checkedSearch = checkedSearch(search);
-        GameType checkedType = type == null ? GameType.ALL : type;
+        BggGameType checkedType = type == null ? BggGameType.ALL : type;
         Sort checkedSort = sort == null ? Sort.HOT : sort;
         if (page < 0 || page > 10_000) throw new IllegalArgumentException("page must be between 0 and 10000");
         if (size < 1 || size > 20) throw new IllegalArgumentException("size must be between 1 and 20");
@@ -73,12 +75,12 @@ public class BggRankedCatalogService implements BggRankedCatalog {
      * enriches the union in a single details batch.
      */
     public BrowseResult recommendationCandidates(
-            GameType requiredType, List<GameType> suggestedTypes, int size) {
-        GameType checkedRequiredType = requiredType == null ? GameType.ALL : requiredType;
+            BggGameType requiredType, List<BggGameType> suggestedTypes, int size) {
+        BggGameType checkedRequiredType = requiredType == null ? BggGameType.ALL : requiredType;
         if (size < 3 || size > 20) {
             throw new IllegalArgumentException("recommendation candidate size must be between 3 and 20");
         }
-        List<GameType> channels = recommendationChannels(checkedRequiredType, suggestedTypes);
+        List<BggGameType> channels = recommendationChannels(checkedRequiredType, suggestedTypes);
         List<List<RankedGame>> rankedChannels = channels.stream()
                 .map(type -> repository.find(new Query("", type, Sort.RANK, 0, size, List.of())).games())
                 .toList();
@@ -105,14 +107,70 @@ public class BggRankedCatalogService implements BggRankedCatalog {
         return ranked.stream().map(game -> new BrowseGame(game, null, details.get(game.bggId()))).toList();
     }
 
-    private List<GameType> recommendationChannels(GameType requiredType, List<GameType> suggestedTypes) {
-        if (requiredType != GameType.ALL) return List.of(requiredType);
-        LinkedHashSet<GameType> channels = new LinkedHashSet<>();
-        channels.add(GameType.ALL);
+    @Override
+    public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+        BrowseResult result = recommendationCandidates(requiredType, suggestedTypes, maximum);
+        return new CandidateSet(
+                result.snapshot().map(Snapshot::gameCount).orElse(0),
+                result.games().stream().map(this::recommendationGame).toList());
+    }
+
+    @Override
+    public List<BoardGameRecommendationCatalog.Game> findGamesByIds(List<Integer> bggIds) {
+        return browseIds(bggIds).stream().map(this::recommendationGame).toList();
+    }
+
+    @Override
+    public int gameCount() {
+        return repository.findSnapshot().map(Snapshot::gameCount).orElse(0);
+    }
+
+    private BoardGameRecommendationCatalog.Game recommendationGame(BrowseGame game) {
+        RankedGame ranked = game.ranked();
+        DiscoveryGame details = game.details();
+        BoardGameRecommendationCatalog.Details publicDetails = details == null
+                ? null
+                : new BoardGameRecommendationCatalog.Details(
+                        details.name(),
+                        details.chineseName(),
+                        details.thumbnailUrl(),
+                        details.minPlayers(),
+                        details.maxPlayers(),
+                        details.playingTimeMinutes(),
+                        details.averageWeight(),
+                        details.categories(),
+                        details.mechanics(),
+                        details.minimumPlayTimeMinutes(),
+                        details.maximumPlayTimeMinutes(),
+                        details.minimumAge(),
+                        details.suggestedMinimumAge(),
+                        details.bestWith(),
+                        details.recommendedWith(),
+                        details.languageDependenceLevel(),
+                        details.weightVotes(),
+                        details.families(),
+                        details.designers(),
+                        details.publishers());
+        return new BoardGameRecommendationCatalog.Game(
+                new BoardGameRecommendationCatalog.Ranking(
+                        ranked.bggId(),
+                        ranked.sourceName(),
+                        ranked.publicationYear(),
+                        ranked.overallRank(),
+                        ranked.bayesAverage(),
+                        ranked.averageRating(),
+                        ranked.usersRated()),
+                publicDetails);
+    }
+
+    private List<BggGameType> recommendationChannels(BggGameType requiredType, List<BggGameType> suggestedTypes) {
+        if (requiredType != BggGameType.ALL) return List.of(requiredType);
+        LinkedHashSet<BggGameType> channels = new LinkedHashSet<>();
+        channels.add(BggGameType.ALL);
         if (suggestedTypes != null) {
             suggestedTypes.stream()
                     .filter(java.util.Objects::nonNull)
-                    .filter(type -> type != GameType.ALL && type != GameType.EXPANSION)
+                    .filter(type -> type != BggGameType.ALL && type != BggGameType.EXPANSION)
                     .limit(2)
                     .forEach(channels::add);
         }
@@ -170,7 +228,7 @@ public class BggRankedCatalogService implements BggRankedCatalog {
             int page,
             int size,
             Sort sort,
-            GameType type,
+            BggGameType type,
             List<BrowseGame> games) {
         public BrowseResult {
             snapshot = snapshot == null ? Optional.empty() : snapshot;

@@ -46,8 +46,8 @@ class BggRankedCatalogImportServiceTest {
         assertThat(wingspan.sourceName()).isEqualTo("Wingspan");
         assertThat(wingspan.averageRating()).isEqualByComparingTo("8.09123");
         assertThat(wingspan.typeRanks())
-                .containsEntry(BggRankedCatalog.GameType.FAMILY, 12)
-                .containsEntry(BggRankedCatalog.GameType.STRATEGY, 88);
+                .containsEntry(com.rulepilot.catalog.BggGameType.FAMILY, 12)
+                .containsEntry(com.rulepilot.catalog.BggGameType.STRATEGY, 88);
         assertThat(repository.staged.get(1).sourceName()).isEqualTo("Catan, 5–6 Player Extension");
         assertThat(repository.staged.get(1).expansion()).isTrue();
     }

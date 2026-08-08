@@ -1,4 +1,4 @@
-package com.rulepilot.catalog.adapter.out.recommendation;
+package com.rulepilot.recommendation.adapter.out.research;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -7,13 +7,13 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.FeatureSource;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoveryRequest;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.DiscoverySignal;
-import com.rulepilot.catalog.BoardGameRecommendationWebResearch.Request;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoverySignal;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
+import com.rulepilot.catalog.BggGameType;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -147,7 +147,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
 
             var result = adapter.discover(new DiscoveryRequest(
                     List.of(new DiscoverySignal("Science Fiction", FeatureMode.REQUIRED, FeatureSource.BGG_METADATA)),
-                    List.of(GameType.THEMATIC),
+                    List.of(BggGameType.THEMATIC),
                     "zh-CN"));
 
             assertThat(result).hasValueSatisfying(discovery -> {

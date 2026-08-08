@@ -1,12 +1,12 @@
-package com.rulepilot.catalog.application;
+package com.rulepilot.recommendation.application;
 
-import com.rulepilot.catalog.BoardGameRecommendationAdvisor.PreferencePatch;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.Clarification;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.ClarificationOption;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.InteractionPreference;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.PreferenceField;
-import com.rulepilot.catalog.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.PreferencePatch;
+import com.rulepilot.catalog.BggGameType;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ClarificationOption;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
@@ -56,7 +56,7 @@ class BoardGamePreferenceDialogue {
                 profile.players(),
                 profile.maxMinutes(),
                 profile.maxWeight(),
-                profile.type() == null ? GameType.ALL : profile.type(),
+                profile.type() == null ? BggGameType.ALL : profile.type(),
                 profile.interaction() == null ? InteractionPreference.ANY : profile.interaction());
     }
 
@@ -109,13 +109,13 @@ class BoardGamePreferenceDialogue {
             weight = BigDecimal.ZERO;
         }
 
-        GameType type = null;
-        if (containsAny(normalized, "聚会游戏", "派对游戏", "party game")) type = GameType.PARTY;
-        else if (containsAny(normalized, "家庭游戏", "family game")) type = GameType.FAMILY;
-        else if (containsAny(normalized, "策略游戏", "strategy game")) type = GameType.STRATEGY;
-        else if (containsAny(normalized, "主题游戏", "thematic game")) type = GameType.THEMATIC;
-        else if (containsAny(normalized, "战争游戏", "war game", "wargame")) type = GameType.WAR;
-        else if (containsAny(normalized, "抽象游戏", "抽象策略", "abstract game")) type = GameType.ABSTRACT;
+        BggGameType type = null;
+        if (containsAny(normalized, "聚会游戏", "派对游戏", "party game")) type = BggGameType.PARTY;
+        else if (containsAny(normalized, "家庭游戏", "family game")) type = BggGameType.FAMILY;
+        else if (containsAny(normalized, "策略游戏", "strategy game")) type = BggGameType.STRATEGY;
+        else if (containsAny(normalized, "主题游戏", "thematic game")) type = BggGameType.THEMATIC;
+        else if (containsAny(normalized, "战争游戏", "war game", "wargame")) type = BggGameType.WAR;
+        else if (containsAny(normalized, "抽象游戏", "抽象策略", "abstract game")) type = BggGameType.ABSTRACT;
 
         InteractionPreference interaction = null;
         if (containsAny(normalized, "合作", "cooperative", "co-op", "coop")) interaction = InteractionPreference.COOPERATIVE;
@@ -168,7 +168,7 @@ class BoardGamePreferenceDialogue {
         return profile.players() != null
                 || profile.maxMinutes() != null
                 || profile.maxWeight() != null
-                || profile.type() != GameType.ALL
+                || profile.type() != BggGameType.ALL
                 || profile.interaction() != InteractionPreference.ANY;
     }
 

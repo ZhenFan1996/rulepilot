@@ -1,6 +1,6 @@
 package com.rulepilot.catalog.adapter.out.persistence;
 
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Page;
 import com.rulepilot.catalog.application.BggRankedCatalog.Query;
 import com.rulepilot.catalog.application.BggRankedCatalog.RankedGame;
@@ -24,15 +24,15 @@ import org.springframework.stereotype.Repository;
 @Profile("!test")
 public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
 
-    private static final Map<GameType, String> TYPE_COLUMNS = Map.of(
-            GameType.ABSTRACT, "abstracts_rank",
-            GameType.CUSTOMIZABLE, "cgs_rank",
-            GameType.CHILDREN, "childrensgames_rank",
-            GameType.FAMILY, "familygames_rank",
-            GameType.PARTY, "partygames_rank",
-            GameType.STRATEGY, "strategygames_rank",
-            GameType.THEMATIC, "thematic_rank",
-            GameType.WAR, "wargames_rank");
+    private static final Map<BggGameType, String> TYPE_COLUMNS = Map.of(
+            BggGameType.ABSTRACT, "abstracts_rank",
+            BggGameType.CUSTOMIZABLE, "cgs_rank",
+            BggGameType.CHILDREN, "childrensgames_rank",
+            BggGameType.FAMILY, "familygames_rank",
+            BggGameType.PARTY, "partygames_rank",
+            BggGameType.STRATEGY, "strategygames_rank",
+            BggGameType.THEMATIC, "thematic_rank",
+            BggGameType.WAR, "wargames_rank");
 
     private static final String COLUMNS = """
             bgg_id, source_name, publication_year, overall_rank, bayes_average, average_rating,
@@ -127,9 +127,9 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
         jdbc.update("DELETE FROM bgg_ranked_game_import WHERE import_id = :importId", parameters);
     }
 
-    private String whereClause(GameType type, String search) {
+    private String whereClause(BggGameType type, String search) {
         List<String> clauses = new ArrayList<>();
-        if (type == GameType.EXPANSION) {
+        if (type == BggGameType.EXPANSION) {
             clauses.add("g.is_expansion");
         } else {
             clauses.add("NOT g.is_expansion");
@@ -164,7 +164,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
     }
 
     private MapSqlParameterSource parameters(UUID importId, RankedGame game) {
-        Map<GameType, Integer> ranks = game.typeRanks();
+        Map<BggGameType, Integer> ranks = game.typeRanks();
         return new MapSqlParameterSource()
                 .addValue("importId", importId)
                 .addValue("bggId", game.bggId())
@@ -175,27 +175,27 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 .addValue("averageRating", game.averageRating())
                 .addValue("usersRated", game.usersRated())
                 .addValue("expansion", game.expansion())
-                .addValue("abstractRank", ranks.get(GameType.ABSTRACT), Types.INTEGER)
-                .addValue("customizableRank", ranks.get(GameType.CUSTOMIZABLE), Types.INTEGER)
-                .addValue("childrenRank", ranks.get(GameType.CHILDREN), Types.INTEGER)
-                .addValue("familyRank", ranks.get(GameType.FAMILY), Types.INTEGER)
-                .addValue("partyRank", ranks.get(GameType.PARTY), Types.INTEGER)
-                .addValue("strategyRank", ranks.get(GameType.STRATEGY), Types.INTEGER)
-                .addValue("thematicRank", ranks.get(GameType.THEMATIC), Types.INTEGER)
-                .addValue("warRank", ranks.get(GameType.WAR), Types.INTEGER);
+                .addValue("abstractRank", ranks.get(BggGameType.ABSTRACT), Types.INTEGER)
+                .addValue("customizableRank", ranks.get(BggGameType.CUSTOMIZABLE), Types.INTEGER)
+                .addValue("childrenRank", ranks.get(BggGameType.CHILDREN), Types.INTEGER)
+                .addValue("familyRank", ranks.get(BggGameType.FAMILY), Types.INTEGER)
+                .addValue("partyRank", ranks.get(BggGameType.PARTY), Types.INTEGER)
+                .addValue("strategyRank", ranks.get(BggGameType.STRATEGY), Types.INTEGER)
+                .addValue("thematicRank", ranks.get(BggGameType.THEMATIC), Types.INTEGER)
+                .addValue("warRank", ranks.get(BggGameType.WAR), Types.INTEGER);
     }
 
     private RankedGame mapGame(ResultSet rs, int rowNumber) throws SQLException {
-        Map<GameType, Integer> typeRanks = new java.util.EnumMap<>(GameType.class);
-        addType(rs, "abstracts_rank", GameType.ABSTRACT, typeRanks);
-        addType(rs, "cgs_rank", GameType.CUSTOMIZABLE, typeRanks);
-        addType(rs, "childrensgames_rank", GameType.CHILDREN, typeRanks);
-        addType(rs, "familygames_rank", GameType.FAMILY, typeRanks);
-        addType(rs, "partygames_rank", GameType.PARTY, typeRanks);
-        addType(rs, "strategygames_rank", GameType.STRATEGY, typeRanks);
-        addType(rs, "thematic_rank", GameType.THEMATIC, typeRanks);
-        addType(rs, "wargames_rank", GameType.WAR, typeRanks);
-        if (rs.getBoolean("is_expansion")) typeRanks.put(GameType.EXPANSION, 1);
+        Map<BggGameType, Integer> typeRanks = new java.util.EnumMap<>(BggGameType.class);
+        addType(rs, "abstracts_rank", BggGameType.ABSTRACT, typeRanks);
+        addType(rs, "cgs_rank", BggGameType.CUSTOMIZABLE, typeRanks);
+        addType(rs, "childrensgames_rank", BggGameType.CHILDREN, typeRanks);
+        addType(rs, "familygames_rank", BggGameType.FAMILY, typeRanks);
+        addType(rs, "partygames_rank", BggGameType.PARTY, typeRanks);
+        addType(rs, "strategygames_rank", BggGameType.STRATEGY, typeRanks);
+        addType(rs, "thematic_rank", BggGameType.THEMATIC, typeRanks);
+        addType(rs, "wargames_rank", BggGameType.WAR, typeRanks);
+        if (rs.getBoolean("is_expansion")) typeRanks.put(BggGameType.EXPANSION, 1);
         return new RankedGame(
                 rs.getInt("bgg_id"),
                 rs.getString("source_name"),
@@ -208,7 +208,7 @@ public class PostgresBggRankedCatalog implements BggRankedCatalogRepository {
                 typeRanks);
     }
 
-    private void addType(ResultSet rs, String column, GameType type, Map<GameType, Integer> types) throws SQLException {
+    private void addType(ResultSet rs, String column, BggGameType type, Map<BggGameType, Integer> types) throws SQLException {
         Integer rank = nullableInteger(rs, column);
         if (rank != null) types.put(type, rank);
     }

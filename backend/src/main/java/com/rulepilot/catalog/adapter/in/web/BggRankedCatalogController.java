@@ -3,7 +3,7 @@ package com.rulepilot.catalog.adapter.in.web;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService;
 import com.rulepilot.catalog.application.SimplifiedChineseText;
 import com.rulepilot.catalog.application.BggMetadataLocalizationService.LocalizedDiscoveryTaxonomy;
-import com.rulepilot.catalog.application.BggRankedCatalog.GameType;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.application.BggRankedCatalog.Snapshot;
 import com.rulepilot.catalog.application.BggRankedCatalog.Sort;
 import com.rulepilot.catalog.application.BggRankedCatalogImportService;
@@ -57,7 +57,7 @@ public class BggRankedCatalogController {
             @RequestParam(defaultValue = "true") boolean enrich) {
         BrowseResult result = catalog.browse(
                 q,
-                enumValue(GameType.class, type, "type"),
+                enumValue(BggGameType.class, type, "type"),
                 enumValue(Sort.class, sort, "sort"),
                 page,
                 size,
