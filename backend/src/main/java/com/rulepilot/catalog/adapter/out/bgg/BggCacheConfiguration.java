@@ -19,4 +19,15 @@ class BggCacheConfiguration {
         executor.setWaitForTasksToCompleteOnShutdown(false);
         return executor;
     }
+
+    @Bean(name = "bggPopularPrewarmExecutor")
+    ThreadPoolTaskExecutor bggPopularPrewarmExecutor() {
+        var executor = new ThreadPoolTaskExecutor();
+        executor.setThreadNamePrefix("bgg-popular-prewarm-");
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(1);
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        return executor;
+    }
 }

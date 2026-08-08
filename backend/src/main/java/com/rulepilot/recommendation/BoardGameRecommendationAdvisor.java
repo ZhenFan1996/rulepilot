@@ -247,6 +247,7 @@ public interface BoardGameRecommendationAdvisor {
 
     enum FeatureSource {
         BGG_METADATA,
-        EXPERIENCE
+        EXPERIENCE,
+        USER_EXPRESSION
     }
 }

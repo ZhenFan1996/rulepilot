@@ -3,7 +3,9 @@ package com.rulepilot.recommendation.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
+import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Choice;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Confidence;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
@@ -87,7 +89,7 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.COOPERATIVE);
         assertThat(fixture.repository.queries).singleElement().satisfies(query -> {
             assertThat(query.type()).isEqualTo(BggGameType.STRATEGY);
-            assertThat(query.size()).isEqualTo(20);
+            assertThat(query.size()).isEqualTo(8);
         });
         assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
                 .contains(10, 20)
@@ -198,9 +200,7 @@ class BoardGameRecommendationAgentTest {
                 List.of(new DialogueMessage("user", "我想玩科幻主题的桌游")),
                 null), "zh-CN");
 
-        assertThat(fixture.repository.queries)
-                .extracting(Query::type)
-                .containsExactly(BggGameType.ALL, BggGameType.THEMATIC, BggGameType.STRATEGY);
+        assertThat(fixture.repository.queries).isEmpty();
         assertThat(discoveryCalls).hasValue(1);
         assertThat(response.harness().actions())
                 .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RANK_STRUCTURED_CANDIDATES")
@@ -212,6 +212,68 @@ class BoardGameRecommendationAgentTest {
             assertThat(game.game().ranking().bggId()).isEqualTo(60);
             assertThat(game.game().details().categories()).contains("Science Fiction");
             assertThat(game.matches()).contains("BGG 元数据命中你提到的“科幻主题”");
+        });
+    }
+
+    @Test
+    void expandsRecallWhenARequiredFeatureIsAbsentFromTheInitialRankPool() {
+        BoardGameRecommendationWebResearch discovery = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                return Optional.of(new CandidateDiscovery(
+                        List.of(new CandidateLead(70, "Game 70", List.of(1))),
+                        List.of(new Source(
+                                1,
+                                "BGG item",
+                                "https://boardgamegeek.com/boardgame/70",
+                                "boardgamegeek.com"))));
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("metadata verification must not invoke experience research");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(4, 120, null, null, null),
+                new UserModel("四人拍卖游戏", List.of()),
+                "我会按明确机制找候选。",
+                "还想调整什么？",
+                false,
+                "",
+                new RetrievalPlan(
+                        List.of(BggGameType.STRATEGY),
+                        List.of(new FeatureConstraint(
+                                "Auction",
+                                FeatureMode.REQUIRED,
+                                FeatureSource.BGG_METADATA,
+                                "拍卖机制")),
+                        false));
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    throw new AssertionError("verified required metadata must use structured ranking");
+                },
+                discovery);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "推荐四人两小时内的拍卖游戏",
+                List.of(),
+                List.of(new DialogueMessage("user", "推荐四人两小时内的拍卖游戏")),
+                null), "zh-CN");
+
+        assertThat(response.harness().actions())
+                .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RANK_STRUCTURED_CANDIDATES");
+        assertThat(response.games()).singleElement().satisfies(game -> {
+            assertThat(game.game().ranking().bggId()).isEqualTo(70);
+            assertThat(game.game().details().mechanics()).contains("Auction");
         });
     }
 
@@ -609,7 +671,7 @@ class BoardGameRecommendationAgentTest {
                 null), "zh-CN");
 
         assertThat(discoveryCalls).hasValue(1);
-        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isEqualTo(1);
         assertThat(response.harness().actions())
                 .contains("DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES", "RESEARCH_GAME_FIT");
@@ -620,6 +682,117 @@ class BoardGameRecommendationAgentTest {
                 assertThat(reason.text()).contains("叙事推进");
             });
         });
+    }
+
+    @Test
+    void preservesAnUnmappedQualitativeRequestSoDiscoveryCanReachBeyondTheTopRankPool() {
+        AtomicInteger discoveryCalls = new AtomicInteger();
+        BoardGameRecommendationWebResearch tools = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                discoveryCalls.incrementAndGet();
+                assertThat(request.signals()).singleElement().satisfies(signal -> {
+                    assertThat(signal.term()).isEqualTo("区控");
+                    assertThat(signal.source()).isEqualTo(FeatureSource.USER_EXPRESSION);
+                });
+                return Optional.of(new CandidateDiscovery(
+                        List.of(new CandidateLead(
+                                60,
+                                "Game 60",
+                                "资料将它列为区域控制游戏",
+                                List.of(1))),
+                        List.of(new Source(
+                                1,
+                                "Area-control games",
+                                "https://review.example/area-control",
+                                "review.example"))));
+            }
+
+            @Override
+            public Optional<Research> research(Request request) {
+                throw new AssertionError("candidate discovery already returned source-grounded fit evidence");
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(4, 120, null, null, null),
+                new UserModel("四人、两小时左右的竞争游戏", List.of()),
+                "我会按人数和时长找候选。",
+                "你更在意冲突强度还是规则量？",
+                false,
+                "",
+                RetrievalPlan.empty());
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    throw new AssertionError("verified discovery must not pay for a second model call");
+                },
+                tools);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "推荐一些适合4人、2小时左右的区控游戏",
+                List.of(),
+                List.of(new DialogueMessage("user", "推荐一些适合4人、2小时左右的区控游戏")),
+                null), "zh-CN");
+
+        assertThat(discoveryCalls).hasValue(1);
+        assertThat(response.harness().actions())
+                .contains(
+                        "DISCOVER_CANDIDATES",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "RESEARCH_GAME_FIT",
+                        "RANK_STRUCTURED_CANDIDATES")
+                .doesNotContain("COMPOSE_RECOMMENDATIONS");
+        assertThat(response.harness().modelCalls()).isEqualTo(1);
+        assertThat(response.games()).singleElement().satisfies(game -> {
+            assertThat(game.game().ranking().bggId()).isEqualTo(60);
+            assertThat(game.game().details().mechanics()).contains("Area Control");
+            assertThat(game.reasons()).anySatisfy(reason -> {
+                assertThat(reason.kind()).isEqualTo(ReasonKind.WEB_RESEARCH);
+                assertThat(reason.text()).contains("区域控制");
+            });
+        });
+    }
+
+    @Test
+    void reportsTruthfulProgressInExecutionOrder() {
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(4, 120, null, null, null),
+                new UserModel("四人策略局", List.of()),
+                "我来找候选。",
+                "哪个方向更接近？",
+                false,
+                "");
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "先看这一款。",
+                        "哪个方向更接近？",
+                        List.of(new Choice(10, List.of(), List.of(), List.of())))),
+                new NoResearch());
+        List<BoardGameRecommendationAgent.ProgressStage> stages = new ArrayList<>();
+
+        fixture.agent.converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "推荐四人策略游戏",
+                        List.of(),
+                        List.of(new DialogueMessage("user", "推荐四人策略游戏")),
+                        null),
+                "zh-CN",
+                update -> stages.add(update.stage()));
+
+        assertThat(stages).containsExactly(
+                BoardGameRecommendationAgent.ProgressStage.UNDERSTANDING_REQUEST,
+                BoardGameRecommendationAgent.ProgressStage.SEARCHING_BGG_CATALOG,
+                BoardGameRecommendationAgent.ProgressStage.COMPOSING_RESPONSE);
     }
 
     @Test
@@ -745,10 +918,27 @@ class BoardGameRecommendationAgentTest {
                 }
             };
             var service = new BggRankedCatalogService(repository, new FakeBgg());
-            var properties = new BoardGameRecommendationProperties(20, 8, 3, new BigDecimal("0.66"));
+            var properties = new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"));
+            var recommendationTools = new BoardGameRecommendationTools(service, research);
+            var candidateAgent = new BoardGameRecommendationCandidateAgent(
+                    new BoardGameRecommendationCandidateModel() {
+                        @Override
+                        public boolean configured() {
+                            return false;
+                        }
+
+                        @Override
+                        public Turn next(Request request) {
+                            throw new AssertionError("disabled native candidate model must not run");
+                        }
+                    },
+                    recommendationTools,
+                    new ObjectMapper());
             agent = new BoardGameRecommendationAgent(
-                    new BoardGameRecommendationTools(service, research),
+                    recommendationTools,
                     new BoardGamePreferenceDialogue(),
+                    new BoardGameRecommendationQueryCoverage(),
+                    candidateAgent,
                     new BoardGameRecommendationSelector(properties),
                     advisor,
                     properties);
@@ -791,6 +981,7 @@ class BoardGameRecommendationAgentTest {
             focusedIds.addAll(ids);
             Map<Integer, RankedGame> byId = rankedGames().stream()
                     .collect(java.util.stream.Collectors.toMap(RankedGame::bggId, Function.identity()));
+            byId.put(70, ranked(70, 70, "7.8"));
             return ids.stream().map(byId::get).filter(java.util.Objects::nonNull).toList();
         }
 
@@ -864,6 +1055,7 @@ class BoardGameRecommendationAgentTest {
                 case 30 -> game(id, 1, 2, 45, "2.0", List.of("Abstract"), List.of("Grid Movement"));
                 case 40 -> game(id, 3, 6, 150, "3.0", List.of("Thematic"), List.of("Team-Based Game"));
                 case 60 -> game(id, 1, 4, 120, "3.2", List.of("Science Fiction"), List.of("Area Control"));
+                case 70 -> game(id, 2, 5, 100, "2.8", List.of("Economic"), List.of("Auction"));
                 default -> game(id, 2, 5, 90, "2.8", List.of("Economic"), List.of("Worker Placement"));
             };
         }

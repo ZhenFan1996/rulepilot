@@ -7,8 +7,10 @@ import type {
   RecommendationClarification,
   RecommendationGame,
   RecommendationMessage,
+  RecommendationProgressStage,
   RecommendationProfile,
 } from '@/components/gameRecommendationTypes'
+import { streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale } from '@/lib/locale'
 
 const { locale } = useLocale()
@@ -22,7 +24,7 @@ const copy = {
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从 {source} 条 BGG 快照记录中补齐并比较了 {count} 款候选。', agent: 'Agent 动态规划', fallback: 'BGG 安全降级', more: '换一批',
     understanding: '我目前的理解（可以随时纠正）', basedOn: '来自：“{value}”', low: '低置信', medium: '中置信', high: '高置信',
-    catalogStatus: '已查询 BGG', lookupStatus: '已按 BGG ID 读取详情', discoveryStatus: '已联网发现候选并经 BGG 验证', structuredStatus: '已按明确条件完成可验证排序', researchStatus: '已联网调查', questionResearchStatus: '已围绕当前问题定向查证', rerankStatus: '已完成个性化重排', responseStatus: '已结合当前问题组织回答',
+    catalogStatus: '已查询 BGG', toolChoiceStatus: '模型已自主选择工具', nameSearchStatus: '已在全量 BGG CSV 快照按名称搜索', lookupStatus: '已按 BGG ID 读取详情', discoveryStatus: '已联网发现候选并经 BGG 验证', structuredStatus: '已按明确条件完成可验证排序', researchStatus: '已联网调查', questionResearchStatus: '已围绕当前问题定向查证', rerankStatus: '已完成个性化重排', responseStatus: '已结合当前问题组织回答',
     starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
     type: '类型：{value}', interaction: '互动：{value}',
   },
@@ -35,16 +37,30 @@ const copy = {
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Enriched and compared {count} candidates from {source} BGG snapshot records.', agent: 'Agent-planned', fallback: 'Safe BGG fallback', more: 'Try another batch',
     understanding: 'My current understanding (correct me anytime)', basedOn: 'From: “{value}”', low: 'Low confidence', medium: 'Medium confidence', high: 'High confidence',
-    catalogStatus: 'BGG searched', lookupStatus: 'BGG details loaded by ID', discoveryStatus: 'Web candidates discovered and verified by BGG', structuredStatus: 'Verifiable constraint ranking complete', researchStatus: 'Web research complete', questionResearchStatus: 'Focused question researched', rerankStatus: 'Personalized reranking complete', responseStatus: 'Response shaped around this question',
+    catalogStatus: 'BGG searched', toolChoiceStatus: 'Model selected tools autonomously', nameSearchStatus: 'Full BGG CSV snapshot searched by name', lookupStatus: 'BGG details loaded by ID', discoveryStatus: 'Web candidates discovered and verified by BGG', structuredStatus: 'Verifiable constraint ranking complete', researchStatus: 'Web research complete', questionResearchStatus: 'Focused question researched', rerankStatus: 'Personalized reranking complete', responseStatus: 'Response shaped around this question',
     starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
   },
 } as const
 
 const loadingCopy = {
-  'zh-CN': ['正在理解这轮需求…', '正在从 BGG 目录生成候选…', '正在比较匹配度，需要时会联网核对…', '仍在处理；首次查询完成后，相同资料会被缓存。'],
-  en: ['Understanding this turn…', 'Generating candidates from the BGG catalog…', 'Comparing fit and researching when useful…', 'Still working; repeated public facts will be cached after the first lookup.'],
+  'zh-CN': {
+    requesting: '已发送请求…', understanding_request: '正在理解这轮需求…',
+    selecting_tools: '模型正在选择下一个检索工具…',
+    searching_bgg_catalog: '模型已选择名称搜索，正在查询全量 BGG CSV…', reading_game_details: '正在读取这款游戏的 BGG 详情…',
+    discovering_candidates: '正在联网发现更符合这个说法的候选…', verifying_bgg_candidates: '正在用 BGG ID 和详情验证候选…',
+    researching_game_fit: '正在核对发行商资料与玩家体验…', composing_response: '候选已就绪，正在组织回答…',
+  },
+  en: {
+    requesting: 'Request sent…', understanding_request: 'Understanding this turn…',
+    selecting_tools: 'The model is choosing the next retrieval tool…',
+    searching_bgg_catalog: 'The model chose title search; querying the full BGG CSV…', reading_game_details: 'Reading this game\'s BGG details…',
+    discovering_candidates: 'Discovering candidates that match your wording…', verifying_bgg_candidates: 'Verifying candidates by BGG ID and details…',
+    researching_game_fit: 'Checking publisher material and player experience…', composing_response: 'Candidates are ready; shaping the response…',
+  },
 } as const
+
+type LoadingStage = 'requesting' | RecommendationProgressStage
 
 type CopyKey = Exclude<keyof typeof copy['zh-CN'], 'starters'>
 type PendingRequest = { message: string; profile: RecommendationProfile; excludedBggIds: number[]; focusedBggId: number | null; transcript: RecommendationMessage[] }
@@ -67,7 +83,8 @@ const response = ref<RecommendationAgentResponse | null>(null)
 const messages = ref<RecommendationMessage[]>([{ id: 1, role: 'assistant', text: t('initial') }])
 const draft = ref('')
 const loading = ref(false)
-const loadingStage = ref(0)
+const loadingStage = ref<LoadingStage>('requesting')
+const loadingElapsedSeconds = ref(0)
 const failed = ref(false)
 const lastRequest = ref<PendingRequest | null>(null)
 const seenBggIds = ref<number[]>([])
@@ -75,9 +92,13 @@ const knownGames = ref<RecommendationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
-let loadingTimers: Array<ReturnType<typeof setTimeout>> = []
+let loadingClock: ReturnType<typeof setInterval> | null = null
+let activeRequest: AbortController | null = null
 
-const loadingMessage = computed(() => loadingCopy[locale.value][loadingStage.value])
+const loadingMessage = computed(() => {
+  const message = loadingCopy[locale.value][loadingStage.value]
+  return loadingElapsedSeconds.value > 0 ? `${message} ${loadingElapsedSeconds.value}s` : message
+})
 
 const profileLabels = computed(() => {
   const labels: string[] = []
@@ -93,7 +114,9 @@ const harnessLabels = computed(() => {
   const actions = response.value?.harness?.actions ?? []
   const labels: string[] = []
   if (actions.includes('SEARCH_BGG_CATALOG')) labels.push(t('catalogStatus'))
-  if (actions.includes('LOOKUP_BGG_GAME')) labels.push(t('lookupStatus'))
+  if (actions.includes('MODEL_SELECT_TOOLS')) labels.push(t('toolChoiceStatus'))
+  if (actions.includes('SEARCH_BGG_BY_NAME')) labels.push(t('nameSearchStatus'))
+  if (actions.includes('LOOKUP_BGG_GAME') || actions.includes('LOOKUP_BGG_CANDIDATES')) labels.push(t('lookupStatus'))
   if (actions.includes('DISCOVER_CANDIDATES')) labels.push(t('discoveryStatus'))
   if (actions.includes('RANK_STRUCTURED_CANDIDATES')) labels.push(t('structuredStatus'))
   if (actions.includes('RESEARCH_GAME_FIT')) labels.push(t('researchStatus'))
@@ -112,18 +135,18 @@ async function csrfToken() {
 }
 
 function beginLoading() {
-  loadingTimers.forEach(timer => clearTimeout(timer))
-  loadingTimers = []
-  loadingStage.value = 0
+  if (loadingClock) clearInterval(loadingClock)
+  loadingStage.value = 'requesting'
+  loadingElapsedSeconds.value = 0
+  const startedAt = Date.now()
+  loadingClock = setInterval(() => { loadingElapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000) }, 1000)
   loading.value = true
-  ;[1200, 4000, 9000].forEach((delay, index) => {
-    loadingTimers.push(setTimeout(() => { loadingStage.value = index + 1 }, delay))
-  })
 }
 
 function endLoading() {
-  loadingTimers.forEach(timer => clearTimeout(timer))
-  loadingTimers = []
+  if (loadingClock) clearInterval(loadingClock)
+  loadingClock = null
+  activeRequest = null
   loading.value = false
 }
 
@@ -136,13 +159,16 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
   failed.value = false
   try {
     const token = await csrfToken()
-    const result = await fetch(`/api/v1/bgg/recommendation-agent?locale=${encodeURIComponent(locale.value)}`, {
+    activeRequest = new AbortController()
+    const parsed = await streamGameRecommendation(`/api/v1/bgg/recommendation-agent/stream?locale=${encodeURIComponent(locale.value)}`, {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json', [token.headerName]: token.token },
       body: JSON.stringify({ ...pending, transcript: transcript.map(({ role, text }) => ({ role, text })) }),
+      signal: activeRequest.signal,
+    }, update => {
+      loadingStage.value = update.stage
+      loadingElapsedSeconds.value = Math.max(loadingElapsedSeconds.value, Math.floor(update.elapsedMs / 1000))
     })
-    if (!result.ok) throw new Error('recommendation unavailable')
-    const parsed = await result.json() as RecommendationAgentResponse
     profile.value = parsed.profile
     clarification.value = parsed.clarification
     response.value = parsed
@@ -153,7 +179,7 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
     const actions = parsed.harness?.actions ?? []
     if (actions.includes('LOOKUP_BGG_GAME') && pending.focusedBggId !== null) {
       activeFocusedBggId.value = pending.focusedBggId
-    } else if (actions.includes('SEARCH_BGG_CATALOG') || actions.includes('DISCOVER_CANDIDATES')) {
+    } else if (actions.includes('SEARCH_BGG_CATALOG') || actions.includes('SEARCH_BGG_BY_NAME') || actions.includes('DISCOVER_CANDIDATES')) {
       activeFocusedBggId.value = parsed.games.length === 1 ? parsed.games[0]!.game.bggId : null
     }
     messages.value.push({ id: ++messageId, role: 'assistant', text: parsed.assistantMessage })
@@ -224,6 +250,8 @@ function retry() {
 }
 
 function reset() {
+  activeRequest?.abort()
+  endLoading()
   profile.value = emptyProfile()
   clarification.value = initialClarification()
   response.value = null
@@ -241,7 +269,10 @@ function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
 
 watch(locale, reset)
 onMounted(() => { void csrfToken().catch(() => undefined) })
-onBeforeUnmount(endLoading)
+onBeforeUnmount(() => {
+  activeRequest?.abort()
+  endLoading()
+})
 </script>
 
 <template>

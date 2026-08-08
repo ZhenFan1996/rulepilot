@@ -105,6 +105,9 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             JsonNode sent = json.readTree(body.get());
             assertThat(sent.path("tools")).singleElement().satisfies(tool ->
                     assertThat(tool.path("type").asText()).isEqualTo("web_search"));
+            assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("minimal");
+            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(1_600);
+            assertThat(sent.path("store").asBoolean()).isFalse();
             assertThat(authorization.get()).isEqualTo("Bearer secret-test-key");
             assertThat(body.get()).doesNotContain("secret-test-key");
         } finally {

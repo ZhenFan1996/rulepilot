@@ -197,13 +197,15 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
   })
 
-  it('shows bounded progress stages while a recommendation turn is still running', async () => {
+  it('shows only progress stages actually reported by the recommendation stream', async () => {
     vi.useFakeTimers()
-    let finish: ((response: Response) => void) | undefined
-    const pending = new Promise<Response>(resolve => { finish = resolve })
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
-      return pending
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { streamController = controller },
+      }), { headers: { 'Content-Type': 'text/event-stream' } })
     }))
     const wrapper = await mountAgent()
     await flushPromises()
@@ -211,15 +213,20 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找有探索感的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(wrapper.get('[role="status"]').text()).toContain('正在理解这轮需求')
+    expect(wrapper.get('[role="status"]').text()).toContain('已发送请求')
+
+    streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))
+    await flushPromises()
+    expect(wrapper.get('[role="status"]').text()).toContain('模型已选择名称搜索')
 
     await vi.advanceTimersByTimeAsync(1300)
-    expect(wrapper.get('[role="status"]').text()).toContain('正在从 BGG 目录生成候选')
+    expect(wrapper.get('[role="status"]').text()).toContain('模型已选择名称搜索')
 
-    finish?.(Response.json({
+    streamController?.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({
       outcome: 'no_match', mode: 'model_assisted', assistantMessage: '还需要再确认一个偏好。',
       profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 20, games: [],
-    }))
+    })}\n\n`))
+    streamController?.close()
     await flushPromises()
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })

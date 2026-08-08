@@ -394,7 +394,11 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 + "mechanic, family, designer, publisher, or exact title. For EXPERIENCE, term is a concise table-experience quality that "
                 + "requires reviews or publisher material to evaluate. EXPERIENCE is only for an explicitly stated subjective quality "
                 + "that BGG metadata cannot answer, such as teach friction, downtime, accessibility, or table feel; never derive it merely "
-                + "from a genre, theme, category, family, or mechanic request. mode is REQUIRED only for an explicit must-have, PREFERRED for a "
+                + "from a genre, theme, category, family, or mechanic request. USER_EXPRESSION preserves the user's short exact qualitative "
+                + "phrase when you cannot confidently map it to a canonical English BGG field; it always requires candidate discovery. "
+                + "Every explicit qualitative constraint must appear in featureConstraints: a broad candidate type or interaction value does "
+                + "not replace a requested theme, mechanism, family, or table quality. Do not name or recommend games in assistantMessage "
+                + "before the catalog tools have returned verified candidates. mode is REQUIRED only for an explicit must-have, PREFERRED for a "
                 + "soft taste, or AVOID for an explicit dislike. source is BGG_METADATA or EXPERIENCE. basedOn must be a short exact quote "
                 + "from a user message. For example, "
                 + "an explicit genre request can map to the corresponding canonical BGG category with REQUIRED mode; do not name or "
@@ -516,7 +520,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private String cacheKey(String operation, String userContent) {
-        return "rulepilot:bgg:recommendation-advisor:v9:" + operation + ":" + digest(userContent);
+        return "rulepilot:bgg:recommendation-advisor:v10:" + operation + ":" + digest(userContent);
     }
 
     private boolean acquireHourlyAllowance() {

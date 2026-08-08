@@ -154,7 +154,10 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
             byte[] requestBytes = json.writeValueAsBytes(Map.of(
                     "model", model,
                     "input", input,
-                    "tools", List.of(Map.of("type", "web_search"))));
+                    "tools", List.of(Map.of("type", "web_search")),
+                    "reasoning", Map.of("effort", "minimal"),
+                    "max_output_tokens", 1_600,
+                    "store", false));
             okhttp3.Request httpRequest = new okhttp3.Request.Builder()
                     .url(endpoint)
                     .header("Authorization", "Bearer " + apiKey)

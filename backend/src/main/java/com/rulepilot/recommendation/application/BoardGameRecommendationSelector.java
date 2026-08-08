@@ -73,8 +73,17 @@ class BoardGameRecommendationSelector {
     }
 
     List<RecommendedGame> fallback(CandidatePool pool, RecommendationProfile profile, boolean chinese) {
+        return fallback(pool, profile, chinese, Research.empty());
+    }
+
+    List<RecommendedGame> fallback(
+            CandidatePool pool,
+            RecommendationProfile profile,
+            boolean chinese,
+            Research research) {
         return diversify(pool.candidates(), properties.resultCount()).stream()
-                .map(game -> factsOnly(game, profile, pool.retrievalPlan(), chinese))
+                .map(game -> withResearch(
+                        factsOnly(game, profile, pool.retrievalPlan(), chinese), research))
                 .toList();
     }
 
@@ -122,6 +131,12 @@ class BoardGameRecommendationSelector {
                         observation.text(),
                         observation.sourceIndexes()))
                 .toList();
+    }
+
+    private RecommendedGame withResearch(RecommendedGame facts, Research research) {
+        List<RecommendationReason> reasons = new ArrayList<>(facts.reasons());
+        reasons.addAll(validatedResearchReasons(research, facts.game().ranking().bggId()));
+        return new RecommendedGame(facts.game(), facts.matches(), facts.tradeoffs(), reasons);
     }
 
     private Candidate candidate(Game game) {
@@ -205,9 +220,9 @@ class BoardGameRecommendationSelector {
     }
 
     private boolean matchesFeature(Game game, FeatureConstraint feature) {
-        String term = normalizedFeature(feature.term());
-        if (term.isBlank() || game.details() == null) return false;
-        return featureValues(game).stream().map(this::normalizedFeature).anyMatch(term::equals);
+        if (feature.term() == null || feature.term().isBlank() || game.details() == null) return false;
+        return featureValues(game).stream()
+                .anyMatch(value -> BoardGameRecommendationTaxonomy.equivalent(feature.term(), value));
     }
 
     private List<String> featureValues(Game game) {

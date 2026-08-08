@@ -40,6 +40,13 @@ public class BggRecommendationAgentController {
             @RequestBody RecommendationConversationRequest request,
             @RequestParam(defaultValue = "en") String locale) {
         ConversationResponse response = agent.converse(request.toCommand(), locale);
+        return present(response, locale, presentation);
+    }
+
+    static RecommendationConversationResponse present(
+            ConversationResponse response,
+            String locale,
+            BggRecommendationPresentation presentation) {
         List<String> categories = response.games().stream()
                 .map(RecommendedGame::game)
                 .map(game -> game.details())

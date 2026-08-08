@@ -336,6 +336,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             Integer id = null;
             String name = null;
             String chineseName = "";
+            String description = "";
+            String image = "";
             String thumbnail = "";
             Integer year = null;
             Integer minPlayers = null;
@@ -404,6 +406,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     id = integer(reader.getAttributeValue(null, "id"));
                     name = null;
                     chineseName = "";
+                    description = "";
+                    image = "";
                     thumbnail = "";
                     year = null;
                     minPlayers = null;
@@ -434,6 +438,10 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                         && "name".equals(reader.getLocalName())
                         && "primary".equals(reader.getAttributeValue(null, "type"))) {
                     name = reader.getAttributeValue(null, "value");
+                } else if (event == XMLStreamConstants.START_ELEMENT && "description".equals(reader.getLocalName())) {
+                    description = reader.getElementText();
+                } else if (event == XMLStreamConstants.START_ELEMENT && "image".equals(reader.getLocalName())) {
+                    image = reader.getElementText();
                 } else if (event == XMLStreamConstants.START_ELEMENT && "thumbnail".equals(reader.getLocalName())) {
                     thumbnail = reader.getElementText();
                 } else if (event == XMLStreamConstants.START_ELEMENT && "yearpublished".equals(reader.getLocalName())) {
@@ -526,7 +534,9 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                             weightVotes,
                             families,
                             designers,
-                            publishers));
+                            publishers,
+                            description,
+                            image));
                 }
             }
             reader.close();

@@ -111,7 +111,9 @@ class BggXmlApiClientTest {
                 <items>
                   <item type="boardgame" id="432123">
                     <thumbnail>https://cf.geekdo-images.com/hot-game-detail.jpg</thumbnail>
+                    <image>https://cf.geekdo-images.com/hot-game-large.jpg</image>
                     <name type="primary" value="A Hot Strategy Game"/>
+                    <description>Build an empire &amp; negotiate.</description>
                     <name type="alternate" value="デューン 砂の惑星"/>
                     <name type="alternate" value="未经版本验证的中文别名"/>
                     <yearpublished value="2026"/>
@@ -166,6 +168,8 @@ class BggXmlApiClientTest {
         assertThat(games.getFirst().families()).containsExactly("Crowdfunding: Kickstarter");
         assertThat(games.getFirst().designers()).containsExactly("A Designer");
         assertThat(games.getFirst().publishers()).containsExactly("A Publisher");
+        assertThat(games.getFirst().description()).isEqualTo("Build an empire & negotiate.");
+        assertThat(games.getFirst().imageUrl()).endsWith("hot-game-large.jpg");
     }
 
     @Test
