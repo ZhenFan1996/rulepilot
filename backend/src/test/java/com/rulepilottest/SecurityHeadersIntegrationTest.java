@@ -4,6 +4,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 
 import com.rulepilot.RulePilotApplication;
 import org.junit.jupiter.api.Test;
@@ -57,6 +58,10 @@ class SecurityHeadersIntegrationTest {
         mockMvc.perform(get("/api/v1/bgg/search").param("q", "Wingspan"))
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/bgg/catalog"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent").with(csrf()))
                 .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/bgg/games/42/import"))
                 .andExpect(status().isForbidden());

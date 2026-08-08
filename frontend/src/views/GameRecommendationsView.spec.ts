@@ -122,7 +122,7 @@ describe('GameRecommendationsView', () => {
     const selects = wrapper.findAll('select')
     await selects[0]!.setValue('rating')
     await selects[1]!.setValue('strategy')
-    await wrapper.findAll('form')[1]!.trigger('submit')
+    await wrapper.findAll('form')[2]!.trigger('submit')
     await flushPromises()
 
     expect(fetchMock.mock.calls.some(([input]) => {

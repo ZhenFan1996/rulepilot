@@ -26,7 +26,8 @@ public class RuntimeModelConfiguration {
         TEACHING,
         VISUAL,
         ANSWER,
-        CRITIC
+        CRITIC,
+        RECOMMENDATION
     }
 
     private static final List<String> SUPPORTED = List.of("gemini", "openai", "deepseek", "qwen", "compatible");
@@ -47,6 +48,8 @@ public class RuntimeModelConfiguration {
             @Value("${rulepilot.answer.model-provider:gemini}") String answerProvider,
             @Value("${rulepilot.critic.provider:fake}") String criticAdapter,
             @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider,
+            @Value("${rulepilot.bgg.recommendation-agent.provider:fake}") String recommendationAdapter,
+            @Value("${rulepilot.bgg.recommendation-agent.model-provider:qwen}") String recommendationProvider,
             @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking) {
         this.factory = factory;
         this.deepSeekGenerationThinking = deepSeekGenerationThinking;
@@ -63,7 +66,8 @@ public class RuntimeModelConfiguration {
                         teachingAssignment,
                         visualAssignment(visualAdapter, visualProvider, teachingAssignment, providers),
                         assignment(answerAdapter, answerProvider, providers),
-                        assignment(criticAdapter, criticProvider, providers)),
+                        assignment(criticAdapter, criticProvider, providers),
+                        assignment(recommendationAdapter, recommendationProvider, providers)),
                 0);
     }
 
@@ -102,7 +106,7 @@ public class RuntimeModelConfiguration {
                 ? providerFor(role)
                 : providerFor(role, username);
         return !deepSeekGenerationThinking
-                && (role == Role.TEACHING || role == Role.ANSWER || role == Role.CRITIC)
+                && (role == Role.TEACHING || role == Role.ANSWER || role == Role.CRITIC || role == Role.RECOMMENDATION)
                 && "deepseek".equals(provider);
     }
 
@@ -184,7 +188,8 @@ public class RuntimeModelConfiguration {
                 selectable(teaching, current.providers()),
                 selectableVisual(visual, current.providers()),
                 selectable(answer, current.providers()),
-                selectable(critic, current.providers()));
+                selectable(critic, current.providers()),
+                current.assignments().recommendation());
         userState.set(new State(current.providers(), assignments, current.revision() + 1));
         return snapshot(username);
     }
@@ -357,13 +362,14 @@ public class RuntimeModelConfiguration {
             boolean apiKeyConfigured,
             boolean visionCapable) {}
 
-    public record Assignments(String teaching, String visual, String answer, String critic) {
+    public record Assignments(String teaching, String visual, String answer, String critic, String recommendation) {
         String forRole(Role role) {
             return switch (role) {
                 case TEACHING -> teaching;
                 case VISUAL -> visual;
                 case ANSWER -> answer;
                 case CRITIC -> critic;
+                case RECOMMENDATION -> recommendation;
             };
         }
 
@@ -372,11 +378,12 @@ public class RuntimeModelConfiguration {
                     teaching.equals(current) ? replacement : teaching,
                     visual.equals(current) ? replacement : visual,
                     answer.equals(current) ? replacement : answer,
-                    critic.equals(current) ? replacement : critic);
+                    critic.equals(current) ? replacement : critic,
+                    recommendation.equals(current) ? replacement : recommendation);
         }
 
         Assignments withoutVisual(String provider) {
-            return visual.equals(provider) ? new Assignments(teaching, "fake", answer, critic) : this;
+            return visual.equals(provider) ? new Assignments(teaching, "fake", answer, critic, recommendation) : this;
         }
     }
 

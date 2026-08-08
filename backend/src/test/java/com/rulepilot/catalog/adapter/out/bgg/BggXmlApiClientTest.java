@@ -116,9 +116,23 @@ class BggXmlApiClientTest {
                     <name type="alternate" value="未经版本验证的中文别名"/>
                     <yearpublished value="2026"/>
                     <minplayers value="2"/><maxplayers value="4"/><playingtime value="90"/>
+                    <minplaytime value="60"/><maxplaytime value="120"/><minage value="14"/>
+                    <poll-summary name="suggested_numplayers">
+                      <result name="bestwith" value="Best with 3 players"/>
+                      <result name="recommmendedwith" value="Recommended with 2–4 players"/>
+                    </poll-summary>
+                    <poll name="suggested_playerage"><results>
+                      <result value="10" numvotes="24"/><result value="12" numvotes="8"/>
+                    </results></poll>
+                    <poll name="language_dependence"><results>
+                      <result level="3" numvotes="19"/><result level="4" numvotes="7"/>
+                    </results></poll>
                     <link type="boardgamecategory" id="1" value="Strategy"/>
                     <link type="boardgamemechanic" id="2" value="Worker Placement"/>
-                    <statistics><ratings><average value="7.81234"/><averageweight value="3.14"/></ratings></statistics>
+                    <link type="boardgamefamily" id="3" value="Crowdfunding: Kickstarter"/>
+                    <link type="boardgamedesigner" id="4" value="A Designer"/>
+                    <link type="boardgamepublisher" id="5" value="A Publisher"/>
+                    <statistics><ratings><average value="7.81234"/><averageweight value="3.14"/><numweights value="456"/></ratings></statistics>
                     <versions>
                       <item type="boardgameversion" id="9">
                         <canonicalname value="熱門策略遊戲"/>
@@ -141,6 +155,17 @@ class BggXmlApiClientTest {
         assertThat(games.getFirst().averageWeight()).isEqualByComparingTo(new BigDecimal("3.14"));
         assertThat(games.getFirst().categories()).containsExactly("Strategy");
         assertThat(games.getFirst().mechanics()).containsExactly("Worker Placement");
+        assertThat(games.getFirst().minimumPlayTimeMinutes()).isEqualTo(60);
+        assertThat(games.getFirst().maximumPlayTimeMinutes()).isEqualTo(120);
+        assertThat(games.getFirst().minimumAge()).isEqualTo(14);
+        assertThat(games.getFirst().suggestedMinimumAge()).isEqualTo(10);
+        assertThat(games.getFirst().bestWith()).isEqualTo("Best with 3 players");
+        assertThat(games.getFirst().recommendedWith()).isEqualTo("Recommended with 2–4 players");
+        assertThat(games.getFirst().languageDependenceLevel()).isEqualTo(3);
+        assertThat(games.getFirst().weightVotes()).isEqualTo(456);
+        assertThat(games.getFirst().families()).containsExactly("Crowdfunding: Kickstarter");
+        assertThat(games.getFirst().designers()).containsExactly("A Designer");
+        assertThat(games.getFirst().publishers()).containsExactly("A Publisher");
     }
 
     @Test

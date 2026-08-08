@@ -14,6 +14,10 @@ public interface BggRankedCatalogRepository {
 
     Page find(Query query);
 
+    default List<RankedGame> findByIds(List<Integer> bggIds) {
+        return List.of();
+    }
+
     void stage(UUID importId, List<RankedGame> games);
 
     void publish(UUID importId, Snapshot snapshot);

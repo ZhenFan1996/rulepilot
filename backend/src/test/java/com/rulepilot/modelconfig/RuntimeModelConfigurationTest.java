@@ -37,6 +37,8 @@ class RuntimeModelConfigurationTest {
                 "gemini",
                 "fake",
                 "gemini",
+                "fake",
+                "qwen",
                 false);
         assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.TEACHING)).isFalse();
 
@@ -69,6 +71,7 @@ class RuntimeModelConfigurationTest {
                     .isTrue();
             assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.ANSWER))
                     .isTrue();
+            assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)).isTrue();
             assertThat(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
                     .isTrue();
         } finally {
@@ -77,6 +80,35 @@ class RuntimeModelConfigurationTest {
         assertThat(configuration.disable("player", "deepseek").assignments().teaching()).isEqualTo("fake");
         verify(factory).create("deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash");
         verify(factory).create("gemini", "gemini-secret", "", "gemini-2.5-flash");
+    }
+
+    @Test
+    void assignsTheRecommendationRoleIndependentlyFromRuleAnswering() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel qwenModel = mock(ChatModel.class);
+        Provider disabled = new Provider(false, "", "", "", false);
+        Provider qwen = new Provider(
+                true,
+                "qwen-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen-plus",
+                false);
+        when(factory.create(
+                        "qwen",
+                        "qwen-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen-plus"))
+                .thenReturn(qwenModel);
+
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, qwen, disabled),
+                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
+                "spring-ai", "qwen", false);
+
+        assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER)).isTrue();
+        assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isEqualTo("qwen");
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isSameAs(qwenModel);
     }
 
     @Test
@@ -101,6 +133,8 @@ class RuntimeModelConfigurationTest {
                 "gemini",
                 "fake",
                 "gemini",
+                "fake",
+                "qwen",
                 false);
 
         RuntimeModelConfiguration.Snapshot defaults = configuration.snapshot("player");
@@ -164,7 +198,8 @@ class RuntimeModelConfigurationTest {
         RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
-                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini", false);
+                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
+                "fake", "qwen", false);
 
         RuntimeModelConfiguration.Snapshot configured = configuration.configure(
                 "player",
