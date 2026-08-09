@@ -72,7 +72,7 @@ public class TeachingPlanService {
 
     public TeachingPlan create(
             UUID documentVersionId, int playerCount, int beginnerCount, int durationMinutes, String createdBy) {
-        return create(documentVersionId, playerCount, beginnerCount, durationMinutes, createdBy, null);
+        return create(documentVersionId, playerCount, beginnerCount, durationMinutes, null, createdBy, null);
     }
 
     public TeachingPlan create(
@@ -80,6 +80,24 @@ public class TeachingPlanService {
             int playerCount,
             int beginnerCount,
             int durationMinutes,
+            String createdBy,
+            UUID assistantRunId) {
+        return create(
+                documentVersionId,
+                playerCount,
+                beginnerCount,
+                durationMinutes,
+                null,
+                createdBy,
+                assistantRunId);
+    }
+
+    public TeachingPlan create(
+            UUID documentVersionId,
+            int playerCount,
+            int beginnerCount,
+            int durationMinutes,
+            String learningGoal,
             String createdBy,
             UUID assistantRunId) {
         var scope = documentScopes.findVersion(documentVersionId)
@@ -108,7 +126,7 @@ public class TeachingPlanService {
                         image.pageNumber(), image.mediaType(), image.content()))
                 .toList();
         var initialOutlineRequest = new OutlineRequest(
-                playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
+                playerCount, beginnerCount, durationMinutes, pages, outlineImages, learningGoal, createdBy);
         var outline = preferDocumentTitle(
                 scope.documentTitle(),
                 VisualOutlineEvidencePolicy.bindIconLegendEvidence(invokeModel(
@@ -128,7 +146,7 @@ public class TeachingPlanService {
             if (!coverageFacts.isEmpty()) {
                 pages = VisualRulebookCatalogPolicy.appendFactsToPageInputs(pages, coverageFacts);
                 outlineRequest = new OutlineRequest(
-                        playerCount, beginnerCount, durationMinutes, pages, outlineImages, createdBy);
+                        playerCount, beginnerCount, durationMinutes, pages, outlineImages, learningGoal, createdBy);
             }
         }
         if (requiresModelSourcePageCoverageRevision(visualOnly)) {
@@ -247,6 +265,7 @@ public class TeachingPlanService {
                 playerCount,
                 beginnerCount,
                 durationMinutes,
+                learningGoal,
                 createdBy,
                 outline), outline.gameTitle());
     }

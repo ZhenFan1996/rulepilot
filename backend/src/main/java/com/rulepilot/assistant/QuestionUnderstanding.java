@@ -28,6 +28,16 @@ public interface QuestionUnderstanding {
             this(documentVersionId, previousQuestion, learningIntent, outputLanguage, null);
         }
 
+        public QuestionContext withLearningIntent(LearningIntent resolvedLearningIntent) {
+            if (learningIntent == resolvedLearningIntent) return this;
+            return new QuestionContext(
+                    documentVersionId,
+                    previousQuestion,
+                    resolvedLearningIntent,
+                    outputLanguage,
+                    priorTurnReference);
+        }
+
         public QuestionContext {
             if (documentVersionId == null) {
                 throw new IllegalArgumentException("question context is invalid");

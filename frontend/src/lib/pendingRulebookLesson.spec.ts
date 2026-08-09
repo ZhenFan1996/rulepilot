@@ -36,6 +36,23 @@ describe('pending rulebook lesson handoff', () => {
 
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
   })
+
+  it('normalizes a bounded natural learning goal and rejects oversized stored input', () => {
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      ...pending('version-1', 4),
+      learningGoal: '  先让我能带大家开局，再重点讲行动衔接。  ',
+    })
+
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
+      ...pending('version-1', 4),
+      learningGoal: '先让我能带大家开局，再重点讲行动衔接。',
+    }])
+
+    localStorage.setItem('rulepilot:pending-rulebook-lessons:oversized', JSON.stringify([{
+      ...pending('version-2', 4), learningGoal: 'x'.repeat(501),
+    }]))
+    expect(readPendingRulebookLessons(localStorage, 'oversized')).toEqual([])
+  })
 })
 
 function pending(versionId: string, playerCount: number) {

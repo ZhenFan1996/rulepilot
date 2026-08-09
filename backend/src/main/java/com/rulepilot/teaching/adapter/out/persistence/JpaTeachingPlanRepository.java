@@ -145,6 +145,9 @@ class TeachingPlanEntity {
     @Column(name = "duration_minutes", nullable = false)
     int durationMinutes;
 
+    @Column(name = "learning_goal", length = 500)
+    String learningGoal;
+
     @Column(name = "game_title", nullable = false)
     String gameTitle;
 
@@ -165,6 +168,7 @@ class TeachingPlanEntity {
         this.playerCount = plan.playerCount();
         this.beginnerCount = plan.beginnerCount();
         this.durationMinutes = plan.durationMinutes();
+        this.learningGoal = plan.learningGoal();
         this.gameTitle = plan.gameTitle();
         this.premise = plan.premise();
         this.createdBy = plan.createdBy();
@@ -178,6 +182,7 @@ class TeachingPlanEntity {
                 playerCount,
                 beginnerCount,
                 durationMinutes,
+                learningGoal,
                 gameTitle,
                 premise,
                 sections,

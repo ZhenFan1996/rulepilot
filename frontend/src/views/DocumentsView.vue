@@ -112,6 +112,7 @@ const sourceType = ref('BASE_RULEBOOK')
 const playerCount = ref(4)
 const beginnerCount = ref(4)
 const durationMinutes = ref(25)
+const learningGoal = ref('')
 const loading = ref(true)
 const uploading = ref(false)
 const importingOfficial = ref(false)
@@ -497,6 +498,7 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
     playerCount: playerCount.value,
     beginnerCount: beginnerCount.value,
     durationMinutes: durationMinutes.value,
+    ...(learningGoal.value.trim() ? { learningGoal: learningGoal.value.trim() } : {}),
   }
 }
 
@@ -512,6 +514,7 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
         playerCount: preferences.playerCount,
         beginnerCount: preferences.beginnerCount,
         durationMinutes: preferences.durationMinutes,
+        learningGoal: preferences.learningGoal ?? null,
       }),
     })
     if (!planResponse.ok) throw new Error(t('documents.error'))
@@ -661,6 +664,7 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
+    if (pending.learningGoal) learningGoal.value = pending.learningGoal
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
     message.value = t('documents.readyToRead')
     return
@@ -724,6 +728,7 @@ function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
 async function recoverPendingHandoff() {
   if (!username.value || preparingVersionId.value) return
   for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
+    if (pending.learningGoal) learningGoal.value = pending.learningGoal
     if (!editionId.value && pending.editionId && editionOptions.value.some(item => item.id === pending.editionId)) {
       editionId.value = pending.editionId
     }
@@ -1077,6 +1082,11 @@ onBeforeUnmount(() => {
                 <p><span class="font-semibold">{{ t('documents.visual.warningLead') }}</span>{{ t('documents.visual.warningBody') }}</p>
                 <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">{{ t('documents.visual.settings') }}</RouterLink>
               </div>
+
+              <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
+                <textarea v-model="learningGoal" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper" />
+                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
+              </label>
 
               <div class="grid gap-4 sm:grid-cols-3">
                 <template v-if="editionId">

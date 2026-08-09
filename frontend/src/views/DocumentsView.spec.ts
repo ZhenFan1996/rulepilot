@@ -19,6 +19,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   it('returns a ready upload to direct reading without forcing lesson generation', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1', playerCount: 3, beginnerCount: 2, durationMinutes: 35,
+      learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
     })
     const fetchMock = mockApplicationFetch(() => 'READY')
     vi.stubGlobal('fetch', fetchMock)
@@ -32,6 +33,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('规则书已可阅读')
     expect(wrapper.get('a[href="/rulebooks/version-1"]').text()).toContain('阅读规则书并答疑')
     expect(wrapper.findAll('button').some(button => button.text() === '后台生成讲解')).toBe(true)
+    expect((wrapper.get('textarea[maxlength="500"]').element as HTMLTextAreaElement).value)
+      .toBe('先让我能带大家开局，再讲容易混淆的行动。')
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
@@ -186,6 +189,34 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('已用时 0 秒')
     expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    wrapper.unmount()
+    await vi.runOnlyPendingTimersAsync()
+  })
+
+  it('sends a free-form learning goal to the outline planner without client-side mode routing', async () => {
+    vi.useFakeTimers()
+    const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING')
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('这次最想学会什么？')
+    expect(wrapper.text()).toContain('用自然语言说就好')
+    await wrapper.get('textarea[maxlength="500"]').setValue(
+      '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。',
+    )
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
+    await flushPromises()
+
+    const planningRequest = fetchMock.mock.calls.find(([input, options]) =>
+      String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
+    expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({
+      playerCount: 4,
+      beginnerCount: 4,
+      durationMinutes: 25,
+      learningGoal: '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。',
+    })
     wrapper.unmount()
     await vi.runOnlyPendingTimersAsync()
   })

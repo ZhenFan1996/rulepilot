@@ -10,6 +10,7 @@ import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
@@ -43,6 +44,7 @@ class SpringAiRuleAnswerModelTest {
         Fixture fixture = fixture("""
                 {"questionType":"LESSON_STEP_FOLLOW_UP","referenceBinding":"PRIOR_GROUNDED_TURN",
                  "terms":["红色标记","这样"],"missingContext":[],
+                 "learningIntent":"EXAMPLE",
                  "subquestions":[
                    {"questionSpan":"红色标记什么时候触发？","evidenceNeeds":["PRIOR_TURN"]},
                    {"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}
@@ -55,6 +57,7 @@ class SpringAiRuleAnswerModelTest {
             assertThat(draft.referenceBinding()).isEqualTo(ReferenceBinding.PRIOR_GROUNDED_TURN);
             assertThat(draft.terms()).containsExactly("红色标记", "这样");
             assertThat(draft.missingContext()).isEmpty();
+            assertThat(draft.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
             assertThat(draft.subquestions()).hasSize(2);
         });
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
@@ -68,7 +71,11 @@ class SpringAiRuleAnswerModelTest {
                                 "never current rule evidence",
                                 "subquestions",
                                 "evidenceNeeds",
-                                "copied verbatim"));
+                                "copied verbatim",
+                                "teaching move",
+                                "learningIntent",
+                                "GENERAL_QUESTION",
+                                "MUST contain between one and four"));
     }
 
     @Test

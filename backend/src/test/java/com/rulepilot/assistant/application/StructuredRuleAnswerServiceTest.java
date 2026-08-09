@@ -2671,6 +2671,88 @@ class StructuredRuleAnswerServiceTest {
     }
 
     @Test
+    void letsTheAnswerAgentInferAnExampleFromANaturalFollowUpBeforeRetrieval() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ACTIONS",
+                "Resolve an action",
+                "After choosing a tile, place it in your display. The action then ends.",
+                6,
+                6,
+                0.95);
+        AtomicReference<QuestionInterpretationRequest> interpretationRequest = new AtomicReference<>();
+        AtomicReference<ModelRequest> compositionRequest = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                interpretationRequest.set(request);
+                return Optional.of(new QuestionInterpretationDraft(
+                        QuestionType.LESSON_STEP_FOLLOW_UP,
+                        ReferenceBinding.PREVIOUS_QUESTION,
+                        List.of("行动", "结算"),
+                        Set.of(),
+                        LearningIntent.EXAMPLE,
+                        List.of(
+                                new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                        "这个行动什么时候结算？",
+                                        Set.of(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.SEQUENCE)),
+                                new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                        "还是没懂，换个例子。",
+                                        Set.of(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.DIRECT_RULE)))));
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                compositionRequest.set(request);
+                return new ModelDraft(
+                        true,
+                        null,
+                        "放好选中的板块后，这次行动才结束。",
+                        "把规则拆成一个局面：先选择板块，再把它放进自己的展示区，随后行动结束。",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH",
+                        "DIRECT_RULE",
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(),
+                        List.of(new WorkedExampleRequest(
+                                "玩家已经选择了一个板块。",
+                                "玩家把这个板块放进自己的展示区。",
+                                "板块放好后，这次行动结束。",
+                                "EVIDENCE_BOUND_ILLUSTRATION",
+                                List.of(source.chunkId()))));
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.95, 1, null, false)),
+                model);
+
+        var answer = service.answer(
+                "还是没懂，换个例子。",
+                new QuestionContext(versionId, "这个行动什么时候结算？", null, PlayerLocale.ZH_CN));
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(interpretationRequest.get().explicitLearningIntent()).isNull();
+        assertThat(compositionRequest.get().question())
+                .contains("这个行动什么时候结算", "还是没懂", "换个例子");
+        assertThat(compositionRequest.get().context().learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
+        assertThat(answer.workedExamples()).singleElement().satisfies(example -> {
+            assertThat(example.action()).contains("放进自己的展示区");
+            assertThat(example.citationIds()).containsExactly(source.chunkId());
+        });
+    }
+
+    @Test
     void revisesRejectedLearningResponseWithBoundedCriticFeedback() {
         RuleEvidenceHit source = evidence("ACTIONS");
         AtomicInteger compositions = new AtomicInteger();

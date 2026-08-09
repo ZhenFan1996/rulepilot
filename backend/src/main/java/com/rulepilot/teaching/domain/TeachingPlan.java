@@ -10,6 +10,7 @@ public record TeachingPlan(
         int playerCount,
         int beginnerCount,
         int durationMinutes,
+        String learningGoal,
         String gameTitle,
         String premise,
         List<PlannedSection> sections,
@@ -17,6 +18,7 @@ public record TeachingPlan(
         Instant createdAt) {
 
     public TeachingPlan {
+        learningGoal = learningGoal == null || learningGoal.isBlank() ? null : learningGoal.strip();
         if (id == null || documentVersionId == null || createdAt == null) {
             throw new IllegalArgumentException("plan identity is required");
         }
@@ -28,6 +30,9 @@ public record TeachingPlan(
         }
         if (durationMinutes < 2 || durationMinutes > 180) {
             throw new IllegalArgumentException("duration must be between 2 and 180 minutes");
+        }
+        if (learningGoal != null && learningGoal.length() > 500) {
+            throw new IllegalArgumentException("teaching learning goal is too long");
         }
         if (gameTitle == null || gameTitle.isBlank() || premise == null || premise.isBlank()
                 || createdBy == null || createdBy.isBlank()) {
@@ -41,6 +46,31 @@ public record TeachingPlan(
                 throw new IllegalArgumentException("section positions must be contiguous");
             }
         }
+    }
+
+    public TeachingPlan(
+            UUID id,
+            UUID documentVersionId,
+            int playerCount,
+            int beginnerCount,
+            int durationMinutes,
+            String gameTitle,
+            String premise,
+            List<PlannedSection> sections,
+            String createdBy,
+            Instant createdAt) {
+        this(
+                id,
+                documentVersionId,
+                playerCount,
+                beginnerCount,
+                durationMinutes,
+                null,
+                gameTitle,
+                premise,
+                sections,
+                createdBy,
+                createdAt);
     }
 
     public record PlannedSection(

@@ -4,6 +4,7 @@ import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.text.Normalizer;
 import java.util.LinkedHashSet;
@@ -42,12 +43,15 @@ final class AnswerQuestionInterpretationPolicy {
                 draft.questionType(),
                 groundedTerms,
                 draft.missingContext());
+        LearningIntent plannedLearningIntent = context.learningIntent() == null
+                ? draft.learningIntent()
+                : context.learningIntent();
         if (understood.needsClarification()) {
-            return Optional.of(new Interpretation(understood, null));
+            return Optional.of(new Interpretation(understood, null, plannedLearningIntent));
         }
         Optional<AnswerQuestionPlan> plan = groundedPlan(
                 draft.subquestions(), groundingText, deterministic.originalQuestion());
-        return plan.map(value -> new Interpretation(understood, value));
+        return plan.map(value -> new Interpretation(understood, value, plannedLearningIntent));
     }
 
     private boolean available(ReferenceBinding binding, QuestionContext context) {
@@ -123,5 +127,8 @@ final class AnswerQuestionInterpretationPolicy {
                 .toLowerCase(Locale.ROOT);
     }
 
-    record Interpretation(UnderstoodQuestion question, AnswerQuestionPlan plan) {}
+    record Interpretation(
+            UnderstoodQuestion question,
+            AnswerQuestionPlan plan,
+            LearningIntent learningIntent) {}
 }
