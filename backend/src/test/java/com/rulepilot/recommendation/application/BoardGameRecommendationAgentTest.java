@@ -347,10 +347,11 @@ class BoardGameRecommendationAgentTest {
                             BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
                             "{\"names\":[\"Game 10\",\"Game 11\"]}")));
                 }
+                assertThat(request.messages().getLast().content()).contains("VERIFIED_CANDIDATE_GAP");
                 return new Turn("", List.of(new ToolCall(
-                        "lookup-1",
-                        BoardGameRecommendationCandidateAgent.LOOKUP_TOOL,
-                        "{\"bggIds\":[10,11]}")));
+                        "search-2",
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Game 20\",\"Game 30\"]}")));
             }
         };
         BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
@@ -406,10 +407,91 @@ class BoardGameRecommendationAgentTest {
                         "LOOKUP_BGG_CANDIDATES",
                         "RANK_STRUCTURED_CANDIDATES")
                 .doesNotContain("DISCOVER_CANDIDATES");
-        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().modelCalls()).isEqualTo(3);
         assertThat(response.assistantMessage())
                 .contains("合作十号", "Game 11", "不用重新报条件")
                 .doesNotContain("我会先核对");
+    }
+
+    @Test
+    void usesConversationAwareNativeDiscoveryAndCompositionInsteadOfRankBackfillForAFollowUp() {
+        AtomicReference<String> candidateInput = new AtomicReference<>();
+        AtomicInteger candidateTurns = new AtomicInteger();
+        BoardGameRecommendationCandidateModel candidateModel = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                candidateInput.set(request.messages().get(1).content());
+                if (candidateTurns.getAndIncrement() > 0) {
+                    assertThat(request.messages().getLast().content())
+                            .contains("VERIFIED_CANDIDATE_GAP", "Search for different titles");
+                    return new Turn("", List.of(new ToolCall(
+                            "search-follow-up-more",
+                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                            "{\"names\":[\"Game 20\",\"Game 30\"]}")));
+                }
+                return new Turn("", List.of(new ToolCall(
+                        "search-follow-up",
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Game 10\",\"Game 11\"]}")));
+            }
+        };
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel(
+                        "上一批太相似，现在想要更强互动",
+                        List.of(new PreferenceHypothesis(
+                                "可能更在意玩家之间的直接影响",
+                                Confidence.MEDIUM,
+                                "想换个互动更强的"))),
+                "我换一组思路。",
+                "这一组的互动方向更接近吗？",
+                false,
+                "",
+                RetrievalPlan.empty());
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    assertThat(request.transcript()).extracting(DialogueMessage::text)
+                            .contains("上一批先看 Game 10。", "想换个互动更强的，不要重复上一批");
+                    assertThat(request.candidates()).extracting(candidate -> candidate.bggId()).contains(11);
+                    return Optional.of(new Slate(
+                            "这次我按你刚补充的互动偏好换了一组。",
+                            "这款的互动方式更接近吗？",
+                            List.of(new Choice(
+                                    11,
+                                    List.of("比上一批更贴近你刚补充的互动方向"),
+                                    List.of(),
+                                    List.of()))));
+                },
+                new NoResearch(),
+                candidateModel);
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "想换个互动更强的，不要重复上一批",
+                List.of(10),
+                List.of(
+                        new DialogueMessage("assistant", "上一批先看 Game 10。"),
+                        new DialogueMessage("user", "想换个互动更强的，不要重复上一批")),
+                null), "zh-CN");
+
+        assertThat(candidateInput.get())
+                .contains("上一批太相似", "想换个互动更强的，不要重复上一批", "\"alreadyShownBggIds\":[10]");
+        assertThat(candidateTurns).hasValue(2);
+        assertThat(fixture.repository.queries)
+                .isNotEmpty()
+                .noneMatch(query -> query.search().isBlank());
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(11);
+        assertThat(response.assistantMessage()).contains("刚补充的互动偏好");
+        assertThat(response.harness().actions())
+                .contains("MODEL_SELECT_TOOLS", "SEARCH_BGG_BY_NAME", "LOOKUP_BGG_CANDIDATES", "COMPOSE_RECOMMENDATIONS")
+                .doesNotContain("SEARCH_BGG_CATALOG", "RANK_STRUCTURED_CANDIDATES");
     }
 
     @Test

@@ -372,7 +372,6 @@ class BoardGameRecommendationSelector {
                         .stream())
                 .distinct()
                 .forEach(matches::add);
-        matches.add(rankSignal(game, chinese));
         List<RecommendationReason> reasons = matches.stream()
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
                 .toList();
@@ -411,12 +410,6 @@ class BoardGameRecommendationSelector {
                     ? "互动方式没有完全命中你的偏好，选择前可打开详情确认"
                     : "Its interaction style is not an exact match; inspect the details before choosing");
         }
-    }
-
-    private String rankSignal(Game game, boolean chinese) {
-        Integer overallRank = game.ranking().overallRank();
-        if (overallRank != null) return chinese ? "BGG 总榜第 " + overallRank + " 名" : "BGG overall rank #" + overallRank;
-        return chinese ? "按 BGG Geek 评分和评分人数进入候选" : "Selected by BGG Geek rating and rating volume";
     }
 
     private String oneDecimal(BigDecimal value) {
