@@ -199,7 +199,7 @@ watch(locale, load)
       </div>
 
       <section v-else-if="game" class="tabletop-panel player-board mt-5 grid gap-8 p-4 sm:p-7 lg:grid-cols-[19rem_1fr]">
-        <div data-testid="game-cover-column" class="self-start rounded-xl border border-ink/8 bg-canvas p-4 lg:sticky lg:top-24">
+        <div data-testid="game-cover-column" class="self-start rounded-xl border border-ink/8 bg-canvas p-4">
           <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
           <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="mt-4 flex justify-center border-t border-ink/8 pt-4"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
         </div>
