@@ -56,6 +56,8 @@ describe('RecommendationRulebookHandoff', () => {
   }
 
   it('keeps selection, candidate review, consent, download, and teaching recovery in one flow', async () => {
+    const openSource = vi.fn()
+    vi.stubGlobal('open', openSource)
     const requests: Array<{ path: string; options?: RequestInit }> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
@@ -76,6 +78,18 @@ describe('RecommendationRulebookHandoff', () => {
           edition: 'Base game',
           sourceDomain: 'publisher.example',
           officialDomainVerified: true,
+          sourceType: 'PUBLISHER',
+          acquisitionMode: 'DIRECT_PDF',
+        }, {
+          title: 'BGG files',
+          url: 'https://boardgamegeek.com/filepage/123/rules',
+          publisher: '',
+          language: 'English',
+          edition: 'Base game',
+          sourceDomain: 'boardgamegeek.com',
+          officialDomainVerified: false,
+          sourceType: 'COMMUNITY_PLATFORM',
+          acquisitionMode: 'SOURCE_PAGE',
         }],
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
@@ -91,11 +105,17 @@ describe('RecommendationRulebookHandoff', () => {
     expect(wrapper.text()).toContain('已选《展翅翱翔》')
     expect(wrapper.text()).toContain('Wingspan Rulebook')
     expect(wrapper.text()).toContain('English')
-    expect(wrapper.text()).toContain('域名匹配出版社')
+    expect(wrapper.text()).toContain('出版社 / 权利方来源')
     expect(requests.find(request => request.path === '/api/v1/bgg/games/266192/import')?.options).toMatchObject({
       method: 'POST',
       headers: { 'X-CSRF-TOKEN': 'csrf' },
     })
+
+    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    expect(openSource).toHaveBeenCalledWith(
+      'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
+    )
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
     const importButton = wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!
@@ -141,7 +161,7 @@ describe('RecommendationRulebookHandoff', () => {
     const { wrapper } = await mountHandoff()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('当前没有找到可直接确认的官方 PDF')
+    expect(wrapper.text()).toContain('当前没有找到可审阅的规则书来源')
     const fallback = wrapper.get('a')
     expect(fallback.attributes('href')).toBe('/teach?editionId=edition-1&onboarding=recommendation-agent')
     expect(fallback.text()).toContain('本地上传')

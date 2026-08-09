@@ -21,6 +21,8 @@ interface RulebookCandidate {
   edition: string
   sourceDomain: string
   officialDomainVerified: boolean
+  sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
+  acquisitionMode: 'DIRECT_PDF' | 'SOURCE_PAGE'
 }
 
 interface RulebookCandidateResponse {
@@ -41,21 +43,23 @@ const router = useRouter()
 const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
-  eyebrow: '从推荐到讲解', title: `已选《${props.game.name}》`, preparing: '正在保存桌游并寻找可审阅的官方规则书…',
-  finding: '桌游已保存，正在检索出版社来源（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: '候选来自联网搜索，下载前请核对来源、语言和版本。语言不必与讲解语言一致，后续讲解会本地化。',
-  verified: '域名匹配出版社', review: '需要人工核对域名', publisher: '出版社', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择',
+  eyebrow: '从推荐到讲解', title: `已选《${props.game.name}》`, preparing: '正在保存桌游并让 Agent 寻找可审阅的规则书…',
+  finding: '桌游已保存，Agent 正在检索出版社、BGG 和可信规则库（已等待 {seconds} 秒，通常几秒，偶尔约 30 秒）…', found: '选择一份规则书', detail: 'Agent 会优先出版社来源，也会保留 BGG 与可信规则库结果。请核对语言和版本；来源页会在新窗口打开，PDF 直链才能直接下载。',
+  sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: 'BGG 社区文件来源', PUBLIC_WEB: '公开 PDF（请重点核对）' },
+  direct: '可直接核验并下载', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', open: '打开来源页',
   consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
-  import: '下载规则书并生成讲解', importing: '正在安全下载并准备讲解…', manual: '改用官方链接或本地上传',
-  unavailable: '当前没有找到可直接确认的官方 PDF。你仍可粘贴出版社链接或上传自己的规则书。',
+  import: '下载规则书并生成讲解', importing: '正在安全下载并准备讲解…', manual: '改用公开链接或本地上传',
+  unavailable: '当前没有找到可审阅的规则书来源。你仍可粘贴公开 PDF 链接或上传自己的规则书。',
   login: '登录后即可保留这次选择并继续找规则书。', loginAction: '打开桌游详情并继续',
   error: '这一步暂时没有完成；推荐对话和已选桌游不会受影响。', retry: '重试', close: '换一款',
 } : {
-  eyebrow: 'From recommendation to guide', title: `${props.game.name} selected`, preparing: 'Saving the game and finding reviewable official rulebooks…',
-  finding: 'Game saved. Searching publisher sources ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'Candidates come from web search. Review the source, language, and edition before download. The guide can be localized later.',
-  verified: 'Domain matches publisher', review: 'Review domain manually', publisher: 'Publisher', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected',
+  eyebrow: 'From recommendation to guide', title: `${props.game.name} selected`, preparing: 'Saving the game and asking the Agent to find reviewable rulebooks…',
+  finding: 'Game saved. The Agent is searching publishers, BGG, and trusted repositories ({seconds}s elapsed; usually a few seconds, occasionally about 30s)…', found: 'Choose a rulebook', detail: 'The Agent prioritizes publisher sources while preserving useful BGG and trusted-repository results. Review language and edition; source pages open separately and only direct PDFs can be downloaded.',
+  sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'BGG community file source', PUBLIC_WEB: 'Public PDF (review carefully)' },
+  direct: 'Direct PDF ready for verification', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', open: 'Open source page',
   consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
-  import: 'Download and generate guide', importing: 'Downloading safely and preparing the guide…', manual: 'Use an official URL or local upload',
-  unavailable: 'No directly reviewable official PDF was found. You can still paste a publisher URL or upload your own rulebook.',
+  import: 'Download and generate guide', importing: 'Downloading safely and preparing the guide…', manual: 'Use a public URL or local upload',
+  unavailable: 'No reviewable rulebook source was found. You can still paste a public PDF URL or upload your own rulebook.',
   login: 'Sign in to keep this selection and continue to its rulebook.', loginAction: 'Open game details and continue',
   error: 'This step did not complete. The conversation and selected game are unaffected.', retry: 'Retry', close: 'Choose another game',
 })
@@ -70,7 +74,7 @@ let csrf: CsrfResponse | null = null
 let sequence = 0
 let findingClock: ReturnType<typeof setInterval> | null = null
 
-const canImport = computed(() => selected.value !== null && consent.value && state.value === 'review')
+const canImport = computed(() => selected.value?.acquisitionMode === 'DIRECT_PDF' && consent.value && state.value === 'review')
 const findingText = computed(() => copy.value.finding.replace('{seconds}', String(findingSeconds.value)))
 const manualRoute = computed(() => ({
   name: 'teach' as const,
@@ -137,6 +141,10 @@ async function discover(request = sequence) {
 }
 
 function choose(candidate: RulebookCandidate) {
+  if (candidate.acquisitionMode === 'SOURCE_PAGE') {
+    window.open(candidate.url, '_blank', 'noopener,noreferrer')
+    return
+  }
   selected.value = candidate
   consent.value = false
 }
@@ -218,9 +226,10 @@ onBeforeUnmount(() => {
                 <p class="font-semibold">{{ candidate.title }}</p>
                 <a :href="candidate.url" target="_blank" rel="noopener noreferrer" class="mt-1 block break-all text-xs font-semibold text-indigo underline underline-offset-2">{{ candidate.sourceDomain }} ↗</a>
                 <p class="mt-2 text-xs leading-5 text-ink/55">{{ copy.publisher }}：{{ candidate.publisher || copy.unknown }} · {{ copy.language }}：{{ candidate.language || copy.unknown }} · {{ copy.edition }}：{{ candidate.edition || copy.unknown }}</p>
-                <p class="mt-1 text-xs font-semibold" :class="candidate.officialDomainVerified ? 'text-emerald-700' : 'text-amber-700'">{{ candidate.officialDomainVerified ? copy.verified : copy.review }}</p>
+                <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ copy.sources[candidate.sourceType] }}</p>
+                <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? copy.direct : copy.page }}</p>
               </div>
-              <button type="button" class="min-h-11 shrink-0 rounded-lg border border-copper/35 px-4 text-sm font-semibold text-copper" :aria-pressed="selected?.url === candidate.url" @click="choose(candidate)">{{ selected?.url === candidate.url ? copy.selected : copy.choose }}</button>
+              <button type="button" class="min-h-11 shrink-0 rounded-lg border border-copper/35 px-4 text-sm font-semibold text-copper" :aria-pressed="candidate.acquisitionMode === 'DIRECT_PDF' ? selected?.url === candidate.url : undefined" @click="choose(candidate)">{{ candidate.acquisitionMode === 'SOURCE_PAGE' ? copy.open : selected?.url === candidate.url ? copy.selected : copy.choose }}</button>
             </div>
           </li>
         </ul>

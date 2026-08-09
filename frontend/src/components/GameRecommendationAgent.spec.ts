@@ -255,7 +255,7 @@ describe('GameRecommendationAgent', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
     expect(wrapper.text()).toContain('已选《展翅翱翔》')
-    expect(wrapper.text()).toContain('仍可粘贴出版社链接或上传自己的规则书')
+    expect(wrapper.text()).toContain('仍可粘贴公开 PDF 链接或上传自己的规则书')
   })
 
   it('shows only progress stages actually reported by the recommendation stream', async () => {

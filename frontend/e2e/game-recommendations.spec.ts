@@ -151,6 +151,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf',
       publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
       sourceDomain: 'publisher.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
     }],
   } }))
   await page.route('**/api/v1/documents/official-imports', route => route.fulfill({ status: 201, json: {

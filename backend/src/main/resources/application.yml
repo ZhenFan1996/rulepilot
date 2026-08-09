@@ -271,7 +271,7 @@ rulepilot:
     model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
     cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
-    allowed-domains: ${RULEBOOK_OFFICIAL_DOMAINS:}
+    trusted-domains: ${RULEBOOK_TRUSTED_DOMAINS:${RULEBOOK_OFFICIAL_DOMAINS:}}
   rulebook-import:
     queue-capacity: ${RULEBOOK_IMPORT_QUEUE_CAPACITY:8}
     connect-timeout: ${RULEBOOK_IMPORT_CONNECT_TIMEOUT:PT10S}

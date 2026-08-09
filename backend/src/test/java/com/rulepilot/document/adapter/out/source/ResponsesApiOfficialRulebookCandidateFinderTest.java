@@ -38,7 +38,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
     }
 
     @Test
-    void acceptsOnlyPdfUrlsObservedInWebSearchSources() throws Exception {
+    void acceptsOnlyRulebookSourcesObservedInWebSearchResults() throws Exception {
         AtomicReference<String> authorization = new AtomicReference<>();
         AtomicReference<String> requestBody = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
@@ -55,6 +55,13 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                             "edition", "First",
                             "sourceIndexes", List.of(1, 2, 3)),
                     Map.of(
+                            "title", "BGG file page",
+                            "url", "https://boardgamegeek.com/filepage/123/rulebook",
+                            "publisher", "",
+                            "language", "en",
+                            "edition", "First",
+                            "sourceIndexes", List.of(2)),
+                    Map.of(
                             "title", "Invented rules",
                             "url", "https://publisher.example/invented.pdf",
                             "publisher", "Publisher",
@@ -64,9 +71,13 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
                     Map.of(
                             "type", "web_search_call",
-                            "action", Map.of("sources", List.of(Map.of(
-                                    "title", "Publisher support",
-                                    "url", "https://publisher.example/support/rules.pdf")))),
+                            "action", Map.of("sources", List.of(
+                                    Map.of(
+                                            "title", "Publisher support",
+                                            "url", "https://publisher.example/support/rules.pdf"),
+                                    Map.of(
+                                            "title", "BGG Files",
+                                            "url", "https://boardgamegeek.com/filepage/123/rulebook")))),
                     Map.of("type", "message", "content", List.of(Map.of("type", "output_text", "text", content))))));
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -85,20 +96,22 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
 
             var candidates = finder.find(new OfficialRulebookCandidateFinder.Request(
                     42, "Catalog Game", "First", 2024, "en",
-                    List.of("Catalog Game", "目录游戏"), List.of("Publisher Studio")));
+                    List.of("Catalog Game", "目录游戏"), List.of("Publisher Studio"), List.of("rules.example")));
 
-            assertThat(candidates).singleElement().satisfies(candidate -> {
-                assertThat(candidate.url()).isEqualTo("https://publisher.example/support/rules.pdf");
-                assertThat(candidate.toString()).doesNotContain("secret-key");
-            });
+            assertThat(candidates).extracting(OfficialRulebookCandidateFinder.Candidate::url).containsExactly(
+                    "https://publisher.example/support/rules.pdf",
+                    "https://boardgamegeek.com/filepage/123/rulebook");
+            assertThat(candidates).allSatisfy(candidate -> assertThat(candidate.toString()).doesNotContain("secret-key"));
             assertThat(authorization.get()).isEqualTo("Bearer secret-key");
             assertThat(requestBody.get()).contains(
                     "\"tools\":[{\"type\":\"web_search\"}]",
-                    "\"max_output_tokens\":700",
-                    "focused web search",
+                    "\"max_output_tokens\":1100",
+                    "Do not stop",
+                    "BoardGameGeek Files",
                     "Catalog Game",
                     "目录游戏",
                     "Publisher Studio",
+                    "rules.example",
                     "\\\"bggId\\\":42");
             assertThat(requestBody.get()).doesNotContain("secret-key");
         } finally {

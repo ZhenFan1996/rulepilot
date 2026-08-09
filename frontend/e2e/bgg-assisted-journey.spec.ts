@@ -235,6 +235,7 @@ async function mockOnboardingApis(page: Page, options: {
         candidates: [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
         }],
       } })
     }

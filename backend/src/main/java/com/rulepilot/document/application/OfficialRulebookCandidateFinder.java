@@ -15,14 +15,16 @@ public interface OfficialRulebookCandidateFinder {
             Integer publicationYear,
             String language,
             List<String> officialNames,
-            List<String> publishers) {
+            List<String> publishers,
+            List<String> trustedDomains) {
         public Request {
             officialNames = officialNames == null ? List.of() : List.copyOf(officialNames);
             publishers = publishers == null ? List.of() : List.copyOf(publishers);
+            trustedDomains = trustedDomains == null ? List.of() : List.copyOf(trustedDomains);
         }
 
         public Request(int bggId, String gameName, String editionName, Integer publicationYear, String language) {
-            this(bggId, gameName, editionName, publicationYear, language, List.of(gameName), List.of());
+            this(bggId, gameName, editionName, publicationYear, language, List.of(gameName), List.of(), List.of());
         }
     }
 
