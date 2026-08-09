@@ -111,11 +111,11 @@ class BggRecommendationAgentControllerTest {
                 20,
                 List.of(new RecommendedGame(
                         new Game(ranked, details),
-                        List.of("支持 4 人游玩", "与参考游戏共享 BGG 记录的机制或类型“Card Drafting”"),
+                        List.of("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting"),
                         List.of(),
                         List.of(new RecommendationReason(
                                 ReasonKind.BGG_FACT,
-                                "与参考游戏共享 BGG 记录的机制或类型“Card Drafting”",
+                                "与参考游戏共有的 BGG 机制/类型：Animals、Card Drafting",
                                 List.of()))))));
         when(presentation.localizeTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(
@@ -135,9 +135,9 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().categories()).containsExactly("动物");
             assertThat(game.game().mechanics()).containsExactly("卡牌轮抽");
             assertThat(game.matches())
-                    .containsExactly("支持 4 人游玩", "与参考游戏共享 BGG 记录的机制或类型“卡牌轮抽”");
+                    .containsExactly("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽");
             assertThat(game.reasons()).singleElement().satisfies(reason ->
-                    assertThat(reason.text()).isEqualTo("与参考游戏共享 BGG 记录的机制或类型“卡牌轮抽”"));
+                    assertThat(reason.text()).isEqualTo("与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽"));
         });
     }
 

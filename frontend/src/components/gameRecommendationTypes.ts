@@ -66,6 +66,7 @@ export type RecommendationAgentResponse = {
     webResearchCalls: number
     fallbackUsed: boolean
     actions: string[]
+    totalElapsedMs?: number
   }
   games: RecommendedGame[]
 }

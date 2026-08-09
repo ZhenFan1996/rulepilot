@@ -11,12 +11,9 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -66,23 +63,17 @@ class BoardGameRecommendationSelector {
         return interactionEligible(details, profile.interaction());
     }
 
-    boolean observedTerm(Game game, String term) {
-        if (game == null || game.details() == null || term == null || term.isBlank()) return false;
-        String expected = normalized(term);
-        return observedTerms(game).stream().map(this::normalized).anyMatch(expected::equals);
-    }
-
     List<RecommendedGame> present(
             List<Game> selected,
             RecommendationProfile profile,
-            Map<Integer, List<String>> evidenceTerms,
+            List<Game> references,
             boolean chinese,
             Research research) {
         return selected.stream()
                 .map(game -> present(
                         game,
                         profile,
-                        evidenceTerms.getOrDefault(game.ranking().bggId(), List.of()),
+                        sharedTaxonomy(game, references),
                         chinese,
                         research))
                 .toList();
@@ -111,7 +102,7 @@ class BoardGameRecommendationSelector {
     private RecommendedGame present(
             Game game,
             RecommendationProfile profile,
-            List<String> evidenceTerms,
+            List<String> sharedTaxonomy,
             boolean chinese,
             Research research) {
         Details details = game.details();
@@ -138,14 +129,9 @@ class BoardGameRecommendationSelector {
                     ? "BGG 复杂度 " + oneDecimal(details.averageWeight()) + " / 5，在你的上限内"
                     : "BGG complexity " + oneDecimal(details.averageWeight()) + " / 5 is within your limit");
         }
-        List<String> groundedTerms = evidenceTerms.stream()
-                .filter(term -> observedTerm(game, term))
-                .distinct()
-                .limit(4)
-                .toList();
-        if (!groundedTerms.isEmpty()) {
-            matches.add((chinese ? "Agent 依据的 BGG 机制/类型：" : "Agent-selected BGG mechanics/categories: ")
-                    + String.join(chinese ? "、" : ", ", groundedTerms));
+        if (!sharedTaxonomy.isEmpty()) {
+            matches.add((chinese ? "与参考游戏共有的 BGG 机制/类型：" : "BGG mechanisms/categories shared with the reference: ")
+                    + String.join(chinese ? "、" : ", ", sharedTaxonomy));
         }
         List<RecommendationReason> reasons = new ArrayList<>(matches.stream()
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
@@ -177,7 +163,7 @@ class BoardGameRecommendationSelector {
     private boolean interactionEligible(Details details, InteractionPreference interaction) {
         if (interaction == null || interaction == InteractionPreference.ANY) return true;
         Set<String> mechanics = details.mechanics().stream()
-                .map(this::normalized)
+                .map(BoardGameRecommendationSelector::normalized)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         boolean cooperative = mechanics.contains("cooperative game");
         boolean team = mechanics.contains("team based game");
@@ -219,23 +205,26 @@ class BoardGameRecommendationSelector {
         if (details == null) return Set.of();
         return java.util.stream.Stream.of(details.categories(), details.mechanics(), details.families())
                 .flatMap(List::stream)
-                .map(this::normalized)
+                .map(BoardGameRecommendationSelector::normalized)
                 .filter(value -> !value.isBlank())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
-    private List<String> observedTerms(Game game) {
-        Details details = game.details();
+    private List<String> sharedTaxonomy(Game game, List<Game> references) {
+        if (game == null || game.details() == null || references == null || references.isEmpty()) return List.of();
+        Set<String> referenceTerms = references.stream()
+                .filter(reference -> reference != null && reference.details() != null)
+                .flatMap(reference -> taxonomy(reference.details()).stream())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         return java.util.stream.Stream.of(
-                        java.util.stream.Stream.of(
-                                game.ranking().sourceName(), details.name(), details.officialChineseName()),
-                        details.categories().stream(),
-                        details.mechanics().stream(),
-                        details.families().stream(),
-                        details.designers().stream(),
-                        details.publishers().stream())
-                .flatMap(java.util.function.Function.identity())
+                        game.details().mechanics(),
+                        game.details().categories(),
+                        game.details().families())
+                .flatMap(List::stream)
                 .filter(java.util.Objects::nonNull)
+                .filter(term -> referenceTerms.contains(normalized(term)))
+                .distinct()
+                .limit(4)
                 .toList();
     }
 
@@ -249,9 +238,9 @@ class BoardGameRecommendationSelector {
                 .toList();
     }
 
-    private String normalized(String value) {
-        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT)
+    private static String normalized(String value) {
+        return java.text.Normalizer.normalize(value == null ? "" : value, java.text.Normalizer.Form.NFKC)
+                .toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("[^\\p{L}\\p{N}]+", " ")
                 .strip()
                 .replaceAll("\\s+", " ");

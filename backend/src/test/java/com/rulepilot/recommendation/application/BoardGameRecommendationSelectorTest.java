@@ -10,32 +10,35 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class BoardGameRecommendationSelectorTest {
 
     private final BoardGameRecommendationSelector selector = new BoardGameRecommendationSelector(
-            new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66")));
+            new BoardGameRecommendationProperties(8, 3, new BigDecimal("0.66"), Duration.ofSeconds(55)));
 
     @Test
-    void preservesAgentSelectionOrderAndPublishesOnlyExactObservedTerms() {
+    void preservesAgentSelectionOrderAndDerivesSharedTaxonomyFromVerifiedGames() {
         Game second = game(2, 50, new BigDecimal("2.2"), List.of("Open Drafting"));
         Game first = game(1, 45, new BigDecimal("2.0"), List.of("Pattern Building"));
+        Game reference = game(3, 55, new BigDecimal("2.1"), List.of("Open Drafting", "Tile Placement"));
 
         var result = selector.present(
                 List.of(second, first),
                 RecommendationProfile.empty(),
-                Map.of(2, List.of("Open Drafting"), 1, List.of("Pattern Building")),
+                List.of(reference),
                 true,
                 Research.empty());
 
         assertThat(result).extracting(value -> value.game().ranking().bggId()).containsExactly(2, 1);
-        assertThat(result.getFirst().matches()).containsExactly("Agent 依据的 BGG 机制/类型：Open Drafting");
-        assertThat(selector.observedTerm(first, "pattern-building")).isTrue();
-        assertThat(selector.observedTerm(first, "unobserved synonym")).isFalse();
+        assertThat(result.getFirst().matches()).singleElement().asString()
+                .contains("与参考游戏共有的 BGG 机制/类型", "Open Drafting", "Abstract Strategy");
+        assertThat(result.get(1).matches()).singleElement().asString()
+                .contains("Abstract Strategy")
+                .doesNotContain("Pattern Building");
     }
 
     @Test
