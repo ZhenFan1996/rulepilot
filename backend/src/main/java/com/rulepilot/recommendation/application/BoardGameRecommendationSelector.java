@@ -21,6 +21,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import org.springframework.context.annotation.Profile;
@@ -220,9 +221,14 @@ class BoardGameRecommendationSelector {
     }
 
     private boolean matchesFeature(Game game, FeatureConstraint feature) {
-        if (feature.term() == null || feature.term().isBlank() || game.details() == null) return false;
+        return matchingFeatureValue(game, feature).isPresent();
+    }
+
+    private Optional<String> matchingFeatureValue(Game game, FeatureConstraint feature) {
+        if (feature.term() == null || feature.term().isBlank() || game.details() == null) return Optional.empty();
         return featureValues(game).stream()
-                .anyMatch(value -> BoardGameRecommendationTaxonomy.equivalent(feature.term(), value));
+                .filter(value -> BoardGameRecommendationTaxonomy.equivalent(feature.term(), value))
+                .findFirst();
     }
 
     private List<String> featureValues(Game game) {
@@ -361,10 +367,9 @@ class BoardGameRecommendationSelector {
         retrievalPlan.features().stream()
                 .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
                 .filter(feature -> feature.mode() != FeatureMode.AVOID)
-                .filter(feature -> matchesFeature(game, feature))
-                .map(feature -> chinese
-                        ? "BGG 元数据命中你提到的“" + feature.basedOn() + "”"
-                        : "BGG metadata matches your request: “" + feature.basedOn() + "”")
+                .flatMap(feature -> matchingFeatureValue(game, feature)
+                        .map(value -> featureMatchExplanation(feature, value, chinese))
+                        .stream())
                 .distinct()
                 .forEach(matches::add);
         matches.add(rankSignal(game, chinese));
@@ -372,6 +377,18 @@ class BoardGameRecommendationSelector {
                 .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
                 .toList();
         return new RecommendedGame(game, matches, tradeoffs, reasons);
+    }
+
+    private String featureMatchExplanation(FeatureConstraint feature, String matchedValue, boolean chinese) {
+        if (feature.basedOn() != null && feature.basedOn().startsWith("reference: ")) {
+            return chinese
+                    ? "与参考游戏共享 BGG 记录的机制或类型“" + matchedValue + "”"
+                    : "Shares the BGG-recorded mechanic or category “" + matchedValue
+                            + "” with the reference game";
+        }
+        return chinese
+                ? "BGG 元数据命中你提到的“" + feature.basedOn() + "”"
+                : "BGG metadata matches your request: “" + feature.basedOn() + "”";
     }
 
     private void interactionExplanation(

@@ -649,7 +649,7 @@ public class BoardGameRecommendationAgent {
                         value,
                         BoardGameRecommendationAdvisor.FeatureMode.PREFERRED,
                         BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA,
-                        "current game: " + reference.ranking().sourceName()))
+                        "reference: " + reference.ranking().sourceName()))
                 .toList();
         java.util.stream.Stream<BoardGameRecommendationAdvisor.FeatureConstraint> retained = planned.features().stream()
                 .filter(feature -> namedReference == null || !derivedFromUnresolvedReference(feature, namedReference));

@@ -224,16 +224,22 @@ public class BggRecommendationAgentController {
                 BggRecommendationPresentation presentation) {
             return new RecommendedGameResponse(
                     CatalogGameResponse.from(game, taxonomy, locale, presentation),
-                    game.matches(),
-                    game.tradeoffs(),
-                    game.reasons().stream().map(RecommendationReasonResponse::from).toList());
+                    game.matches().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
+                    game.tradeoffs().stream().map(value -> localizeTaxonomyText(value, taxonomy)).toList(),
+                    game.reasons().stream()
+                            .map(reason -> RecommendationReasonResponse.from(reason, taxonomy))
+                            .toList());
         }
     }
 
     record RecommendationReasonResponse(String kind, String text, List<Integer> sourceIndexes) {
-        static RecommendationReasonResponse from(BoardGameRecommendationAgent.RecommendationReason reason) {
+        static RecommendationReasonResponse from(
+                BoardGameRecommendationAgent.RecommendationReason reason,
+                LocalizedTaxonomy taxonomy) {
             return new RecommendationReasonResponse(
-                    reason.kind().name().toLowerCase(Locale.ROOT), reason.text(), reason.sourceIndexes());
+                    reason.kind().name().toLowerCase(Locale.ROOT),
+                    localizeTaxonomyText(reason.text(), taxonomy),
+                    reason.sourceIndexes());
         }
     }
 
@@ -303,5 +309,20 @@ public class BggRecommendationAgentController {
         } catch (RuntimeException exception) {
             throw new IllegalArgumentException("recommendation profile contains an unsupported value");
         }
+    }
+
+    private static String localizeTaxonomyText(String text, LocalizedTaxonomy taxonomy) {
+        if (text == null || text.isBlank()) return text;
+        String localized = text;
+        List<Map.Entry<String, String>> translations = java.util.stream.Stream.concat(
+                        taxonomy.categories().entrySet().stream(), taxonomy.mechanics().entrySet().stream())
+                .sorted((left, right) -> Integer.compare(right.getKey().length(), left.getKey().length()))
+                .toList();
+        for (Map.Entry<String, String> translation : translations) {
+            localized = localized
+                    .replace("“" + translation.getKey() + "”", "“" + translation.getValue() + "”")
+                    .replace("\"" + translation.getKey() + "\"", "\"" + translation.getValue() + "\"");
+        }
+        return localized;
     }
 }

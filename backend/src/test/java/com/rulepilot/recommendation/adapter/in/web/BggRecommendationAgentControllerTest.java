@@ -21,7 +21,9 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Int
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Outcome;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.PreferenceField;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -109,8 +111,12 @@ class BggRecommendationAgentControllerTest {
                 20,
                 List.of(new RecommendedGame(
                         new Game(ranked, details),
-                        List.of("支持 4 人游玩"),
-                        List.of()))));
+                        List.of("支持 4 人游玩", "与参考游戏共享 BGG 记录的机制或类型“Card Drafting”"),
+                        List.of(),
+                        List.of(new RecommendationReason(
+                                ReasonKind.BGG_FACT,
+                                "与参考游戏共享 BGG 记录的机制或类型“Card Drafting”",
+                                List.of()))))));
         when(presentation.localizeTaxonomy(List.of("Animals"), List.of("Card Drafting"), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(
                         Map.of("Animals", "动物"), Map.of("Card Drafting", "卡牌轮抽")));
@@ -128,7 +134,10 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().nameLocalized()).isTrue();
             assertThat(game.game().categories()).containsExactly("动物");
             assertThat(game.game().mechanics()).containsExactly("卡牌轮抽");
-            assertThat(game.matches()).containsExactly("支持 4 人游玩");
+            assertThat(game.matches())
+                    .containsExactly("支持 4 人游玩", "与参考游戏共享 BGG 记录的机制或类型“卡牌轮抽”");
+            assertThat(game.reasons()).singleElement().satisfies(reason ->
+                    assertThat(reason.text()).isEqualTo("与参考游戏共享 BGG 记录的机制或类型“卡牌轮抽”"));
         });
     }
 }
