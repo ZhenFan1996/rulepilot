@@ -20,7 +20,11 @@ import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Reques
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.ToolCall;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Turn;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateLead;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import java.math.BigDecimal;
@@ -159,6 +163,123 @@ class BoardGameRecommendationCandidateAgentTest {
         assertThat(result.actions()).doesNotContain("REJECTED_TOOL_CALL");
     }
 
+    @Test
+    void continuesTheAgentLoopWhenObservedGamesFailApplicationHardGates() {
+        AtomicInteger turns = new AtomicInteger();
+        BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                if (turns.getAndIncrement() == 0) {
+                    return new Turn("", List.of(new ToolCall(
+                            "search-first",
+                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                            "{\"names\":[\"Candidate Alpha\",\"Candidate Beta\"]}")));
+                }
+                assertThat(request.messages().getLast().content())
+                        .contains(
+                                "VERIFIED_CANDIDATE_GAP",
+                                "\"rejectedByApplicationGates\":1",
+                                "\"remaining\":1");
+                return new Turn("", List.of(new ToolCall(
+                        "search-second",
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Candidate Gamma\",\"Candidate Delta\"]}")));
+            }
+        };
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                throw new AssertionError("the Agent must continue its own retrieval loop");
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return names.stream().map(name -> switch (name) {
+                    case "Candidate Alpha" -> ranking(60, name);
+                    case "Candidate Beta" -> ranking(61, name);
+                    case "Candidate Gamma" -> ranking(62, name);
+                    case "Candidate Delta" -> ranking(63, name);
+                    default -> throw new AssertionError("unexpected candidate title");
+                }).toList();
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return bggIds.stream()
+                        .map(id -> candidateGame(id, id == 60 ? 180 : 120))
+                        .toList();
+            }
+
+            @Override
+            public int gameCount() {
+                return 1000;
+            }
+        };
+
+        var result = agent(model, catalog).discover(areaControl(), profile(), "zh-CN");
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.modelCalls()).isEqualTo(2);
+        assertThat(result.toolCalls()).isEqualTo(4);
+        assertThat(result.games()).extracting(game -> game.ranking().bggId())
+                .containsExactly(60, 61, 62, 63);
+    }
+
+    @Test
+    void letsTheAgentChooseSourceGroundedPublicDiscoveryInsteadOfGuessingTitles() {
+        BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                assertThat(request.tools()).extracting(tool -> tool.name())
+                        .contains(BoardGameRecommendationCandidateAgent.DISCOVER_TOOL);
+                return new Turn("", List.of(new ToolCall(
+                        "discover-public",
+                        BoardGameRecommendationCandidateAgent.DISCOVER_TOOL,
+                        "{}")));
+            }
+        };
+        BoardGameRecommendationWebResearch research = new BoardGameRecommendationWebResearch() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Optional<CandidateDiscovery> discover(DiscoveryRequest request) {
+                assertThat(request.signals()).singleElement().satisfies(signal ->
+                        assertThat(signal.term()).isEqualTo("Area Control"));
+                return Optional.of(new CandidateDiscovery(
+                        List.of(
+                                new CandidateLead(60, "Kemet", "source fit", List.of(1)),
+                                new CandidateLead(61, "Inis", "source fit", List.of(1))),
+                        List.of(new Source(1, "Public guide", "https://example.test/guide", "example.test"))));
+            }
+
+            @Override
+            public Optional<Research> research(BoardGameRecommendationWebResearch.Request request) {
+                return Optional.empty();
+            }
+        };
+
+        var result = agent(model, new FakeCatalog(), research)
+                .discover(areaControl(), profile(), "zh-CN");
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.actions())
+                .containsExactly("MODEL_SELECT_TOOLS", "DISCOVER_CANDIDATES", "LOOKUP_BGG_CANDIDATES");
+        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(60, 61);
+    }
+
     private BoardGameRecommendationCandidateAgent agent(
             BoardGameRecommendationCandidateModel model,
             BoardGameRecommendationCatalog catalog) {
@@ -173,9 +294,18 @@ class BoardGameRecommendationCandidateAgentTest {
                 return Optional.empty();
             }
         };
+        return agent(model, catalog, noResearch);
+    }
+
+    private BoardGameRecommendationCandidateAgent agent(
+            BoardGameRecommendationCandidateModel model,
+            BoardGameRecommendationCatalog catalog,
+            BoardGameRecommendationWebResearch research) {
         return new BoardGameRecommendationCandidateAgent(
                 model,
-                new BoardGameRecommendationTools(catalog, noResearch),
+                new BoardGameRecommendationTools(catalog, research),
+                new BoardGameRecommendationSelector(
+                        new BoardGameRecommendationProperties(8, 2, new BigDecimal("0.66"))),
                 new ObjectMapper());
     }
 
@@ -192,6 +322,44 @@ class BoardGameRecommendationCandidateAgentTest {
 
     private RecommendationProfile profile() {
         return new RecommendationProfile(4, 120, null, BggGameType.ALL, InteractionPreference.ANY);
+    }
+
+    private static Game candidateGame(int id, int maximumMinutes) {
+        String name = "Candidate " + id;
+        return new Game(
+                ranking(id, name),
+                new Details(
+                        name,
+                        "",
+                        "",
+                        2,
+                        5,
+                        maximumMinutes,
+                        new BigDecimal("3.1"),
+                        List.of("Strategy"),
+                        List.of("Area Control"),
+                        90,
+                        maximumMinutes,
+                        14,
+                        14,
+                        "Best with 4 players",
+                        "Recommended with 3–5 players",
+                        2,
+                        100,
+                        List.of(),
+                        List.of(),
+                        List.of()));
+    }
+
+    private static Ranking ranking(int id, String name) {
+        return new Ranking(
+                id,
+                name,
+                2025,
+                id,
+                new BigDecimal("8.0"),
+                new BigDecimal("8.2"),
+                10_000);
     }
 
     private static final class FakeCatalog implements BoardGameRecommendationCatalog {
@@ -252,15 +420,5 @@ class BoardGameRecommendationCandidateAgentTest {
             return 179_737;
         }
 
-        private Ranking ranking(int id, String name) {
-            return new Ranking(
-                    id,
-                    name,
-                    2025,
-                    id,
-                    new BigDecimal("8.0"),
-                    new BigDecimal("8.2"),
-                    10_000);
-        }
     }
 }

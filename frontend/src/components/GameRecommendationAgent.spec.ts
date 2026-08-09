@@ -163,13 +163,14 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('我先核对参考游戏')
   })
 
-  it('resolves a natural follow-up mentioning a previously shown official title to its BGG id', async () => {
+  it('leaves natural references to the Agent and supplies verified conversation games as context', async () => {
     const requests: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       requests.push(body)
-      const focused = body.focusedBggId === game.bggId
+      const knownGames = body.knownGames as Array<{ bggId: number }> | undefined
+      const focused = knownGames?.some(entry => entry.bggId === game.bggId) === true
       return Response.json({
         outcome: 'recommendations', mode: 'model_assisted',
         assistantMessage: focused ? '这是刚才那款游戏的详细介绍。' : '先看这款是否接近你的想法。',
@@ -199,13 +200,17 @@ describe('GameRecommendationAgent', () => {
     expect(requests).toHaveLength(3)
     expect(requests[1]).toMatchObject({
       message: '能介绍一下《展翅翱翔》吗？',
-      focusedBggId: 266192,
+      focusedBggId: null,
       excludedBggIds: [],
+      knownGames: [{ bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan' }],
+      shownBggIds: [266192],
     })
     expect(requests[2]).toMatchObject({
       message: '它是什么机制，属于什么类型，具体怎么玩？',
-      focusedBggId: 266192,
+      focusedBggId: null,
       excludedBggIds: [],
+      knownGames: [{ bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan' }],
+      shownBggIds: [266192],
     })
     expect(wrapper.text()).toContain('这是刚才那款游戏的详细介绍')
   })

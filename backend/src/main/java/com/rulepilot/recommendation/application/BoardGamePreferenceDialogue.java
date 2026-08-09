@@ -43,8 +43,7 @@ class BoardGamePreferenceDialogue {
         RecommendationProfile profile = validatedProfile(input == null ? RecommendationProfile.empty() : input);
         String message = normalizedMessage(inputMessage);
         if (!message.isBlank()) {
-            PreferencePatch patch = deterministicPatch(message);
-            if (advisedPatch != null) patch = preferDeterministic(patch, advisedPatch);
+            PreferencePatch patch = advisedPatch == null ? deterministicPatch(message) : advisedPatch;
             profile = apply(profile, patch);
         }
         return new ResolvedTurn(profile, nextClarification(profile, locale), hasPreferenceSignal(profile));
@@ -86,15 +85,6 @@ class BoardGamePreferenceDialogue {
                 patch.maxWeight() == null ? profile.maxWeight() : patch.maxWeight(),
                 patch.type() == null ? profile.type() : patch.type(),
                 patch.interaction() == null ? profile.interaction() : patch.interaction()));
-    }
-
-    private PreferencePatch preferDeterministic(PreferencePatch deterministic, PreferencePatch interpreted) {
-        return new PreferencePatch(
-                deterministic.players() == null ? interpreted.players() : deterministic.players(),
-                deterministic.maxMinutes() == null ? interpreted.maxMinutes() : deterministic.maxMinutes(),
-                deterministic.maxWeight() == null ? interpreted.maxWeight() : deterministic.maxWeight(),
-                deterministic.type(),
-                deterministic.interaction());
     }
 
     private PreferencePatch deterministicPatch(String message) {

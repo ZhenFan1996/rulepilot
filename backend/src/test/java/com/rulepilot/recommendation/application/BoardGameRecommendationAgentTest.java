@@ -183,7 +183,7 @@ class BoardGameRecommendationAgentTest {
                 null), "zh-CN");
 
         assertThat(response.mode()).isEqualTo(DecisionMode.MODEL_ASSISTED);
-        assertThat(response.profile().type()).isEqualTo(BggGameType.ALL);
+        assertThat(response.profile().type()).isEqualTo(BggGameType.FAMILY);
         assertThat(response.userModel().summary()).contains("讲解负担");
         assertThat(response.userModel().hypotheses()).singleElement()
                 .extracting(BoardGameRecommendationAgent.PreferenceHypothesisView::confidence)
@@ -728,7 +728,11 @@ class BoardGameRecommendationAgentTest {
                 "我查一下实际体验。",
                 "",
                 true,
-                "查证这款游戏的桌上节奏");
+                "查证这款游戏的桌上节奏",
+                RetrievalPlan.empty(),
+                "",
+                20,
+                false);
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> Optional.of(new Slate(
@@ -784,7 +788,11 @@ class BoardGameRecommendationAgentTest {
                 "我直接介绍刚才那款。",
                 "",
                 false,
-                "");
+                "",
+                RetrievalPlan.empty(),
+                "",
+                20,
+                false);
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
@@ -804,7 +812,11 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().webResearchCalls()).isZero();
         assertThat(response.harness().actions())
-                .containsExactly("PLAN_DIALOGUE", "LOOKUP_BGG_GAME", "RANK_STRUCTURED_CANDIDATES");
+                .containsExactly(
+                        "PLAN_DIALOGUE",
+                        "BIND_CONVERSATION_GAME",
+                        "LOOKUP_BGG_GAME",
+                        "RANK_STRUCTURED_CANDIDATES");
         assertThat(response.assistantMessage()).contains("BGG 目录资料", "规则书答疑");
         assertThat(response.clarification()).isNull();
         assertThat(response.games()).singleElement()
@@ -821,7 +833,11 @@ class BoardGameRecommendationAgentTest {
                 "我用它作参照，换几款更轻的。",
                 "哪一款更接近？",
                 false,
-                "");
+                "",
+                RetrievalPlan.empty(),
+                "",
+                20,
+                false);
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
@@ -850,6 +866,45 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().actions())
                 .contains("LOOKUP_REFERENCE_GAME", "SEARCH_BGG_CATALOG")
                 .doesNotContain("LOOKUP_BGG_GAME");
+    }
+
+    @Test
+    void letsThePlannerApplyNaturalRejectionFeedbackToTheShownCandidateSet() {
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("上一批不符合，需要换一个方向", List.of()),
+                "明白，这次我会避开刚才那批。",
+                "",
+                false,
+                "",
+                RetrievalPlan.empty(),
+                "",
+                null,
+                true);
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    assertThat(request.candidates())
+                            .extracting(BoardGameRecommendationAdvisor.Candidate::bggId)
+                            .doesNotContain(20);
+                    return Optional.of(new Slate(
+                            "我换了一批不同的候选。",
+                            "",
+                            List.of(new Choice(30, List.of("方向不同"), List.of(), List.of()))));
+                },
+                new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "这些都不是我想要的，换一批",
+                List.of(),
+                List.of(new DialogueMessage("user", "这些都不是我想要的，换一批")),
+                null,
+                List.of(new BoardGameRecommendationAgent.KnownGame(20, "Game 20", "Game 20")),
+                List.of(20)), "zh-CN");
+
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId()).containsExactly(30);
     }
 
     @Test
@@ -1066,7 +1121,14 @@ class BoardGameRecommendationAgentTest {
                 "你更在意冲突强度还是规则量？",
                 false,
                 "",
-                RetrievalPlan.empty());
+                new RetrievalPlan(
+                        List.of(),
+                        List.of(new FeatureConstraint(
+                                "区控",
+                                FeatureMode.PREFERRED,
+                                FeatureSource.USER_EXPRESSION,
+                                "区控")),
+                        true));
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
@@ -1271,11 +1333,11 @@ class BoardGameRecommendationAgentTest {
             var candidateAgent = new BoardGameRecommendationCandidateAgent(
                     candidateModel,
                     recommendationTools,
+                    new BoardGameRecommendationSelector(properties),
                     new ObjectMapper());
             agent = new BoardGameRecommendationAgent(
                     recommendationTools,
                     new BoardGamePreferenceDialogue(),
-                    new BoardGameRecommendationQueryCoverage(),
                     new BoardGameReferenceIntent(),
                     candidateAgent,
                     new BoardGameRecommendationSelector(properties),
