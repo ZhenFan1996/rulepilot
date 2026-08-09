@@ -11,11 +11,11 @@ import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
-import com.rulepilot.document.application.OfficialRulebookImportService;
+import com.rulepilot.document.application.OfficialRulebookImportJobService;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.catalog.BoardGameMetadataLinking.Link;
 import com.rulepilot.document.domain.DocumentSourceType;
-import com.rulepilot.document.domain.DocumentVersion;
+import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.domain.RuleDocument;
 import java.security.Principal;
 import java.time.Instant;
@@ -27,7 +27,7 @@ class UserRuleDocumentControllerTest {
 
     @Test
     void passesOfficialImportConsentAndOwnerToTheRightsAwarePipeline() {
-        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
         UserRuleDocumentController controller = new UserRuleDocumentController(
                 mock(UploadRuleDocumentService.class),
                 mock(PhotographedRulebookUploadService.class),
@@ -35,33 +35,21 @@ class UserRuleDocumentControllerTest {
                 mock(RuleDocumentMetadataSuggestionService.class),
                 mock(RuleDocumentMetadataConfirmationService.class),
                 imports);
-        UUID documentId = UUID.randomUUID();
+        UUID jobId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-06T00:00:00Z");
-        RuleDocument document = new RuleDocument(
-                documentId,
+        var job = OfficialRulebookImportJob.queued(
+                jobId,
+                "alice",
                 null,
                 "Example Rules",
                 DocumentSourceType.BASE_RULEBOOK,
                 "https://publisher.example/rules.pdf",
-                "alice",
                 now);
-        DocumentVersion version = DocumentVersion.create(
-                documentId,
-                1,
-                "official-rulebook.pdf",
-                "documents/example.pdf",
-                "0".repeat(64),
-                12,
-                "application/pdf",
-                now);
-        when(imports.importRulebook(
-                        null,
-                        "Example Rules",
-                        DocumentSourceType.BASE_RULEBOOK,
-                        "https://publisher.example/rules.pdf",
-                        true,
-                        "alice"))
-                .thenReturn(new UploadRuleDocumentService.UploadResult(document, version, false));
+        var command = new OfficialRulebookImportJobService.Command(
+                null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                "https://publisher.example/rules.pdf", true);
+        when(imports.enqueue(command, "alice"))
+                .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
 
         var response = controller.importOfficialRulebook(
                 new UserRuleDocumentController.OfficialRulebookImportRequest(
@@ -72,16 +60,10 @@ class UserRuleDocumentControllerTest {
                         true),
                 () -> "alice");
 
-        assertThat(response.document().officialSourceUrl()).isEqualTo("https://publisher.example/rules.pdf");
-        assertThat(response.version().originalFilename()).isEqualTo("official-rulebook.pdf");
-        assertThat(response.duplicate()).isFalse();
-        verify(imports).importRulebook(
-                null,
-                "Example Rules",
-                DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf",
-                true,
-                "alice");
+        assertThat(response.id()).isEqualTo(jobId);
+        assertThat(response.sourceDomain()).isEqualTo("publisher.example");
+        assertThat(response.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
+        verify(imports).enqueue(command, "alice");
     }
 
     @Test
@@ -93,7 +75,7 @@ class UserRuleDocumentControllerTest {
                 mock(RuleDocumentRemovalService.class),
                 suggestions,
                 mock(RuleDocumentMetadataConfirmationService.class),
-                mock(OfficialRulebookImportService.class));
+                mock(OfficialRulebookImportJobService.class));
         UUID documentId = UUID.randomUUID();
         Principal principal = () -> "alice";
         when(suggestions.suggest(documentId, "alice"))
@@ -125,7 +107,7 @@ class UserRuleDocumentControllerTest {
                 mock(RuleDocumentRemovalService.class),
                 mock(RuleDocumentMetadataSuggestionService.class),
                 confirmations,
-                mock(OfficialRulebookImportService.class));
+                mock(OfficialRulebookImportJobService.class));
         UUID documentId = UUID.randomUUID();
         UUID gameId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();

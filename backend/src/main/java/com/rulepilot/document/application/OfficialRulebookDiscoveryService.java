@@ -1,6 +1,7 @@
 package com.rulepilot.document.application;
 
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
+import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
 import java.net.IDN;
 import java.net.URI;
 import java.util.Arrays;
@@ -18,14 +19,17 @@ import org.springframework.stereotype.Service;
 public class OfficialRulebookDiscoveryService {
 
     private final CatalogGamePresentationLookup catalog;
+    private final CatalogGameSourceIdentityLookup sourceIdentities;
     private final OfficialRulebookCandidateFinder finder;
     private final Set<String> allowedDomains;
 
     public OfficialRulebookDiscoveryService(
             CatalogGamePresentationLookup catalog,
+            CatalogGameSourceIdentityLookup sourceIdentities,
             OfficialRulebookCandidateFinder finder,
             @Value("${rulepilot.rulebook-discovery.allowed-domains:}") String allowedDomains) {
         this.catalog = catalog;
+        this.sourceIdentities = sourceIdentities;
         this.finder = finder;
         this.allowedDomains = Arrays.stream(allowedDomains.split(","))
                 .map(String::strip)
@@ -39,18 +43,27 @@ public class OfficialRulebookDiscoveryService {
         var game = catalog.findByEdition(editionId)
                 .orElseThrow(() -> new IllegalArgumentException("catalog edition does not exist or has no BGG metadata"));
         String checkedLanguage = language == null || language.isBlank() ? game.language() : language.strip();
+        var identity = sourceIdentities.findByBggId(game.bggId())
+                .orElse(new CatalogGameSourceIdentityLookup.Identity(game.gameName(), List.of(game.gameName()), List.of()));
         var request = new OfficialRulebookCandidateFinder.Request(
-                game.bggId(), game.gameName(), game.editionName(), game.publicationYear(), checkedLanguage);
+                game.bggId(),
+                game.gameName(),
+                game.editionName(),
+                game.publicationYear(),
+                checkedLanguage,
+                identity.officialNames(),
+                identity.publishers());
         List<Candidate> candidates = finder.find(request).stream()
                 .limit(8)
-                .map(this::validate)
+                .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .sorted(java.util.Comparator.comparing(Candidate::officialDomainVerified).reversed())
                 .toList();
         return new Result(true, candidates);
     }
 
-    private Candidate validate(OfficialRulebookCandidateFinder.Candidate candidate) {
+    private Candidate validate(
+            OfficialRulebookCandidateFinder.Candidate candidate, List<String> verifiedPublishers) {
         if (candidate == null || candidate.url() == null || candidate.title() == null) return null;
         URI uri;
         try {
@@ -64,7 +77,9 @@ public class OfficialRulebookDiscoveryService {
         }
         String host = IDN.toASCII(uri.getHost()).toLowerCase(Locale.ROOT);
         boolean allowed = allowedDomains.stream().anyMatch(domain -> host.equals(domain) || host.endsWith("." + domain));
-        boolean publisherMatch = publisherTokens(candidate.publisher()).stream().anyMatch(host::contains);
+        boolean publisherMatch = verifiedPublishers.stream()
+                .flatMap(publisher -> publisherTokens(publisher).stream())
+                .anyMatch(host::contains);
         return new Candidate(
                 bounded(candidate.title(), 180),
                 uri.toASCIIString(),

@@ -2,10 +2,12 @@ package com.rulepilot.document.adapter.out.source;
 
 import com.rulepilot.document.application.MinioStorageProperties;
 import com.rulepilot.document.application.OfficialRulebookSourceFetcher;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -17,6 +19,7 @@ import okhttp3.Request;
 import okhttp3.Response;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -40,17 +43,28 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
     private final long maxPdfBytes;
 
     @Autowired
-    public HttpOfficialRulebookSourceFetcher(MinioStorageProperties storage) {
+    public HttpOfficialRulebookSourceFetcher(
+            MinioStorageProperties storage,
+            @Value("${rulepilot.rulebook-import.connect-timeout:PT10S}") Duration connectTimeout,
+            @Value("${rulepilot.rulebook-import.read-timeout:PT1M30S}") Duration readTimeout,
+            @Value("${rulepilot.rulebook-import.call-timeout:PT10M}") Duration callTimeout) {
         this(
                 new OkHttpClient.Builder()
-                        .connectTimeout(10, TimeUnit.SECONDS)
-                        .readTimeout(30, TimeUnit.SECONDS)
-                        .callTimeout(40, TimeUnit.SECONDS)
+                        .connectTimeout(checkedTimeout(connectTimeout, "connect"), TimeUnit.MILLISECONDS)
+                        .readTimeout(checkedTimeout(readTimeout, "read"), TimeUnit.MILLISECONDS)
+                        .callTimeout(checkedTimeout(callTimeout, "call"), TimeUnit.MILLISECONDS)
                         .dns(PUBLIC_DNS)
                         .followRedirects(false)
                         .followSslRedirects(false)
                         .build(),
                 storage.maxPdfBytes());
+    }
+
+    private static long checkedTimeout(Duration timeout, String name) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative() || timeout.compareTo(Duration.ofMinutes(15)) > 0) {
+            throw new IllegalArgumentException("official rulebook " + name + " timeout must be between 1 ms and 15 minutes");
+        }
+        return timeout.toMillis();
     }
 
     HttpOfficialRulebookSourceFetcher(Call.Factory calls, long maxPdfBytes) {
@@ -63,6 +77,11 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
 
     @Override
     public FetchedRulebook fetch(URI source) {
+        return fetch(source, ProgressListener.none());
+    }
+
+    @Override
+    public FetchedRulebook fetch(URI source, ProgressListener progress) {
         URI current = trusted(source);
         try {
             for (int redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
@@ -88,7 +107,10 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
                     if (declaredSize > maxPdfBytes) {
                         throw new IllegalArgumentException("official rulebook PDF exceeds the configured size limit");
                     }
-                    byte[] content = response.body().byteStream().readNBytes(Math.toIntExact(maxPdfBytes + 1));
+                    Long totalBytes = declaredSize > 0 ? declaredSize : null;
+                    progress.downloadStarted(totalBytes);
+                    byte[] content = readBounded(response, progress, totalBytes);
+                    progress.verifying();
                     validatePdf(content);
                     return new FetchedRulebook(current, content);
                 }
@@ -97,6 +119,31 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
         } catch (IOException exception) {
             throw new IllegalStateException("official rulebook source is temporarily unavailable", exception);
         }
+    }
+
+    private byte[] readBounded(Response response, ProgressListener progress, Long totalBytes) throws IOException {
+        var content = new ByteArrayOutputStream(totalBytes == null
+                ? 64 * 1024
+                : Math.toIntExact(Math.min(totalBytes, maxPdfBytes)));
+        byte[] buffer = new byte[16 * 1024];
+        long downloaded = 0;
+        long lastReported = 0;
+        try (var input = response.body().byteStream()) {
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                downloaded += read;
+                if (downloaded > maxPdfBytes) {
+                    throw new IllegalArgumentException("official rulebook PDF exceeds the configured size limit");
+                }
+                content.write(buffer, 0, read);
+                if (downloaded - lastReported >= 256 * 1024) {
+                    progress.downloaded(downloaded, totalBytes);
+                    lastReported = downloaded;
+                }
+            }
+        }
+        progress.downloaded(downloaded, totalBytes);
+        return content.toByteArray();
     }
 
     URI trusted(URI source) {

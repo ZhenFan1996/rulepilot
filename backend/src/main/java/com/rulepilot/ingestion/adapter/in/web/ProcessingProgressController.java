@@ -48,6 +48,16 @@ public class ProcessingProgressController {
         return emitter;
     }
 
+    @GetMapping(path = "/snapshot", produces = MediaType.APPLICATION_JSON_VALUE)
+    ProgressSnapshot snapshot(@PathVariable UUID versionId, Principal principal) {
+        versions.findVersion(versionId)
+                .filter(candidate -> candidate.createdBy().equals(principal.getName()))
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "document version does not exist"));
+        return progress.current(versionId)
+                .orElseGet(() -> new ProgressSnapshot("UPLOADED", 0, 0, 0, false));
+    }
+
     private void send(SseEmitter emitter, ProgressSnapshot snapshot, Runnable unsubscribe) {
         try {
             emitter.send(SseEmitter.event().name("progress").data(snapshot));

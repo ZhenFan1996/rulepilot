@@ -44,7 +44,12 @@ describe('DocumentsView recoverable lesson handoff', () => {
   it('shows the selected game and edition handed off from discovery', async () => {
     const fetchMock = mockApplicationFetch(
       () => 'READY', 'COMPLETED', [], undefined, undefined,
-      () => response({ duplicate: false, version: { id: 'selected-version', status: 'EXTRACTING' } }, 201),
+      (options) => response({
+        id: 'job-selected', title: 'Catalog Game Rules', sourceDomain: 'publisher.example',
+        stage: options?.method === 'POST' ? 'CONNECTING' : 'COMPLETED',
+        downloadedBytes: 2048, totalBytes: 2048, documentVersionId: 'selected-version',
+        duplicate: false, errorCode: null, reused: false,
+      }, options?.method === 'POST' ? 202 : 200),
     )
     fetchMock.mockImplementationOnce(async () => response({ username: 'player' }))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
@@ -237,8 +242,13 @@ describe('DocumentsView recoverable lesson handoff', () => {
       undefined,
       undefined,
       (options) => {
-        importOptions = options
-        return response({ duplicate: false, version: { id: 'imported-version', status: 'EXTRACTING' } }, 201)
+        if (options?.method === 'POST') importOptions = options
+        return response({
+          id: 'job-imported', title: 'wingspan rules', sourceDomain: 'publisher.example',
+          stage: options?.method === 'POST' ? 'CONNECTING' : 'COMPLETED',
+          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'imported-version',
+          duplicate: false, errorCode: null, reused: false,
+        }, options?.method === 'POST' ? 202 : 200)
       },
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -465,7 +475,12 @@ async function mountDocuments(path = '/teach') {
   })
   await router.push(path)
   await router.isReady()
-  return { wrapper: mount(DocumentsView, { global: { plugins: [router] } }), router }
+  return {
+    wrapper: mount(DocumentsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    }),
+    router,
+  }
 }
 
 function mockApplicationFetch(
@@ -504,6 +519,10 @@ function mockApplicationFetch(
     if (path.endsWith('/api/v1/documents/official-imports') && options?.method === 'POST') {
       return officialImport ? await officialImport(options) : new Response(null, { status: 404 })
     }
+    if (path.includes('/api/v1/documents/official-imports/')) {
+      return officialImport ? await officialImport(options) : new Response(null, { status: 404 })
+    }
+    if (path.endsWith('/api/v1/documents/official-imports')) return response([])
     if (path.includes('/api/auth/csrf')) return response({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
     if (path.includes('/api/v1/assistant-runs/latest')) return new Response(null, { status: 404 })
     if (path.includes('/api/v1/assistant-runs/prep-run-1')) {

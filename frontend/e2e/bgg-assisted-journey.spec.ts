@@ -77,7 +77,9 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     officialSourceUrl: 'https://publisher.example/rules.pdf',
     rightsConfirmed: true,
   })
-  await expect(page.getByText(/上传完成，正在读取页面和图片/)).toBeVisible()
+  await expect(page.getByText('规则书正在后台获取')).toBeVisible()
+  await expect(page.getByText('正在下载 PDF')).toBeVisible()
+  await expect(page.getByText(/可以离开这一页/)).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: '补全桌游资料' }).click()
@@ -102,11 +104,11 @@ test('keeps manual onboarding and the ready guide usable when BGG fails on mobil
   await page.setViewportSize({ width: 390, height: 844 })
 
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '今晚，从哪一步开始？' })).toBeVisible()
-  await expect(page.locator('a[href="/teach"]:visible').first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: '把想玩的，变成今晚真的能开桌。' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '添加规则书' }).first()).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
-  await page.getByRole('link', { name: /浏览桌游目录/ }).click()
+  await page.getByRole('link', { name: '浏览全部桌游' }).click()
   await expect(page.getByText('桌游目录暂时打不开')).toBeVisible()
   await expect(page.getByText('筛选条件已经保留，可以稍后重试。')).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
@@ -224,8 +226,15 @@ async function mockOnboardingApis(page: Page, options: {
     }
     if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') {
       options.onOfficialImport?.(request.postDataJSON() as Record<string, unknown>)
-      return route.fulfill({ status: 201, json: {
-        duplicate: false, version: { id: 'imported-version', status: 'EXTRACTING' },
+      return route.fulfill({ status: 202, json: {
+        id: 'import-job-1', title: 'Catalog Game Rules', sourceDomain: 'publisher.example', stage: 'QUEUED',
+        downloadedBytes: 0, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
+      } })
+    }
+    if (path === '/api/v1/documents/official-imports/import-job-1' && request.method() === 'GET') {
+      return route.fulfill({ json: {
+        id: 'import-job-1', title: 'Catalog Game Rules', sourceDomain: 'publisher.example', stage: 'DOWNLOADING',
+        downloadedBytes: 2048, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
       } })
     }
     if (path === '/api/v1/documents/document-1/bgg-suggestions') {

@@ -3,6 +3,7 @@ package com.rulepilot.document.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,7 +42,8 @@ class OfficialRulebookImportServiceTest {
     void sendsValidatedPublisherPdfThroughTheExistingUploadPipeline() throws Exception {
         URI source = URI.create("https://publisher.example/rules.pdf");
         byte[] pdf = "%PDF-1.7\nbody".getBytes(StandardCharsets.US_ASCII);
-        when(sources.fetch(source)).thenReturn(new FetchedRulebook(source, pdf));
+        when(sources.fetch(eq(source), any(OfficialRulebookSourceFetcher.ProgressListener.class)))
+                .thenReturn(new FetchedRulebook(source, pdf));
         UUID editionId = UUID.randomUUID();
 
         service.importRulebook(

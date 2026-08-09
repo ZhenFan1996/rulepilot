@@ -84,7 +84,8 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     "search-model");
 
             var candidates = finder.find(new OfficialRulebookCandidateFinder.Request(
-                    42, "Catalog Game", "First", 2024, "en"));
+                    42, "Catalog Game", "First", 2024, "en",
+                    List.of("Catalog Game", "目录游戏"), List.of("Publisher Studio")));
 
             assertThat(candidates).singleElement().satisfies(candidate -> {
                 assertThat(candidate.url()).isEqualTo("https://publisher.example/support/rules.pdf");
@@ -96,6 +97,8 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     "\"max_output_tokens\":700",
                     "focused web search",
                     "Catalog Game",
+                    "目录游戏",
+                    "Publisher Studio",
                     "\\\"bggId\\\":42");
             assertThat(requestBody.get()).doesNotContain("secret-key");
         } finally {

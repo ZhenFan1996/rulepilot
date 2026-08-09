@@ -25,7 +25,7 @@ describe('AppShell', () => {
       }
       if (path.includes('/api/v1/assistant-runs/active')) {
         activeReads += 1
-        return response(activeReads === 1 ? [{ id: 'run-1', subjectId: 'plan-1' }] : [])
+        return response(activeReads === 1 ? [{ id: 'run-1', subjectId: 'plan-1', state: 'LESSON_COMPOSITION' }] : [])
       }
       if (path.includes('/api/v1/assistant-runs/run-1')) {
         return response({ run: { id: 'run-1', state: 'COMPLETED' } })
@@ -33,6 +33,7 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-1', gameTitle: '星际探索' }])
       }
+      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -56,24 +57,24 @@ describe('AppShell', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('《星际探索》仍在后台准备')
+    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).toContain('可以继续浏览')
     expect(wrapper.text()).toContain('公开讲解')
     expect(wrapper.text()).toContain('我的讲解')
-    expect(wrapper.findAll('[aria-label="1 份讲解正在生成"]')).toHaveLength(2)
+    expect(wrapper.get('button[aria-label="后台任务"]').text()).toContain('1')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('中文')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('EN')
 
-    vi.advanceTimersByTime(5000)
+    vi.advanceTimersByTime(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('《星际探索》的后台处理已经结束')
-    expect(wrapper.text()).toContain('查看实际结果')
+    expect(wrapper.text()).toContain('已完成')
     expect(wrapper.text()).not.toContain('生成成功')
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/v1/teaching-plans'))).toHaveLength(1)
 
-    await wrapper.get('button[aria-label="关闭讲解完成提醒"]').trigger('click')
-    expect(wrapper.text()).not.toContain('后台处理已经结束')
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    expect(wrapper.text()).not.toContain('星际探索')
     wrapper.unmount()
   })
 
@@ -138,6 +139,7 @@ describe('AppShell', () => {
           ? new Response(null, { status: 503 })
           : response({ run: { id: 'run-1', state: 'COMPLETED' } })
       }
+      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
@@ -146,13 +148,14 @@ describe('AppShell', () => {
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('《星际探索》仍在后台准备')
+    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).not.toContain('后台处理已经结束')
 
-    await vi.advanceTimersByTimeAsync(5000)
+    await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
 
-    expect(wrapper.text()).toContain('《星际探索》的后台处理已经结束')
+    expect(wrapper.text()).toContain('已完成')
     wrapper.unmount()
   })
 
@@ -164,6 +167,7 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/assistant-runs/run-2')) {
         return response({ run: { id: 'run-2', state: 'RECEIVED' } })
       }
+      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
@@ -171,12 +175,13 @@ describe('AppShell', () => {
     await router.isReady()
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
-    expect(wrapper.text()).not.toContain('仍在后台准备')
+    expect(wrapper.get('button[aria-label="后台任务"]').text()).not.toContain('1')
 
     notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('《卡坦岛》仍在后台准备')
+    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    expect(wrapper.text()).toContain('卡坦岛')
     expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-2')
     wrapper.unmount()
   })
@@ -194,6 +199,7 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-other-tab', gameTitle: '跨标签页规则书' }])
       }
+      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
@@ -203,14 +209,11 @@ describe('AppShell', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('跨标签页规则书')
-    await vi.advanceTimersByTimeAsync(5000)
-    await flushPromises()
-    expect(activeReads).toBe(1)
-
-    await vi.advanceTimersByTimeAsync(10_000)
+    await vi.advanceTimersByTimeAsync(15_000)
     await flushPromises()
     expect(activeReads).toBe(2)
-    expect(wrapper.text()).toContain('《跨标签页规则书》仍在后台准备')
+    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    expect(wrapper.text()).toContain('跨标签页规则书')
     expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-other-tab')
     wrapper.unmount()
   })
