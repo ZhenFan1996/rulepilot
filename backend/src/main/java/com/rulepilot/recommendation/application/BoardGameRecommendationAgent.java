@@ -105,9 +105,14 @@ public class BoardGameRecommendationAgent {
                         plan.retrievalPlan(), request.message(), turn.profile()))
                 .orElseGet(RetrievalPlan::empty);
         int sourceCount = tools.catalogGameCount();
-        Optional<ReferenceIntent> namedReference = request.focusedBggId() == null
-                ? referenceIntent.resolve(request.transcript(), request.message())
+        Optional<ReferenceIntent> agentReference = request.focusedBggId() == null
+                ? planned.flatMap(plan -> referenceIntent.resolveAgent(
+                        plan.referenceTitle(), request.transcript(), request.message()))
                 : Optional.empty();
+        Optional<ReferenceIntent> namedReference = request.focusedBggId() == null
+                ? agentReference.or(() -> referenceIntent.resolve(request.transcript(), request.message()))
+                : Optional.empty();
+        if (agentReference.isPresent()) actions.add("INTERPRET_BGG_REFERENCE");
         Game resolvedNamedReference = null;
         if (namedReference.isPresent()) {
             progress.accept(ProgressStage.READING_GAME_DETAILS);

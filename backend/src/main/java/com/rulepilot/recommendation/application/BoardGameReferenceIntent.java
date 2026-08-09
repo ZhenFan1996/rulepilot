@@ -20,12 +20,6 @@ class BoardGameReferenceIntent {
                     + "[^《\"“]{0,12}[《\"“]([^》\"”]{2,80})[》\"”]");
     private static final Pattern REVERSED_QUOTED_COMPARISON = Pattern.compile(
             "(?iu)(?:和|跟)\\s*[《\"“]([^》\"”]{2,80})[》\"”]\\s*(?:类似|接近|差不多)");
-    private static final Pattern CHINESE_COMPARISON = Pattern.compile(
-            "(?iu)(?:类似(?:于)?|像|接近于?)\\s*([\\p{L}\\p{N}·:：'’\\- ]{2,80}?)"
-                    + "(?=的(?:桌游|游戏)|[，。！？,.!?]|$)");
-    private static final Pattern ENGLISH_COMPARISON = Pattern.compile(
-            "(?iu)(?:similar\\s+to|(?:a|some|something|games?)\\s+like)\\s+"
-                    + "([\\p{L}\\p{N}:'’\\- ]{2,80}?)(?=\\s+(?:but|with|that)|[,.!?]|$)");
     private static final Pattern NAMED_CORRECTION = Pattern.compile(
             "(?iu)(?:《([^》]{2,80})》|^([\\p{L}\\p{N}·:：'’\\- ]{2,80}?))\\s*(?:并)?不是");
     private static final Pattern CORRECTION = Pattern.compile(
@@ -53,11 +47,27 @@ class BoardGameReferenceIntent {
         return Optional.empty();
     }
 
+    Optional<ReferenceIntent> resolveAgent(
+            String interpretedTitle,
+            List<DialogueMessage> transcript,
+            String latestMessage) {
+        Optional<String> checked = checkedTitle(interpretedTitle);
+        if (checked.isEmpty()) return Optional.empty();
+        String title = checked.orElseThrow();
+        boolean groundedInLatest = containsTitle(latestMessage, title);
+        boolean groundedInTranscript = transcript != null && transcript.stream()
+                .filter(message -> message != null && "user".equals(message.role()))
+                .anyMatch(message -> containsTitle(message.text(), title));
+        if (!groundedInLatest && !groundedInTranscript) return Optional.empty();
+        return Optional.of(new ReferenceIntent(
+                title,
+                bounded(latestMessage),
+                CORRECTION.matcher(bounded(latestMessage)).find()));
+    }
+
     private Optional<String> title(String message) {
         return firstTitle(message, QUOTED_COMPARISON)
-                .or(() -> firstTitle(message, REVERSED_QUOTED_COMPARISON))
-                .or(() -> firstTitle(message, CHINESE_COMPARISON))
-                .or(() -> firstTitle(message, ENGLISH_COMPARISON));
+                .or(() -> firstTitle(message, REVERSED_QUOTED_COMPARISON));
     }
 
     private Optional<String> correctedTitle(String message) {
@@ -88,6 +98,13 @@ class BoardGameReferenceIntent {
     private String bounded(String value) {
         String normalized = value == null ? "" : value.strip().replaceAll("\\s+", " ");
         return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
+    }
+
+    private boolean containsTitle(String message, String title) {
+        String normalizedMessage = Normalizer.normalize(message == null ? "" : message, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT);
+        String normalizedTitle = Normalizer.normalize(title, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        return normalizedMessage.contains(normalizedTitle);
     }
 
     record ReferenceIntent(String title, String basedOn, boolean correction) {

@@ -86,7 +86,29 @@ public interface BoardGameRecommendationAdvisor {
             String nextQuestion,
             boolean researchRequested,
             String researchQuestion,
-            RetrievalPlan retrievalPlan) {
+            RetrievalPlan retrievalPlan,
+            String referenceTitle) {
+        public Plan(
+                DialogueAct act,
+                PreferencePatch explicitPatch,
+                UserModel userModel,
+                String assistantMessage,
+                String nextQuestion,
+                boolean researchRequested,
+                String researchQuestion,
+                RetrievalPlan retrievalPlan) {
+            this(
+                    act,
+                    explicitPatch,
+                    userModel,
+                    assistantMessage,
+                    nextQuestion,
+                    researchRequested,
+                    researchQuestion,
+                    retrievalPlan,
+                    "");
+        }
+
         public Plan(
                 DialogueAct act,
                 PreferencePatch explicitPatch,
@@ -103,7 +125,8 @@ public interface BoardGameRecommendationAdvisor {
                     nextQuestion,
                     researchRequested,
                     researchQuestion,
-                    RetrievalPlan.empty());
+                    RetrievalPlan.empty(),
+                    "");
         }
 
         public Plan {
@@ -111,6 +134,7 @@ public interface BoardGameRecommendationAdvisor {
             nextQuestion = nextQuestion == null ? "" : nextQuestion;
             researchQuestion = researchQuestion == null ? "" : researchQuestion;
             retrievalPlan = retrievalPlan == null ? RetrievalPlan.empty() : retrievalPlan;
+            referenceTitle = referenceTitle == null ? "" : referenceTitle;
         }
     }
 
