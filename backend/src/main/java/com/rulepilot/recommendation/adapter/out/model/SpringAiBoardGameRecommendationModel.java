@@ -26,7 +26,7 @@ import org.springframework.stereotype.Component;
 public class SpringAiBoardGameRecommendationModel implements BoardGameRecommendationModel {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
-    static final int QWEN_THINKING_BUDGET = 512;
+    static final int QWEN_THINKING_BUDGET = 256;
 
     private final RuntimeModelConfiguration models;
 
@@ -67,6 +67,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         } else {
             options = ToolCallingChatOptions.builder();
         }
+        long startedAt = System.nanoTime();
         ChatResponse response = model.call(new Prompt(
                 request.messages().stream().map(this::message).toList(),
                 options.toolCallbacks(callbacks)
@@ -76,7 +77,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
             throw new IllegalStateException("recommendation model returned no result");
         }
-        logUsage(request, response);
+        logUsage(request, response, (System.nanoTime() - startedAt) / 1_000_000);
         AssistantMessage output = response.getResult().getOutput();
         return new Turn(
                 output.getText(),
@@ -85,7 +86,7 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         .toList());
     }
 
-    private void logUsage(Request request, ChatResponse response) {
+    private void logUsage(Request request, ChatResponse response, long elapsedMs) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
                         .sum()
@@ -98,9 +99,10 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 ? null
                 : response.getMetadata().getUsage();
         LOGGER.info(
-                "Recommendation ReAct model usage: provider={}, model={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                "Recommendation ReAct model usage: provider={}, model={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
                 models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
                 models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
+                elapsedMs,
                 inputCharacters,
                 request.maxOutputTokens(),
                 usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),

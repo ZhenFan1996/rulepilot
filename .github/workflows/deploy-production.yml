@@ -138,7 +138,7 @@ jobs:
           found=false
           qwen_enabled=false
           qwen_key_present=false
-          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
+          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_AGENT_TIMEOUT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -167,6 +167,7 @@ jobs:
             'BGG_RECOMMENDATION_PROVIDER=spring-ai' \
             'BGG_RECOMMENDATION_MODEL_PROVIDER=qwen' \
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
+            'BGG_RECOMMENDATION_AGENT_TIMEOUT=PT55S' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
             'WEB_SEARCH_MODEL=qwen3.7-plus' \
@@ -364,7 +365,7 @@ jobs:
               throw new Error(`recommendation stream first progress took ${firstProgressMillis ?? 'no'} ms`)
             }
             if (result == null) throw new Error('recommendation stream completed without a result event')
-            return { result, firstProgressMillis }
+            return { result, firstProgressMillis, totalMillis: Date.now() - startedAt }
           }
           // This path invokes paid models. Run it once; application budgets and diagnostics make failure actionable.
           for (let attempt = 1; attempt <= 1; attempt += 1) {
@@ -415,10 +416,12 @@ jobs:
               const openingResult = openingStreamed.result
               if (openingResult.mode !== 'model_assisted'
                   || typeof openingResult.assistantMessage !== 'string'
-                  || openingResult.assistantMessage.length === 0) {
+                  || openingResult.assistantMessage.length === 0
+                  || openingStreamed.totalMillis > 30_000) {
                 throw new Error(`recommendation Agent did not complete the opening turn: ${JSON.stringify({
                   httpStatus: openingAgent.status,
                   outcome: openingResult.outcome ?? 'missing',
+                  totalMillis: openingStreamed.totalMillis,
                   actions: Array.isArray(openingResult.harness?.actions) ? openingResult.harness.actions : [],
                 })}`)
               }
@@ -466,11 +469,13 @@ jobs:
                 && agentActions.includes('LOOKUP_BGG_CANDIDATES')
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
-                  || !completedRecommendation || !usedSemanticReActTools) {
+                  || !completedRecommendation || !usedSemanticReActTools
+                  || streamed.totalMillis > 30_000) {
                 const diagnostic = JSON.stringify({
                   httpStatus: agent.status,
                   outcome: agentResult.outcome ?? 'missing',
                   gameCount: Array.isArray(agentResult.games) ? agentResult.games.length : -1,
+                  totalMillis: streamed.totalMillis,
                   actions: Array.isArray(agentActions) ? agentActions : [],
                 })
                 throw new Error(`recommendation Agent returned an invalid response: ${diagnostic}`)
@@ -498,7 +503,7 @@ jobs:
                 throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
               }
               console.log(
-                `Verified public frontend, two-turn recommendation SSE (${openingStreamed.firstProgressMillis}/${streamed.firstProgressMillis} ms first progress), BGG API, and game detail on attempt ${attempt}`,
+                `Verified public frontend, two-turn recommendation SSE (${openingStreamed.totalMillis}/${streamed.totalMillis} ms total; ${openingStreamed.firstProgressMillis}/${streamed.firstProgressMillis} ms first progress), BGG API, and game detail on attempt ${attempt}`,
               )
               process.exit(0)
             } catch (error) {

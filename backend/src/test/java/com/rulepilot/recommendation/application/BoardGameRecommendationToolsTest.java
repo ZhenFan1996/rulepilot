@@ -51,6 +51,44 @@ class BoardGameRecommendationToolsTest {
     }
 
     @Test
+    void resolvesAndHydratesTitleHypothesesInOneAgentFacingRead() {
+        List<String> calls = new ArrayList<>();
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                throw new AssertionError("broad ranking search must not run");
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                calls.add("names:" + names);
+                return List.of(game(20).ranking(), game(21).ranking());
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                calls.add("ids:" + bggIds);
+                return bggIds.stream().map(BoardGameRecommendationToolsTest::game).toList();
+            }
+
+            @Override
+            public int gameCount() {
+                return 179_737;
+            }
+        };
+        BoardGameRecommendationTools tools = new BoardGameRecommendationTools(catalog, new DisabledResearch());
+
+        var observation = tools.inspectTitles(List.of("Synthetic Twenty", "Synthetic Twenty One"));
+
+        assertThat(calls).containsExactly(
+                "names:[Synthetic Twenty, Synthetic Twenty One]",
+                "ids:[20, 21]");
+        assertThat(observation.status()).isEqualTo(ToolStatus.SUCCESS);
+        assertThat(observation.tool()).isEqualTo(ToolName.INSPECT_BGG_TITLES);
+        assertThat(observation.games()).extracting(value -> value.ranking().bggId()).containsExactly(20, 21);
+    }
+
+    @Test
     void returnsATypedErrorObservationInsteadOfLeakingCatalogFailures() {
         BoardGameRecommendationCatalog failing = new BoardGameRecommendationCatalog() {
             @Override
