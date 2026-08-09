@@ -54,6 +54,17 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByRole('link', { name: /BGG 社区文件（用户上传，非官方）/ })).toHaveAttribute(
     'href', 'https://boardgamegeek.com/boardgame/42/files',
   )
+  const coverColumn = page.getByTestId('game-cover-column')
+  const longDetails = page.getByTestId('game-long-details')
+  await page.getByText(/BGG 资料仅用于推荐、识别游戏和展示封面/).scrollIntoViewIfNeeded()
+  await page.evaluate(() => window.scrollTo(
+    0,
+    Math.min(900, document.documentElement.scrollHeight - window.innerHeight),
+  ))
+  const [coverBox, detailsBox] = await Promise.all([coverColumn.boundingBox(), longDetails.boundingBox()])
+  expect(coverBox).not.toBeNull()
+  expect(detailsBox).not.toBeNull()
+  expect(rectanglesOverlap(coverBox!, detailsBox!)).toBe(false)
   await page.getByRole('button', { name: '选择这款桌游并找规则书' }).click()
   await expect(page).toHaveURL(/\/teach\?editionId=edition-1&onboarding=selected-game/)
   expect(bggImportCount).toBe(1)
@@ -267,6 +278,16 @@ async function mockOnboardingApis(page: Page, options: {
     }
     return route.fulfill({ status: 404 })
   })
+}
+
+function rectanglesOverlap(
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+) {
+  return left.x < right.x + right.width
+    && left.x + left.width > right.x
+    && left.y < right.y + right.height
+    && left.y + left.height > right.y
 }
 
 async function hasHorizontalOverflow(page: Page) {
