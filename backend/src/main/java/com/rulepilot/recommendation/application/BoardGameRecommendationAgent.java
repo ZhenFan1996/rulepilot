@@ -353,7 +353,11 @@ public class BoardGameRecommendationAgent {
         }
         if (arguments.has("type")) {
             JsonNode update = preference(arguments.path("type"), request);
-            type = enumValue(BggGameType.class, update.path("value"), "GAME_TYPE_INVALID");
+            BggGameType value = enumValue(
+                    BggGameType.class, update.path("value"), "GAME_TYPE_INVALID");
+            requirePositiveGameTypeEvidence(
+                    groundedEvidenceText(text(update.path("evidence"), 1, 160), request), value);
+            type = value;
         }
         if (arguments.has("interaction")) {
             JsonNode update = preference(arguments.path("interaction"), request);
@@ -405,10 +409,14 @@ public class BoardGameRecommendationAgent {
                     yield new RecommendationProfile(
                             result.players(), result.maxMinutes(), weight, result.type(), result.interaction());
                 }
-                case "type" -> new RecommendationProfile(
-                        result.players(), result.maxMinutes(), result.maxWeight(),
-                        enumValue(BggGameType.class, value, "GAME_TYPE_INVALID"),
-                        result.interaction());
+                case "type" -> {
+                    BggGameType preference = enumValue(
+                            BggGameType.class, value, "GAME_TYPE_INVALID");
+                    requirePositiveGameTypeEvidence(groundedEvidence, preference);
+                    yield new RecommendationProfile(
+                            result.players(), result.maxMinutes(), result.maxWeight(),
+                            preference, result.interaction());
+                }
                 case "interaction" -> {
                     InteractionPreference preference = enumValue(
                             InteractionPreference.class, value, "INTERACTION_INVALID");
@@ -470,6 +478,33 @@ public class BoardGameRecommendationAgent {
             case TEAM -> containsPositiveTerm(normalized, "组队", "分组", "团队", "team", "teams");
         };
         if (!explicit) throw new InvalidAction("INTERACTION_EVIDENCE_MISMATCH");
+    }
+
+    private void requirePositiveGameTypeEvidence(String evidence, BggGameType type) {
+        String normalized = normalizedEvidence(evidence).toLowerCase(Locale.ROOT);
+        boolean explicit = switch (type) {
+            case ALL -> containsPositiveTerm(
+                    normalized, "不限类型", "类型不限", "什么类型都行", "any game type", "any type", "all types");
+            case ABSTRACT -> containsPositiveTerm(
+                    normalized, "抽象策略", "抽象棋类", "抽象游戏", "abstract strategy", "abstract game");
+            case CUSTOMIZABLE -> containsPositiveTerm(
+                    normalized, "集换式", "可定制游戏", "collectible card game", "customizable game");
+            case CHILDREN -> containsPositiveTerm(
+                    normalized, "儿童游戏", "幼儿游戏", "给孩子玩", "children's game", "kids game");
+            case FAMILY -> containsPositiveTerm(
+                    normalized, "家庭游戏", "亲子游戏", "全家玩", "family game");
+            case PARTY -> containsPositiveTerm(
+                    normalized, "派对游戏", "聚会游戏", "party game");
+            case STRATEGY -> containsPositiveTerm(
+                    normalized, "策略游戏", "策略类", "战略游戏", "战略类", "德式", "重策", "轻策", "strategy game");
+            case THEMATIC -> containsPositiveTerm(
+                    normalized, "主题游戏", "美式游戏", "美式主题", "thematic game");
+            case WAR -> containsPositiveTerm(
+                    normalized, "战争游戏", "兵棋", "war game", "wargame");
+            case EXPANSION -> containsPositiveTerm(
+                    normalized, "扩展", "扩充", "资料片", "expansion");
+        };
+        if (!explicit) throw new InvalidAction("GAME_TYPE_EVIDENCE_MISMATCH");
     }
 
     private boolean containsPositiveTerm(String value, String... candidates) {
@@ -771,6 +806,8 @@ public class BoardGameRecommendationAgent {
                 "New candidate recommendations must use recommend_games so the UI can render verified cards. Its brief connective message may name a declared reference game, but no candidate; cards contain candidate names and facts.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
                 "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
+            case "GAME_TYPE_EVIDENCE_MISMATCH" ->
+                "Persist a BGG game type only when the cited user message explicitly asks for that type. Similarity mechanics, a reference game's facts, setting, or occasion are not type evidence.";
             case "FINAL_ID_FAILS_HARD_GATES" ->
                 "Select only IDs listed in runMemory.recommendableBggIds; those IDs already satisfy the current typed hard gates.";
             default -> "Correct the action arguments using the supplied JSON schema and current runMemory.";

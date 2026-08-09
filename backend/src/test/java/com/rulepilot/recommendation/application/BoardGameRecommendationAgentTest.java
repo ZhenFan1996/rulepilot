@@ -88,7 +88,8 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "resolve",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\"}");
+                            "{\"title\":\"Mosaic Field\","
+                                    + "\"preferenceUpdates\":[{\"field\":\"type\",\"value\":\"STRATEGY\",\"evidence\":\"U1\"}]}");
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
@@ -132,6 +133,7 @@ class BoardGameRecommendationAgentTest {
                 .containsExactly(60, 61);
         assertThat(response.games().getFirst().matches()).anyMatch(value -> value.contains("Pattern Building"));
         assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_PREFERENCE_UPDATE:GAME_TYPE_EVIDENCE_MISMATCH",
                 "RESOLVE_BGG_REFERENCE",
                 "IGNORED_POST_REFERENCE_PREFERENCE_UPDATE",
                 "SEARCH_BGG_BY_NAME",
