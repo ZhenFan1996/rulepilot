@@ -387,7 +387,43 @@ jobs:
                 ? csrf.headers.getSetCookie()
                 : [csrf.headers.get('set-cookie')].filter(Boolean)
               const cookie = setCookies.map((value) => value.split(';', 1)[0]).join('; ')
-              const recommendationPrompt = '5 人，90 分钟，想要谈判、互坑，不要合作，而且别太难教'
+              const openingPrompt = '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
+              const openingStartedAt = Date.now()
+              const openingAgent = await fetch(
+                `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent/stream?locale=zh-CN`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'content-type': 'application/json',
+                    accept: 'text/event-stream',
+                    [payload.headerName]: payload.token,
+                    cookie,
+                  },
+                  body: JSON.stringify({
+                    profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+                    message: openingPrompt,
+                    excludedBggIds: [],
+                    transcript: [{ role: 'user', text: openingPrompt }],
+                    focusedBggId: null,
+                    knownGames: [],
+                    shownBggIds: [],
+                  }),
+                  signal: AbortSignal.timeout(120_000),
+                },
+              )
+              const openingStreamed = await readRecommendationStream(openingAgent, openingStartedAt)
+              const openingResult = openingStreamed.result
+              if (openingResult.mode !== 'model_assisted'
+                  || typeof openingResult.assistantMessage !== 'string'
+                  || openingResult.assistantMessage.length === 0) {
+                throw new Error(`recommendation Agent did not complete the opening turn: ${JSON.stringify({
+                  httpStatus: openingAgent.status,
+                  outcome: openingResult.outcome ?? 'missing',
+                  actions: Array.isArray(openingResult.harness?.actions) ? openingResult.harness.actions : [],
+                })}`)
+              }
+              const openingGames = Array.isArray(openingResult.games) ? openingResult.games : []
+              const recommendationPrompt = '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款吧。'
               const agentStartedAt = Date.now()
               const agent = await fetch(
                 `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent/stream?locale=zh-CN`,
@@ -400,11 +436,21 @@ jobs:
                     cookie,
                   },
                   body: JSON.stringify({
-                    profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
+                    profile: openingResult.profile,
                     message: recommendationPrompt,
                     excludedBggIds: [],
-                    transcript: [{ role: 'user', text: recommendationPrompt }],
+                    transcript: [
+                      { role: 'user', text: openingPrompt },
+                      { role: 'assistant', text: openingResult.assistantMessage },
+                      { role: 'user', text: recommendationPrompt },
+                    ],
                     focusedBggId: null,
+                    knownGames: openingGames.map(({ game }) => ({
+                      bggId: game.bggId,
+                      name: game.name,
+                      originalName: game.originalName,
+                    })),
+                    shownBggIds: openingGames.map(({ game }) => game.bggId),
                   }),
                   signal: AbortSignal.timeout(120_000),
                 },
@@ -421,7 +467,13 @@ jobs:
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
                   || !completedRecommendation || !usedSemanticReActTools) {
-                throw new Error(`recommendation Agent returned an invalid HTTP ${agent.status} response`)
+                const diagnostic = JSON.stringify({
+                  httpStatus: agent.status,
+                  outcome: agentResult.outcome ?? 'missing',
+                  gameCount: Array.isArray(agentResult.games) ? agentResult.games.length : -1,
+                  actions: Array.isArray(agentActions) ? agentActions : [],
+                })
+                throw new Error(`recommendation Agent returned an invalid response: ${diagnostic}`)
               }
               const recommendations = await fetch(
                 `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendations`,
@@ -446,7 +498,7 @@ jobs:
                 throw new Error(`BGG game detail returned an invalid HTTP ${details.status} response`)
               }
               console.log(
-                `Verified public frontend, recommendation SSE (${streamed.firstProgressMillis} ms first progress), BGG API, and game detail on attempt ${attempt}`,
+                `Verified public frontend, two-turn recommendation SSE (${openingStreamed.firstProgressMillis}/${streamed.firstProgressMillis} ms first progress), BGG API, and game detail on attempt ${attempt}`,
               )
               process.exit(0)
             } catch (error) {

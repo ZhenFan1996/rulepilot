@@ -125,8 +125,8 @@ const profileLabels = computed(() => {
   return labels
 })
 
-const toolLabels = computed(() => {
-  const actions = response.value?.harness?.actions ?? []
+function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
+  const actions = turnResponse?.harness?.actions ?? []
   const labels: string[] = []
   const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
   if (actions.some(action => action === 'REPLY_TO_USER' || action === 'ASK_USER' || action === 'UPDATE_PREFERENCES' || action === 'RECOMMEND_GAMES')) add(t('toolUnderstand'))
@@ -137,7 +137,7 @@ const toolLabels = computed(() => {
   if (actions.includes('DISCOVER_CANDIDATES')) add(t('toolDiscover'))
   if (actions.some(action => action === 'RESEARCH_GAME_FIT' || action === 'RESEARCH_GAME_QUESTION')) add(t('toolResearch'))
   return labels
-})
+}
 
 async function csrfToken() {
   if (csrf) return csrf
@@ -166,12 +166,21 @@ function endLoading() {
 async function scrollConversationToLatest() {
   await nextTick()
   const scroller = conversationScroller.value
-  if (scroller) scroller.scrollTop = scroller.scrollHeight
+  if (!scroller) return
+  const turns = scroller.querySelectorAll<HTMLElement>('[data-conversation-message]')
+  const latest = turns.item(turns.length - 1)
+  if (latest?.dataset.hasRecommendations === 'true') {
+    const scrollerTop = scroller.getBoundingClientRect().top
+    const latestTop = latest.getBoundingClientRect().top
+    scroller.scrollTop = Math.max(0, scroller.scrollTop + latestTop - scrollerTop - 8)
+    return
+  }
+  scroller.scrollTop = scroller.scrollHeight
 }
 
 async function sendTurn(message: string, requestProfile: RecommendationProfile, userLabel?: string, excludedBggIds: number[] = [], focusedBggId: number | null = null) {
   if (userLabel) messages.value.push({ id: ++messageId, role: 'user', text: userLabel })
-  const transcript = messages.value.slice(-24).map(item => ({ ...item }))
+  const transcript = messages.value.slice(-24).map(({ id, role, text }) => ({ id, role, text }))
   const pending = {
     message,
     profile: { ...requestProfile },
@@ -203,7 +212,12 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
     knownGames.value = [...parsed.games.map(entry => entry.game), ...knownGames.value]
       .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
       .slice(0, 60)
-    messages.value.push({ id: ++messageId, role: 'assistant', text: parsed.assistantMessage })
+    messages.value.push({
+      id: ++messageId,
+      role: 'assistant',
+      text: parsed.assistantMessage,
+      response: parsed,
+    })
   } catch {
     failed.value = true
   } finally {
@@ -223,8 +237,8 @@ function submitMessage() {
   void sendTurn(message, profile.value, message, [], activeFocusedBggId.value)
 }
 
-function moreGames() {
-  if (!response.value?.games.length || loading.value) return
+function moreGames(turnResponse?: RecommendationAgentResponse) {
+  if (!turnResponse?.games.length || loading.value || turnResponse !== response.value) return
   void sendTurn(t('more'), profile.value, t('more'), seenBggIds.value)
 }
 
@@ -300,8 +314,28 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="min-w-0 bg-paper text-ink">
-          <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[31rem] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:px-6 sm:py-7 sm:pb-9" aria-live="polite">
-            <div v-for="message in messages" :key="message.id" class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'"><p class="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6" :class="message.role === 'user' ? 'rounded-br-sm bg-felt text-white' : 'rounded-bl-sm border border-ink/8 bg-canvas text-ink/72'">{{ message.text }}</p></div>
+          <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[70vh] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[31rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[46rem]" aria-live="polite">
+            <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+              <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
+              <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
+                <p class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72">{{ message.text }}</p>
+
+                <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" aria-label="recommendation tool trail">
+                  <span class="font-semibold text-ink/58">{{ t('toolTrail') }}</span>
+                  <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
+                </div>
+
+                <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p class="text-xs leading-5 text-ink/48">{{ t('source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
+                    <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ t('more') }}</button>
+                  </div>
+                  <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                    <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" />
+                  </TransitionGroup>
+                </div>
+              </article>
+            </div>
             <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
           </div>
           <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
@@ -311,19 +345,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="response?.games.length" class="mt-8">
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p class="max-w-3xl text-sm leading-6 text-ink/48">{{ t('source', { source: response.sourceCount.toLocaleString(), count: response.candidatesEvaluated }) }}</p>
-          <div v-if="toolLabels.length" class="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink/48" aria-label="recommendation tool trail">
-            <span class="font-semibold text-ink/58">{{ t('toolTrail') }}</span>
-            <span v-for="label in toolLabels" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
-          </div>
-        </div>
-        <button type="button" :disabled="loading" class="min-h-11 text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40" @click="moreGames">{{ t('more') }}</button>
-      </div>
-      <TransitionGroup tag="div" name="tile" class="mt-4 grid gap-4 md:grid-cols-3"><RecommendationGameCard v-for="entry in response.games" :key="entry.game.bggId" :entry="entry" :sources="response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" /></TransitionGroup>
-      <RecommendationRulebookHandoff v-if="selectedGame" :key="selectedGame.bggId" :game="selectedGame" :profile="profile" @close="selectedGame = null" />
-    </div>
+    <RecommendationRulebookHandoff v-if="selectedGame" :key="selectedGame.bggId" class="mt-8" :game="selectedGame" :profile="profile" @close="selectedGame = null" />
   </section>
 </template>

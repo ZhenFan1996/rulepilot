@@ -279,18 +279,19 @@ test('keeps a corrected reference title in conversational context on mobile', as
     ]),
   })
 
-  const reply = page.getByText(/Mosaic Field 当成一个全新问题/)
+  const recommendationTurn = page.getByTestId('assistant-recommendation-turn')
+  const reply = recommendationTurn.getByText(/Mosaic Field 当成一个全新问题/)
   await expect(reply).toBeVisible()
-  await expect(page.getByText('在 BGG 核对参考游戏')).toBeVisible()
-  await expect(page.getByRole('heading', { level: 3, name: 'Glass Orchard' })).toBeVisible()
-  const viewportAtBottom = await page.getByTestId('recommendation-conversation').evaluate(element =>
-    element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
-  )
-  expect(viewportAtBottom).toBe(true)
+  await expect(recommendationTurn.getByText('在 BGG 核对参考游戏')).toBeVisible()
+  await expect(recommendationTurn.getByRole('heading', { level: 3, name: 'Glass Orchard' })).toBeVisible()
   const replyBox = await reply.boundingBox()
+  const conversationBox = await page.getByTestId('recommendation-conversation').boundingBox()
   const composerBox = await composer.boundingBox()
   expect(replyBox).not.toBeNull()
+  expect(conversationBox).not.toBeNull()
   expect(composerBox).not.toBeNull()
+  expect(replyBox!.y).toBeGreaterThanOrEqual(conversationBox!.y)
+  expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(conversationBox!.y + conversationBox!.height)
   expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
 })
 

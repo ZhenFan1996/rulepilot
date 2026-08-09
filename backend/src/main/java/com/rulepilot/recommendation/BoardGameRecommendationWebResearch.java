@@ -16,6 +16,20 @@ public interface BoardGameRecommendationWebResearch {
         return Optional.empty();
     }
 
+    /** Signals that the configured public-research capability cannot serve this run. */
+    final class WebResearchUnavailableException extends RuntimeException {
+        private final String code;
+
+        public WebResearchUnavailableException(String code) {
+            super(code);
+            this.code = code;
+        }
+
+        public String code() {
+            return code;
+        }
+    }
+
     record Request(List<Candidate> candidates, String locale, String question) {
         public Request(List<Candidate> candidates, String locale) {
             this(candidates, locale, "");
@@ -77,12 +91,14 @@ public interface BoardGameRecommendationWebResearch {
         }
     }
 
-    record CandidateLead(int bggId, String name, String fitObservation, List<Integer> sourceIndexes) {
-        public CandidateLead(int bggId, String name, List<Integer> sourceIndexes) {
-            this(bggId, name, "", sourceIndexes);
+    /** Source-backed title hypothesis; BGG identity is resolved by the catalog tool afterward. */
+    record CandidateLead(String name, String fitObservation, List<Integer> sourceIndexes) {
+        public CandidateLead(String name, List<Integer> sourceIndexes) {
+            this(name, "", sourceIndexes);
         }
 
         public CandidateLead {
+            name = name == null ? "" : name.strip();
             fitObservation = fitObservation == null ? "" : fitObservation;
             sourceIndexes = sourceIndexes == null ? List.of() : List.copyOf(sourceIndexes);
         }
