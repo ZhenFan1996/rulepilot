@@ -23,7 +23,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 class SpringAiBoardGameRecommendationModelTest {
 
     @Test
-    void preservesNativeActionCallsAndUsesABoundedQwenPlanningBudget() {
+    void preservesNativeActionCallsAndRequiresTheQwenActionProtocol() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)).thenReturn(false);
@@ -59,17 +59,12 @@ class SpringAiBoardGameRecommendationModelTest {
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
         OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getToolChoice()).isEqualTo("auto");
+        assertThat(options.getToolChoice()).isEqualTo("required");
         assertThat(options.getParallelToolCalls()).isFalse();
         assertThat(options.getTemperature()).isEqualTo(0.2);
         assertThat(options.getMaxTokens()).isEqualTo(1_200);
         assertThat(options.getExtraBody())
-                .containsEntry("enable_thinking", true)
-                .containsEntry(
-                        "thinking_budget",
-                        SpringAiBoardGameRecommendationModel.QWEN_THINKING_BUDGET)
-                .containsEntry("preserve_thinking", false);
-        assertThat(SpringAiBoardGameRecommendationModel.QWEN_THINKING_BUDGET).isEqualTo(256);
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("enable_thinking", false));
         assertThat(options.getToolCallbacks()).singleElement().satisfies(callback ->
                 assertThat(callback.getToolDefinition().name()).isEqualTo("reply_to_user"));
     }
