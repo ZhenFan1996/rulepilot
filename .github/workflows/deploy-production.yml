@@ -380,6 +380,7 @@ jobs:
                 ? csrf.headers.getSetCookie()
                 : [csrf.headers.get('set-cookie')].filter(Boolean)
               const cookie = setCookies.map((value) => value.split(';', 1)[0]).join('; ')
+              const recommendationPrompt = '5 人，90 分钟，想要谈判、互坑，不要合作，而且别太难教'
               const agentStartedAt = Date.now()
               const agent = await fetch(
                 `${process.env.RULEPILOT_PUBLIC_URL}/api/v1/bgg/recommendation-agent/stream?locale=zh-CN`,
@@ -393,9 +394,9 @@ jobs:
                   },
                   body: JSON.stringify({
                     profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
-                    message: '4 人，60 分钟，想玩合作游戏',
+                    message: recommendationPrompt,
                     excludedBggIds: [],
-                    transcript: [{ role: 'user', text: '4 人，60 分钟，想玩合作游戏' }],
+                    transcript: [{ role: 'user', text: recommendationPrompt }],
                     focusedBggId: null,
                   }),
                   signal: AbortSignal.timeout(120_000),

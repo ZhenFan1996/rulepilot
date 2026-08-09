@@ -49,6 +49,13 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /firstProgressMillis > 20_000/)
   assert.match(deploymentWorkflow, /AbortSignal\.timeout\(120_000\)/)
   assert.match(deploymentWorkflow, /attempt <= 3/)
+  assert.match(
+    deploymentWorkflow,
+    /const recommendationPrompt = '5 人，90 分钟，想要谈判、互坑，不要合作，而且别太难教'/,
+  )
+  assert.match(deploymentWorkflow, /message: recommendationPrompt/)
+  assert.match(deploymentWorkflow, /transcript: \[\{ role: 'user', text: recommendationPrompt \}\]/)
+  assert.doesNotMatch(deploymentWorkflow, /4 人，60 分钟，想玩合作游戏/)
   assert.match(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
   assert.match(deploymentWorkflow, /RANK_STRUCTURED_CANDIDATES/)
   assert.match(deploymentWorkflow, /MODEL_SELECT_TOOLS/)
