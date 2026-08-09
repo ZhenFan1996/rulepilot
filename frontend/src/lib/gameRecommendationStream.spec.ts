@@ -30,7 +30,7 @@ describe('streamGameRecommendation', () => {
 
   it('keeps JSON response compatibility during a rolling deployment', async () => {
     const payload = {
-      outcome: 'unavailable', mode: 'deterministic', assistantMessage: '暂时不可用。',
+      outcome: 'unavailable', mode: 'model_assisted', assistantMessage: '暂时不可用。',
       profile: { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' },
       clarification: null, sourceCount: 0, candidatesEvaluated: 0, games: [],
     }

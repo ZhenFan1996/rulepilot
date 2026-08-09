@@ -169,7 +169,7 @@ jobs:
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
-            'WEB_SEARCH_MODEL=qwen3.5-plus' \
+            'WEB_SEARCH_MODEL=qwen3.7-plus' \
             'QWEN_MODEL=qwen3.7-plus' \
             'QWEN_VISION_CAPABLE=true' \
             'RULEBOOK_DISCOVERY_MODEL=qwen3.7-plus' \
@@ -413,16 +413,14 @@ jobs:
               const agentResult = streamed.result
               const agentActions = agentResult.harness?.actions
               const completedRecommendation = Array.isArray(agentActions)
-                && (agentActions.includes('COMPOSE_RECOMMENDATIONS')
-                  || agentActions.includes('RANK_STRUCTURED_CANDIDATES'))
-              const usedNativeBggTools = Array.isArray(agentActions)
-                && agentActions.includes('MODEL_SELECT_TOOLS')
+                && agentActions.includes('RECOMMEND_GAMES')
+              const usedSemanticReActTools = Array.isArray(agentActions)
                 && (agentActions.includes('SEARCH_BGG_BY_NAME')
                   || agentActions.includes('DISCOVER_CANDIDATES'))
                 && agentActions.includes('LOOKUP_BGG_CANDIDATES')
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
-                  || !completedRecommendation || !usedNativeBggTools) {
+                  || !completedRecommendation || !usedSemanticReActTools) {
                 throw new Error(`recommendation Agent returned an invalid HTTP ${agent.status} response`)
               }
               const recommendations = await fetch(

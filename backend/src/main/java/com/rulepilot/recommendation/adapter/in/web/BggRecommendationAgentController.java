@@ -6,7 +6,7 @@ import com.rulepilot.catalog.BggRecommendationPresentation.LocalizedTaxonomy;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationRequest;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;

@@ -14,7 +14,6 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Clarification;
-import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ClarificationOption;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.DecisionMode;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
@@ -42,13 +41,13 @@ class BggRecommendationAgentControllerTest {
                 4, null, null, BggGameType.ALL, InteractionPreference.ANY);
         when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
                 Outcome.NEEDS_CLARIFICATION,
-                DecisionMode.DETERMINISTIC,
+                DecisionMode.MODEL_ASSISTED,
                 "你们愿意为一局留出多长时间？",
                 profile,
                 new Clarification(
-                        PreferenceField.DURATION,
+                        PreferenceField.CONVERSATION,
                         "你们愿意为一局留出多长时间？",
-                        List.of(new ClarificationOption("60", "1 小时内"))),
+                        List.of()),
                 0,
                 0,
                 List.of()));
@@ -64,8 +63,9 @@ class BggRecommendationAgentControllerTest {
 
         assertThat(response.outcome()).isEqualTo("needs_clarification");
         assertThat(response.profile().players()).isEqualTo(4);
-        assertThat(response.clarification().field()).isEqualTo("duration");
-        assertThat(response.clarification().options().getFirst().label()).isEqualTo("1 小时内");
+        assertThat(response.mode()).isEqualTo("model_assisted");
+        assertThat(response.clarification().field()).isEqualTo("conversation");
+        assertThat(response.clarification().options()).isEmpty();
     }
 
     @Test

@@ -1,9 +1,11 @@
 package com.rulepilot.recommendation.adapter.out.model;
 
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
-import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
+import com.rulepilot.recommendation.BoardGameRecommendationModel;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -18,14 +20,16 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+/** Native action-call adapter; all actions execute inside the application-owned ReAct loop. */
 @Component
 @Profile("!test")
-public class SpringAiBoardGameRecommendationCandidateModel
-        implements BoardGameRecommendationCandidateModel {
+public class SpringAiBoardGameRecommendationModel implements BoardGameRecommendationModel {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
 
     private final RuntimeModelConfiguration models;
 
-    public SpringAiBoardGameRecommendationCandidateModel(RuntimeModelConfiguration models) {
+    public SpringAiBoardGameRecommendationModel(RuntimeModelConfiguration models) {
         this.models = models;
     }
 
@@ -57,12 +61,13 @@ public class SpringAiBoardGameRecommendationCandidateModel
         ChatResponse response = model.call(new Prompt(
                 request.messages().stream().map(this::message).toList(),
                 options.toolCallbacks(callbacks)
-                        .temperature(0.0)
+                        .temperature(0.2)
                         .maxTokens(request.maxOutputTokens())
                         .build()));
         if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
-            throw new IllegalStateException("recommendation candidate model returned no result");
+            throw new IllegalStateException("recommendation model returned no result");
         }
+        logUsage(request, response);
         AssistantMessage output = response.getResult().getOutput();
         return new Turn(
                 output.getText(),
@@ -71,8 +76,29 @@ public class SpringAiBoardGameRecommendationCandidateModel
                         .toList());
     }
 
-    private org.springframework.ai.chat.messages.Message message(
-            BoardGameRecommendationCandidateModel.Message message) {
+    private void logUsage(Request request, ChatResponse response) {
+        int inputCharacters = request.messages().stream()
+                        .mapToInt(message -> message.content().length())
+                        .sum()
+                + request.tools().stream()
+                        .mapToInt(tool -> tool.name().length()
+                                + tool.description().length()
+                                + tool.inputSchema().length())
+                        .sum();
+        org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
+                ? null
+                : response.getMetadata().getUsage();
+        LOGGER.info(
+                "Recommendation ReAct model usage: provider={}, model={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
+                models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
+                inputCharacters,
+                request.maxOutputTokens(),
+                usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
+                usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
+    }
+
+    private org.springframework.ai.chat.messages.Message message(BoardGameRecommendationModel.Message message) {
         return switch (message.role()) {
             case SYSTEM -> new SystemMessage(message.content());
             case USER -> new UserMessage(message.content());
@@ -108,7 +134,7 @@ public class SpringAiBoardGameRecommendationCandidateModel
 
         @Override
         public String call(String input) {
-            throw new IllegalStateException("recommendation tools execute only in the application-owned loop");
+            throw new IllegalStateException("recommendation actions execute only in the application-owned loop");
         }
     }
 }

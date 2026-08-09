@@ -212,7 +212,7 @@ rulepilot:
       enabled: ${QWEN_ENABLED:false}
       api-key: ${QWEN_API_KEY:}
       base-url: ${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
-      model: ${QWEN_MODEL:qwen3-vl-plus}
+      model: ${QWEN_MODEL:qwen3.7-plus}
       vision-capable: ${QWEN_VISION_CAPABLE:true}
     compatible:
       enabled: ${COMPATIBLE_MODEL_ENABLED:false}
@@ -259,7 +259,7 @@ rulepilot:
         enabled: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:false}
         api-key: ${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}
         base-url: ${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}
-        model: ${WEB_SEARCH_MODEL:qwen3.5-plus}
+        model: ${WEB_SEARCH_MODEL:qwen3.7-plus}
         timeout: ${BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT:PT25S}
         cache-ttl: ${BGG_RECOMMENDATION_WEB_RESEARCH_CACHE_TTL:P7D}
         hourly-limit: ${BGG_RECOMMENDATION_WEB_RESEARCH_HOURLY_LIMIT:60}
