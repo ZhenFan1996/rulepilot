@@ -90,6 +90,15 @@ require_directory "scripts"
 require_directory "examples/evaluation"
 require_directory ".github/workflows"
 
+for model_config in .env.example backend/src/main/resources/application.yml infra/compose.deployment.yml .github/workflows/deploy-production.yml; do
+	if grep -Eiq '(^|[:=][[:space:]]*\$\{?[^}]*:|=)qwen-plus([_-]|$)' "$model_config"; then
+		echo "FAIL prohibited qwen-plus runtime configuration: $model_config"
+		failures=$((failures + 1))
+	else
+		echo "PASS no prohibited qwen-plus runtime configuration: $model_config"
+	fi
+done
+
 readme_links=$(sed -n 's/.*](\([^)#?]*\).*/\1/p' README.md)
 for link in $readme_links; do
 	case "$link" in

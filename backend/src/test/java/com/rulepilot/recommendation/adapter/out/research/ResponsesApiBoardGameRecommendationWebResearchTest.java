@@ -1,6 +1,7 @@
 package com.rulepilot.recommendation.adapter.out.research;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -32,6 +33,29 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 class ResponsesApiBoardGameRecommendationWebResearchTest {
+
+    @Test
+    void rejectsLegacyQwenPlusBeforeCreatingAWebSearchRequest() {
+        var calls = mock(okhttp3.Call.Factory.class);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+
+        assertThatThrownBy(() -> new ResponsesApiBoardGameRecommendationWebResearch(
+                        calls,
+                        new ObjectMapper(),
+                        redis,
+                        true,
+                        "secret-test-key",
+                        "https://dashscope.aliyuncs.com/api/v1",
+                        "qwen-plus-latest",
+                        Duration.ofDays(7),
+                        20,
+                        2,
+                        Clock.systemUTC()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("qwen-plus")
+                .hasMessageContaining("prohibited");
+        org.mockito.Mockito.verifyNoInteractions(calls);
+    }
 
     @Test
     void usesTheStandardWebSearchToolAndReturnsOnlyValidatedHttpsSources() throws Exception {

@@ -3,6 +3,7 @@ package com.rulepilot.recommendation.adapter.out.model;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameTitleGrounding;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Semaphore;
 import org.slf4j.Logger;
@@ -27,8 +29,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.ClassPathResource;
@@ -43,7 +48,8 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationAdvisor.class);
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
     private static final String REFERENCE_PLANNING_REVISION = readPromptRevision(
-            "prompts/recommendation-dialogue-planner-v17-conversation-state-system.txt");
+            "prompts/recommendation-dialogue-planner-v18-provider-variance-system.txt");
+    private static final Duration INVALID_RESULT_CACHE_TTL = Duration.ofMinutes(10);
     private static final java.util.regex.Pattern EXPLICIT_MUST_HAVE = java.util.regex.Pattern.compile(
             "(?iu)(?:必须|一定要|非.+不可|缺一不可|硬性|不能没有|\\b(?:must|required|non[- ]negotiable)\\b)");
 
@@ -94,11 +100,14 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     public Optional<Plan> plan(PlanningRequest request) {
         if (!configured() || !valid(request)) return Optional.empty();
         String userContent = serialize(request);
-        Optional<JsonNode> output = requestJson("plan", planningPrompt(), userContent);
-        Optional<Plan> parsed = output.flatMap(root -> parsePlan(root, request));
-        if (parsed.isPresent()) cache(cacheKey("plan", userContent), output.orElseThrow());
+        Optional<JsonObservation> output = requestJson("plan", planningPrompt(), userContent);
+        Optional<Plan> parsed = output.flatMap(observation -> parsePlan(observation.value(), request));
+        output.filter(JsonObservation::fresh).ifPresent(observation -> cache(
+                cacheKey("plan", userContent),
+                observation.value(),
+                parsed.isPresent() ? cacheTtl : INVALID_RESULT_CACHE_TTL));
         if (output.isPresent() && parsed.isEmpty()) {
-            LOGGER.warn("Recommendation planning output failed structural validation: {}", shape(output.orElseThrow()));
+            LOGGER.warn("Recommendation planning output failed structural validation: {}", shape(output.orElseThrow().value()));
         }
         return parsed;
     }
@@ -106,12 +115,15 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     @Override
     public Optional<Slate> compose(CompositionRequest request) {
         if (!configured() || !valid(request)) return Optional.empty();
-        String userContent = serialize(request);
-        Optional<JsonNode> output = requestJson("compose", compositionPrompt(), userContent);
-        Optional<Slate> parsed = output.flatMap(root -> parseSlate(root, request));
-        if (parsed.isPresent()) cache(cacheKey("compose", userContent), output.orElseThrow());
+        String userContent = serialize(compositionInput(request));
+        Optional<JsonObservation> output = requestJson("compose", compositionPrompt(), userContent);
+        Optional<Slate> parsed = output.flatMap(observation -> parseSlate(observation.value(), request));
+        output.filter(JsonObservation::fresh).ifPresent(observation -> cache(
+                cacheKey("compose", userContent),
+                observation.value(),
+                parsed.isPresent() ? cacheTtl : INVALID_RESULT_CACHE_TTL));
         if (output.isPresent() && parsed.isEmpty()) {
-            LOGGER.warn("Recommendation composition output failed structural validation: {}", shape(output.orElseThrow()));
+            LOGGER.warn("Recommendation composition output failed structural validation: {}", shape(output.orElseThrow().value()));
         }
         return parsed;
     }
@@ -167,22 +179,38 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
         return "zh-CN".equals(locale) || "en".equals(locale);
     }
 
-    private Optional<JsonNode> requestJson(String operation, String systemPrompt, String userContent) {
+    private Optional<JsonObservation> requestJson(String operation, String systemPrompt, String userContent) {
         String key = cacheKey(operation, userContent);
         Optional<JsonNode> cached = cached(key);
-        if (cached.isPresent()) return cached;
+        if (cached.isPresent()) return cached.map(value -> new JsonObservation(value, false));
         if (!permits.tryAcquire()) return Optional.empty();
         try {
             if (!acquireHourlyAllowance()) return Optional.empty();
-            ChatResponse response = models.modelFor(Role.RECOMMENDATION)
-                    .call(new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(userContent))));
+            ChatModel model = models.modelFor(Role.RECOMMENDATION);
+            int maxOutputTokens = "plan".equals(operation) ? 1_400 : 2_000;
+            ToolCallingChatOptions.Builder<?> options;
+            if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
+                OpenAiChatOptions.Builder builder = defaults.mutate();
+                if ("qwen".equals(models.providerFor(Role.RECOMMENDATION))) {
+                    builder.extraBody(Map.of("enable_thinking", false));
+                }
+                options = builder;
+            } else if (model.getDefaultOptions() instanceof ToolCallingChatOptions defaults) {
+                options = defaults.mutate();
+            } else {
+                options = ToolCallingChatOptions.builder();
+            }
+            ChatResponse response = model.call(new Prompt(
+                    List.of(new SystemMessage(systemPrompt), new UserMessage(userContent)),
+                    options.temperature(0.0).maxTokens(maxOutputTokens).build()));
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
                 return Optional.empty();
             }
+            logUsage(operation, systemPrompt.length() + userContent.length(), maxOutputTokens, response);
             String content = response.getResult().getOutput().getText();
             JsonNode result = json.readTree(jsonPayload(content));
             if (!result.isObject()) return Optional.empty();
-            return Optional.of(result);
+            return Optional.of(new JsonObservation(result, true));
         } catch (IOException | RuntimeException exception) {
             LOGGER.warn("Board-game recommendation advisor is temporarily unavailable");
             return Optional.empty();
@@ -308,9 +336,10 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
 
     private RetrievalPlan retrievalPlan(JsonNode root, PlanningRequest request) {
         JsonNode typesNode = root.get("candidateTypes");
-        if (!typesNode.isArray() || typesNode.size() > 2) throw new ValidationFailure("candidate-types");
+        if (!typesNode.isArray() || typesNode.size() > 8) throw new ValidationFailure("candidate-types");
         List<BggGameType> types = new ArrayList<>();
         for (JsonNode value : typesNode) {
+            if (types.size() == 2) break;
             if (!value.isTextual()) continue;
             try {
                 BggGameType type = requiredEnum(value, BggGameType.class);
@@ -320,9 +349,10 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
             }
         }
         JsonNode featuresNode = root.get("featureConstraints");
-        if (!featuresNode.isArray() || featuresNode.size() > 8) throw new ValidationFailure("feature-constraints");
+        if (!featuresNode.isArray() || featuresNode.size() > 16) throw new ValidationFailure("feature-constraints");
         List<FeatureConstraint> features = new ArrayList<>();
         for (JsonNode value : featuresNode) {
+            if (features.size() == 8) break;
             if (!exactFields(value, "term", "mode", "source", "basedOn")) {
                 throw new ValidationFailure("feature-shape");
             }
@@ -334,7 +364,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                     requestedMode == FeatureMode.REQUIRED && !EXPLICIT_MUST_HAVE.matcher(basedOn).find()
                             ? FeatureMode.PREFERRED
                             : requestedMode,
-                    requiredEnum(value.get("source"), FeatureSource.class),
+                    featureSource(value.get("source")),
                     basedOn);
             if (features.stream().noneMatch(existing -> existing.term().equalsIgnoreCase(feature.term())
                     && existing.mode() == feature.mode())) features.add(feature);
@@ -346,6 +376,18 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 List.copyOf(types),
                 List.copyOf(features),
                 root.get("candidateDiscoveryRequested").booleanValue());
+    }
+
+    private FeatureSource featureSource(JsonNode node) {
+        if (node == null || !node.isTextual()) throw new IllegalArgumentException("feature source required");
+        String normalized = node.asText().strip().toUpperCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+        return switch (normalized) {
+            case "USER", "PLAYER", "USER_TEXT", "PLAYER_TEXT", "PLAYER_EXPRESSION" ->
+                    FeatureSource.USER_EXPRESSION;
+            case "BGG", "CATALOG", "METADATA", "BGG_CATALOG" -> FeatureSource.BGG_METADATA;
+            case "EXPERIENTIAL", "PUBLIC_EVIDENCE", "WEB_RESEARCH" -> FeatureSource.EXPERIENCE;
+            default -> Enum.valueOf(FeatureSource.class, normalized);
+        };
     }
 
     private boolean quotedByUser(List<DialogueMessage> transcript, String evidence) {
@@ -535,16 +577,91 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
         return value.substring(newline + 1, value.length() - 3).strip();
     }
 
-    private void cache(String key, JsonNode value) {
+    private void cache(String key, JsonNode value, Duration ttl) {
         try {
-            redis.opsForValue().set(key, json.writeValueAsString(value), cacheTtl);
+            redis.opsForValue().set(key, json.writeValueAsString(value), ttl);
         } catch (IOException | RuntimeException exception) {
             LOGGER.warn("Board-game recommendation advice could not be cached");
         }
     }
 
     private String cacheKey(String operation, String userContent) {
-        return "rulepilot:bgg:recommendation-advisor:v17:" + operation + ":" + digest(userContent);
+        return "rulepilot:bgg:recommendation-advisor:v18:" + operation + ":" + digest(userContent);
+    }
+
+    private void logUsage(String operation, int inputCharacters, int maxOutputTokens, ChatResponse response) {
+        org.springframework.ai.chat.metadata.Usage usage = response.getMetadata() == null
+                ? null
+                : response.getMetadata().getUsage();
+        LOGGER.info(
+                "Recommendation model usage: operation={}, provider={}, model={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
+                operation,
+                models.providerFor(Role.RECOMMENDATION),
+                models.modelNameFor(Role.RECOMMENDATION),
+                inputCharacters,
+                maxOutputTokens,
+                usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
+                usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
+    }
+
+    private CompositionModelInput compositionInput(CompositionRequest request) {
+        return new CompositionModelInput(
+                request.transcript(),
+                request.profile(),
+                request.userModel(),
+                request.candidates().stream()
+                        .map(candidate -> compactCandidate(
+                                candidate,
+                                java.util.Objects.equals(candidate.bggId(), request.focusedBggId())))
+                        .toList(),
+                request.research(),
+                request.focusedBggId(),
+                request.locale(),
+                request.act(),
+                request.referenceGame() == null ? null : compactCandidate(request.referenceGame(), true));
+    }
+
+    private CandidateModelInput compactCandidate(Candidate candidate, boolean detailed) {
+        return new CandidateModelInput(
+                candidate.bggId(),
+                bounded(candidate.name(), 160),
+                candidate.year(),
+                candidate.rank(),
+                candidate.rating(),
+                candidate.weight(),
+                candidate.minPlayers(),
+                candidate.maxPlayers(),
+                candidate.minutes(),
+                candidate.minimumMinutes(),
+                candidate.maximumMinutes(),
+                candidate.minimumAge(),
+                candidate.suggestedMinimumAge(),
+                bounded(candidate.bestWith(), 240),
+                bounded(candidate.recommendedWith(), 240),
+                candidate.languageDependenceLevel(),
+                candidate.weightVotes(),
+                bounded(candidate.categories(), 12, 100),
+                bounded(candidate.mechanics(), 12, 100),
+                bounded(candidate.families(), 8, 120),
+                bounded(candidate.designers(), 8, 120),
+                bounded(candidate.publishers(), 8, 120),
+                bounded(candidate.description(), detailed ? 4_000 : 1_200));
+    }
+
+    private String bounded(String value, int maximum) {
+        String normalized = value == null ? "" : value.strip().replaceAll("\\s+", " ");
+        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    }
+
+    private List<String> bounded(List<String> values, int maximumItems, int maximumCharacters) {
+        if (values == null) return List.of();
+        return values.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(value -> bounded(value, maximumCharacters))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(maximumItems)
+                .toList();
     }
 
     private boolean acquireHourlyAllowance() {
@@ -675,4 +792,42 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
         TYPE,
         INTERACTION
     }
+
+    private record CompositionModelInput(
+            List<DialogueMessage> transcript,
+            ProfileView profile,
+            UserModel userModel,
+            List<CandidateModelInput> candidates,
+            BoardGameRecommendationWebResearch.Research research,
+            Integer focusedBggId,
+            String locale,
+            DialogueAct act,
+            CandidateModelInput referenceGame) {}
+
+    private record CandidateModelInput(
+            int bggId,
+            String name,
+            Integer year,
+            Integer rank,
+            java.math.BigDecimal rating,
+            java.math.BigDecimal weight,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer minutes,
+            Integer minimumMinutes,
+            Integer maximumMinutes,
+            Integer minimumAge,
+            Integer suggestedMinimumAge,
+            String bestWith,
+            String recommendedWith,
+            Integer languageDependenceLevel,
+            Integer weightVotes,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> families,
+            List<String> designers,
+            List<String> publishers,
+            String description) {}
+
+    private record JsonObservation(JsonNode value, boolean fresh) {}
 }

@@ -268,9 +268,12 @@ rulepilot:
     enabled: ${RULEBOOK_DISCOVERY_ENABLED:${QWEN_ENABLED:false}}
     api-key: ${RULEBOOK_DISCOVERY_API_KEY:${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}}
     base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
-    model: ${RULEBOOK_DISCOVERY_MODEL:qwen-plus}
+    model: ${RULEBOOK_DISCOVERY_MODEL:qwen3.7-plus}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
     cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
+    negative-cache-ttl: ${RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL:PT10M}
+    hourly-limit: ${RULEBOOK_DISCOVERY_HOURLY_LIMIT:30}
+    provider-concurrency: ${RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY:1}
     trusted-domains: ${RULEBOOK_TRUSTED_DOMAINS:${RULEBOOK_OFFICIAL_DOMAINS:}}
   rulebook-import:
     queue-capacity: ${RULEBOOK_IMPORT_QUEUE_CAPACITY:8}

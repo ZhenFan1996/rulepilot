@@ -108,7 +108,7 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
         this.enabled = enabled;
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.endpoint = (baseUrl.endsWith("/") ? baseUrl : baseUrl + "/") + "responses";
-        this.model = model == null ? "" : model.strip();
+        this.model = permittedModel(model == null ? "" : model.strip());
         this.cacheTtl = positive(cacheTtl, "recommendation web research cache TTL");
         if (hourlyLimit < 1 || hourlyLimit > 1_000 || concurrency < 1 || concurrency > 8) {
             throw new IllegalArgumentException("recommendation web research budget is invalid");
@@ -171,7 +171,15 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
                 }
                 byte[] bytes = response.body().byteStream().readNBytes(MAX_RESPONSE_BYTES + 1);
                 if (bytes.length > MAX_RESPONSE_BYTES) return invalidSearch("response-size");
-                return Optional.of(json.readTree(bytes));
+                JsonNode result = json.readTree(bytes);
+                JsonNode usage = result.path("usage");
+                LOGGER.info(
+                        "Recommendation web-search model usage: model={}, inputCharacters={}, inputTokens={}, outputTokens={}",
+                        model,
+                        input.length(),
+                        nonNegativeInt(usage.path("input_tokens")),
+                        nonNegativeInt(usage.path("output_tokens")));
+                return Optional.of(result);
             }
         } catch (IOException | RuntimeException exception) {
             LOGGER.warn(
@@ -181,6 +189,21 @@ public class ResponsesApiBoardGameRecommendationWebResearch implements BoardGame
         } finally {
             permits.release();
         }
+    }
+
+    private int nonNegativeInt(JsonNode value) {
+        return value.canConvertToInt() && value.intValue() >= 0 ? value.intValue() : 0;
+    }
+
+    private static String permittedModel(String value) {
+        String normalized = value.toLowerCase(Locale.ROOT);
+        if (normalized.equals("qwen-plus")
+                || normalized.startsWith("qwen-plus-")
+                || normalized.startsWith("qwen-plus_")) {
+            throw new IllegalArgumentException(
+                    "qwen-plus and its legacy aliases are prohibited for recommendation web research");
+        }
+        return value;
     }
 
     private boolean valid(BoardGameRecommendationWebResearch.Request request) {

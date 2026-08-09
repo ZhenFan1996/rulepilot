@@ -231,6 +231,84 @@ class BoardGameRecommendationCandidateAgentTest {
     }
 
     @Test
+    void boundsAccumulatedCatalogTaxonomyBeforeTheNextAgentTurn() {
+        AtomicInteger turns = new AtomicInteger();
+        BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                if (turns.getAndIncrement() == 0) {
+                    return new Turn("", List.of(new ToolCall(
+                            "search-taxonomy",
+                            BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                            "{\"names\":[\"Taxonomy Game\"]}")));
+                }
+                String gap = request.messages().getLast().content();
+                assertThat(gap).contains("Category 0", "Category 11", "Mechanic 11");
+                assertThat(gap).doesNotContain("Category 12", "Mechanic 12");
+                assertThat(gap.length()).isLessThan(5_000);
+                return new Turn("", List.of());
+            }
+        };
+        BoardGameRecommendationCatalog catalog = new BoardGameRecommendationCatalog() {
+            @Override
+            public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
+                throw new AssertionError("the native Agent must not query a ranked prefix");
+            }
+
+            @Override
+            public List<Ranking> searchByNames(List<String> names) {
+                return List.of(ranking(60, "Taxonomy Game"));
+            }
+
+            @Override
+            public List<Game> findGamesByIds(List<Integer> bggIds) {
+                return List.of(new Game(
+                        ranking(60, "Taxonomy Game"),
+                        new Details(
+                                "Taxonomy Game",
+                                "",
+                                "",
+                                2,
+                                5,
+                                120,
+                                new BigDecimal("3.1"),
+                                java.util.stream.IntStream.range(0, 30)
+                                        .mapToObj(index -> "Category " + index)
+                                        .toList(),
+                                java.util.stream.IntStream.range(0, 30)
+                                        .mapToObj(index -> "Mechanic " + index)
+                                        .toList(),
+                                90,
+                                120,
+                                14,
+                                14,
+                                "Best with 4 players",
+                                "Recommended with 3–5 players",
+                                2,
+                                100,
+                                List.of(),
+                                List.of(),
+                                List.of())));
+            }
+
+            @Override
+            public int gameCount() {
+                return 1;
+            }
+        };
+
+        var result = agent(model, catalog).discover(RetrievalPlan.empty(), profile(), "zh-CN");
+
+        assertThat(result.modelCalls()).isEqualTo(2);
+        assertThat(turns).hasValue(2);
+    }
+
+    @Test
     void letsTheAgentChooseSourceGroundedPublicDiscoveryInsteadOfGuessingTitles() {
         BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
             @Override

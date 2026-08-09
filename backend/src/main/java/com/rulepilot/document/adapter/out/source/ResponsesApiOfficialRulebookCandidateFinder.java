@@ -9,7 +9,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -18,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -41,6 +45,7 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private static final Logger LOGGER = LoggerFactory.getLogger(ResponsesApiOfficialRulebookCandidateFinder.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private static final int MAX_RESPONSE_BYTES = 256_000;
+    private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
 
     private final Call.Factory calls;
     private final ObjectMapper json;
@@ -50,6 +55,10 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private final String model;
     private final StringRedisTemplate redis;
     private final Duration cacheTtl;
+    private final Duration negativeCacheTtl;
+    private final int hourlyLimit;
+    private final Semaphore permits;
+    private final Clock clock;
 
     @Autowired
     public ResponsesApiOfficialRulebookCandidateFinder(
@@ -60,7 +69,10 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
             @Value("${rulepilot.rulebook-discovery.base-url:https://api.openai.com/v1}") String baseUrl,
             @Value("${rulepilot.rulebook-discovery.model:}") String model,
             @Value("${rulepilot.rulebook-discovery.timeout:PT60S}") Duration timeout,
-            @Value("${rulepilot.rulebook-discovery.cache-ttl:P30D}") Duration cacheTtl) {
+            @Value("${rulepilot.rulebook-discovery.cache-ttl:P30D}") Duration cacheTtl,
+            @Value("${rulepilot.rulebook-discovery.negative-cache-ttl:PT10M}") Duration negativeCacheTtl,
+            @Value("${rulepilot.rulebook-discovery.hourly-limit:30}") int hourlyLimit,
+            @Value("${rulepilot.rulebook-discovery.provider-concurrency:1}") int providerConcurrency) {
         this(
                 new OkHttpClient.Builder()
                         .connectTimeout(Math.min(timeout.toMillis(), 5_000), TimeUnit.MILLISECONDS)
@@ -73,12 +85,28 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                 apiKey,
                 secureBaseUrl(baseUrl),
                 model,
-                cacheTtl);
+                cacheTtl,
+                negativeCacheTtl,
+                hourlyLimit,
+                providerConcurrency,
+                Clock.systemUTC());
     }
 
     ResponsesApiOfficialRulebookCandidateFinder(
             Call.Factory calls, ObjectMapper json, boolean enabled, String apiKey, String baseUrl, String model) {
-        this(calls, json, null, enabled, apiKey, baseUrl, model, Duration.ofDays(30));
+        this(
+                calls,
+                json,
+                null,
+                enabled,
+                apiKey,
+                baseUrl,
+                model,
+                Duration.ofDays(30),
+                Duration.ofMinutes(10),
+                30,
+                1,
+                Clock.systemUTC());
     }
 
     ResponsesApiOfficialRulebookCandidateFinder(
@@ -90,17 +118,55 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
             String baseUrl,
             String model,
             Duration cacheTtl) {
+        this(
+                calls,
+                json,
+                redis,
+                enabled,
+                apiKey,
+                baseUrl,
+                model,
+                cacheTtl,
+                Duration.ofMinutes(10),
+                30,
+                1,
+                Clock.systemUTC());
+    }
+
+    ResponsesApiOfficialRulebookCandidateFinder(
+            Call.Factory calls,
+            ObjectMapper json,
+            StringRedisTemplate redis,
+            boolean enabled,
+            String apiKey,
+            String baseUrl,
+            String model,
+            Duration cacheTtl,
+            Duration negativeCacheTtl,
+            int hourlyLimit,
+            int providerConcurrency,
+            Clock clock) {
         this.calls = calls;
         this.json = json;
         this.redis = redis;
         this.enabled = enabled;
         this.apiKey = apiKey == null ? "" : apiKey.strip();
         this.endpoint = (baseUrl.endsWith("/") ? baseUrl : baseUrl + "/") + "responses";
-        this.model = model == null ? "" : model.strip();
+        this.model = permittedModel(model == null ? "" : model.strip());
         if (cacheTtl == null || cacheTtl.isZero() || cacheTtl.isNegative()) {
             throw new IllegalArgumentException("rulebook discovery cache TTL must be positive");
         }
+        if (negativeCacheTtl == null || negativeCacheTtl.isZero() || negativeCacheTtl.isNegative()) {
+            throw new IllegalArgumentException("rulebook discovery negative cache TTL must be positive");
+        }
+        if (hourlyLimit < 1 || hourlyLimit > 2_000 || providerConcurrency < 1 || providerConcurrency > 16) {
+            throw new IllegalArgumentException("rulebook discovery provider budget is invalid");
+        }
         this.cacheTtl = cacheTtl;
+        this.negativeCacheTtl = negativeCacheTtl;
+        this.hourlyLimit = hourlyLimit;
+        this.permits = new Semaphore(providerConcurrency);
+        this.clock = clock;
     }
 
     @Override
@@ -116,31 +182,42 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
             String cacheKey = "rulepilot:rulebook-discovery:v3:" + digest(input);
             Optional<List<Candidate>> cached = cached(cacheKey);
             if (cached.isPresent()) return cached.orElseThrow();
-            byte[] body = json.writeValueAsBytes(Map.of(
-                    "model", model,
-                    "input", input,
-                    "tools", List.of(Map.of("type", "web_search")),
-                    "max_output_tokens", 1100,
-                    "store", false));
-            okhttp3.Request httpRequest = new okhttp3.Request.Builder()
-                    .url(endpoint)
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Accept", "application/json")
-                    .post(RequestBody.create(body, JSON))
-                    .build();
-            try (Response response = calls.newCall(httpRequest).execute()) {
-                if (!response.isSuccessful()) {
-                    LOGGER.warn("Official rulebook discovery returned status {}", response.code());
-                    return List.of();
+            if (!permits.tryAcquire()) return List.of();
+            try {
+                if (!acquireHourlyAllowance()) return List.of();
+                byte[] body = json.writeValueAsBytes(Map.of(
+                        "model", model,
+                        "input", input,
+                        "tools", List.of(Map.of("type", "web_search")),
+                        "reasoning", Map.of("effort", "minimal"),
+                        "max_output_tokens", 1100,
+                        "store", false));
+                okhttp3.Request httpRequest = new okhttp3.Request.Builder()
+                        .url(endpoint)
+                        .header("Authorization", "Bearer " + apiKey)
+                        .header("Accept", "application/json")
+                        .post(RequestBody.create(body, JSON))
+                        .build();
+                try (Response response = calls.newCall(httpRequest).execute()) {
+                    if (!response.isSuccessful()) {
+                        LOGGER.warn("Official rulebook discovery returned status {}", response.code());
+                        return List.of();
+                    }
+                    byte[] bytes = response.body().byteStream().readNBytes(MAX_RESPONSE_BYTES + 1);
+                    if (bytes.length > MAX_RESPONSE_BYTES) return List.of();
+                    JsonNode responseBody = json.readTree(bytes);
+                    List<Candidate> result = parse(responseBody);
+                    cache(cacheKey, result);
+                    logUsage(input, responseBody);
+                    return result;
                 }
-                byte[] bytes = response.body().byteStream().readNBytes(MAX_RESPONSE_BYTES + 1);
-                if (bytes.length > MAX_RESPONSE_BYTES) return List.of();
-                List<Candidate> result = parse(json.readTree(bytes));
-                if (!result.isEmpty()) cache(cacheKey, result);
-                return result;
+            } finally {
+                permits.release();
             }
         } catch (IOException | RuntimeException exception) {
-            LOGGER.warn("Official rulebook discovery is temporarily unavailable ({})", exception.getClass().getSimpleName());
+            LOGGER.warn(
+                    "Official rulebook discovery is temporarily unavailable ({})",
+                    exception.getClass().getSimpleName());
             return List.of();
         }
     }
@@ -161,9 +238,25 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private void cache(String key, List<Candidate> candidates) {
         if (redis == null) return;
         try {
-            redis.opsForValue().set(key, json.writeValueAsString(candidates), cacheTtl);
+            redis.opsForValue().set(
+                    key,
+                    json.writeValueAsString(candidates),
+                    candidates.isEmpty() ? negativeCacheTtl : cacheTtl);
         } catch (IOException | RuntimeException exception) {
             LOGGER.warn("Official rulebook discovery result could not be cached");
+        }
+    }
+
+    private boolean acquireHourlyAllowance() {
+        if (redis == null) return true;
+        String key = "rulepilot:rulebook-discovery:budget:" + HOUR.format(clock.instant());
+        try {
+            Long count = redis.opsForValue().increment(key);
+            if (count == null) return false;
+            if (count == 1) redis.expire(key, Duration.ofHours(2));
+            return count <= hourlyLimit;
+        } catch (RuntimeException exception) {
+            return false;
         }
     }
 
@@ -243,13 +336,13 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
     private String prompt(OfficialRulebookCandidateFinder.Request request) throws IOException {
         String input = json.writeValueAsString(Map.of(
                 "bggId", request.bggId(),
-                "gameName", request.gameName(),
-                "officialNames", request.officialNames(),
-                "editionName", request.editionName(),
+                "gameName", bounded(request.gameName(), 180),
+                "officialNames", bounded(request.officialNames(), 12, 180),
+                "editionName", bounded(request.editionName(), 180),
                 "publicationYear", request.publicationYear() == null ? "unknown" : request.publicationYear(),
-                "preferredLanguage", request.language(),
-                "publishers", request.publishers(),
-                "trustedDomains", request.trustedDomains()));
+                "preferredLanguage", bounded(request.language(), 40),
+                "publishers", bounded(request.publishers(), 12, 160),
+                "trustedDomains", bounded(request.trustedDomains(), 20, 160)));
         return "Search broadly and independently for up to eight exact public HTTPS sources that provide the complete rulebook for this board game. "
                 + "Do not stop when the publisher site has no indexed PDF. Use the supplied BGG identity to disambiguate title, edition, year, and language, then search these source tiers: "
                 + "(1) publisher, rights-holder, localized publisher, designer, distributor, and their CDNs; "
@@ -260,6 +353,37 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
                 + "Return JSON only as {\"candidates\":[{\"title\":\"\",\"url\":\"https://...\",\"publisher\":\"\",\"language\":\"\",\"edition\":\"\","
                 + "\"sourceIndexes\":[1]}]}. Every URL must exactly match a web-search source. Use no more than five actual source indexes "
                 + "per candidate. Input: " + input;
+    }
+
+    private void logUsage(String input, JsonNode response) {
+        JsonNode usage = response.path("usage");
+        LOGGER.info(
+                "Official rulebook discovery model usage: model={}, inputCharacters={}, inputTokens={}, outputTokens={}, totalTokens={}",
+                model,
+                input.length(),
+                nonNegativeInt(usage.path("input_tokens")),
+                nonNegativeInt(usage.path("output_tokens")),
+                nonNegativeInt(usage.path("total_tokens")));
+    }
+
+    private int nonNegativeInt(JsonNode value) {
+        return value.canConvertToInt() && value.intValue() >= 0 ? value.intValue() : 0;
+    }
+
+    private String bounded(String value, int maximum) {
+        String normalized = value == null ? "" : value.strip().replaceAll("\\s+", " ");
+        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    }
+
+    private List<String> bounded(List<String> values, int maximumItems, int maximumCharacters) {
+        if (values == null) return List.of();
+        return values.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(value -> bounded(value, maximumCharacters))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(maximumItems)
+                .toList();
     }
 
     private String jsonPayload(String content) {
@@ -308,5 +432,16 @@ public class ResponsesApiOfficialRulebookCandidateFinder implements OfficialRule
             throw new IllegalArgumentException("rulebook-search Responses API base URL must be HTTPS without credentials");
         }
         return uri.toASCIIString().replaceAll("/+$", "");
+    }
+
+    private static String permittedModel(String value) {
+        String normalized = value.toLowerCase(Locale.ROOT);
+        if (normalized.equals("qwen-plus")
+                || normalized.startsWith("qwen-plus-")
+                || normalized.startsWith("qwen-plus_")) {
+            throw new IllegalArgumentException(
+                    "qwen-plus and its legacy aliases are prohibited for rulebook discovery");
+        }
+        return value;
     }
 }

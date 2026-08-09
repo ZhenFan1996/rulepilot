@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,6 +32,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -39,7 +40,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -93,6 +94,112 @@ class SpringAiBoardGameRecommendationAdvisorTest {
             });
         });
         verify(fixture.models).modelFor(Role.RECOMMENDATION);
+    }
+
+    @Test
+    void toleratesProviderSpellingForPlayerEvidenceAndKeepsOnlyTwoRetrievalChannels() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","profileUpdates":[],
+                 "profileSummary":"想找谈判和互坑的竞争游戏","hypotheses":[],
+                 "assistantMessage":"明白，我会沿着谈判和互坑来找。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":["PARTY","STRATEGY","FAMILY"],
+                 "featureConstraints":[{"term":"negotiation","mode":"PREFERRED","source":"user","basedOn":"谈判"}],
+                 "candidateDiscoveryRequested":true}
+                """);
+
+        var result = fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "想要谈判、互坑，不要合作")),
+                profile(),
+                null,
+                "zh-CN"));
+
+        assertThat(result).hasValueSatisfying(plan -> {
+            assertThat(plan.retrievalPlan().candidateTypes())
+                    .containsExactly(BggGameType.PARTY, BggGameType.STRATEGY);
+            assertThat(plan.retrievalPlan().features()).singleElement().satisfies(feature -> {
+                assertThat(feature.source())
+                        .isEqualTo(com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource.USER_EXPRESSION);
+                assertThat(feature.basedOn()).isEqualTo("谈判");
+            });
+        });
+    }
+
+    @Test
+    void boundsQwenPlanningOutputAndDisablesThinking() {
+        Fixture fixture = fixture("""
+                {"act":"RESPOND","profileUpdates":[],"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"你好，想玩什么样的桌游？","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":null,"excludeShownCandidates":false,"candidateTypes":[],
+                 "featureConstraints":[],"candidateDiscoveryRequested":false}
+                """);
+
+        fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "你好")), profile(), null, "zh-CN"));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getMaxTokens()).isEqualTo(1_400);
+        assertThat(options.getTemperature()).isZero();
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+    }
+
+    @Test
+    void reusesAnInvalidPlannerObservationDuringTheShortRecoveryWindow() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","profileUpdates":[],"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"先找找看。","nextQuestion":null,"researchRequested":false,
+                 "researchQuestion":null,"referenceTitle":null,"contextBggId":null,
+                 "excludeShownCandidates":false,"candidateTypes":[],"featureConstraints":[
+                 {"term":"negotiation","mode":"PREFERRED","source":"unsupported-provider-label","basedOn":"谈判"}],
+                 "candidateDiscoveryRequested":true}
+                """);
+        PlanningRequest request = new PlanningRequest(
+                List.of(new DialogueMessage("user", "想玩谈判游戏")), profile(), null, "zh-CN");
+
+        assertThat(fixture.adapter.plan(request)).isEmpty();
+        assertThat(fixture.adapter.plan(request)).isEmpty();
+
+        verify(fixture.chatModel, times(1)).call(any(Prompt.class));
+        verify(fixture.values).set(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(Duration.ofMinutes(10)));
+    }
+
+    @Test
+    void compactsShortlistDescriptionsBeforeCompositionButKeepsFocusedEvidenceDetailed() {
+        Fixture fixture = fixture("""
+                {"assistantMessage":"先看这款。","nextQuestion":null,
+                 "choices":[{"bggId":10,"preferenceReasons":["可能合适"],"researchedReasons":[],"tradeoffs":[]}]}
+                """);
+        String longDescription = "x".repeat(4_000);
+        Candidate candidate = new Candidate(
+                10, "Game 10", 2025, 1, new BigDecimal("8.5"), new BigDecimal("2.5"),
+                2, 4, 60, 45, 60, 10, 10, "Best with 4 players", "Recommended with 2–4 players",
+                2, 100, List.of("Strategy"), List.of("Negotiation"), List.of(), List.of(), List.of(),
+                longDescription);
+
+        assertThat(fixture.adapter.compose(new CompositionRequest(
+                        List.of(new DialogueMessage("user", "推荐一个")),
+                        profile(),
+                        new UserModel("想谈判", List.of()),
+                        List.of(candidate),
+                        Research.empty(),
+                        null,
+                        "zh-CN")))
+                .isPresent();
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel).call(prompt.capture());
+        String userInput = prompt.getValue().getInstructions().stream()
+                .filter(org.springframework.ai.chat.messages.UserMessage.class::isInstance)
+                .map(message -> message.getText())
+                .findFirst()
+                .orElseThrow();
+        assertThat(userInput).contains("x".repeat(1_200));
+        assertThat(userInput).doesNotContain("x".repeat(1_201));
+        assertThat(((OpenAiChatOptions) prompt.getValue().getOptions()).getMaxTokens()).isEqualTo(2_000);
     }
 
     @Test
@@ -325,7 +432,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 "zh-CN"));
 
         assertThat(result).isEmpty();
-        verify(fixture.values, never()).set(anyString(), anyString(), any(Duration.class));
+        verify(fixture.values).set(anyString(), anyString(), org.mockito.ArgumentMatchers.eq(Duration.ofMinutes(10)));
     }
 
     @Test
@@ -401,16 +508,25 @@ class SpringAiBoardGameRecommendationAdvisorTest {
         RuntimeModelConfiguration models = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(models.usesFake(Role.RECOMMENDATION)).thenReturn(false);
+        when(models.providerFor(Role.RECOMMENDATION)).thenReturn("qwen");
+        when(models.modelNameFor(Role.RECOMMENDATION)).thenReturn("qwen3.7-plus");
         when(models.modelFor(Role.RECOMMENDATION)).thenReturn(chatModel);
-        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .model("qwen3.7-plus")
+                .build());
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage(response)))));
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         @SuppressWarnings("unchecked")
         ValueOperations<String, String> values = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
-        when(values.get(anyString())).thenReturn(null);
+        AtomicReference<String> cached = new AtomicReference<>();
+        when(values.get(anyString())).thenAnswer(ignored -> cached.get());
         when(values.increment(anyString())).thenReturn(1L);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            cached.set(invocation.getArgument(1));
+            return null;
+        }).when(values).set(anyString(), anyString(), any(Duration.class));
         var adapter = new SpringAiBoardGameRecommendationAdvisor(
                 models,
                 new ObjectMapper(),
