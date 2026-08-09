@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
+import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.AgentExecutionControl;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
@@ -17,6 +19,9 @@ import com.rulepilot.assistant.RuleAnswerModel.DecisionBranchRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ExceptionClauseRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import com.rulepilot.assistant.RuleAnswerModel.SituationCheckRequest;
 import com.rulepilot.assistant.RuleAnswerModel.TermDefinitionRequest;
@@ -32,6 +37,7 @@ import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
 import com.rulepilot.assistant.domain.AnswerConfidence;
 import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.RuleCitation;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.document.RuleDataVersion;
@@ -2190,6 +2196,67 @@ class StructuredRuleAnswerServiceTest {
                 .contains("What exactly", "rulebook name")
                 .doesNotContain("REFERENCED_OBJECT");
         assertThat(called).isFalse();
+    }
+
+    @Test
+    void letsTheAnswerAgentResolveAPriorGroundedReferenceBeforeDeterministicClarification() {
+        RuleEvidenceHit source = new RuleEvidenceHit(
+                UUID.randomUUID(),
+                versionId,
+                "ACTIONS",
+                "Marker timing",
+                "The red marker triggers after the action ends.",
+                4,
+                4,
+                0.9);
+        AtomicReference<QuestionInterpretationRequest> interpretationRequest = new AtomicReference<>();
+        RuleAnswerModel model = new RuleAnswerModel() {
+            @Override
+            public boolean supportsQuestionInterpretation() {
+                return true;
+            }
+
+            @Override
+            public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+                interpretationRequest.set(request);
+                return Optional.of(new QuestionInterpretationDraft(
+                        QuestionType.LESSON_STEP_FOLLOW_UP,
+                        ReferenceBinding.PRIOR_GROUNDED_TURN,
+                        List.of("红色标记", "这样"),
+                        Set.of()));
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                assertThat(request.question()).contains("红色标记", "它也是这样吗");
+                return new ModelDraft(
+                        "是，在行动结束后触发。",
+                        "规则明确说明红色标记在行动结束后触发。",
+                        List.of(source.chunkId()),
+                        List.of(),
+                        "HIGH");
+            }
+        };
+        var service = answerService(
+                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                model);
+        QuestionContext context = new QuestionContext(
+                versionId,
+                null,
+                null,
+                PlayerLocale.ZH_CN,
+                new PriorTurnReference(
+                        versionId,
+                        "红色标记在什么时候触发？",
+                        "它在行动结束后触发。",
+                        List.of(new PriorCitationReference(source.chunkId(), versionId, 4, 4))));
+
+        var answer = service.answer("它也是这样吗？", context);
+
+        assertThat(answer.status()).isEqualTo(AnswerStatus.ANSWERED);
+        assertThat(answer.shortVerdict()).contains("行动结束后");
+        assertThat(interpretationRequest.get().deterministicMissingContext())
+                .contains(com.rulepilot.assistant.domain.MissingQuestionContext.REFERENCED_OBJECT);
     }
 
     @Test

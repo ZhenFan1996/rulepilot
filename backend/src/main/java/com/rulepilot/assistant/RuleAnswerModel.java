@@ -1,8 +1,11 @@
 package com.rulepilot.assistant;
 
 import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface RuleAnswerModel {
@@ -23,6 +26,74 @@ public interface RuleAnswerModel {
      */
     default List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
         return List.of();
+    }
+
+    /**
+     * Selects a bounded semantic interpretation from application-defined choices. The result is untrusted dialogue
+     * control data, never rule evidence; unsupported models preserve deterministic question understanding.
+     */
+    default Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+        return Optional.empty();
+    }
+
+    default boolean supportsQuestionInterpretation() {
+        return false;
+    }
+
+    record QuestionInterpretationRequest(
+            String question,
+            String previousQuestion,
+            String priorGroundedQuestion,
+            String priorGroundedVerdict,
+            QuestionType deterministicType,
+            Set<MissingQuestionContext> deterministicMissingContext,
+            PlayerLocale outputLanguage) {
+        public QuestionInterpretationRequest {
+            if (question == null || question.isBlank() || question.length() > 800
+                    || deterministicType == null || deterministicMissingContext == null) {
+                throw new IllegalArgumentException("question interpretation request is invalid");
+            }
+            question = question.strip();
+            previousQuestion = optionalContext(previousQuestion);
+            priorGroundedQuestion = optionalContext(priorGroundedQuestion);
+            priorGroundedVerdict = optionalContext(priorGroundedVerdict);
+            deterministicMissingContext = Set.copyOf(deterministicMissingContext);
+            outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
+        }
+
+        private static String optionalContext(String value) {
+            if (value == null || value.isBlank()) return "";
+            String normalized = value.strip();
+            return normalized.length() <= 800 ? normalized : normalized.substring(0, 800);
+        }
+    }
+
+    enum ReferenceBinding {
+        CURRENT_QUESTION,
+        PREVIOUS_QUESTION,
+        PRIOR_GROUNDED_TURN,
+        NEEDS_CLARIFICATION
+    }
+
+    record QuestionInterpretationDraft(
+            QuestionType questionType,
+            ReferenceBinding referenceBinding,
+            List<String> terms,
+            Set<MissingQuestionContext> missingContext) {
+        public QuestionInterpretationDraft {
+            if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
+                    || missingContext == null || missingContext.size() > 2) {
+                throw new IllegalArgumentException("question interpretation draft is invalid");
+            }
+            if (terms.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 80)) {
+                throw new IllegalArgumentException("question interpretation term is invalid");
+            }
+            terms = terms.stream()
+                    .map(String::strip)
+                    .distinct()
+                    .toList();
+            missingContext = Set.copyOf(missingContext);
+        }
     }
 
     record ModelRequest(String question, QuestionType questionType, AnswerContext context, List<EvidenceInput> evidence) {

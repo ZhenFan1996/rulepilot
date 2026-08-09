@@ -1,25 +1,37 @@
 package com.rulepilot.assistant.adapter.out.model;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.modelconfig.VersionedAgentPrompts;
+import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpTimeoutException;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
 @Component
 @Primary
 public class SpringAiRuleAnswerModel implements RuleAnswerModel {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
+            "prompts/rule-answer-question-interpretation-v1-system.txt");
+    private static final String QUESTION_INTERPRETATION_USER = readPrompt(
+            "prompts/rule-answer-question-interpretation-v1-user.txt");
 
     private final RuntimeModelConfiguration models;
     private final FakeRuleAnswerModel fakeModel;
@@ -139,6 +151,53 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
         }
     }
 
+    @Override
+    public boolean supportsQuestionInterpretation() {
+        return !models.usesFake(Role.ANSWER);
+    }
+
+    @Override
+    public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
+        if (models.usesFake(Role.ANSWER)) return Optional.empty();
+        try {
+            ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
+            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
+                OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+                options.model(models.modelNameFor(Role.ANSWER));
+                options.maxTokens(256);
+                if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+                    options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+                } else {
+                    options.extraBody(Map.of("enable_thinking", false));
+                }
+                if (usesQwen()) {
+                    options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+                }
+                prompt = prompt.options(options);
+            } else {
+                prompt = prompt.options(ChatOptions.builder().maxTokens(256).temperature(0.0));
+            }
+            String content = prompt
+                    .system(QUESTION_INTERPRETATION_SYSTEM)
+                    .user(user -> user.text(QUESTION_INTERPRETATION_USER)
+                            .param("question", request.question())
+                            .param("previousQuestion", optional(request.previousQuestion()))
+                            .param("priorGroundedQuestion", optional(request.priorGroundedQuestion()))
+                            .param("priorGroundedVerdict", optional(request.priorGroundedVerdict()))
+                            .param("deterministicType", request.deterministicType().name())
+                            .param("deterministicMissingContext", request.deterministicMissingContext())
+                            .param("outputLanguage", request.outputLanguage().promptName()))
+                    .call()
+                    .content();
+            return parseQuestionInterpretation(content);
+        } catch (RuntimeException exception) {
+            if (isTimeout(exception)) {
+                throw new RuleAnswerModelTimeoutException("answer question interpretation timed out", exception);
+            }
+            return Optional.empty();
+        }
+    }
+
     private ModelDraft composeOnce(ModelRequest request, String repairInstruction) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
         if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
@@ -186,6 +245,29 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             current = current.getCause();
         }
         return false;
+    }
+
+    private String optional(String value) {
+        return value == null || value.isBlank() ? "not provided" : value;
+    }
+
+    private Optional<QuestionInterpretationDraft> parseQuestionInterpretation(String content) {
+        if (content == null || content.isBlank() || content.length() > 4_000) return Optional.empty();
+        try {
+            return Optional.of(JSON.readValue(content, QuestionInterpretationDraft.class));
+        } catch (IOException invalidOutput) {
+            return Optional.empty();
+        }
+    }
+
+    private static String readPrompt(String path) {
+        try {
+            String prompt = new ClassPathResource(path).getContentAsString(StandardCharsets.UTF_8).strip();
+            if (prompt.isBlank()) throw new IllegalStateException("answer interpretation prompt is blank");
+            return prompt;
+        } catch (IOException exception) {
+            throw new IllegalStateException("answer interpretation prompt is unavailable", exception);
+        }
     }
 
 }

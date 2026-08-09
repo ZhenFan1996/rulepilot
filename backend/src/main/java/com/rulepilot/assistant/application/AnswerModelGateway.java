@@ -5,8 +5,11 @@ import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RetrievalQueryRequest;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /** Bounded answer-model calls with one permit lifecycle and the player-visible audit activity. */
@@ -74,6 +77,30 @@ final class AnswerModelGateway {
                     estimateTokens(request.question()),
                     "Cross-language retrieval phrases prepared",
                     () -> model.rewriteRetrievalQueries(request),
+                    result -> estimateTokens(result.toString()));
+        } finally {
+            permit.close();
+        }
+    }
+
+    boolean supportsQuestionInterpretation() {
+        return model.supportsQuestionInterpretation();
+    }
+
+    Optional<QuestionInterpretationDraft> interpretQuestion(
+            UUID runId,
+            String username,
+            UUID gameSessionId,
+            QuestionInterpretationRequest request) {
+        RuleAnswerRateLimiter.Permit permit = acquire(username, gameSessionId);
+        try {
+            return invocations.invoke(
+                    runId,
+                    ActivityType.MODEL,
+                    "interpretAnswerQuestion",
+                    estimateTokens(request.toString()),
+                    "Player question intent interpreted",
+                    () -> model.interpretQuestion(request),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();

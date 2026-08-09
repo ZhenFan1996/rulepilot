@@ -14,6 +14,7 @@ import com.rulepilot.assistant.RuleAnswering;
 import com.rulepilot.assistant.RuleAnswerModel;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
 import com.rulepilot.assistant.RuleAnswerModelTimeoutException;
 import com.rulepilot.assistant.application.RuleAnswerCache.AnswerCacheKey;
 import com.rulepilot.assistant.domain.AnswerStatus;
@@ -56,10 +57,11 @@ import org.springframework.stereotype.Service;
 public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
-    // Worked-example evidence and grammatical-relation rules changed, so prior example answers are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v109-permission-ruling";
+    // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
+    private static final String ANSWER_POLICY_VERSION = "answer-v110-agent-question-interpretation";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
+    private final AnswerQuestionInterpretationPolicy questionInterpretation;
     private final AnswerEvidenceRetriever evidenceRetriever;
     private final AnswerEvidenceRefiner evidenceRefiner;
     private final AnswerModelRequestFactory modelRequestFactory;
@@ -94,6 +96,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private final Counter cacheReadErrors;
     private final Counter cacheWriteErrors;
     private final Counter confirmedRulingHits;
+    private final Counter acceptedQuestionInterpretations;
+    private final Counter fallbackQuestionInterpretations;
 
     @Autowired
     public StructuredRuleAnswerService(
@@ -115,6 +119,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             AnswerEvidenceRefiner evidenceRefiner) {
         this.understanding = understanding;
         this.modelGateway = new AnswerModelGateway(model, rateLimiter, invocations);
+        this.questionInterpretation = new AnswerQuestionInterpretationPolicy();
         this.evidenceRetriever = new AnswerEvidenceRetriever(
                 retrieval, visualFacts, evidenceLookup, invocations, modelGateway);
         this.evidenceRefiner = evidenceRefiner;
@@ -151,6 +156,10 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         this.cacheReadErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "read");
         this.cacheWriteErrors = metrics.counter("rulepilot.answer.cache.errors", "operation", "write");
         this.confirmedRulingHits = metrics.counter("rulepilot.answer.requests", "source", "confirmed-ruling");
+        this.acceptedQuestionInterpretations = metrics.counter(
+                "rulepilot.answer.question.interpretations", "result", "accepted");
+        this.fallbackQuestionInterpretations = metrics.counter(
+                "rulepilot.answer.question.interpretations", "result", "fallback");
     }
 
     public StructuredRuleAnswerService(
@@ -333,25 +342,50 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             UUID gameSessionId,
             UUID assistantRunId,
             boolean useCache) {
-        UnderstoodQuestion understood = understanding.understand(question, context);
-        if (understood.needsClarification()) {
-            return AnswerOutcomePolicy.clarification(understood, context.outputLanguage());
+        UnderstoodQuestion deterministic = understanding.understand(question, context);
+        UnderstoodQuestion understood = deterministic;
+        if (modelGateway.supportsQuestionInterpretation()) {
+            try {
+                Optional<UnderstoodQuestion> interpreted = modelGateway
+                        .interpretQuestion(
+                                assistantRunId,
+                                username,
+                                gameSessionId,
+                                interpretationRequest(deterministic, context))
+                        .flatMap(draft -> questionInterpretation.apply(deterministic, context, draft));
+                if (interpreted.isPresent()) {
+                    understood = interpreted.orElseThrow();
+                    acceptedQuestionInterpretations.increment();
+                } else {
+                    fallbackQuestionInterpretations.increment();
+                }
+            } catch (RuleAnswerModelTimeoutException timeout) {
+                fallbackQuestionInterpretations.increment();
+                LOGGER.warn("Answer question interpretation timed out; preserving deterministic understanding");
+            } catch (RuntimeException failure) {
+                fallbackQuestionInterpretations.increment();
+                LOGGER.warn("Answer question interpretation failed validation; preserving deterministic understanding");
+            }
+        }
+        UnderstoodQuestion interpretedQuestion = understood;
+        if (interpretedQuestion.needsClarification()) {
+            return AnswerOutcomePolicy.clarification(interpretedQuestion, context.outputLanguage());
         }
         var confirmed = invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
                 "searchConfirmedRulings",
-                estimateTokens(understood.normalizedQuestion()),
+                estimateTokens(interpretedQuestion.normalizedQuestion()),
                 "Confirmed ruling lookup completed",
                 () -> confirmedRulings.find(
-                        context.documentVersionId(), Set.of(), understood.normalizedQuestion(), username),
+                        context.documentVersionId(), Set.of(), interpretedQuestion.normalizedQuestion(), username),
                 result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
             return AnswerOutcomePolicy.confirmedRuling(confirmed.get());
         }
         rateLimiter.checkUser(username);
-        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(understood, context) : Optional.empty();
+        Optional<AnswerCacheKey> cacheKey = useCache ? cacheKey(interpretedQuestion, context) : Optional.empty();
         if (cacheKey.isPresent()) {
             var cached = findCached(cacheKey.get());
             if (cached.isPresent()) {
@@ -360,10 +394,11 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             }
             cacheMisses.increment();
         }
-        AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(assistantRunId, understood, context, username);
+        AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
+                assistantRunId, interpretedQuestion, context, username);
         if (evidenceRefiner != null) {
             retrievalResult = evidenceRefiner.refine(
-                    assistantRunId, understood, context, username, gameSessionId, retrievalResult);
+                    assistantRunId, interpretedQuestion, context, username, gameSessionId, retrievalResult);
         }
         AnswerEvidenceAdmissionGate.Admission admission = evidenceAdmissionGate.admit(
                 context.documentVersionId(), retrievalResult);
@@ -373,7 +408,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         List<HybridEvidenceHit> evidence = admission.evidence();
         ModelRequest modelRequest;
         try {
-            modelRequest = modelRequestFactory.create(understood, context, evidence);
+            modelRequest = modelRequestFactory.create(interpretedQuestion, context, evidence);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
@@ -771,7 +806,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         try {
             reviewResult = postPublicationReviewer.review(
                     assistantRunId,
-                    understood,
+                    interpretedQuestion,
                     context,
                     username,
                     gameSessionId,
@@ -792,6 +827,24 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             saveCached(cacheKey.get(), answer);
         }
         return answer;
+    }
+
+    private QuestionInterpretationRequest interpretationRequest(
+            UnderstoodQuestion deterministic, QuestionContext context) {
+        String priorQuestion = context.priorTurnReference() == null
+                ? ""
+                : context.priorTurnReference().question();
+        String priorVerdict = context.priorTurnReference() == null
+                ? ""
+                : context.priorTurnReference().groundedVerdict();
+        return new QuestionInterpretationRequest(
+                deterministic.originalQuestion(),
+                context.previousQuestion(),
+                priorQuestion,
+                priorVerdict,
+                deterministic.type(),
+                deterministic.missingContext(),
+                context.outputLanguage());
     }
 
     private Optional<StructuredRuleAnswer> findCached(AnswerCacheKey key) {
