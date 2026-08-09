@@ -199,8 +199,9 @@ watch(locale, load)
       </div>
 
       <section v-else-if="game" class="tabletop-panel player-board mt-5 grid gap-8 p-4 sm:p-7 lg:grid-cols-[19rem_1fr]">
-        <div class="rounded-xl border border-ink/8 bg-canvas p-4">
+        <div data-testid="game-cover-column" class="self-start rounded-xl border border-ink/8 bg-canvas p-4 lg:sticky lg:top-24">
           <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
+          <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="mt-4 flex justify-center border-t border-ink/8 pt-4"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
         </div>
         <div class="min-w-0 self-center">
           <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
@@ -210,22 +211,24 @@ watch(locale, load)
           <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
             <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li>
           </ul>
-          <p v-if="translating" class="mt-6 text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
-          <p v-else-if="game.descriptionTranslated" class="mt-6 text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : 'mt-6'" class="whitespace-pre-line text-[0.95rem] leading-8 text-ink/68">{{ game.description }}</p>
-          <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-3 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2">
-            <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1">{{ game.designers.join('、') }}</dd></div>
-            <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1">{{ game.publishers.join('、') }}</dd></div>
-            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}<span v-if="game.mechanicsTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1">{{ game.mechanics.join('、') }}</dd></div>
-            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}<span v-if="game.categoriesTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1">{{ game.categories.join('、') }}</dd></div>
-          </dl>
-          <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
           <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button type="button" :disabled="selecting" class="min-h-12 rounded-xl bg-felt px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" @click="selectGame">
               {{ selecting ? copy.selecting : copy.select }}
             </button>
             <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="min-h-12 rounded-xl border border-ink/15 px-5 py-3 text-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
           </div>
+        </div>
+        <div data-testid="game-long-details" class="border-t border-ink/10 pt-6 lg:col-span-2">
+          <p v-if="translating" class="text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
+          <p v-else-if="game.descriptionTranslated" class="text-xs font-semibold text-copper">{{ copy.translation }}</p>
+          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68">{{ game.description }}</p>
+          <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ game.designers.join('、') }}</dd></div>
+            <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ game.publishers.join('、') }}</dd></div>
+            <div v-if="game.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}<span v-if="game.mechanicsTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.mechanics.join('、') }}</dd></div>
+            <div v-if="game.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}<span v-if="game.categoriesTranslated" class="font-medium text-copper"> · {{ copy.metadataTranslation }}</span></dt><dd class="mt-1 leading-6">{{ game.categories.join('、') }}</dd></div>
+          </dl>
+          <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
         </div>
         <div class="border-t border-ink/10 pt-6 lg:col-span-2">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">

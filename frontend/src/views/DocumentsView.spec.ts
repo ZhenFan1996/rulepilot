@@ -16,7 +16,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.unstubAllGlobals()
   })
 
-  it('continues a ready upload after returning with its original preferences', async () => {
+  it('returns a ready upload to direct reading without forcing lesson generation', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1', playerCount: 3, beginnerCount: 2, durationMinutes: 35,
     })
@@ -27,16 +27,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
     await flushPromises()
 
-    const planRequest = fetchMock.mock.calls.find(([input]) => String(input).includes('/document-versions/version-1/teaching-plans'))
-    expect(planRequest).toBeDefined()
-    expect(JSON.parse(String(planRequest![1]?.body))).toEqual({
-      playerCount: 3, beginnerCount: 2, durationMinutes: 35,
-    })
-    expect(router.currentRoute.value.name).toBe('lessons')
-    expect(router.currentRoute.value.query.started).toBe('plan-1')
-    expect(router.currentRoute.value.query.run).toBe('lesson-run-1')
-    expect(fetchMock.mock.calls.some(([input, options]) =>
-      String(input).endsWith('/teaching-plans/plan-1/illustrated-lessons') && options?.method === 'POST')).toBe(true)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/document-versions/version-1/teaching-plans'))).toBe(false)
+    expect(router.currentRoute.value.name).toBe('teach')
+    expect(wrapper.text()).toContain('规则书已可阅读')
+    expect(wrapper.get('a[href="/rulebooks/version-1"]').text()).toContain('阅读规则书并答疑')
+    expect(wrapper.findAll('button').some(button => button.text() === '后台生成讲解')).toBe(true)
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
@@ -85,7 +80,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
     await wrapper.get('input[type="checkbox"]').setValue(true)
-    await wrapper.findAll('button').find(button => button.text() === '下载并生成讲解')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书')!.trigger('click')
     await flushPromises()
     expect(readPendingRulebookLessons(localStorage, 'player')).toContainEqual({
       versionId: 'selected-version', editionId: 'edition-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
@@ -172,6 +167,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
     await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
+    await flushPromises()
 
     expect(wrapper.text()).toContain('正在阅读图文并组织讲解顺序')
     expect(wrapper.text()).toContain('已用时 0 秒')
@@ -194,6 +191,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     const { wrapper } = await mountDocuments()
     await flushPromises()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('正在识别第 2 组页面里的组件、图标和示例')
@@ -256,7 +255,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
 
-    const importButton = wrapper.findAll('button').find((button) => button.text() === '下载并生成讲解')!
+    const importButton = wrapper.findAll('button').find((button) => button.text() === '下载规则书')!
     expect(importButton.attributes('disabled')).toBeDefined()
     await wrapper.get('input[type="url"]').setValue('https://publisher.example/wingspan_rules.pdf')
     expect(importButton.attributes('disabled')).toBeDefined()
@@ -301,7 +300,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     await wrapper.get('input[type="url"]').setValue('https://publisher.example/not-a-pdf')
     await wrapper.get('input[type="checkbox"]').setValue(true)
-    await wrapper.findAll('button').find((button) => button.text() === '下载并生成讲解')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '下载规则书')!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('无法安全导入该链接')
@@ -381,7 +380,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
       'X-CSRF-TOKEN': 'csrf',
     })
     expect(wrapper.text()).toContain('已关联桌游资料')
-    expect(wrapper.text()).toContain('开始讲解')
+    expect(wrapper.text()).toContain('后台生成讲解')
     wrapper.unmount()
   })
 
@@ -395,7 +394,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await wrapper.findAll('button').find((button) => button.text() === '补全桌游资料')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('没有找到同名桌游')
-    expect(wrapper.text()).toContain('开始讲解')
+    expect(wrapper.text()).toContain('后台生成讲解')
     wrapper.unmount()
 
     const failingFetch = mockApplicationFetch(
@@ -411,7 +410,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
     expect(second.wrapper.text()).toContain('规则书和讲解不受影响')
     expect(second.wrapper.text()).toContain('重试查找')
-    expect(second.wrapper.text()).toContain('开始讲解')
+    expect(second.wrapper.text()).toContain('后台生成讲解')
     second.wrapper.unmount()
   })
 
@@ -440,7 +439,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await reused.wrapper.findAll('button').find((button) => button.text() === '确认关联这款桌游')!.trigger('click')
     await flushPromises()
     expect(reused.wrapper.text()).toContain('已复用现有桌游资料并完成关联')
-    expect(reused.wrapper.text()).toContain('开始讲解')
+    expect(reused.wrapper.text()).toContain('后台生成讲解')
     reused.wrapper.unmount()
 
     vi.stubGlobal('fetch', mockApplicationFetch(
@@ -454,7 +453,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await failed.wrapper.findAll('button').find((button) => button.text() === '确认关联这款桌游')!.trigger('click')
     await flushPromises()
     expect(failed.wrapper.text()).toContain('关联失败，没有改变规则书')
-    expect(failed.wrapper.text()).toContain('开始讲解')
+    expect(failed.wrapper.text()).toContain('后台生成讲解')
     failed.wrapper.unmount()
   })
 })
@@ -468,6 +467,7 @@ async function mountDocuments(path = '/teach') {
       { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
       { path: '/teach', name: 'teach', component: DocumentsView },
       { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+      { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: { template: '<div />' } },
       { path: '/account', name: 'account', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
       { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },

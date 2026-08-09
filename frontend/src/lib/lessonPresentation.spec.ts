@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { deduplicatePublicLessons, groupPlansForReading, playerFacingTitle } from './lessonPresentation'
+import { deduplicatePublicLessons, groupPlansForReading, playerFacingTitle, publicLessonTitle } from './lessonPresentation'
 
 describe('playerFacingTitle', () => {
   it('removes rulebook and internal replay suffixes without rewriting stored data', () => {
@@ -8,6 +8,16 @@ describe('playerFacingTitle', () => {
     expect(playerFacingTitle('Root: Learning to Play Rules')).toBe('Root')
     expect(playerFacingTitle('Atelier: The Painter\'s Studio Rules')).toBe("Atelier: The Painter's Studio")
     expect(playerFacingTitle('Rules')).toBe('Rules')
+  })
+})
+
+describe('publicLessonTitle', () => {
+  it('prefers an exact linked BGG identity over cover and uploaded filename', () => {
+    expect(publicLessonTitle({
+      rulebookTitle: 'wingspan_rules.pdf',
+      gameCover: { gameName: 'Wingspan Rules' },
+      publicGame: { name: '翼展' },
+    })).toBe('翼展')
   })
 })
 

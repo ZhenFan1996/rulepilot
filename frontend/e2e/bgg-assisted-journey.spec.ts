@@ -64,7 +64,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await page.getByRole('button', { name: '帮我找官方规则书' }).click()
   await expect(page.getByText('publisher.example')).toBeVisible()
   await page.getByRole('button', { name: '选择并继续核对' }).click()
-  const officialButton = page.getByRole('button', { name: '下载并生成讲解' })
+  const officialButton = page.getByRole('button', { name: '下载规则书' })
   await expect(officialButton).toBeDisabled()
   await expect(page.getByRole('textbox', { name: /官方原文链接/ })).toHaveValue('https://publisher.example/rules.pdf')
   await page.getByRole('checkbox', { name: /我确认这是官方来源/ }).check()
@@ -88,7 +88,12 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await page.getByRole('button', { name: '确认关联这款桌游' }).click()
   await expect.poll(() => bggLink).toEqual({ bggId: 42 })
   await expect(page.getByText('已关联桌游资料，并保留原规则书作为唯一规则证据。')).toBeVisible()
-  await expect(page.getByRole('button', { name: '开始讲解' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '阅读规则书并答疑' })).toHaveAttribute('href', '/rulebooks/version-1')
+  await expect(page.getByRole('button', { name: '后台生成讲解' })).toBeVisible()
+  await page.getByRole('link', { name: '阅读规则书并答疑' }).click()
+  await expect(page).toHaveURL('/rulebooks/version-1')
+  await expect(page.getByRole('heading', { name: 'Example Rulebook' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '基于这本规则书答疑' }).first()).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
   await page.goto('/games/game-1')
@@ -117,7 +122,8 @@ test('keeps manual onboarding and the ready guide usable when BGG fails on mobil
   await page.getByRole('button', { name: '补全桌游资料' }).click()
   await expect(page.getByText('暂时无法连接 BGG。规则书和讲解不受影响，你可以稍后重试。')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '开始讲解' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '阅读规则书并答疑' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '后台生成讲解' })).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 })
 
@@ -223,6 +229,19 @@ async function mockOnboardingApis(page: Page, options: {
     }
     if (path === '/api/v1/documents' && request.method() === 'GET') {
       return route.fulfill({ json: [readyDocument] })
+    }
+    if (path === '/api/v1/document-versions/version-1/pages' && request.method() === 'GET') {
+      return route.fulfill({ json: [
+        { pageNumber: 1, text: 'Set up the game.', characterCount: 16 },
+        { pageNumber: 2, text: 'Take a turn.', characterCount: 12 },
+      ] })
+    }
+    if (/^\/api\/v1\/document-versions\/version-1\/pages\/\d+\/image$/.test(path)) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1100"><rect width="100%" height="100%" fill="#fffaf2"/></svg>',
+      })
     }
     if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') {
       options.onOfficialImport?.(request.postDataJSON() as Record<string, unknown>)

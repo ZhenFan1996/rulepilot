@@ -605,33 +605,6 @@ async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: Csrf
   await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
 }
 
-async function resumeOrStartLesson(pending: PendingRulebookLesson) {
-  let snapshot: TeachingPreparationRun | null = null
-  try {
-    const response = await checkedFetch(
-      `/api/v1/assistant-runs/latest?mode=TEACHING_PREPARATION&subjectId=${pending.versionId}`,
-    )
-    if (response.ok) snapshot = await response.json() as TeachingPreparationRun
-  } catch {
-    // A missing run is safe to recover through the idempotent launch endpoint.
-  }
-  if (snapshot && (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED')) {
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-    throw new Error(t('documents.error'))
-  }
-  if (snapshot) {
-    beginPreparation(pending.versionId, snapshot.run.state)
-    const csrf = await csrfToken()
-    try {
-      await waitForTeachingPreparation(snapshot.run.id, pending, csrf, snapshot)
-    } finally {
-      if (preparingVersionId.value === pending.versionId) endPreparation()
-    }
-    return
-  }
-  await startLesson(pending.versionId, pending)
-}
-
 function closeProgressConnection(versionId: string) {
   progressConnections.get(versionId)?.close()
   progressConnections.delete(versionId)
@@ -678,9 +651,8 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
-    await resumeOrStartLesson(pending).catch((error: unknown) => {
-      errorMessage.value = error instanceof Error ? error.message : t('documents.error')
-    })
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+    message.value = t('documents.readyToRead')
     return
   }
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -802,7 +774,8 @@ async function continueUploadedRulebook(result: { duplicate: boolean; version: {
   officialImportRightsConfirmed.value = false
   await loadDocuments()
   if (result.version.status === 'READY') {
-    await startLesson(result.version.id, pending)
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
+    message.value = t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
     await handleTerminalProgress(pending, 'FAILED')
   } else {
@@ -1177,6 +1150,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="flex shrink-0 flex-wrap gap-2">
                 <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
+                <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
                 <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
                 <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>

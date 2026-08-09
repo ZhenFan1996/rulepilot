@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
+import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import java.util.LinkedHashSet;
@@ -26,17 +27,20 @@ public class PublicLessonCatalog {
     private final IllustratedLessonRepository lessons;
     private final PublicRulebookReferenceLookup rulebooks;
     private final PublicGameCoverLookup covers;
+    private final PublicGameIdentityLookup gameIdentities;
     private final ConcurrentMap<Integer, CachedEntries> cachedEntries = new ConcurrentHashMap<>();
 
     public PublicLessonCatalog(
             TeachingPlanRepository plans,
             IllustratedLessonRepository lessons,
             PublicRulebookReferenceLookup rulebooks,
-            PublicGameCoverLookup covers) {
+            PublicGameCoverLookup covers,
+            PublicGameIdentityLookup gameIdentities) {
         this.plans = plans;
         this.lessons = lessons;
         this.rulebooks = rulebooks;
         this.covers = covers;
+        this.gameIdentities = gameIdentities;
     }
 
     @Transactional(readOnly = true)
@@ -67,6 +71,7 @@ public class PublicLessonCatalog {
                 .map(PublicRulebookReferenceLookup.Reference::gameEditionId)
                 .filter(java.util.Objects::nonNull)
                 .toList());
+        Map<String, PublicGameIdentityLookup.Identity> identities = publicGameIdentities(planReferences);
         Set<UUID> documentVersions = new LinkedHashSet<>();
         return planReferences.stream()
                 .map(plan -> candidate(plan, lessonSummaries.get(plan.teachingPlanId()), references.get(plan.documentVersionId())))
@@ -80,8 +85,19 @@ public class PublicLessonCatalog {
                         candidate,
                         candidate.reference().gameEditionId() == null
                                 ? null
-                                : gameCovers.get(candidate.reference().gameEditionId())))
+                                : gameCovers.get(candidate.reference().gameEditionId()),
+                        identities.get(candidate.plan().gameTitle())))
                 .toList();
+    }
+
+    private Map<String, PublicGameIdentityLookup.Identity> publicGameIdentities(
+            List<TeachingPlanRepository.PlanReference> planReferences) {
+        try {
+            return gameIdentities.findByTitles(
+                    planReferences.stream().map(TeachingPlanRepository.PlanReference::gameTitle).toList());
+        } catch (RuntimeException unavailableOptionalMetadata) {
+            return Map.of();
+        }
     }
 
     private java.util.Optional<Candidate> candidate(
@@ -114,15 +130,24 @@ public class PublicLessonCatalog {
             String rulebookTitle,
             String officialSourceUrl,
             PublicLessonReader.PublicCover gameCover,
+            PublicGameIdentityLookup.Identity publicGame,
             int sectionCount,
             int stepCount) {
-        static Entry from(Candidate candidate, PublicGameCoverLookup.Cover catalogCover) {
+        static Entry from(
+                Candidate candidate,
+                PublicGameCoverLookup.Cover catalogCover,
+                PublicGameIdentityLookup.Identity matchedIdentity) {
             PublicRulebookReferenceLookup.Reference reference = candidate.reference();
+            PublicGameIdentityLookup.Identity publicGame = catalogCover == null
+                    ? matchedIdentity
+                    : new PublicGameIdentityLookup.Identity(
+                            catalogCover.bggId(), catalogCover.gameName(), catalogCover.bggUrl());
             return new Entry(
                     candidate.plan().teachingPlanId(),
                     reference.title(),
                     reference.officialSourceUrl(),
                     cover(reference, catalogCover),
+                    publicGame,
                     candidate.summary().sectionCount(),
                     candidate.summary().stepCount());
         }
