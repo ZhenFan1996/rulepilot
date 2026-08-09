@@ -117,7 +117,47 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 .extracting(message -> message.getText())
                 .singleElement()
                 .asString()
-                .contains("referenceTitle", "before or after comparison wording", "Return null when no named game");
+                .contains(
+                        "referenceTitle",
+                        "before or after comparison wording",
+                        "short standalone title",
+                        "do not remove a leading letter",
+                        "Return null when no named game");
+    }
+
+    @Test
+    void bindsAnExactStandaloneTitleToThePriorUnresolvedComparison() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"以澄清后的标题为参照","hypotheses":[],
+                 "assistantMessage":"明白，你说的是 Azul。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"Azul",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+        var transcript = List.of(
+                new DialogueMessage("user", "我想玩花砖物语类似机制的游戏"),
+                new DialogueMessage("assistant", "请补充原文名，我会再查一次。"),
+                new DialogueMessage("user", "Azul"));
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(transcript, profile(), null, "zh-CN")))
+                .hasValueSatisfying(plan -> {
+                    assertThat(plan.act()).isEqualTo(DialogueAct.RECOMMEND);
+                    assertThat(plan.referenceTitle()).isEqualTo("Azul");
+                });
+    }
+
+    @Test
+    void rejectsATruncatedLatinReferenceEvenWhenItIsACharacterSubstring() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"zul",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "Azul")), profile(), null, "zh-CN"))).isEmpty();
     }
 
     @Test

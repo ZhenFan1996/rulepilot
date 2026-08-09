@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameTitleGrounding;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import java.io.IOException;
@@ -42,7 +43,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationAdvisor.class);
     private static final DateTimeFormatter HOUR = DateTimeFormatter.ofPattern("yyyyMMddHH").withZone(ZoneOffset.UTC);
     private static final String REFERENCE_PLANNING_REVISION = readPromptRevision(
-            "prompts/recommendation-dialogue-planner-v15-reference-resolution-system.txt");
+            "prompts/recommendation-dialogue-planner-v16-reference-clarification-system.txt");
     private static final java.util.regex.Pattern PLAYER_EVIDENCE = java.util.regex.Pattern.compile(
             "(?iu)(?:1[0-2]|[1-9]|[一二两三四五六七八九十]{1,3})\\s*(?:个?人|位|玩家|players?|people)");
     private static final java.util.regex.Pattern DURATION_EVIDENCE = java.util.regex.Pattern.compile(
@@ -351,12 +352,10 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private boolean quotedByUser(List<DialogueMessage> transcript, String evidence) {
-        String normalizedEvidence = normalizedEvidence(evidence);
-        return !normalizedEvidence.isBlank() && transcript.stream()
+        return evidence != null && !evidence.isBlank() && transcript.stream()
                 .filter(message -> "user".equals(message.role()))
                 .map(DialogueMessage::text)
-                .map(this::normalizedEvidence)
-                .anyMatch(text -> text.contains(normalizedEvidence));
+                .anyMatch(text -> BoardGameTitleGrounding.occursInPlayerText(text, evidence));
     }
 
     private String normalizedEvidence(String value) {
@@ -553,7 +552,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private String cacheKey(String operation, String userContent) {
-        return "rulepilot:bgg:recommendation-advisor:v15:" + operation + ":" + digest(userContent);
+        return "rulepilot:bgg:recommendation-advisor:v16:" + operation + ":" + digest(userContent);
     }
 
     private boolean acquireHourlyAllowance() {

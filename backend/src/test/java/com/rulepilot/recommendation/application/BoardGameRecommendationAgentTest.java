@@ -612,6 +612,45 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void continuesTheOriginalComparisonAfterAStandaloneEnglishTitleClarification() {
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("以玩家澄清后的参考游戏为依据", List.of()),
+                "明白，你说的是 Azul。我先核对资料，再找相似候选。",
+                "",
+                false,
+                "",
+                RetrievalPlan.empty(),
+                "Azul");
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    assertThat(request.act()).isEqualTo(DialogueAct.RECOMMEND);
+                    assertThat(request.referenceGame()).isNotNull();
+                    assertThat(request.referenceGame().bggId()).isEqualTo(21);
+                    return Optional.of(new Slate(
+                            "我按 Azul 在 BGG 中核对到的机制找了这些候选。",
+                            "",
+                            List.of(new Choice(30, List.of("共享已验证的目录特征"), List.of(), List.of()))));
+                },
+                new NoResearch());
+        var transcript = List.of(
+                new DialogueMessage("user", "我想玩花砖物语类似机制的游戏"),
+                new DialogueMessage("assistant", "请补充原文名或出版年份，我会再查一次。"),
+                new DialogueMessage("user", "azul"));
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(), "azul", List.of(), transcript, null), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).contains("Azul", "BGG");
+        assertThat(response.harness().actions())
+                .contains("PLAN_DIALOGUE", "INTERPRET_BGG_REFERENCE", "RESOLVE_BGG_REFERENCE")
+                .doesNotContain("ASK_CLARIFICATION");
+    }
+
+    @Test
     void keepsAPlannerQuestionConversationalAfterPreferencesAlreadyExist() {
         Plan plan = new Plan(
                 DialogueAct.ASK,
@@ -1338,9 +1377,11 @@ class BoardGameRecommendationAgentTest {
 
         @Override
         public List<SearchResult> search(String query) {
-            return "白塔庭院".equals(query)
-                    ? List.of(new SearchResult(20, "白塔庭院", 2025))
-                    : List.of();
+            return switch (query) {
+                case "白塔庭院" -> List.of(new SearchResult(20, "白塔庭院", 2025));
+                case "Azul", "azul" -> List.of(new SearchResult(21, "Azul", 2017));
+                default -> List.of();
+            };
         }
 
         @Override
@@ -1415,7 +1456,7 @@ class BoardGameRecommendationAgentTest {
         public GameDetails game(int bggId) {
             return new GameDetails(
                     bggId,
-                    "Game " + bggId,
+                    bggId == 21 ? "Azul" : "Game " + bggId,
                     "玩家在回合中派遣代理人，并通过卡牌构筑强化后续行动。",
                     "https://example.test/" + bggId + "-thumb.jpg",
                     2025,
