@@ -29,9 +29,9 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v1-system.txt");
+            "prompts/rule-answer-question-interpretation-v2-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
-            "prompts/rule-answer-question-interpretation-v1-user.txt");
+            "prompts/rule-answer-question-interpretation-v2-user.txt");
 
     private final RuntimeModelConfiguration models;
     private final FakeRuleAnswerModel fakeModel;
@@ -164,7 +164,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
                 OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
                 options.model(models.modelNameFor(Role.ANSWER));
-                options.maxTokens(256);
+                options.maxTokens(384);
                 if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
                     options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
                 } else {
@@ -175,7 +175,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 }
                 prompt = prompt.options(options);
             } else {
-                prompt = prompt.options(ChatOptions.builder().maxTokens(256).temperature(0.0));
+                prompt = prompt.options(ChatOptions.builder().maxTokens(384).temperature(0.0));
             }
             String content = prompt
                     .system(QUESTION_INTERPRETATION_SYSTEM)

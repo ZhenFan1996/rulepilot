@@ -58,7 +58,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(StructuredRuleAnswerService.class);
     // Context-resolved questions use a new semantic identity, so earlier answer-cache entries are stale.
-    private static final String ANSWER_POLICY_VERSION = "answer-v110-agent-question-interpretation";
+    private static final String ANSWER_POLICY_VERSION = "answer-v111-agent-question-planning";
     private final QuestionUnderstanding understanding;
     private final AnswerModelGateway modelGateway;
     private final AnswerQuestionInterpretationPolicy questionInterpretation;
@@ -344,17 +344,20 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             boolean useCache) {
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
+        AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
         if (modelGateway.supportsQuestionInterpretation()) {
             try {
-                Optional<UnderstoodQuestion> interpreted = modelGateway
+                Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
                         .interpretQuestion(
                                 assistantRunId,
                                 username,
                                 gameSessionId,
                                 interpretationRequest(deterministic, context))
-                        .flatMap(draft -> questionInterpretation.apply(deterministic, context, draft));
+                        .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, context, draft));
                 if (interpreted.isPresent()) {
-                    understood = interpreted.orElseThrow();
+                    AnswerQuestionInterpretationPolicy.Interpretation accepted = interpreted.orElseThrow();
+                    understood = accepted.question();
+                    if (accepted.plan() != null) questionPlan = accepted.plan();
                     acceptedQuestionInterpretations.increment();
                 } else {
                     fallbackQuestionInterpretations.increment();
@@ -395,10 +398,16 @@ public class StructuredRuleAnswerService implements RuleAnswering {
             cacheMisses.increment();
         }
         AnswerEvidenceRetriever.Result retrievalResult = evidenceRetriever.retrieve(
-                assistantRunId, interpretedQuestion, context, username);
+                assistantRunId, interpretedQuestion, context, username, questionPlan);
         if (evidenceRefiner != null) {
             retrievalResult = evidenceRefiner.refine(
-                    assistantRunId, interpretedQuestion, context, username, gameSessionId, retrievalResult);
+                    assistantRunId,
+                    interpretedQuestion,
+                    context,
+                    username,
+                    gameSessionId,
+                    questionPlan,
+                    retrievalResult);
         }
         AnswerEvidenceAdmissionGate.Admission admission = evidenceAdmissionGate.admit(
                 context.documentVersionId(), retrievalResult);

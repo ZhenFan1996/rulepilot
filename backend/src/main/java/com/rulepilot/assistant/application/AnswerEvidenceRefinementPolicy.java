@@ -38,11 +38,25 @@ final class AnswerEvidenceRefinementPolicy {
             UnderstoodQuestion question,
             QuestionContext context,
             AnswerEvidenceRetriever.Result deterministic) {
+        return requiresRefinement(question, context, AnswerQuestionPlan.fallback(question), deterministic);
+    }
+
+    static boolean requiresRefinement(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            AnswerQuestionPlan plan,
+            AnswerEvidenceRetriever.Result deterministic) {
         if (question == null || context == null || deterministic == null
                 || deterministic.state() != AnswerEvidenceRetriever.State.READY) {
             return false;
         }
         if (deterministic.evidence().isEmpty()) return true;
+        if (plan != null && plan.agentPlanned()
+                && (plan.subquestions().size() > 1
+                        || plan.evidenceNeeds().stream()
+                                .anyMatch(need -> need != com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.DIRECT_RULE))) {
+            return true;
+        }
         String playerQuestion = question.normalizedQuestion();
         if (AnswerEvidencePolicy.asksForCompleteList(playerQuestion)) return true;
         if (asksAboutVisualReference(playerQuestion)) return true;

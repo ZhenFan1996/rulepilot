@@ -2223,7 +2223,14 @@ class StructuredRuleAnswerServiceTest {
                         QuestionType.LESSON_STEP_FOLLOW_UP,
                         ReferenceBinding.PRIOR_GROUNDED_TURN,
                         List.of("红色标记", "这样"),
-                        Set.of()));
+                        Set.of(),
+                        List.of(
+                                new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                        "红色标记在什么时候触发？",
+                                        Set.of(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.PRIOR_TURN)),
+                                new com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion(
+                                        "它也是这样吗？",
+                                        Set.of(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.DIRECT_RULE)))));
             }
 
             @Override
@@ -2237,8 +2244,12 @@ class StructuredRuleAnswerServiceTest {
                         "HIGH");
             }
         };
+        List<String> retrievalQueries = new java.util.ArrayList<>();
         var service = answerService(
-                (version, query, options) -> List.of(new HybridEvidenceHit(source, 0.9, 1, null, false)),
+                (version, query, options) -> {
+                    retrievalQueries.add(query);
+                    return List.of(new HybridEvidenceHit(source, 0.9, 1, null, false));
+                },
                 model);
         QuestionContext context = new QuestionContext(
                 versionId,
@@ -2257,6 +2268,9 @@ class StructuredRuleAnswerServiceTest {
         assertThat(answer.shortVerdict()).contains("行动结束后");
         assertThat(interpretationRequest.get().deterministicMissingContext())
                 .contains(com.rulepilot.assistant.domain.MissingQuestionContext.REFERENCED_OBJECT);
+        assertThat(retrievalQueries)
+                .anySatisfy(query -> assertThat(query).contains("红色标记在什么时候触发", "follow-up dependency"))
+                .anySatisfy(query -> assertThat(query).contains("它也是这样吗", "direct rule clause"));
     }
 
     @Test

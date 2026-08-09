@@ -7,6 +7,8 @@ import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
+import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
@@ -38,7 +40,10 @@ class AnswerQuestionInterpretationPolicyTest {
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 ReferenceBinding.PRIOR_GROUNDED_TURN,
                 List.of("红色标记", "行动结束后"),
-                Set.of());
+                Set.of(),
+                List.of(
+                        new PlannedSubquestion("红色标记在什么时候触发？", Set.of(EvidenceNeed.PRIOR_TURN)),
+                        new PlannedSubquestion("这个也是在行动结束后触发吗？", Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.apply(deterministic, context, draft)).hasValueSatisfying(understood -> {
             assertThat(understood.needsClarification()).isFalse();
@@ -54,7 +59,8 @@ class AnswerQuestionInterpretationPolicyTest {
                 QuestionType.LESSON_STEP_FOLLOW_UP,
                 ReferenceBinding.PRIOR_GROUNDED_TURN,
                 List.of(),
-                Set.of());
+                Set.of(),
+                List.of(new PlannedSubquestion("这个什么时候触发？", Set.of(EvidenceNeed.PRIOR_TURN))));
 
         assertThat(policy.apply(
                         deterministic("这个什么时候触发？"),
@@ -69,9 +75,26 @@ class AnswerQuestionInterpretationPolicyTest {
                 QuestionType.RULE_QUERY,
                 ReferenceBinding.CURRENT_QUESTION,
                 List.of("模型猜出的组件"),
-                Set.of());
+                Set.of(),
+                List.of(new PlannedSubquestion("这个阶段能做什么？", Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.apply(
+                        deterministic("这个阶段能做什么？"),
+                        new QuestionContext(versionId),
+                        draft))
+                .isEmpty();
+    }
+
+    @Test
+    void rejectsAQuestionPlanThatInventsAnEvidenceObligationOutsidePlayerContext() {
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("阶段"),
+                Set.of(),
+                List.of(new PlannedSubquestion("隐藏角色会得到奖励吗？", Set.of(EvidenceNeed.CONDITION))));
+
+        assertThat(policy.applyWithPlan(
                         deterministic("这个阶段能做什么？"),
                         new QuestionContext(versionId),
                         draft))
@@ -84,12 +107,14 @@ class AnswerQuestionInterpretationPolicyTest {
                 QuestionType.SITUATION_QUERY,
                 ReferenceBinding.NEEDS_CLARIFICATION,
                 List.of("这个"),
-                Set.of());
+                Set.of(),
+                List.of());
         QuestionInterpretationDraft grounded = new QuestionInterpretationDraft(
                 QuestionType.RULE_QUERY,
                 ReferenceBinding.CURRENT_QUESTION,
                 List.of("阶段"),
-                Set.of(MissingQuestionContext.REFERENCED_OBJECT));
+                Set.of(MissingQuestionContext.REFERENCED_OBJECT),
+                List.of(new PlannedSubquestion("这个阶段能做什么？", Set.of(EvidenceNeed.DIRECT_RULE))));
 
         assertThat(policy.apply(
                         deterministic("这个阶段能做什么？"),

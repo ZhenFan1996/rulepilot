@@ -42,7 +42,11 @@ class SpringAiRuleAnswerModelTest {
     void interpretsQuestionContextAsBoundedStructuredAgentOutput() {
         Fixture fixture = fixture("""
                 {"questionType":"LESSON_STEP_FOLLOW_UP","referenceBinding":"PRIOR_GROUNDED_TURN",
-                 "terms":["红色标记","这样"],"missingContext":[]}
+                 "terms":["红色标记","这样"],"missingContext":[],
+                 "subquestions":[
+                   {"questionSpan":"红色标记什么时候触发？","evidenceNeeds":["PRIOR_TURN"]},
+                   {"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}
+                 ]}
                 """);
 
         var result = fixture.model.interpretQuestion(request());
@@ -51,20 +55,28 @@ class SpringAiRuleAnswerModelTest {
             assertThat(draft.referenceBinding()).isEqualTo(ReferenceBinding.PRIOR_GROUNDED_TURN);
             assertThat(draft.terms()).containsExactly("红色标记", "这样");
             assertThat(draft.missingContext()).isEmpty();
+            assertThat(draft.subquestions()).hasSize(2);
         });
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(fixture.chatModel).call(prompt.capture());
         assertThat(prompt.getValue().getInstructions())
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
-                        .contains("NEEDS_CLARIFICATION", "prior grounded conversation turn", "never current rule evidence"));
+                        .contains(
+                                "NEEDS_CLARIFICATION",
+                                "prior grounded conversation turn",
+                                "never current rule evidence",
+                                "subquestions",
+                                "evidenceNeeds",
+                                "copied verbatim"));
     }
 
     @Test
     void rejectsQuestionInterpretationWithFieldsOutsideTheVersionedContract() {
         Fixture fixture = fixture("""
                 {"questionType":"RULE_QUERY","referenceBinding":"CURRENT_QUESTION","terms":[],
-                 "missingContext":[],"answer":"invented rule fact"}
+                 "missingContext":[],"subquestions":[{"questionSpan":"它也是这样吗？","evidenceNeeds":["DIRECT_RULE"]}],
+                 "answer":"invented rule fact"}
                 """);
 
         assertThat(fixture.model.interpretQuestion(request())).isEmpty();

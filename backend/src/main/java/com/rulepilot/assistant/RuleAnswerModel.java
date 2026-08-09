@@ -75,14 +75,39 @@ public interface RuleAnswerModel {
         NEEDS_CLARIFICATION
     }
 
+    enum EvidenceNeed {
+        DIRECT_RULE,
+        CONDITION,
+        SEQUENCE,
+        EXCEPTION,
+        DEFINITION,
+        RELATIONSHIP,
+        VISUAL_REFERENCE,
+        COMPLETE_LIST,
+        PRIOR_TURN
+    }
+
+    record PlannedSubquestion(String questionSpan, Set<EvidenceNeed> evidenceNeeds) {
+        public PlannedSubquestion {
+            if (questionSpan == null || questionSpan.isBlank() || questionSpan.length() > 300
+                    || evidenceNeeds == null || evidenceNeeds.isEmpty() || evidenceNeeds.size() > 3) {
+                throw new IllegalArgumentException("planned answer subquestion is invalid");
+            }
+            questionSpan = questionSpan.strip();
+            evidenceNeeds = Set.copyOf(evidenceNeeds);
+        }
+    }
+
     record QuestionInterpretationDraft(
             QuestionType questionType,
             ReferenceBinding referenceBinding,
             List<String> terms,
-            Set<MissingQuestionContext> missingContext) {
+            Set<MissingQuestionContext> missingContext,
+            List<PlannedSubquestion> subquestions) {
         public QuestionInterpretationDraft {
             if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
-                    || missingContext == null || missingContext.size() > 2) {
+                    || missingContext == null || missingContext.size() > 2
+                    || subquestions == null || subquestions.size() > 4) {
                 throw new IllegalArgumentException("question interpretation draft is invalid");
             }
             if (terms.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 80)) {
@@ -93,6 +118,7 @@ public interface RuleAnswerModel {
                     .distinct()
                     .toList();
             missingContext = Set.copyOf(missingContext);
+            subquestions = List.copyOf(subquestions);
         }
     }
 

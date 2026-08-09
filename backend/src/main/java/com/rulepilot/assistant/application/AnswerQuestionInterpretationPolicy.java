@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
+import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.text.Normalizer;
 import java.util.LinkedHashSet;
@@ -18,6 +19,13 @@ final class AnswerQuestionInterpretationPolicy {
             UnderstoodQuestion deterministic,
             QuestionContext context,
             QuestionInterpretationDraft draft) {
+        return applyWithPlan(deterministic, context, draft).map(Interpretation::question);
+    }
+
+    Optional<Interpretation> applyWithPlan(
+            UnderstoodQuestion deterministic,
+            QuestionContext context,
+            QuestionInterpretationDraft draft) {
         if (deterministic == null || context == null || draft == null) return Optional.empty();
         if (!available(draft.referenceBinding(), context)) return Optional.empty();
         if (!consistentClarification(draft)) return Optional.empty();
@@ -27,13 +35,19 @@ final class AnswerQuestionInterpretationPolicy {
         if (groundedTerms.size() != draft.terms().size()) return Optional.empty();
 
         String resolvedQuestion = resolvedQuestion(deterministic, context, draft.referenceBinding());
-        return Optional.of(new UnderstoodQuestion(
+        UnderstoodQuestion understood = new UnderstoodQuestion(
                 deterministic.documentVersionId(),
                 deterministic.originalQuestion(),
                 normalize(resolvedQuestion),
                 draft.questionType(),
                 groundedTerms,
-                draft.missingContext()));
+                draft.missingContext());
+        if (understood.needsClarification()) {
+            return Optional.of(new Interpretation(understood, null));
+        }
+        Optional<AnswerQuestionPlan> plan = groundedPlan(
+                draft.subquestions(), groundingText, deterministic.originalQuestion());
+        return plan.map(value -> new Interpretation(understood, value));
     }
 
     private boolean available(ReferenceBinding binding, QuestionContext context) {
@@ -46,7 +60,8 @@ final class AnswerQuestionInterpretationPolicy {
 
     private boolean consistentClarification(QuestionInterpretationDraft draft) {
         boolean clarification = draft.referenceBinding() == ReferenceBinding.NEEDS_CLARIFICATION;
-        return clarification == !draft.missingContext().isEmpty();
+        return clarification == !draft.missingContext().isEmpty()
+                && clarification == draft.subquestions().isEmpty();
     }
 
     private List<String> groundedTerms(List<String> terms, String groundingText) {
@@ -58,6 +73,25 @@ final class AnswerQuestionInterpretationPolicy {
             grounded.add(term.strip());
         }
         return List.copyOf(grounded);
+    }
+
+    private Optional<AnswerQuestionPlan> groundedPlan(
+            List<PlannedSubquestion> proposed, String groundingText, String currentQuestion) {
+        String haystack = normalize(groundingText);
+        String current = normalize(currentQuestion);
+        List<AnswerQuestionPlan.Subquestion> accepted = proposed.stream()
+                .filter(subquestion -> haystack.contains(normalize(subquestion.questionSpan())))
+                .map(subquestion -> new AnswerQuestionPlan.Subquestion(
+                        subquestion.questionSpan(), subquestion.evidenceNeeds()))
+                .distinct()
+                .toList();
+        if (accepted.size() != proposed.size()) return Optional.empty();
+        boolean coversCurrentTurn = accepted.stream()
+                .map(AnswerQuestionPlan.Subquestion::text)
+                .map(this::normalize)
+                .anyMatch(span -> current.contains(span) || span.contains(current));
+        if (!coversCurrentTurn) return Optional.empty();
+        return Optional.of(new AnswerQuestionPlan(accepted, true));
     }
 
     private String groundingText(
@@ -88,4 +122,6 @@ final class AnswerQuestionInterpretationPolicy {
                 .strip()
                 .toLowerCase(Locale.ROOT);
     }
+
+    record Interpretation(UnderstoodQuestion question, AnswerQuestionPlan plan) {}
 }

@@ -14,4 +14,15 @@ public interface AnswerEvidenceRefiner {
             String username,
             UUID gameSessionId,
             AnswerEvidenceRetriever.Result deterministic);
+
+    default AnswerEvidenceRetriever.Result refine(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            AnswerQuestionPlan questionPlan,
+            AnswerEvidenceRetriever.Result deterministic) {
+        return refine(assistantRunId, question, context, username, gameSessionId, deterministic);
+    }
 }
