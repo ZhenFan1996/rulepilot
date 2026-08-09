@@ -15,6 +15,16 @@ public interface BoardGameRecommendationCatalog {
         return List.of();
     }
 
+    default List<Game> resolveReferenceTitle(String title) {
+        return searchByNames(List.of(title)).stream()
+                .map(Ranking::bggId)
+                .findFirst()
+                .map(this::findGameById)
+                .flatMap(value -> value)
+                .map(List::of)
+                .orElseGet(List::of);
+    }
+
     default Optional<Game> findGameById(int bggId) {
         return findGamesByIds(List.of(bggId)).stream().findFirst();
     }

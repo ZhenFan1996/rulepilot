@@ -143,8 +143,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 && !request.candidates().isEmpty()
                 && request.candidates().size() <= 20
                 && request.research() != null
-                && (request.referenceGame() == null
-                        || request.focusedBggId() != null && request.referenceGame().bggId() == request.focusedBggId())
+                && (request.referenceGame() == null || request.referenceGame().bggId() > 0)
                 && validLocale(request.locale());
     }
 
@@ -393,7 +392,10 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
                 + "for ordinary conversation that needs no catalog facts, ASK only for a genuinely necessary clarification, RECOMMEND when "
                 + "the user asks for games or alternatives, and EXPLAIN when the user asks about the focused game. A focused BGG ID is a "
                 + "verified conversational referent, not a forced action: keep it for pronouns such as it/this game, but a request for "
-                + "alternatives is RECOMMEND. Never claim the focused game does not exist. Treat researchRequested and "
+                + "alternatives is RECOMMEND. When the player asks for something similar to a named game, choose RECOMMEND rather than "
+                + "ASK: the application will resolve that title through BGG. Do not infer or mention that named game's mechanisms, "
+                + "categories, weight, or play style from memory, and do not ask the player to explain the game before the catalog lookup. "
+                + "Never claim the focused game does not exist. Treat researchRequested and "
                 + "candidateDiscoveryRequested as choices of allow-listed read tools in an observe-decide-act loop. Set researchRequested "
                 + "only when current external evidence would materially improve this turn—for example subjective table experience, an "
                 + "explicit comparison, rules flow/how-to-play, or facts absent from the supplied BGG record. Do not request research for "
@@ -536,7 +538,7 @@ public class SpringAiBoardGameRecommendationAdvisor implements BoardGameRecommen
     }
 
     private String cacheKey(String operation, String userContent) {
-        return "rulepilot:bgg:recommendation-advisor:v13:" + operation + ":" + digest(userContent);
+        return "rulepilot:bgg:recommendation-advisor:v14:" + operation + ":" + digest(userContent);
     }
 
     private boolean acquireHourlyAllowance() {

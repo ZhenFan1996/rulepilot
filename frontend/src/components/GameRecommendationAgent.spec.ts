@@ -139,6 +139,30 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.text()).toContain('8 人')
   })
 
+  it('keeps the newest reply above the composer by scrolling the conversation viewport', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted',
+        assistantMessage: '我先核对参考游戏，再给出有具体共同机制的候选。',
+        profile: baseProfile, clarification: null, sourceCount: 179737, candidatesEvaluated: 1,
+        games: [{ game, matches: ['共享已核对的机制'], tradeoffs: [] }],
+        harness: { modelCalls: 1, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE'] },
+      })
+    }))
+    const wrapper = await mountAgent()
+    const viewport = wrapper.get('[data-testid="recommendation-conversation"]').element as HTMLElement
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, get: () => 640 })
+
+    await wrapper.get('textarea').setValue('我想找一款类似白塔庭院的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(viewport.scrollTop).toBe(640)
+    expect(wrapper.text()).toContain('在 BGG 核对参考游戏')
+    expect(wrapper.text()).toContain('我先核对参考游戏')
+  })
+
   it('resolves a natural follow-up mentioning a previously shown official title to its BGG id', async () => {
     const requests: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

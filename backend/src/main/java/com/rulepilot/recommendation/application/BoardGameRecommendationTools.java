@@ -80,6 +80,22 @@ public class BoardGameRecommendationTools {
         }
     }
 
+    ReferenceObservation resolveReferenceTitle(String title) {
+        try {
+            List<Game> games = catalog.resolveReferenceTitle(title);
+            boolean complete = games.size() == 1 && games.getFirst().details() != null;
+            return new ReferenceObservation(
+                    complete ? ToolStatus.SUCCESS : ToolStatus.PARTIAL,
+                    games,
+                    complete ? "" : games.isEmpty() ? "REFERENCE_NOT_FOUND" : "REFERENCE_DETAILS_UNAVAILABLE");
+        } catch (IllegalArgumentException exception) {
+            return new ReferenceObservation(ToolStatus.ERROR, List.of(), "INVALID_ARGUMENT");
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation reference-title resolution failed");
+            return new ReferenceObservation(ToolStatus.ERROR, List.of(), "CATALOG_UNAVAILABLE");
+        }
+    }
+
     private CatalogObservation lookupGames(List<Integer> bggIds, ToolName tool) {
         try {
             return new CatalogObservation(
@@ -131,6 +147,7 @@ public class BoardGameRecommendationTools {
         LOOKUP_BGG_GAME,
         LOOKUP_BGG_CANDIDATES,
         SEARCH_BGG_BY_NAME,
+        RESOLVE_BGG_REFERENCE,
         DISCOVER_CANDIDATES,
         RESEARCH_GAME_FIT,
         RESEARCH_GAME_QUESTION
@@ -182,6 +199,16 @@ public class BoardGameRecommendationTools {
 
         boolean succeeded() {
             return status == ToolStatus.SUCCESS;
+        }
+    }
+
+    record ReferenceObservation(ToolStatus status, List<Game> games, String code) {
+        ReferenceObservation {
+            games = List.copyOf(games);
+        }
+
+        boolean resolved() {
+            return status == ToolStatus.SUCCESS && games.size() == 1;
         }
     }
 

@@ -147,6 +147,36 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
     }
 
     @Override
+    public List<BoardGameRecommendationCatalog.Game> resolveReferenceTitle(String title) {
+        String checked = checkedSearch(title);
+        String normalized = normalizedTitle(checked);
+        Optional<RankedGame> localExact = repository
+                .find(new Query(checked, BggGameType.ALL, Sort.RANK, 0, 5, List.of()))
+                .games()
+                .stream()
+                .filter(game -> normalizedTitle(game.sourceName()).equals(normalized))
+                .findFirst();
+        if (localExact.isPresent()) {
+            return findGameById(localExact.orElseThrow().bggId()).map(List::of).orElseGet(List::of);
+        }
+        if (!bgg.configured()) return List.of();
+
+        List<Integer> exactIds = bgg.search(checked).stream()
+                .filter(result -> normalizedTitle(result.name()).equals(normalized))
+                .map(BoardGameGeekCatalog.SearchResult::bggId)
+                .distinct()
+                .limit(2)
+                .toList();
+        if (exactIds.size() != 1) return List.of();
+        int bggId = exactIds.getFirst();
+        Optional<RankedGame> ranked = repository.findByIds(List.of(bggId)).stream().findFirst();
+        GameDetails details = bgg.game(bggId);
+        return List.of(ranked
+                .map(value -> recommendationGame(value, details))
+                .orElseGet(() -> recommendationGame(details)));
+    }
+
+    @Override
     public Optional<BoardGameRecommendationCatalog.Game> findGameById(int bggId) {
         if (bggId <= 0) throw new IllegalArgumentException("BGG id must be positive");
         Optional<RankedGame> ranked = repository.findByIds(List.of(bggId)).stream().findFirst();
@@ -208,34 +238,51 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
     }
 
     private BoardGameRecommendationCatalog.Game recommendationGame(RankedGame ranked, GameDetails details) {
+        return new BoardGameRecommendationCatalog.Game(
+                recommendationRanking(ranked),
+                recommendationDetails(details));
+    }
+
+    private BoardGameRecommendationCatalog.Game recommendationGame(GameDetails details) {
+        return new BoardGameRecommendationCatalog.Game(
+                new BoardGameRecommendationCatalog.Ranking(
+                        details.bggId(),
+                        details.name(),
+                        details.publicationYear(),
+                        null,
+                        details.averageRating(),
+                        details.averageRating(),
+                        0),
+                recommendationDetails(details));
+    }
+
+    private BoardGameRecommendationCatalog.Details recommendationDetails(GameDetails details) {
         String officialChineseName = details.officialChineseNames().isEmpty()
                 ? ""
                 : details.officialChineseNames().getFirst();
-        return new BoardGameRecommendationCatalog.Game(
-                recommendationRanking(ranked),
-                new BoardGameRecommendationCatalog.Details(
-                        details.name(),
-                        officialChineseName,
-                        details.thumbnailUrl(),
-                        details.minPlayers(),
-                        details.maxPlayers(),
-                        details.playingTimeMinutes(),
-                        details.averageWeight(),
-                        details.categories(),
-                        details.mechanics(),
-                        details.playingTimeMinutes(),
-                        details.playingTimeMinutes(),
-                        details.minimumAge(),
-                        null,
-                        "",
-                        "",
-                        null,
-                        null,
-                        List.of(),
-                        details.designers(),
-                        details.publishers(),
-                        details.description(),
-                        details.imageUrl()));
+        return new BoardGameRecommendationCatalog.Details(
+                details.name(),
+                officialChineseName,
+                details.thumbnailUrl(),
+                details.minPlayers(),
+                details.maxPlayers(),
+                details.playingTimeMinutes(),
+                details.averageWeight(),
+                details.categories(),
+                details.mechanics(),
+                details.playingTimeMinutes(),
+                details.playingTimeMinutes(),
+                details.minimumAge(),
+                null,
+                "",
+                "",
+                null,
+                null,
+                List.of(),
+                details.designers(),
+                details.publishers(),
+                details.description(),
+                details.imageUrl());
     }
 
     private BoardGameRecommendationCatalog.Ranking recommendationRanking(RankedGame ranked) {

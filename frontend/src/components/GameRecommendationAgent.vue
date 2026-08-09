@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationRulebookHandoff from '@/components/RecommendationRulebookHandoff.vue'
@@ -26,6 +26,7 @@ const copy = {
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
     toolTrail: '本轮实际调用', toolUnderstand: '理解这段对话', toolCatalog: '完整目录条件筛选',
+    toolReference: '在 BGG 核对参考游戏',
     toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证',
     starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
     type: '类型：{value}', interaction: '互动：{value}',
@@ -40,6 +41,7 @@ const copy = {
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
     toolTrail: 'Tools used this turn', toolUnderstand: 'Understand the conversation', toolCatalog: 'Filter the full catalog',
+    toolReference: 'Resolve the reference game in BGG',
     toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience',
     starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
@@ -94,6 +96,7 @@ const seenBggIds = ref<number[]>([])
 const knownGames = ref<RecommendationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
+const conversationScroller = ref<HTMLElement | null>(null)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
@@ -119,6 +122,7 @@ const toolLabels = computed(() => {
   const labels: string[] = []
   const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
   if (actions.includes('PLAN_DIALOGUE')) add(t('toolUnderstand'))
+  if (actions.includes('RESOLVE_BGG_REFERENCE')) add(t('toolReference'))
   if (actions.includes('SEARCH_BGG_CATALOG')) add(t('toolCatalog'))
   if (actions.includes('SEARCH_BGG_BY_NAME')) add(t('toolNames'))
   if (actions.some(action => action === 'LOOKUP_BGG_CANDIDATES' || action === 'LOOKUP_BGG_GAME')) add(t('toolDetails'))
@@ -149,6 +153,12 @@ function endLoading() {
   loadingClock = null
   activeRequest = null
   loading.value = false
+}
+
+async function scrollConversationToLatest() {
+  await nextTick()
+  const scroller = conversationScroller.value
+  if (scroller) scroller.scrollTop = scroller.scrollHeight
 }
 
 async function sendTurn(message: string, requestProfile: RecommendationProfile, userLabel?: string, excludedBggIds: number[] = [], focusedBggId: number | null = null) {
@@ -275,7 +285,15 @@ function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
 }
 
 watch(locale, reset)
-onMounted(() => { void csrfToken().catch(() => undefined) })
+watch(
+  () => [messages.value.length, loading.value, loadingStage.value],
+  () => { void scrollConversationToLatest() },
+  { flush: 'post' },
+)
+onMounted(() => {
+  void csrfToken().catch(() => undefined)
+  void scrollConversationToLatest()
+})
 onBeforeUnmount(() => {
   activeRequest?.abort()
   endLoading()
@@ -300,7 +318,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="min-w-0 bg-paper text-ink">
-          <div class="max-h-[31rem] min-h-72 stack-y-md overflow-y-auto px-4 py-5 sm:px-6 sm:py-7" aria-live="polite">
+          <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[31rem] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:px-6 sm:py-7 sm:pb-9" aria-live="polite">
             <div v-for="message in messages" :key="message.id" class="flex" :class="message.role === 'user' ? 'justify-end' : 'justify-start'"><p class="max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-6" :class="message.role === 'user' ? 'rounded-br-sm bg-felt text-white' : 'rounded-bl-sm border border-ink/8 bg-canvas text-ink/72'">{{ message.text }}</p></div>
             <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
           </div>

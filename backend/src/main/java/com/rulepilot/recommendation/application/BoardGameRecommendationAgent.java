@@ -16,9 +16,11 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Discovery
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.recommendation.application.BoardGamePreferenceDialogue.ResolvedTurn;
+import com.rulepilot.recommendation.application.BoardGameReferenceIntent.ReferenceIntent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationSelector.CandidatePool;
 import com.rulepilot.recommendation.application.BoardGameRecommendationSelector.SelectionStatus;
 import com.rulepilot.recommendation.application.BoardGameRecommendationTools.CatalogObservation;
+import com.rulepilot.recommendation.application.BoardGameRecommendationTools.ReferenceObservation;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,6 +45,7 @@ public class BoardGameRecommendationAgent {
     private final BoardGameRecommendationTools tools;
     private final BoardGamePreferenceDialogue dialogue;
     private final BoardGameRecommendationQueryCoverage queryCoverage;
+    private final BoardGameReferenceIntent referenceIntent;
     private final BoardGameRecommendationCandidateAgent candidateAgent;
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationAdvisor advisor;
@@ -52,6 +55,7 @@ public class BoardGameRecommendationAgent {
             BoardGameRecommendationTools tools,
             BoardGamePreferenceDialogue dialogue,
             BoardGameRecommendationQueryCoverage queryCoverage,
+            BoardGameReferenceIntent referenceIntent,
             BoardGameRecommendationCandidateAgent candidateAgent,
             BoardGameRecommendationSelector selector,
             BoardGameRecommendationAdvisor advisor,
@@ -59,6 +63,7 @@ public class BoardGameRecommendationAgent {
         this.tools = tools;
         this.dialogue = dialogue;
         this.queryCoverage = queryCoverage;
+        this.referenceIntent = referenceIntent;
         this.candidateAgent = candidateAgent;
         this.selector = selector;
         this.advisor = advisor;
@@ -99,11 +104,38 @@ public class BoardGameRecommendationAgent {
                 .map(plan -> queryCoverage.preserveUncoveredExpression(
                         plan.retrievalPlan(), request.message(), turn.profile()))
                 .orElseGet(RetrievalPlan::empty);
+        int sourceCount = tools.catalogGameCount();
+        Optional<ReferenceIntent> namedReference = request.focusedBggId() == null
+                ? referenceIntent.resolve(request.transcript(), request.message())
+                : Optional.empty();
+        Game resolvedNamedReference = null;
+        if (namedReference.isPresent()) {
+            progress.accept(ProgressStage.READING_GAME_DETAILS);
+            catalogCalls++;
+            ReferenceObservation observation = tools.resolveReferenceTitle(namedReference.orElseThrow().title());
+            actions.add("RESOLVE_BGG_REFERENCE");
+            if (!observation.resolved()) {
+                return unresolvedReference(
+                        turn,
+                        locale,
+                        namedReference.orElseThrow().title(),
+                        observation.code(),
+                        modelCalls,
+                        catalogCalls,
+                        researchCalls,
+                        actions);
+            }
+            resolvedNamedReference = observation.games().getFirst();
+            retrievalPlan = similarityRetrievalPlan(
+                    retrievalPlan, resolvedNamedReference, namedReference.orElseThrow());
+            userModel = referenceUserModel(resolvedNamedReference, locale);
+        }
         boolean plannedPreferenceSignal = planned.isPresent()
                 && (!retrievalPlan.features().isEmpty()
                         || !planned.orElseThrow().userModel().hypotheses().isEmpty());
 
-        if (planned.filter(plan -> plan.act() == DialogueAct.RESPOND).isPresent()) {
+        if (resolvedNamedReference == null
+                && planned.filter(plan -> plan.act() == DialogueAct.RESPOND).isPresent()) {
             Plan plan = planned.orElseThrow();
             return response(
                     Outcome.CONVERSATION,
@@ -119,7 +151,8 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
 
-        if (planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent()) {
+        if (resolvedNamedReference == null
+                && planned.filter(plan -> plan.act() == DialogueAct.ASK).isPresent()) {
             Plan plan = planned.orElseThrow();
             String message = !plan.assistantMessage().isBlank() ? plan.assistantMessage() : plan.nextQuestion();
             return response(
@@ -136,7 +169,8 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
         if (planned.filter(plan -> plan.act() == DialogueAct.EXPLAIN).isPresent()
-                && request.focusedBggId() == null) {
+                && request.focusedBggId() == null
+                && resolvedNamedReference == null) {
             Plan plan = planned.orElseThrow();
             String question = !plan.nextQuestion().isBlank()
                     ? plan.nextQuestion()
@@ -157,7 +191,7 @@ public class BoardGameRecommendationAgent {
         }
         boolean modelWantsCandidateWork = planned
                 .map(plan -> plan.act() == DialogueAct.RECOMMEND || plan.act() == DialogueAct.EXPLAIN)
-                .orElse(false);
+                .orElse(false) || resolvedNamedReference != null;
         if (!turn.hasPreferenceSignal()
                 && !plannedPreferenceSignal
                 && request.focusedBggId() == null
@@ -178,18 +212,23 @@ public class BoardGameRecommendationAgent {
 
         boolean focusedDiscussion = request.focusedBggId() != null
                 && planned.map(plan -> plan.act() == DialogueAct.EXPLAIN).orElse(true);
-        List<Integer> effectiveExcludedBggIds = focusedDiscussion || request.focusedBggId() == null
-                ? request.excludedBggIds()
-                : java.util.stream.Stream.concat(
-                                java.util.stream.Stream.of(request.focusedBggId()),
-                                request.excludedBggIds().stream())
+        Game namedReferenceGame = resolvedNamedReference;
+        List<Integer> effectiveExcludedBggIds = java.util.stream.Stream.concat(
+                        request.excludedBggIds().stream(),
+                        java.util.stream.Stream.of(
+                                        !focusedDiscussion && request.focusedBggId() != null
+                                                ? request.focusedBggId()
+                                                : null,
+                                        namedReferenceGame == null
+                                                ? null
+                                                : namedReferenceGame.ranking().bggId())
+                                .filter(Objects::nonNull))
                         .distinct()
                         .limit(60)
                         .toList();
 
         List<Game> sourceGames = List.of();
-        Game referenceGame = null;
-        int sourceCount = tools.catalogGameCount();
+        Game referenceGame = resolvedNamedReference;
         if (focusedDiscussion) {
             progress.accept(ProgressStage.READING_GAME_DETAILS);
             catalogCalls++;
@@ -212,7 +251,9 @@ public class BoardGameRecommendationAgent {
             }
         }
 
-        retrievalPlan = referenceGame == null ? retrievalPlan : similarityRetrievalPlan(retrievalPlan, referenceGame);
+        retrievalPlan = referenceGame == null || namedReference.isPresent()
+                ? retrievalPlan
+                : similarityRetrievalPlan(retrievalPlan, referenceGame, null);
         List<Integer> discoveredBggIds = List.of();
         Research candidateDiscoveryEvidence = Research.empty();
         boolean requiredUserExpression = !focusedDiscussion && retrievalPlan.features().stream()
@@ -445,7 +486,9 @@ public class BoardGameRecommendationAgent {
                     research,
                     request.focusedBggId(),
                     locale,
-                    planned.orElseThrow().act(),
+                    completedReferenceGame != null && request.focusedBggId() == null
+                            ? DialogueAct.RECOMMEND
+                            : planned.orElseThrow().act(),
                     completedReferenceGame == null ? null : selector.advisorCandidate(completedReferenceGame)));
             if (slate.isPresent()) {
                 actions.add(focusedDiscussion ? "COMPOSE_GAME_RESPONSE" : "COMPOSE_RECOMMENDATIONS");
@@ -466,7 +509,9 @@ public class BoardGameRecommendationAgent {
         boolean fallback = slate.isEmpty() && !structuredRanking;
         String assistantMessage = slate.map(Slate::assistantMessage)
                 .filter(value -> !value.isBlank())
-                .orElseGet(() -> structuredRanking
+                .orElseGet(() -> completedReferenceGame != null && request.focusedBggId() == null
+                        ? referenceSummary(locale, completedReferenceGame)
+                        : structuredRanking
                         ? fastNativeResponse
                                 ? fastNativeSummary
                                 : evidenceBoundFocusedResponse
@@ -476,7 +521,10 @@ public class BoardGameRecommendationAgent {
         String nextQuestion = slate.map(Slate::nextQuestion)
                 .filter(value -> !value.isBlank())
                 .orElse("");
-        if (nextQuestion.isBlank() && planned.isPresent() && !focusedDiscussion) {
+        if (nextQuestion.isBlank()
+                && planned.isPresent()
+                && !focusedDiscussion
+                && completedReferenceGame == null) {
             nextQuestion = planned.orElseThrow().nextQuestion();
         }
         Clarification responseClarification = !nextQuestion.isBlank()
@@ -588,7 +636,10 @@ public class BoardGameRecommendationAgent {
         return retrievalPlan.candidateDiscoveryRequested() || !retrievalPlan.features().isEmpty();
     }
 
-    private RetrievalPlan similarityRetrievalPlan(RetrievalPlan planned, Game reference) {
+    private RetrievalPlan similarityRetrievalPlan(
+            RetrievalPlan planned,
+            Game reference,
+            ReferenceIntent namedReference) {
         if (reference.details() == null) return planned;
         List<BoardGameRecommendationAdvisor.FeatureConstraint> derived = java.util.stream.Stream.concat(
                         reference.details().categories().stream().limit(4),
@@ -600,8 +651,10 @@ public class BoardGameRecommendationAgent {
                         BoardGameRecommendationAdvisor.FeatureSource.BGG_METADATA,
                         "current game: " + reference.ranking().sourceName()))
                 .toList();
+        java.util.stream.Stream<BoardGameRecommendationAdvisor.FeatureConstraint> retained = planned.features().stream()
+                .filter(feature -> namedReference == null || !derivedFromUnresolvedReference(feature, namedReference));
         List<BoardGameRecommendationAdvisor.FeatureConstraint> merged = java.util.stream.Stream.concat(
-                        planned.features().stream(), derived.stream())
+                        retained, derived.stream())
                 .filter(feature -> feature != null)
                 .collect(java.util.stream.Collectors.collectingAndThen(
                         java.util.stream.Collectors.toMap(
@@ -611,6 +664,27 @@ public class BoardGameRecommendationAgent {
                                 java.util.LinkedHashMap::new),
                         values -> values.values().stream().limit(8).toList()));
         return new RetrievalPlan(planned.candidateTypes(), merged, true);
+    }
+
+    private boolean derivedFromUnresolvedReference(
+            BoardGameRecommendationAdvisor.FeatureConstraint feature,
+            ReferenceIntent reference) {
+        String title = reference.normalizedTitle();
+        String term = normalizedForReference(feature.term());
+        String basedOn = normalizedForReference(feature.basedOn());
+        String sourceMessage = normalizedForReference(reference.basedOn());
+        return feature.source() == BoardGameRecommendationAdvisor.FeatureSource.USER_EXPRESSION
+                || term.contains(title)
+                || basedOn.contains(title)
+                || !sourceMessage.isBlank() && basedOn.equals(sourceMessage);
+    }
+
+    private String normalizedForReference(String value) {
+        return java.text.Normalizer.normalize(
+                        value == null ? "" : value, java.text.Normalizer.Form.NFKC)
+                .toLowerCase(java.util.Locale.ROOT)
+                .strip()
+                .replaceAll("\\s+", " ");
     }
 
     private DiscoveryRequest discoveryRequest(RetrievalPlan retrievalPlan, String locale) {
@@ -758,6 +832,40 @@ public class BoardGameRecommendationAgent {
                 List.of());
     }
 
+    private ConversationResponse unresolvedReference(
+            ResolvedTurn turn,
+            String locale,
+            String title,
+            String code,
+            int modelCalls,
+            int catalogCalls,
+            int researchCalls,
+            List<String> actions) {
+        boolean unavailable = "CATALOG_UNAVAILABLE".equals(code) || "REFERENCE_DETAILS_UNAVAILABLE".equals(code);
+        String question = unavailable
+                ? chinese(locale)
+                        ? "BGG 暂时没有返回《" + title + "》的完整资料，所以我先不猜它的玩法。可以稍后直接重试。"
+                        : "BGG did not return complete details for “" + title
+                                + "”, so I will not guess its gameplay. Please retry shortly."
+                : chinese(locale)
+                        ? "我先在 BGG 里核对了《" + title
+                                + "》，但没有找到唯一的精确对应，所以先不猜它的玩法。请补充原文名或出版年份，我会再查一次。"
+                        : "I checked BGG for “" + title
+                                + "” but did not find one exact match, so I will not guess its gameplay. Add the original title or publication year and I will check again.";
+        return response(
+                unavailable ? Outcome.UNAVAILABLE : Outcome.NEEDS_CLARIFICATION,
+                DecisionMode.DETERMINISTIC,
+                question,
+                turn.profile(),
+                unavailable ? null : conversationalClarification(question),
+                tools.catalogGameCount(),
+                0,
+                emptyUserModel(),
+                List.of(),
+                new HarnessTrace(modelCalls, catalogCalls, researchCalls, false, actions),
+                List.of());
+    }
+
     private ConversationResponse response(
             Outcome outcome,
             DecisionMode mode,
@@ -798,6 +906,16 @@ public class BoardGameRecommendationAgent {
         return new UserModel("", List.of());
     }
 
+    private UserModel referenceUserModel(Game reference, String locale) {
+        String title = referenceTitle(reference, locale);
+        return new UserModel(
+                chinese(locale)
+                        ? "正在以 BGG 已核对的《" + title + "》作为参照；相似点只从实际目录资料中提取。"
+                        : "Using the BGG-verified “" + title
+                                + "” as the reference; similarity is derived only from observed catalog metadata.",
+                List.of());
+    }
+
     private Clarification conversationalClarification(String question) {
         return question == null || question.isBlank()
                 ? null
@@ -809,6 +927,28 @@ public class BoardGameRecommendationAgent {
                 ? "先给你几款方向不同的候选。推荐 Agent 暂时没有完成个性化重排，下面是基于 BGG 条件与排名的稳妥结果。"
                 : "Here are several different directions. The recommendation Agent did not complete personalized reranking, so these are safe BGG constraint-and-rank results.";
         return clarification == null ? result : result + " " + clarification.prompt();
+    }
+
+    private String referenceSummary(String locale, Game reference) {
+        String title = referenceTitle(reference, locale);
+        if (chinese(locale)) {
+            return "我先在 BGG 核对了《" + title + "》，再按它实际记录的机制和类型"
+                    + "找相似候选；没有沿用对话里未经来源验证的玩法猜测。下面每张卡片会分别说明真正重合的点和取舍。";
+        }
+        return "I verified “" + title + "” in BGG first, then searched by its observed mechanics and categories"
+                + ". I discarded any earlier unsupported guesses; each card shows the concrete overlap and tradeoff.";
+    }
+
+    private String referenceTitle(Game game, String locale) {
+        if (chinese(locale)
+                && game.details() != null
+                && !game.details().officialChineseName().isBlank()) {
+            String original = game.ranking().sourceName();
+            return game.details().officialChineseName().equalsIgnoreCase(original)
+                    ? original
+                    : game.details().officialChineseName() + "（" + original + "）";
+        }
+        return game.ranking().sourceName();
     }
 
     private String structuredSummary(String locale, RetrievalPlan retrievalPlan) {

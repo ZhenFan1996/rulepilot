@@ -79,6 +79,22 @@ class BggRankedCatalogServiceTest {
         assertThat(result).extracting(game -> game.bggId()).containsExactly(20, 10);
     }
 
+    @Test
+    void resolvesAnExactLocalizedAliasThroughBggAndHydratesItsCanonicalDetails() {
+        MemoryRepository repository = new MemoryRepository();
+        FakeBgg bgg = new FakeBgg();
+        BggRankedCatalogService service = new BggRankedCatalogService(repository, bgg);
+
+        var result = service.resolveReferenceTitle("白塔庭院");
+
+        assertThat(result).singleElement().satisfies(game -> {
+            assertThat(game.ranking().bggId()).isEqualTo(20);
+            assertThat(game.ranking().sourceName()).isEqualTo("Game 20");
+            assertThat(game.details().mechanics()).contains("Worker Placement", "Deck Building");
+        });
+        assertThat(bgg.searchQueries).containsExactly("白塔庭院");
+    }
+
     private static final class MemoryRepository implements BggRankedCatalogRepository {
         private Query query;
 
@@ -128,6 +144,7 @@ class BggRankedCatalogServiceTest {
 
     private static final class FakeBgg implements BoardGameGeekCatalog {
         private List<Integer> detailIds = List.of();
+        private final java.util.ArrayList<String> searchQueries = new java.util.ArrayList<>();
 
         @Override
         public boolean configured() {
@@ -136,7 +153,10 @@ class BggRankedCatalogServiceTest {
 
         @Override
         public List<SearchResult> search(String query) {
-            return List.of();
+            searchQueries.add(query);
+            return "白塔庭院".equals(query)
+                    ? List.of(new SearchResult(20, "白塔庭院", 2026))
+                    : List.of();
         }
 
         @Override
