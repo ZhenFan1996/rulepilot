@@ -65,7 +65,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                  "hypotheses":[{"text":"可能喜欢共同决策","confidence":"MEDIUM","basedOn":"想一起讨论剧情"}],
                  "assistantMessage":"我大概抓到方向了，先看看几款。","nextQuestion":null,
                  "researchRequested":false,"researchQuestion":null,
-                 "candidateTypes":["THEMATIC","Science Fiction"],
+                 "referenceTitle":null,"candidateTypes":["THEMATIC","Science Fiction"],
                  "featureConstraints":[{"term":"Adventure","mode":"PREFERRED","source":"BGG_METADATA","basedOn":"讨论剧情"}],
                  "candidateDiscoveryRequested":true}
                 """);
@@ -94,12 +94,56 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     }
 
     @Test
+    void extractsAnUnquotedReferenceTitleAsGroundedStructuredAgentOutput() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"以明确提到的游戏为参照","hypotheses":[],
+                 "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"白塔庭院",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+
+        var result = fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "我想玩和白塔庭院类似机制的游戏")),
+                profile(),
+                null,
+                "zh-CN"));
+
+        assertThat(result).hasValueSatisfying(plan -> assertThat(plan.referenceTitle()).isEqualTo("白塔庭院"));
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions())
+                .filteredOn(org.springframework.ai.chat.messages.SystemMessage.class::isInstance)
+                .extracting(message -> message.getText())
+                .singleElement()
+                .asString()
+                .contains("referenceTitle", "before or after comparison wording", "Return null when no named game");
+    }
+
+    @Test
+    void rejectsAnAgentReferenceTitleThatDoesNotAppearInPlayerMessages() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
+                 "type":null,"interaction":null,"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"模型猜出的标题",
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "我想找一款类似的游戏")),
+                profile(),
+                null,
+                "zh-CN"))).isEmpty();
+    }
+
+    @Test
     void downgradesAnUnsupportedRequiredFeatureUnlessTheUserCalledItNonNegotiable() {
         Fixture soft = fixture("""
                 {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
                  "type":null,"interaction":null,"profileSummary":"想要强互动","hypotheses":[],
                  "assistantMessage":"我按强互动来找。","nextQuestion":null,
-                 "researchRequested":false,"researchQuestion":null,"candidateTypes":[],
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,"candidateTypes":[],
                  "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"希望有明显互动"}],
                  "candidateDiscoveryRequested":true}
                 """);
@@ -107,7 +151,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
                  "type":null,"interaction":null,"profileSummary":"必须强互动","hypotheses":[],
                  "assistantMessage":"我会把强互动作为硬条件。","nextQuestion":null,
-                 "researchRequested":false,"researchQuestion":null,"candidateTypes":[],
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,"candidateTypes":[],
                  "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"必须有明显互动"}],
                  "candidateDiscoveryRequested":true}
                 """);
@@ -130,7 +174,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                  "type":"FAMILY","interaction":null,"profileSummary":"第一次带家人玩",
                  "hypotheses":[],"assistantMessage":"先试几款。","nextQuestion":"",
                  "researchRequested":false,"researchQuestion":"",
-                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
+                 "referenceTitle":null,"candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(
@@ -153,7 +197,7 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                  "type":null,"interaction":"COMPETITIVE","profileSummary":"五人九十分钟竞争局",
                  "hypotheses":[],"assistantMessage":"明白，按五人九十分钟来找。","nextQuestion":"",
                  "researchRequested":false,"researchQuestion":"",
-                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
+                 "referenceTitle":null,"candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(

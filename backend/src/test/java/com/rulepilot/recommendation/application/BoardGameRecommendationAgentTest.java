@@ -457,7 +457,8 @@ class BoardGameRecommendationAgentTest {
                                 FeatureMode.PREFERRED,
                                 FeatureSource.BGG_METADATA,
                                 "我想找一款类似白塔庭院的桌游")),
-                        false));
+                        false),
+                "白塔庭院");
         Fixture fixture = new Fixture(
                 request -> Optional.of(plan),
                 request -> {
@@ -492,6 +493,40 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.userModel().hypotheses()).isEmpty();
         assertThat(response.harness().actions())
                 .contains("RESOLVE_BGG_REFERENCE", "SEARCH_BGG_CATALOG", "COMPOSE_RECOMMENDATIONS");
+    }
+
+    @Test
+    void letsTheAgentInterpretAnUnquotedChineseReferenceBeforeBggVerification() {
+        Plan plan = new Plan(
+                DialogueAct.RECOMMEND,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel("以玩家明确提到的游戏为参照", List.of()),
+                "我先核对这款参考游戏，再按实际资料找相似候选。",
+                "",
+                false,
+                "",
+                RetrievalPlan.empty(),
+                "白塔庭院");
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> Optional.of(new Slate(
+                        "我已经按核对后的参考资料找候选。",
+                        "",
+                        List.of(new Choice(30, List.of("共享已验证的目录特征"), List.of(), List.of())))),
+                new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "你好，我想玩和白塔庭院类似机制的游戏",
+                List.of(),
+                List.of(new DialogueMessage("user", "你好，我想玩和白塔庭院类似机制的游戏")),
+                null), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).contains("核对后的参考资料");
+        assertThat(response.harness().actions())
+                .contains("PLAN_DIALOGUE", "INTERPRET_BGG_REFERENCE", "RESOLVE_BGG_REFERENCE");
+        assertThat(response.assistantMessage()).doesNotContain("《机制》");
     }
 
     @Test
