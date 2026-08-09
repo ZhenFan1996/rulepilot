@@ -26,9 +26,18 @@ public final class AnswerRetrievalPlanner {
 
     public static List<RetrievalIntent> plan(
             UnderstoodQuestion question, QuestionContext context, List<String> rewrittenQueries) {
+        return plan(question, context, rewrittenQueries, AnswerQuestionPlan.fallback(question));
+    }
+
+    public static List<RetrievalIntent> plan(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            List<String> rewrittenQueries,
+            AnswerQuestionPlan questionPlan) {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
+        if (questionPlan == null) questionPlan = AnswerQuestionPlan.fallback(question);
         Set<String> inferredSectionScope = inferredSections(question, context);
         String currentSection = inferredSectionScope.stream().findFirst().orElse(null);
         Set<String> directQuestionScope = directQuestionScope(question, currentSection);
@@ -41,7 +50,9 @@ public final class AnswerRetrievalPlanner {
                 .filter(intent -> intent.purpose() == RetrievalPurpose.CONDITION_PROCEDURE)
                 .toList();
         String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
-        List<String> parts = questionParts(contextualQuestion);
+        List<String> parts = questionPlan.agentPlanned()
+                ? questionPlan.subquestions().stream().map(AnswerQuestionPlan.Subquestion::text).toList()
+                : questionParts(contextualQuestion);
         Set<String> learningScope = context.learningIntent() != null && currentSection != null
                 ? Set.of(currentSection)
                 : directQuestionScope;
@@ -50,11 +61,20 @@ public final class AnswerRetrievalPlanner {
         if (parts.size() == 1) {
             int rewriteBudget = Math.max(0, availableBeforeSupplementary - 1);
             addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
-            intents.add(new RetrievalIntent(
-                    expandSearchTerms(question.normalizedQuestion()), learningScope, currentSection, true));
+            String directQuery = questionPlan.agentPlanned()
+                    ? plannedQuery(questionPlan.subquestions().getFirst())
+                    : expandSearchTerms(question.normalizedQuestion());
+            intents.add(new RetrievalIntent(directQuery, learningScope, currentSection, true));
         } else {
-            parts.stream().limit(availableBeforeSupplementary).forEach(part -> intents.add(new RetrievalIntent(
-                    expandSearchTerms(part), learningScope, currentSection, true)));
+            if (questionPlan.agentPlanned()) {
+                questionPlan.subquestions().stream()
+                        .limit(availableBeforeSupplementary)
+                        .forEach(subquestion -> intents.add(new RetrievalIntent(
+                                plannedQuery(subquestion), learningScope, currentSection, true)));
+            } else {
+                parts.stream().limit(availableBeforeSupplementary).forEach(part -> intents.add(new RetrievalIntent(
+                        expandSearchTerms(part), learningScope, currentSection, true)));
+            }
             int rewriteBudget = Math.max(0, MAX_INTENTS - intents.size() - 1);
             addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
         }
@@ -64,6 +84,28 @@ public final class AnswerRetrievalPlanner {
                 inferredSectionScope,
                 currentSection));
         return intents.stream().limit(MAX_INTENTS).toList();
+    }
+
+    private static String plannedQuery(AnswerQuestionPlan.Subquestion subquestion) {
+        StringBuilder query = new StringBuilder(subquestion.text());
+        subquestion.evidenceNeeds().stream()
+                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
+                .forEach(facet -> append(query, facet));
+        return bounded(query.toString());
+    }
+
+    private static String evidenceNeedFacets(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed need) {
+        return switch (need) {
+            case DIRECT_RULE -> "direct rule clause";
+            case CONDITION -> "condition prerequisite applicability";
+            case SEQUENCE -> "order timing procedure";
+            case EXCEPTION -> "exception restriction unless";
+            case DEFINITION -> "definition glossary terminology";
+            case RELATIONSHIP -> "conflict precedence special general rule";
+            case VISUAL_REFERENCE -> "icon diagram label printed reference";
+            case COMPLETE_LIST -> "complete list each all";
+            case PRIOR_TURN -> "follow-up dependency";
+        };
     }
 
     private static String contextualQuestion(String question, String previousQuestion) {

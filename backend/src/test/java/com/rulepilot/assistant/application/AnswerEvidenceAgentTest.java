@@ -14,6 +14,7 @@ import com.rulepilot.assistant.NativeToolAgent.ObservationRecord;
 import com.rulepilot.assistant.NativeToolAgent.RunResult;
 import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.NativeToolScopes;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorCitationReference;
 import com.rulepilot.assistant.QuestionUnderstanding.PriorTurnReference;
@@ -438,7 +439,8 @@ class AnswerEvidenceAgentTest {
 
         assertThat(captured.get().allowedTools()).containsExactlyInAnyOrder(
                 "search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
-        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
+        assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
+        assertThat(captured.get().maxToolCalls()).isEqualTo(4);
         assertThat(captured.get().playerRequest()).doesNotContain("Prior cited pages to re-read");
     }
 
@@ -479,10 +481,110 @@ class AnswerEvidenceAgentTest {
                 ready(initial));
 
         assertThat(captured.get().allowedTools()).containsExactlyInAnyOrder(
-                "search_rule_relationships", "expand_rule_evidence_context", "read_rule_pages");
-        assertThat(captured.get().requiredToolsBeforeCompletion())
-                .containsExactlyInAnyOrder("search_rule_relationships", "read_rule_pages");
-        assertThat(captured.get().maxToolCalls()).isEqualTo(3);
+                "search_rule_evidence",
+                "search_rule_relationships",
+                "expand_rule_evidence_context",
+                "read_rule_pages");
+        assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
+        assertThat(captured.get().maxToolCalls()).isEqualTo(4);
+    }
+
+    @Test
+    void letsTheValidatedQuestionPlanDriveAMultiObligationToolPortfolio() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "General rule overview.");
+        java.util.concurrent.atomic.AtomicReference<NativeToolAgent.RunRequest> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        NativeToolAgent nativeAgent = new NativeToolAgent() {
+            @Override
+            public RunResult run(RunRequest request) {
+                captured.set(request);
+                return new RunResult(
+                        RunStatus.FALLBACK,
+                        "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                        "NO_NEW_EVIDENCE",
+                        1,
+                        0,
+                        List.of());
+            }
+
+            @Override
+            public String providerId(com.rulepilot.assistant.NativeAgentTool.Role role, String ownerUsername) {
+                return "test-provider";
+            }
+        };
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(nativeAgent, emptyLookup(), scopes(), limiter);
+        AnswerQuestionPlan plan = new AnswerQuestionPlan(
+                List.of(
+                        new AnswerQuestionPlan.Subquestion(
+                                "哪个规则优先", Set.of(EvidenceNeed.RELATIONSHIP)),
+                        new AnswerQuestionPlan.Subquestion(
+                                "图标表示什么", Set.of(EvidenceNeed.VISUAL_REFERENCE))),
+                true);
+
+        agent.refine(
+                runId,
+                question("哪个规则优先，图标表示什么？"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                plan,
+                ready(initial));
+
+        assertThat(captured.get().allowedTools()).containsExactlyInAnyOrder(
+                "search_rule_evidence",
+                "search_rule_relationships",
+                "expand_rule_evidence_context",
+                "read_visual_page_facts",
+                "read_rule_pages");
+        assertThat(captured.get().requiredToolsBeforeCompletion()).isEmpty();
+        assertThat(captured.get().maxIterations()).isEqualTo(5);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(5);
+        assertThat(captured.get().playerRequest())
+                .contains("Agent-validated question plan", "哪个规则优先", "RELATIONSHIP", "图标表示什么", "VISUAL_REFERENCE");
+    }
+
+    @Test
+    void refusesToPromoteSearchOnlyObservationsWithoutAnExactPageRead() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Overview", "General rule overview.");
+        RuleEvidenceHit searchOnly = source(UUID.randomUUID(), "Exception", "A candidate exception.");
+        ToolObservation observation = ToolObservation.success(
+                "EVIDENCE_FOUND",
+                Map.of("evidence", List.of(Map.of("evidenceId", searchOnly.chunkId().toString()))),
+                1);
+        RunResult completed = new RunResult(
+                RunStatus.COMPLETED,
+                "EVIDENCE_READY",
+                "MODEL_COMPLETED",
+                2,
+                1,
+                List.of(new ObservationRecord(1, "search_rule_evidence", "schema", observation)));
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        Permit permit = mock(Permit.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AtomicInteger hydrationCalls = new AtomicInteger();
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(completed),
+                (documentVersionId, chunkIds) -> {
+                    hydrationCalls.incrementAndGet();
+                    return List.of(searchOnly);
+                },
+                scopes(),
+                limiter);
+        AnswerEvidenceRetriever.Result deterministic = ready(initial);
+
+        var result = agent.refine(
+                runId,
+                question("Is there an exception, and when does it apply?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                deterministic);
+
+        assertThat(result).isSameAs(deterministic);
+        assertThat(hydrationCalls).hasValue(0);
     }
 
     @Test
@@ -544,10 +646,10 @@ class AnswerEvidenceAgentTest {
 
     private ObservationRecord observation(UUID evidenceId) {
         ToolObservation observation = ToolObservation.success(
-                "EVIDENCE_FOUND",
+                "PAGE_EVIDENCE_FOUND",
                 Map.of("evidence", List.of(Map.of("evidenceId", evidenceId.toString()))),
                 1);
-        return new ObservationRecord(1, "search_rule_evidence", "schema", observation);
+        return new ObservationRecord(1, "read_rule_pages", "schema", observation);
     }
 
     private DocumentNativeToolScopeFactory scopes() {

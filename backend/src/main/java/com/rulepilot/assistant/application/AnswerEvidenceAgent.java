@@ -93,7 +93,26 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             String username,
             UUID gameSessionId,
             AnswerEvidenceRetriever.Result deterministic) {
-        if (!AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, deterministic)) {
+        return refine(
+                assistantRunId,
+                question,
+                context,
+                username,
+                gameSessionId,
+                AnswerQuestionPlan.fallback(question),
+                deterministic);
+    }
+
+    @Override
+    public AnswerEvidenceRetriever.Result refine(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            UUID gameSessionId,
+            AnswerQuestionPlan questionPlan,
+            AnswerEvidenceRetriever.Result deterministic) {
+        if (!AnswerEvidenceRefinementPolicy.requiresRefinement(question, context, questionPlan, deterministic)) {
             return deterministic;
         }
         var scope = scopes.create(username, context.documentVersionId(), assistantRunId);
@@ -108,13 +127,15 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     Role.ANSWER,
                     scope.get(),
                     SYSTEM_PROMPT,
-                    playerRequest(question, context, deterministic.evidence()),
+                    playerRequest(question, context, questionPlan, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    usesPriorPages(question, context) ? 2 : 4,
+                    usesPriorPages(question, context)
+                            ? 2
+                            : questionPlan.subquestions().size() > 1 ? 5 : 4,
                     384,
-                    toolPortfolio(question, context),
+                    toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools(question, context),
-                    usesPriorPages(question, context) ? 1 : 3));
+                    usesPriorPages(question, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -123,40 +144,43 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         } finally {
             permit.close();
         }
-        if (result.status() != RunStatus.COMPLETED || result.toolCalls() == 0) return deterministic;
-        Set<UUID> observedIds = NativeToolEvidenceHandles.prioritized(result, MAX_OBSERVED_EVIDENCE);
-        if (observedIds.isEmpty()) return deterministic;
+        if (result.status() != RunStatus.COMPLETED
+                || !"EVIDENCE_READY".equals(result.text().strip())
+                || result.toolCalls() == 0) return deterministic;
         List<Set<UUID>> exactPageGroups = NativeToolEvidenceHandles.exactPageObservationGroups(
                 result, 8, MAX_OBSERVED_EVIDENCE);
+        Set<UUID> observedIds = exactPageGroups.stream()
+                .flatMap(Set::stream)
+                .limit(MAX_OBSERVED_EVIDENCE)
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        if (observedIds.isEmpty()) return deterministic;
         return mergeCanonicalEvidence(
                 context.documentVersionId(), question.normalizedQuestion(), deterministic, observedIds, exactPageGroups);
     }
 
-    private Set<String> toolPortfolio(UnderstoodQuestion question, QuestionContext context) {
+    private Set<String> toolPortfolio(
+            UnderstoodQuestion question, QuestionContext context, AnswerQuestionPlan questionPlan) {
         if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
-        String playerQuestion = question.normalizedQuestion();
-        if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
-            return Set.of("search_rule_evidence", "read_rule_pages", "read_visual_page_facts");
+        Set<String> tools = new java.util.LinkedHashSet<>(Set.of(
+                "search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages"));
+        Set<com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed> needs = questionPlan.evidenceNeeds();
+        if (needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.VISUAL_REFERENCE)
+                || (!questionPlan.agentPlanned()
+                        && AnswerEvidenceRefinementPolicy.asksAboutVisualReference(question.normalizedQuestion()))) {
+            tools.add("read_visual_page_facts");
         }
-        if (AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(playerQuestion)) {
-            return Set.of("search_rule_relationships", "expand_rule_evidence_context", "read_rule_pages");
+        if (needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.RELATIONSHIP)
+                || needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.EXCEPTION)
+                || (!questionPlan.agentPlanned()
+                        && AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(question.normalizedQuestion()))) {
+            tools.add("search_rule_relationships");
         }
-        if (context.previousQuestion() != null && !context.previousQuestion().isBlank()) {
-            return Set.of("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
-        }
-        return Set.of("search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages");
+        return Set.copyOf(tools);
     }
 
     private Set<String> requiredEvidenceTools(UnderstoodQuestion question, QuestionContext context) {
         if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
-        String playerQuestion = question.normalizedQuestion();
-        if (AnswerEvidenceRefinementPolicy.asksAboutVisualReference(playerQuestion)) {
-            return Set.of("search_rule_evidence", "read_visual_page_facts");
-        }
-        if (AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(playerQuestion)) {
-            return Set.of("search_rule_relationships", "read_rule_pages");
-        }
-        return Set.of("search_rule_evidence", "read_rule_pages");
+        return Set.of();
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(
@@ -240,7 +264,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
     private record PageRange(int from, int to) {}
 
     private String playerRequest(
-            UnderstoodQuestion question, QuestionContext context, List<HybridEvidenceHit> evidence) {
+            UnderstoodQuestion question,
+            QuestionContext context,
+            AnswerQuestionPlan questionPlan,
+            List<HybridEvidenceHit> evidence) {
         StringBuilder request = new StringBuilder("Player question: ")
                 .append(bounded(question.normalizedQuestion(), 800));
         if (context.previousQuestion() != null && !context.previousQuestion().isBlank()) {
@@ -279,6 +306,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     .append(" | ")
                     .append(bounded(hit.evidence().excerpt(), 600));
         }
+        request.append("\nAgent-validated question plan:");
+        for (AnswerQuestionPlan.Subquestion subquestion : questionPlan.subquestions()) {
+            request.append("\n- exact span: ")
+                    .append(bounded(subquestion.text(), 300))
+                    .append(" | evidence needs: ")
+                    .append(subquestion.evidenceNeeds());
+        }
+        request.append("\nUse observations to cover every listed span. EVIDENCE_READY is accepted only when exact pages have been read.");
         return request.toString();
     }
 

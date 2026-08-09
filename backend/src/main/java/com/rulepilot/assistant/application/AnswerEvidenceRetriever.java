@@ -63,6 +63,20 @@ final class AnswerEvidenceRetriever {
     }
 
     Result retrieve(UUID assistantRunId, UnderstoodQuestion question, QuestionContext context, String username) {
+        return retrieve(
+                assistantRunId,
+                question,
+                context,
+                username,
+                AnswerQuestionPlan.fallback(question));
+    }
+
+    Result retrieve(
+            UUID assistantRunId,
+            UnderstoodQuestion question,
+            QuestionContext context,
+            String username,
+            AnswerQuestionPlan questionPlan) {
         Map<UUID, HybridEvidenceHit> evidenceById = new LinkedHashMap<>();
         Map<UUID, HybridEvidenceHit> intentAnchors = new LinkedHashMap<>();
         Map<Integer, PageFactMatch> visualFactsByPage = new LinkedHashMap<>();
@@ -78,7 +92,8 @@ final class AnswerEvidenceRetriever {
                 visualFactsByPage,
                 directQuestionVisualFactPages);
         List<String> rewrittenQueries = rewriteCrossLanguageQueries(assistantRunId, question, context, username);
-        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(question, context, rewrittenQueries);
+        List<RetrievalIntent> intents = AnswerRetrievalPlanner.plan(
+                question, context, rewrittenQueries, questionPlan);
         for (int intentIndex = 0; intentIndex < intents.size(); intentIndex++) {
             RetrievalIntent intent = intents.get(intentIndex);
             List<HybridEvidenceHit> retrieved;

@@ -3,6 +3,7 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.LearningIntent;
@@ -13,6 +14,33 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class AnswerRetrievalPlannerTest {
+
+    @Test
+    void followsTheValidatedAgentSubquestionsInsteadOfRegexPunctuationSplitting() {
+        UUID versionId = UUID.randomUUID();
+        UnderstoodQuestion question = new UnderstoodQuestion(
+                versionId,
+                "行动后先补牌吗，还有例外情况吗？",
+                "行动后先补牌吗，还有例外情况吗？",
+                QuestionType.RULE_QUERY,
+                List.of("补牌", "例外"),
+                Set.of());
+        AnswerQuestionPlan plan = new AnswerQuestionPlan(
+                List.of(
+                        new AnswerQuestionPlan.Subquestion(
+                                "行动后先补牌吗", Set.of(EvidenceNeed.SEQUENCE)),
+                        new AnswerQuestionPlan.Subquestion(
+                                "例外情况吗", Set.of(EvidenceNeed.EXCEPTION))),
+                true);
+
+        var intents = AnswerRetrievalPlanner.plan(
+                question, new QuestionContext(versionId), List.of(), plan);
+
+        assertThat(intents).extracting(AnswerRetrievalPlanner.RetrievalIntent::query)
+                .anySatisfy(query -> assertThat(query).contains("行动后先补牌吗", "order timing procedure"))
+                .anySatisfy(query -> assertThat(query).contains("例外情况吗", "exception restriction unless"));
+        assertThat(intents).filteredOn(AnswerRetrievalPlanner.RetrievalIntent::directQuestion).hasSize(2);
+    }
 
     @Test
     void addsPermissionAndProhibitionFacetsForACanQuestion() {
