@@ -53,7 +53,7 @@ services:
       BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED: ${BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED:-false}
       WEB_SEARCH_API_KEY: ${WEB_SEARCH_API_KEY:-${QWEN_API_KEY:-}}
       WEB_SEARCH_BASE_URL: ${WEB_SEARCH_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
-      WEB_SEARCH_MODEL: ${WEB_SEARCH_MODEL:-qwen3.5-plus}
+      WEB_SEARCH_MODEL: ${WEB_SEARCH_MODEL:-qwen3.7-plus}
       QWEN_ENABLED: ${QWEN_ENABLED:-false}
       QWEN_API_KEY: ${QWEN_API_KEY:-}
       QWEN_BASE_URL: ${QWEN_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}

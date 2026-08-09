@@ -37,6 +37,24 @@ const catalog = {
   }],
 }
 
+const similarToMosaicField = {
+  ...catalog.games[0],
+  bggId: 600061,
+  name: 'Glass Orchard',
+  originalName: 'Glass Orchard',
+  nameLocalized: false,
+  publicationYear: 2024,
+  overallRank: 2190,
+  thumbnailUrl: 'https://example.test/glass-orchard.jpg',
+  minPlayers: 1,
+  maxPlayers: 4,
+  playingTimeMinutes: 45,
+  averageWeight: 1.93,
+  categories: ['抽象策略', '骰子'],
+  mechanics: ['轮抽', '图案构筑'],
+  bggUrl: 'https://boardgamegeek.com/boardgame/600061',
+}
+
 async function mockPublicDiscovery(page: import('@playwright/test').Page, authenticated = false) {
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
@@ -60,15 +78,29 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       }
       await route.fulfill({ json: payload })
     }
-    if (body.message.includes('白塔庭院')) {
+    if (body.message.includes('马赛克花园')) {
+      await fulfill({
+        outcome: 'needs_clarification', mode: 'model_assisted',
+        assistantMessage: '我明白你想找一款机制相近的游戏。“马赛克花园”可能是译名或口头叫法，你知道它的原文名吗？只说名字就行，我会接着上一句查。',
+        profile: { ...body.profile, type: 'all', interaction: 'any' },
+        clarification: { field: 'conversation', prompt: '它的原文名是什么？', options: [] },
+        sourceCount: 179737, candidatesEvaluated: 0,
+        userModel: { summary: '想找与“马赛克花园”机制相近的游戏。', hypotheses: [] },
+        harness: { modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE', 'ASK_USER'] },
+        games: [],
+      })
+      return
+    }
+    if (body.message.trim().toLowerCase() === 'mosaic field'
+      && body.transcript.some(message => message.role === 'user' && message.text.includes('马赛克花园'))) {
       await fulfill({
         outcome: 'recommendations', mode: 'model_assisted',
-        assistantMessage: '我先在 BGG 核对了《白塔庭院（Ivory Courtyard）》；没有沿用未经来源验证的玩法猜测。下面的候选只按实际记录的共同机制和类型生成，每张卡片都会分别说明真正重合的点与取舍。',
+        assistantMessage: '对，你说的是 Mosaic Field。我已经把它和上一句的“机制相近”连在一起，先核对了 BGG 中的参考游戏，再查候选，不会把 Mosaic Field 当成一个全新问题。',
         profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
-        sourceCount: 179737, candidatesEvaluated: 8,
-        userModel: { summary: '正在以 BGG 已核对的《白塔庭院》作为参照。', hypotheses: [] },
-        harness: { modelCalls: 2, catalogCalls: 3, webResearchCalls: 0, fallbackUsed: false, actions: ['PLAN_DIALOGUE', 'RESOLVE_BGG_REFERENCE', 'SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES'] },
-        games: [{ game: catalog.games[0], matches: ['共享已核对的机制'], tradeoffs: [] }],
+        sourceCount: 179737, candidatesEvaluated: 6,
+        userModel: { summary: '以 Mosaic Field 为参照，寻找机制相近的游戏。', hypotheses: [] },
+        harness: { modelCalls: 4, catalogCalls: 3, webResearchCalls: 0, fallbackUsed: false, actions: ['RESOLVE_BGG_REFERENCE', 'SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
+        games: [{ game: similarToMosaicField, matches: ['同样包含轮抽与图案构筑'], tradeoffs: ['候选使用骰子，随机性更高'] }],
       })
       return
     }
@@ -79,7 +111,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '朋友聚会，可能重视参与感', hypotheses: [{ text: '可能不喜欢等待太久', confidence: 'medium', basedOn: '想热闹一点' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
-        harness: { modelCalls: 2, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'RESEARCH_GAME_FIT', 'COMPOSE_RECOMMENDATIONS'] },
+        harness: { modelCalls: 3, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['LOOKUP_BGG_CANDIDATES', 'RESEARCH_GAME_FIT', 'RECOMMEND_GAMES'] },
         games: [{ game: catalog.games[0], matches: ['BGG 总榜第 34 名'], tradeoffs: [], reasons: [
           { kind: 'bgg_fact', text: 'BGG 总榜第 34 名', sourceIndexes: [] },
           { kind: 'preference_inference', text: '可能适合希望全桌持续参与的场景', sourceIndexes: [] },
@@ -88,28 +120,11 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       })
       return
     }
-    if (body.profile.maxMinutes === null) {
-      await fulfill({
-        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '先给你几款候选。你们愿意为一局留出多长时间？',
-        profile: { ...body.profile, players: 4, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
-        games: [{ game: catalog.games[0], matches: ['支持 4 人游玩'], tradeoffs: [] }],
-        clarification: { field: 'duration', prompt: '你们愿意为一局留出多长时间？', options: [{ value: '90', label: '90 分钟内' }] },
-      })
-      return
-    }
-    if (body.profile.maxWeight === null) {
-      await fulfill({
-        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '我按时长更新了候选。这次想要多复杂？',
-        profile: { ...body.profile, type: 'all', interaction: 'any' }, sourceCount: 179737, candidatesEvaluated: 20,
-        games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
-        clarification: { field: 'complexity', prompt: '这次想要多复杂？', options: [{ value: '3.2', label: '中等策略' }] },
-      })
-      return
-    }
     await fulfill({
-      outcome: 'recommendations', mode: 'deterministic', assistantMessage: '下面这些各有侧重。',
-      profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
+      outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白：4 个人、90 分钟内，想要中等策略和有参与感的聚会气氛。我先按这些条件核对一批；哪一点不对，直接告诉我就行。',
+      profile: { players: 4, maxMinutes: 90, maxWeight: 3.2, type: 'all', interaction: 'any' }, clarification: null,
       sourceCount: 179737, candidatesEvaluated: 20,
+      harness: { modelCalls: 4, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false, actions: ['UPDATE_PREFERENCES', 'SEARCH_BGG_CATALOG', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
       games: [{ game: catalog.games[0], matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
     })
   })
@@ -206,10 +221,10 @@ test('keeps full-catalog browsing separate from the conversational recommendatio
 
   const firstAgentRequest = page.waitForRequest(request => request.url().includes('/api/v1/bgg/recommendation-agent')
     && request.headers()['x-csrf-token'] === 'csrf')
-  await page.getByRole('button', { name: '朋友聚会想热闹一点', exact: true }).click()
+  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  await composer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
   await firstAgentRequest
-  await page.getByRole('button', { name: '90 分钟内' }).click()
-  await page.getByRole('button', { name: '中等策略' }).click()
   await expect(page.getByText('从完整 BGG 目录中核对了 20 款候选。')).toBeVisible()
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
 
@@ -238,23 +253,42 @@ test('keeps full-catalog discovery usable without horizontal overflow at 390 px'
   expect(hasHorizontalOverflow).toBe(false)
 })
 
-test('keeps a source-grounded comparison reply visible above the composer on mobile', async ({ page }) => {
+test('keeps a corrected reference title in conversational context on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await mockPublicDiscovery(page)
   await page.goto('/discover')
 
-  await page.getByLabel('说说你想玩的桌游').fill('我想找一款类似白塔庭院的桌游')
+  const composer = page.getByLabel('和推荐 Agent 聊聊')
+  await composer.fill('我想玩和马赛克花园类似机制的游戏')
   await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText(/你知道它的原文名吗/)).toBeVisible()
 
-  const reply = page.getByText(/我先在 BGG 核对了《白塔庭院/)
+  const correctionRequest = page.waitForRequest(request => {
+    if (!request.url().includes('/api/v1/bgg/recommendation-agent')) return false
+    const body = request.postDataJSON() as { message?: string }
+    return body.message === 'Mosaic Field'
+  })
+  await composer.fill('Mosaic Field')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const correction = await correctionRequest
+  expect(correction.postDataJSON()).toMatchObject({
+    message: 'Mosaic Field',
+    transcript: expect.arrayContaining([
+      { role: 'user', text: '我想玩和马赛克花园类似机制的游戏' },
+      { role: 'user', text: 'Mosaic Field' },
+    ]),
+  })
+
+  const reply = page.getByText(/Mosaic Field 当成一个全新问题/)
   await expect(reply).toBeVisible()
   await expect(page.getByText('在 BGG 核对参考游戏')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 3, name: 'Glass Orchard' })).toBeVisible()
   const viewportAtBottom = await page.getByTestId('recommendation-conversation').evaluate(element =>
     element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
   )
   expect(viewportAtBottom).toBe(true)
   const replyBox = await reply.boundingBox()
-  const composerBox = await page.getByLabel('说说你想玩的桌游').boundingBox()
+  const composerBox = await composer.boundingBox()
   expect(replyBox).not.toBeNull()
   expect(composerBox).not.toBeNull()
   expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
@@ -264,9 +298,8 @@ test('selects a recommendation, reviews an official rulebook, and hands recovery
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByRole('button', { name: '朋友聚会想热闹一点', exact: true }).click()
-  await page.getByRole('button', { name: '90 分钟内' }).click()
-  await page.getByRole('button', { name: '中等策略' }).click()
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
   await page.getByRole('button', { name: '选这款，找规则书' }).click()
 
   await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()

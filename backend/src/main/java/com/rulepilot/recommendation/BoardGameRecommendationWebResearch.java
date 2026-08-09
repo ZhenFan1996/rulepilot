@@ -1,9 +1,7 @@
 package com.rulepilot.recommendation;
 
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
 import com.rulepilot.catalog.BggGameType;
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 
@@ -40,14 +38,37 @@ public interface BoardGameRecommendationWebResearch {
 
     record Source(int index, String title, String url, String domain) {}
 
-    record DiscoveryRequest(List<DiscoverySignal> signals, List<BggGameType> candidateTypes, String locale) {
-        public DiscoveryRequest {
-            signals = signals == null ? List.of() : List.copyOf(signals);
-            candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);
+    record Candidate(
+            int bggId,
+            String name,
+            Integer year,
+            Integer rank,
+            BigDecimal rating,
+            BigDecimal weight,
+            Integer minPlayers,
+            Integer maxPlayers,
+            Integer minimumMinutes,
+            Integer maximumMinutes,
+            List<String> categories,
+            List<String> mechanics,
+            List<String> families,
+            List<String> designers,
+            List<String> publishers) {
+        public Candidate {
+            categories = categories == null ? List.of() : List.copyOf(categories);
+            mechanics = mechanics == null ? List.of() : List.copyOf(mechanics);
+            families = families == null ? List.of() : List.copyOf(families);
+            designers = designers == null ? List.of() : List.copyOf(designers);
+            publishers = publishers == null ? List.of() : List.copyOf(publishers);
         }
     }
 
-    record DiscoverySignal(String term, FeatureMode mode, FeatureSource source) {}
+    record DiscoveryRequest(String query, List<BggGameType> candidateTypes, String locale) {
+        public DiscoveryRequest {
+            query = query == null ? "" : query.strip();
+            candidateTypes = candidateTypes == null ? List.of() : List.copyOf(candidateTypes);
+        }
+    }
 
     record CandidateDiscovery(List<CandidateLead> candidates, List<Source> sources) {
         public CandidateDiscovery {

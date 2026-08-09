@@ -18,47 +18,47 @@ const { locale } = useLocale()
 const copy = {
   'zh-CN': {
     eyebrow: '一起挑一款', title: '今晚想玩什么？',
-    description: '告诉我人数、时间，或者你期待的气氛。可以随时追问某一款，也可以直接说不喜欢哪里。',
-    initial: '这次几个人？想玩多久？如果暂时没想好，也可以只说想要轻松、热闹还是有点对抗。',
-    inputLabel: '说说你想玩的桌游', inputPlaceholder: '例如：4 个人，两个小时左右，想要有争夺感但别太难教', send: '发送', sending: '正在找合适的桌游…',
+    description: '可以像和朋友一样聊：说一个游戏、一个感觉，或者上一批哪里不对。我会沿着上下文继续，不用按表格报条件。',
+    initial: '晚上好。想一起挑一款，还是先聊聊最近喜欢的桌游？游戏名、气氛、人数，想到什么就说什么。',
+    inputLabel: '和推荐 Agent 聊聊', inputPlaceholder: '例如：想找和花砖物语机制接近、但互动再多一点的游戏', send: '发送', sending: '正在接着你的话想…',
     reset: '清空这次对话', error: '刚才没有接上。你写下的条件还在，可以直接重试。', retry: '重试', profile: '这次想找',
     players: '{value} 人', duration: '{value} 分钟内', durationAny: '时长不限', weight: '复杂度 ≤ {value}', weightAny: '复杂度不限',
     source: '从完整 BGG 目录中核对了 {count} 款候选。', more: '换一批',
     understanding: '目前记下的偏好', basedOn: '你提到：“{value}”', low: '可能', medium: '大概', high: '明确',
-    toolTrail: '本轮实际调用', toolUnderstand: '理解这段对话', toolCatalog: '完整目录条件筛选',
+    toolTrail: '本轮 Agent 轨迹', toolUnderstand: '理解上下文并决定下一步', toolCatalog: '浏览 BGG 目录候选',
     toolReference: '在 BGG 核对参考游戏',
     toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证',
-    starters: ['第一次和家人玩', '两个人想要有互动', '朋友聚会想热闹一点', '先随便推荐几款'],
+    starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
-    description: 'Share the group, the time you have, or the mood you want. Ask about any game, or simply say what did not fit.',
-    initial: 'How many people are playing, and for how long? You can also start with a mood: relaxed, lively, or competitive.',
-    inputLabel: 'Describe the game you want', inputPlaceholder: 'For example: four players, about two hours, competitive but easy to teach', send: 'Send', sending: 'Finding a good fit…',
+    description: 'Talk as you would with a friend: name a game, describe a feeling, or say what missed the mark. I will continue from context; no form-filling required.',
+    initial: 'Good evening. Want to choose a game together, or chat about what you have enjoyed lately? Start anywhere—a title, a mood, or the group.',
+    inputLabel: 'Chat with the recommendation Agent', inputPlaceholder: 'For example: something with similar mechanisms to a tile-drafting game, but more interaction', send: 'Send', sending: 'Thinking from where we left off…',
     reset: 'Clear this conversation', error: 'That reply did not come through. Your preferences are still here.', retry: 'Retry', profile: 'Looking for',
     players: '{value} players', duration: 'Up to {value} min', durationAny: 'Any duration', weight: 'Complexity ≤ {value}', weightAny: 'Any complexity',
     source: 'Checked {count} candidates against the complete BGG catalog.', more: 'Try another batch',
     understanding: 'Preferences so far', basedOn: 'You said: “{value}”', low: 'Maybe', medium: 'Likely', high: 'Clear',
-    toolTrail: 'Tools used this turn', toolUnderstand: 'Understand the conversation', toolCatalog: 'Filter the full catalog',
+    toolTrail: 'Agent trajectory this turn', toolUnderstand: 'Understand context and choose the next step', toolCatalog: 'Browse BGG catalog candidates',
     toolReference: 'Resolve the reference game in BGG',
     toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience',
-    starters: ['First game with family', 'Interactive game for two', 'A lively friend gathering', 'Just suggest a few'],
+    starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
   },
 } as const
 
 const loadingCopy = {
   'zh-CN': {
-    requesting: '收到，正在看看…', understanding_request: '正在整理你刚才提到的条件…',
-    selecting_tools: '正在决定从哪里找更合适…',
+    requesting: '收到，接着聊下去…', understanding_request: '正在结合前文理解你这句话…',
+    selecting_tools: '推荐 Agent 正在决定下一步…',
     searching_bgg_catalog: '正在桌游目录里查找…', reading_game_details: '正在翻看这款游戏的详细资料…',
     discovering_candidates: '正在补充更贴近这个感觉的候选…', verifying_bgg_candidates: '正在核对人数、时长和玩法…',
     researching_game_fit: '正在看看实际游玩感受…', composing_response: '已经找到几款，马上整理好…',
   },
   en: {
-    requesting: 'Got it. Looking now…', understanding_request: 'Sorting out the details you mentioned…',
-    selecting_tools: 'Choosing the best place to look…',
+    requesting: 'Got it. Continuing from here…', understanding_request: 'Understanding this turn in the context of the conversation…',
+    selecting_tools: 'The recommendation Agent is choosing its next step…',
     searching_bgg_catalog: 'Searching the game catalog…', reading_game_details: 'Reading this game\'s details…',
     discovering_candidates: 'Looking for a closer fit…', verifying_bgg_candidates: 'Checking player count, time, and play style…',
     researching_game_fit: 'Checking how it feels to play…', composing_response: 'A few good options are ready…',
@@ -129,7 +129,7 @@ const toolLabels = computed(() => {
   const actions = response.value?.harness?.actions ?? []
   const labels: string[] = []
   const add = (label: string) => { if (!labels.includes(label)) labels.push(label) }
-  if (actions.includes('PLAN_DIALOGUE')) add(t('toolUnderstand'))
+  if (actions.some(action => action === 'REPLY_TO_USER' || action === 'ASK_USER' || action === 'UPDATE_PREFERENCES' || action === 'RECOMMEND_GAMES')) add(t('toolUnderstand'))
   if (actions.includes('RESOLVE_BGG_REFERENCE')) add(t('toolReference'))
   if (actions.includes('SEARCH_BGG_CATALOG')) add(t('toolCatalog'))
   if (actions.includes('SEARCH_BGG_BY_NAME')) add(t('toolNames'))
@@ -213,12 +213,7 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
 
 function choose(option: { value: string; label: string }) {
   if (!clarification.value || loading.value) return
-  const updated = { ...profile.value }
-  if (clarification.value.field === 'players') updated.players = Number(option.value)
-  else if (clarification.value.field === 'duration') updated.maxMinutes = Number(option.value)
-  else if (clarification.value.field === 'complexity') updated.maxWeight = Number(option.value)
-  const message = clarification.value.field === 'conversation' ? option.value : ''
-  void sendTurn(message, updated, option.label)
+  void sendTurn(option.value, profile.value, option.label)
 }
 
 function submitMessage() {

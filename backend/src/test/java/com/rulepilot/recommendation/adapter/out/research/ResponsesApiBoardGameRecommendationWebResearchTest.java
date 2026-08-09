@@ -8,11 +8,8 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
-import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoverySignal;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
 import com.rulepilot.catalog.BggGameType;
 import com.sun.net.httpserver.HttpExchange;
@@ -140,7 +137,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
     }
 
     @Test
-    void discoversCandidateIdsFromStructuredSignalsWithoutReceivingThePrivateTranscript() throws Exception {
+    void discoversCandidateIdsFromAnAgentWrittenSemanticQueryWithoutReceivingThePrivateTranscript() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/v1/responses", exchange -> {
@@ -173,7 +170,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
 
             var result = adapter.discover(new DiscoveryRequest(
-                    List.of(new DiscoverySignal("Science Fiction", FeatureMode.REQUIRED, FeatureSource.BGG_METADATA)),
+                    "Science Fiction games with a shared investigation and low conflict",
                     List.of(BggGameType.THEMATIC),
                     "zh-CN"));
 
@@ -243,15 +240,8 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                 new BigDecimal("2.5"),
                 2,
                 4,
-                60,
                 45,
                 60,
-                10,
-                10,
-                "Best with 3 players",
-                "Recommended with 2–4 players",
-                2,
-                100,
                 List.of("Family"),
                 List.of("Card Drafting"),
                 List.of(),

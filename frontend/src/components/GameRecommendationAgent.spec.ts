@@ -34,7 +34,7 @@ describe('GameRecommendationAgent', () => {
     return mount(GameRecommendationAgent, { global: { plugins: [router] } })
   }
 
-  it('asks one material question at a time and renders attributed recommendation cards', async () => {
+  it('asks one natural material question and then renders attributed recommendation cards', async () => {
     const requests: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -51,7 +51,7 @@ describe('GameRecommendationAgent', () => {
         sourceCount: 179737, candidatesEvaluated: 1,
         userModel: { summary: '家庭局，重视参与感', hypotheses: [{ text: '可能不喜欢长时间等待', confidence: 'medium', basedOn: '希望大家都有参与感' }] },
         researchSources: [{ index: 1, title: 'Publisher guide', url: 'https://publisher.example/wingspan', domain: 'publisher.example' }],
-        harness: { modelCalls: 2, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'RESEARCH_GAME_FIT', 'COMPOSE_RECOMMENDATIONS'] },
+        harness: { modelCalls: 3, catalogCalls: 1, webResearchCalls: 1, fallbackUsed: false, actions: ['LOOKUP_BGG_CANDIDATES', 'RESEARCH_GAME_FIT', 'RECOMMEND_GAMES'] },
         games: [{
           game, matches: ['BGG 总榜第 34 名'], tradeoffs: ['需要留意卡牌文字量'],
           reasons: [
@@ -61,38 +61,40 @@ describe('GameRecommendationAgent', () => {
           ],
         }],
       })
-      if (body.profile.maxMinutes === null) return Response.json({
-        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '先给你几款候选。你们愿意为一局留出多长时间？',
-        profile: { ...baseProfile, players: 4 }, sourceCount: 179737, candidatesEvaluated: 20,
-        games: [{ game, matches: ['支持 4 人游玩'], tradeoffs: [] }],
-        clarification: { field: 'duration', prompt: '你们愿意为一局留出多长时间？', options: [{ value: '90', label: '90 分钟内' }] },
-      })
-      if (body.profile.maxWeight === null) return Response.json({
-        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '我按时长更新了候选。这次想要多复杂？',
-        profile: { ...baseProfile, players: 4, maxMinutes: 90 }, sourceCount: 179737, candidatesEvaluated: 20,
-        games: [{ game, matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
-        clarification: { field: 'complexity', prompt: '这次想要多复杂？', options: [{ value: '3.2', label: '中等策略' }] },
+      if (body.message === '朋友聚会，想热闹但不要尴尬') return Response.json({
+        outcome: 'needs_clarification', mode: 'model_assisted',
+        assistantMessage: '听起来你更在意全桌参与感。这次大概几个人、能留多少时间？想到多少说多少就行。',
+        profile: baseProfile, sourceCount: 179737, candidatesEvaluated: 0, games: [],
+        clarification: { field: 'conversation', prompt: '这次大概几个人、能留多少时间？', options: [] },
+        harness: { modelCalls: 1, catalogCalls: 0, webResearchCalls: 0, fallbackUsed: false, actions: ['ASK_USER'] },
       })
       return Response.json({
-        outcome: 'recommendations', mode: 'deterministic', assistantMessage: '下面这些各有侧重。',
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '明白，我按这组条件核对了一批。',
         profile: { ...baseProfile, players: 4, maxMinutes: 90, maxWeight: 3.2 }, clarification: null,
         sourceCount: 179737, candidatesEvaluated: 20,
+        harness: { modelCalls: 4, catalogCalls: 2, webResearchCalls: 0, fallbackUsed: false, actions: ['UPDATE_PREFERENCES', 'SEARCH_BGG_CATALOG', 'LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES'] },
         games: [{ game, matches: ['支持 4 人游玩', '70 分钟，不超过你的时长上限'], tradeoffs: [] }],
       })
     }))
     const wrapper = await mountAgent()
 
-    await wrapper.findAll('button').find(button => button.text() === '朋友聚会想热闹一点')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '朋友聚会，想热闹但不要尴尬')!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('展翅翱翔')
-    expect(wrapper.text()).toContain('你们愿意为一局留出多长时间')
-    await wrapper.findAll('button').find(button => button.text() === '90 分钟内')!.trigger('click')
-    await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '中等策略')!.trigger('click')
+    expect(wrapper.text()).toContain('这次大概几个人、能留多少时间')
+    expect(wrapper.text()).not.toContain('展翅翱翔')
+    await wrapper.get('textarea').setValue('4 个人，90 分钟内，想要中等策略')
+    await wrapper.get('form').trigger('submit')
     await flushPromises()
 
-    expect(requests).toHaveLength(3)
-    expect(requests[0]).toMatchObject({ message: '朋友聚会想热闹一点', transcript: expect.arrayContaining([{ role: 'user', text: '朋友聚会想热闹一点' }]) })
+    expect(requests).toHaveLength(2)
+    expect(requests[0]).toMatchObject({ message: '朋友聚会，想热闹但不要尴尬', transcript: expect.arrayContaining([{ role: 'user', text: '朋友聚会，想热闹但不要尴尬' }]) })
+    expect(requests[1]).toMatchObject({
+      message: '4 个人，90 分钟内，想要中等策略',
+      transcript: expect.arrayContaining([
+        { role: 'user', text: '朋友聚会，想热闹但不要尴尬' },
+        { role: 'user', text: '4 个人，90 分钟内，想要中等策略' },
+      ]),
+    })
     expect(wrapper.text()).toContain('展翅翱翔')
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.text()).toContain('支持 4 人游玩')
@@ -101,18 +103,18 @@ describe('GameRecommendationAgent', () => {
 
     await wrapper.findAll('button').find(button => button.text() === '介绍一下')!.trigger('click')
     await flushPromises()
-    expect(requests[3]).toMatchObject({ focusedBggId: 266192, message: '介绍一下《展翅翱翔》' })
+    expect(requests[2]).toMatchObject({ focusedBggId: 266192, message: '介绍一下《展翅翱翔》' })
     expect(wrapper.text()).toContain('进一步了解')
     expect(wrapper.text()).toContain('发行商资料展示了分步教学流程')
     expect(wrapper.get('a[href="https://publisher.example/wingspan"]').attributes('rel')).toContain('noopener')
     expect(wrapper.text()).toContain('目前记下的偏好')
-    expect(wrapper.text()).toContain('本轮实际调用')
-    expect(wrapper.text()).toContain('完整目录条件筛选')
+    expect(wrapper.text()).toContain('本轮 Agent 轨迹')
+    expect(wrapper.text()).toContain('理解上下文并决定下一步')
     expect(wrapper.text()).toContain('体验资料查证')
     await wrapper.findAll('button').find(button => button.text() === '换一批')!.trigger('click')
     await flushPromises()
-    expect(requests).toHaveLength(5)
-    expect(requests[4]).toMatchObject({ message: '换一批', excludedBggIds: [266192] })
+    expect(requests).toHaveLength(4)
+    expect(requests[3]).toMatchObject({ message: '换一批', excludedBggIds: [266192] })
   })
 
   it('accepts a natural-language turn with CSRF while preserving a truthful no-match result', async () => {
@@ -178,8 +180,8 @@ describe('GameRecommendationAgent', () => {
         harness: {
           modelCalls: 2, catalogCalls: 1, webResearchCalls: 0, fallbackUsed: false,
           actions: focused
-            ? ['PLAN_DIALOGUE', 'LOOKUP_BGG_GAME', 'COMPOSE_GAME_RESPONSE']
-            : ['PLAN_DIALOGUE', 'SEARCH_BGG_CATALOG', 'COMPOSE_RECOMMENDATIONS'],
+            ? ['LOOKUP_BGG_CANDIDATES', 'RECOMMEND_GAMES']
+            : ['SEARCH_BGG_CATALOG', 'RECOMMEND_GAMES'],
         },
         games: [{ game, matches: [], tradeoffs: [] }],
       })
@@ -279,7 +281,7 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找有探索感的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    expect(wrapper.get('[role="status"]').text()).toContain('收到，正在看看')
+    expect(wrapper.get('[role="status"]').text()).toContain('收到，接着聊下去')
 
     streamController?.enqueue(encoder.encode('event: progress\ndata: {"stage":"searching_bgg_catalog","elapsedMs":120}\n\n'))
     await flushPromises()

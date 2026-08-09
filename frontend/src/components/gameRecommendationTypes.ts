@@ -7,7 +7,7 @@ export type RecommendationProfile = {
 }
 
 export type RecommendationClarification = {
-  field: 'players' | 'duration' | 'complexity' | 'conversation'
+  field: 'conversation'
   prompt: string
   options: { value: string; label: string }[]
 }
@@ -49,7 +49,7 @@ export type ResearchSource = { index: number; title: string; url: string; domain
 
 export type RecommendationAgentResponse = {
   outcome: 'conversation' | 'needs_clarification' | 'recommendations' | 'no_match' | 'unavailable'
-  mode: 'deterministic' | 'model_assisted'
+  mode: 'model_assisted'
   assistantMessage: string
   profile: RecommendationProfile
   clarification: RecommendationClarification | null

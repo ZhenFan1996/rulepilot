@@ -1,14 +1,8 @@
 package com.rulepilot.recommendation.application;
 
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Choice;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureConstraint;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Slate;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
@@ -16,17 +10,18 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationReason;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.text.Normalizer;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+/** Application-owned hard gates and factual presentation for Agent-selected games. */
 @Component
 @Profile("!test")
 class BoardGameRecommendationSelector {
@@ -37,110 +32,63 @@ class BoardGameRecommendationSelector {
         this.properties = properties;
     }
 
-    CandidatePool prepare(
+    List<Game> eligible(
             List<Game> source,
             RecommendationProfile profile,
-            List<Integer> excludedBggIds,
-            RetrievalPlan retrievalPlan,
-            List<Integer> discoveredBggIds) {
-        Set<Integer> discovered = discoveredBggIds == null ? Set.of() : Set.copyOf(discoveredBggIds);
-        int candidatesEvaluated = (int) source.stream().filter(game -> game.details() != null).count();
-        if (!source.isEmpty() && candidatesEvaluated == 0) {
-            return new CandidatePool(SelectionStatus.NO_DETAILS, 0, List.of(), retrievalPlan, discovered);
-        }
-        List<Game> eligible = source.stream()
+            Set<Integer> excludedBggIds,
+            int maximum) {
+        List<Game> allowed = source.stream()
+                .filter(game -> game != null && game.details() != null)
                 .filter(game -> !excludedBggIds.contains(game.ranking().bggId()))
-                .filter(game -> eligible(game.details(), profile))
-                .filter(game -> satisfiesRequiredFeatures(game, retrievalPlan))
-                .filter(game -> avoidsRejectedFeatures(game, retrievalPlan))
-                .sorted(candidateComparator(profile, retrievalPlan, discovered))
+                .filter(game -> eligible(game, profile))
                 .toList();
-        return new CandidatePool(
-                eligible.isEmpty() ? SelectionStatus.NO_MATCH : SelectionStatus.READY,
-                candidatesEvaluated,
-                eligible,
-                retrievalPlan,
-                discovered);
+        return diversify(allowed, maximum);
     }
 
-    List<Candidate> advisorCandidates(CandidatePool pool) {
-        return diversify(pool.candidates(), properties.modelCandidateLimit()).stream()
-                .map(this::candidate)
-                .toList();
+    boolean eligible(Game game, RecommendationProfile profile) {
+        if (game == null || game.details() == null) return false;
+        Details details = game.details();
+        if (profile.players() != null
+                && (details.minPlayers() == null
+                        || details.maxPlayers() == null
+                        || details.minPlayers() > profile.players()
+                        || details.maxPlayers() < profile.players())) return false;
+        Integer maximumMinutes = details.maximumPlayTimeMinutes() == null
+                ? details.playingTimeMinutes()
+                : details.maximumPlayTimeMinutes();
+        if (profile.maxMinutes() != null
+                && profile.maxMinutes() > 0
+                && (maximumMinutes == null || maximumMinutes > profile.maxMinutes())) return false;
+        if (profile.maxWeight() != null
+                && profile.maxWeight().compareTo(BigDecimal.ZERO) > 0
+                && (details.averageWeight() == null
+                        || details.averageWeight().compareTo(profile.maxWeight()) > 0)) return false;
+        return interactionEligible(details, profile.interaction());
     }
 
-    Candidate advisorCandidate(Game game) {
-        return candidate(game);
+    boolean observedTerm(Game game, String term) {
+        if (game == null || game.details() == null || term == null || term.isBlank()) return false;
+        String expected = normalized(term);
+        return observedTerms(game).stream().map(this::normalized).anyMatch(expected::equals);
     }
 
-    List<RecommendedGame> fallback(CandidatePool pool, RecommendationProfile profile, boolean chinese) {
-        return fallback(pool, profile, chinese, Research.empty());
-    }
-
-    List<RecommendedGame> fallback(
-            CandidatePool pool,
+    List<RecommendedGame> present(
+            List<Game> selected,
             RecommendationProfile profile,
+            Map<Integer, List<String>> evidenceTerms,
             boolean chinese,
             Research research) {
-        return diversify(pool.candidates(), properties.resultCount()).stream()
-                .map(game -> withResearch(
-                        factsOnly(game, profile, pool.retrievalPlan(), chinese), research))
+        return selected.stream()
+                .map(game -> present(
+                        game,
+                        profile,
+                        evidenceTerms.getOrDefault(game.ranking().bggId(), List.of()),
+                        chinese,
+                        research))
                 .toList();
     }
 
-    List<RecommendedGame> fromSlate(
-            CandidatePool pool,
-            Slate slate,
-            RecommendationProfile profile,
-            boolean chinese,
-            Research research) {
-        Map<Integer, Game> candidates = pool.candidates().stream().collect(java.util.stream.Collectors.toMap(
-                game -> game.ranking().bggId(), Function.identity()));
-        List<RecommendedGame> result = new ArrayList<>();
-        for (Choice choice : slate.choices()) {
-            Game game = candidates.get(choice.bggId());
-            if (game == null) return List.of();
-            RecommendedGame facts = factsOnly(game, profile, pool.retrievalPlan(), chinese);
-            List<RecommendationReason> reasons = new ArrayList<>(facts.reasons());
-            choice.preferenceReasons().forEach(text -> reasons.add(new RecommendationReason(
-                    ReasonKind.PREFERENCE_INFERENCE, text, List.of())));
-            reasons.addAll(validatedResearchReasons(research, choice.bggId()));
-            List<String> matches = new ArrayList<>(facts.matches());
-            matches.addAll(choice.preferenceReasons());
-            List<String> tradeoffs = new ArrayList<>(facts.tradeoffs());
-            tradeoffs.addAll(choice.tradeoffs());
-            result.add(new RecommendedGame(game, matches, tradeoffs, reasons));
-        }
-        return List.copyOf(result);
-    }
-
-    private List<RecommendationReason> validatedResearchReasons(Research research, int bggId) {
-        Set<Integer> validSources = research.sources().stream()
-                .map(com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Source::index)
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
-        return research.games().stream()
-                .filter(game -> game.bggId() == bggId)
-                .flatMap(game -> game.observations().stream())
-                .filter(observation -> observation.text() != null
-                        && !observation.text().isBlank()
-                        && observation.text().length() <= 600
-                        && !observation.sourceIndexes().isEmpty()
-                        && validSources.containsAll(observation.sourceIndexes()))
-                .limit(3)
-                .map(observation -> new RecommendationReason(
-                        ReasonKind.WEB_RESEARCH,
-                        observation.text(),
-                        observation.sourceIndexes()))
-                .toList();
-    }
-
-    private RecommendedGame withResearch(RecommendedGame facts, Research research) {
-        List<RecommendationReason> reasons = new ArrayList<>(facts.reasons());
-        reasons.addAll(validatedResearchReasons(research, facts.game().ranking().bggId()));
-        return new RecommendedGame(facts.game(), facts.matches(), facts.tradeoffs(), reasons);
-    }
-
-    private Candidate candidate(Game game) {
+    Candidate researchCandidate(Game game) {
         Details details = game.details();
         return new Candidate(
                 game.ranking().bggId(),
@@ -151,162 +99,98 @@ class BoardGameRecommendationSelector {
                 details.averageWeight(),
                 details.minPlayers(),
                 details.maxPlayers(),
-                details.playingTimeMinutes(),
                 details.minimumPlayTimeMinutes(),
                 details.maximumPlayTimeMinutes(),
-                details.minimumAge(),
-                details.suggestedMinimumAge(),
-                details.bestWith(),
-                details.recommendedWith(),
-                details.languageDependenceLevel(),
-                details.weightVotes(),
-                details.categories(),
-                details.mechanics(),
-                details.families(),
-                details.designers(),
-                details.publishers(),
-                boundedDescription(details.description()));
+                bounded(details.categories(), 12),
+                bounded(details.mechanics(), 12),
+                bounded(details.families(), 8),
+                bounded(details.designers(), 5),
+                bounded(details.publishers(), 5));
     }
 
-    private String boundedDescription(String value) {
-        String description = value == null ? "" : value.strip().replaceAll("\\s+", " ");
-        return description.length() <= 4_000 ? description : description.substring(0, 4_000);
-    }
-
-    private Comparator<Game> candidateComparator(
-            RecommendationProfile profile, RetrievalPlan retrievalPlan, Set<Integer> discoveredBggIds) {
-        return Comparator.comparingInt((Game game) -> discoveredBggIds.contains(game.ranking().bggId()) ? 1 : 0)
-                .reversed()
-                .thenComparing(Comparator.comparingInt(
-                                (Game game) -> preferredFeatureFit(game, retrievalPlan))
-                        .reversed())
-                .thenComparing(Comparator.comparingInt(
-                                (Game game) -> playerFit(game.details(), profile.players()))
-                        .reversed())
-                .thenComparing(Comparator.comparingInt(
-                                (Game game) -> interactionFit(game.details(), profile.interaction()))
-                        .reversed())
-                .thenComparing(
-                        (Game game) -> game.ranking().bayesAverage(),
-                        Comparator.nullsLast(Comparator.reverseOrder()))
-                .thenComparing(
-                        (Game game) -> game.ranking().overallRank(),
-                        Comparator.nullsLast(Comparator.naturalOrder()))
-                .thenComparing(Comparator.comparingInt(
-                                (Game game) -> game.ranking().usersRated())
-                        .reversed())
-                .thenComparingInt(game -> game.ranking().bggId());
-    }
-
-    private boolean satisfiesRequiredFeatures(Game game, RetrievalPlan retrievalPlan) {
-        return retrievalPlan.features().stream()
-                .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
-                .filter(feature -> feature.mode() == FeatureMode.REQUIRED)
-                .allMatch(feature -> matchesFeature(game, feature));
-    }
-
-    private boolean avoidsRejectedFeatures(Game game, RetrievalPlan retrievalPlan) {
-        return retrievalPlan.features().stream()
-                .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
-                .filter(feature -> feature.mode() == FeatureMode.AVOID)
-                .noneMatch(feature -> matchesFeature(game, feature));
-    }
-
-    private int preferredFeatureFit(Game game, RetrievalPlan retrievalPlan) {
-        return (int) retrievalPlan.features().stream()
-                .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
-                .filter(feature -> feature.mode() == FeatureMode.PREFERRED)
-                .filter(feature -> matchesFeature(game, feature))
-                .count();
-    }
-
-    private boolean matchesFeature(Game game, FeatureConstraint feature) {
-        return matchingFeatureValue(game, feature).isPresent();
-    }
-
-    private Optional<String> matchingFeatureValue(Game game, FeatureConstraint feature) {
-        if (feature.term() == null || feature.term().isBlank() || game.details() == null) return Optional.empty();
-        return featureValues(game).stream()
-                .filter(value -> BoardGameRecommendationTaxonomy.equivalent(feature.term(), value))
-                .findFirst();
-    }
-
-    private List<String> featureValues(Game game) {
+    private RecommendedGame present(
+            Game game,
+            RecommendationProfile profile,
+            List<String> evidenceTerms,
+            boolean chinese,
+            Research research) {
         Details details = game.details();
-        return java.util.stream.Stream.of(
-                        java.util.stream.Stream.of(game.ranking().sourceName(), details.name(), details.officialChineseName()),
-                        details.categories().stream(),
-                        details.mechanics().stream(),
-                        details.families().stream(),
-                        details.designers().stream(),
-                        details.publishers().stream())
-                .flatMap(Function.identity())
-                .filter(java.util.Objects::nonNull)
+        List<String> matches = new ArrayList<>();
+        if (profile.players() != null) {
+            matches.add(chinese
+                    ? "BGG 资料确认支持 " + profile.players() + " 人"
+                    : "BGG data confirms support for " + profile.players() + " players");
+        }
+        if (profile.maxMinutes() != null && profile.maxMinutes() > 0) {
+            Integer minutes = details.maximumPlayTimeMinutes() == null
+                    ? details.playingTimeMinutes()
+                    : details.maximumPlayTimeMinutes();
+            if (minutes != null) {
+                matches.add(chinese
+                        ? "BGG 标注最长约 " + minutes + " 分钟，在你的上限内"
+                        : "BGG lists up to " + minutes + " minutes, within your limit");
+            }
+        }
+        if (profile.maxWeight() != null
+                && profile.maxWeight().compareTo(BigDecimal.ZERO) > 0
+                && details.averageWeight() != null) {
+            matches.add(chinese
+                    ? "BGG 复杂度 " + oneDecimal(details.averageWeight()) + " / 5，在你的上限内"
+                    : "BGG complexity " + oneDecimal(details.averageWeight()) + " / 5 is within your limit");
+        }
+        List<String> groundedTerms = evidenceTerms.stream()
+                .filter(term -> observedTerm(game, term))
+                .distinct()
+                .limit(4)
+                .toList();
+        if (!groundedTerms.isEmpty()) {
+            matches.add((chinese ? "Agent 依据的 BGG 机制/类型：" : "Agent-selected BGG mechanics/categories: ")
+                    + String.join(chinese ? "、" : ", ", groundedTerms));
+        }
+        List<RecommendationReason> reasons = new ArrayList<>(matches.stream()
+                .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
+                .toList());
+        reasons.addAll(researchReasons(research, game.ranking().bggId()));
+        return new RecommendedGame(game, matches, List.of(), reasons);
+    }
+
+    private List<RecommendationReason> researchReasons(Research research, int bggId) {
+        Set<Integer> sourceIndexes = research.sources().stream()
+                .map(source -> source.index())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        return research.games().stream()
+                .filter(game -> game.bggId() == bggId)
+                .flatMap(game -> game.observations().stream())
+                .filter(observation -> observation.text() != null
+                        && !observation.text().isBlank()
+                        && observation.text().length() <= 600
+                        && !observation.sourceIndexes().isEmpty()
+                        && sourceIndexes.containsAll(observation.sourceIndexes()))
+                .limit(3)
+                .map(observation -> new RecommendationReason(
+                        ReasonKind.WEB_RESEARCH,
+                        observation.text(),
+                        observation.sourceIndexes()))
                 .toList();
     }
 
-    private String normalizedFeature(String value) {
-        return java.text.Normalizer.normalize(value == null ? "" : value, java.text.Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[^\\p{L}\\p{N}]+", " ")
-                .strip()
-                .replaceAll("\\s+", " ");
-    }
-
-    private int playerFit(Details game, Integer players) {
-        if (game == null || players == null) return 1;
-        if (includesPlayerCount(game.bestWith(), players)) return 3;
-        if (includesPlayerCount(game.recommendedWith(), players)) return 2;
-        return 1;
-    }
-
-    private boolean includesPlayerCount(String summary, int players) {
-        String normalized = summary.toLowerCase(Locale.ROOT).replace('\u2013', '-').replace('\u2014', '-');
-        if (normalized.matches(".*(?<!\\d)" + players + "(?!\\d).*$")) return true;
-        java.util.regex.Matcher ranges = java.util.regex.Pattern.compile("(?<!\\d)(\\d{1,2})\\s*-\\s*(\\d{1,2})(?!\\d)")
-                .matcher(normalized);
-        while (ranges.find()) {
-            int minimum = Integer.parseInt(ranges.group(1));
-            int maximum = Integer.parseInt(ranges.group(2));
-            if (players >= minimum && players <= maximum) return true;
-        }
-        return false;
-    }
-
-    private boolean eligible(Details game, RecommendationProfile profile) {
-        if (game == null) return false;
-        if (profile.players() != null
-                && (game.minPlayers() == null
-                        || game.maxPlayers() == null
-                        || game.minPlayers() > profile.players()
-                        || game.maxPlayers() < profile.players())) return false;
-        Integer maximumMinutes = game.maximumPlayTimeMinutes() == null
-                ? game.playingTimeMinutes()
-                : game.maximumPlayTimeMinutes();
-        if (profile.maxMinutes() != null && profile.maxMinutes() > 0
-                && (maximumMinutes == null || maximumMinutes > profile.maxMinutes())) return false;
-        return profile.maxWeight() == null
-                || profile.maxWeight().compareTo(BigDecimal.ZERO) == 0
-                || (game.averageWeight() != null && game.averageWeight().compareTo(profile.maxWeight()) <= 0);
-    }
-
-    private int interactionFit(Details game, InteractionPreference preference) {
-        if (preference == InteractionPreference.ANY) return 1;
-        Set<String> mechanics = game.mechanics().stream()
-                .map(value -> value.toLowerCase(Locale.ROOT))
-                .collect(java.util.stream.Collectors.toSet());
+    private boolean interactionEligible(Details details, InteractionPreference interaction) {
+        if (interaction == null || interaction == InteractionPreference.ANY) return true;
+        Set<String> mechanics = details.mechanics().stream()
+                .map(this::normalized)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         boolean cooperative = mechanics.contains("cooperative game");
-        boolean team = mechanics.contains("team-based game") || mechanics.contains("team based game");
-        return switch (preference) {
-            case COOPERATIVE -> cooperative ? 2 : 0;
-            case TEAM -> team ? 2 : 0;
-            case COMPETITIVE -> !cooperative && !team ? 2 : 0;
-            case ANY -> 1;
+        boolean team = mechanics.contains("team based game");
+        return switch (interaction) {
+            case COOPERATIVE -> cooperative;
+            case TEAM -> team;
+            case COMPETITIVE -> !cooperative && !team;
+            case ANY -> true;
         };
     }
 
-    private List<Game> diversify(List<Game> ranked, int maximum) {
-        List<Game> remaining = new ArrayList<>(ranked);
+    private List<Game> diversify(List<Game> source, int maximum) {
+        List<Game> remaining = new ArrayList<>(source);
         List<Game> selected = new ArrayList<>();
         while (!remaining.isEmpty() && selected.size() < maximum) {
             Game next = remaining.stream()
@@ -324,114 +208,56 @@ class BoardGameRecommendationSelector {
         Set<String> leftTerms = taxonomy(left.details());
         Set<String> rightTerms = taxonomy(right.details());
         if (leftTerms.isEmpty() || rightTerms.isEmpty()) return 0;
-        Set<String> intersection = new java.util.HashSet<>(leftTerms);
+        Set<String> intersection = new LinkedHashSet<>(leftTerms);
         intersection.retainAll(rightTerms);
-        Set<String> union = new java.util.HashSet<>(leftTerms);
+        Set<String> union = new LinkedHashSet<>(leftTerms);
         union.addAll(rightTerms);
         return (double) intersection.size() / union.size();
     }
 
-    private Set<String> taxonomy(Details game) {
-        if (game == null) return Set.of();
-        return java.util.stream.Stream.of(game.categories(), game.mechanics(), game.families())
+    private Set<String> taxonomy(Details details) {
+        if (details == null) return Set.of();
+        return java.util.stream.Stream.of(details.categories(), details.mechanics(), details.families())
                 .flatMap(List::stream)
-                .map(value -> value.toLowerCase(Locale.ROOT))
+                .map(this::normalized)
+                .filter(value -> !value.isBlank())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
-    private RecommendedGame factsOnly(
-            Game game, RecommendationProfile profile, RetrievalPlan retrievalPlan, boolean chinese) {
+    private List<String> observedTerms(Game game) {
         Details details = game.details();
-        List<String> matches = new ArrayList<>();
-        List<String> tradeoffs = new ArrayList<>();
-        if (profile.players() != null) {
-            matches.add(chinese ? "支持 " + profile.players() + " 人游玩" : "Supports " + profile.players() + " players");
-            if (!details.bestWith().isBlank() && playerFit(details, profile.players()) == 3) {
-                matches.add(chinese ? "BGG 玩家投票认为这个人数最合适" : "BGG player votes mark this count as best");
-            }
-        }
-        if (profile.maxMinutes() != null && profile.maxMinutes() > 0) {
-            Integer minutes = details.maximumPlayTimeMinutes() == null
-                    ? details.playingTimeMinutes()
-                    : details.maximumPlayTimeMinutes();
-            matches.add(chinese
-                    ? minutes + " 分钟以内，不超过你的时长上限"
-                    : "Up to " + minutes + " minutes, within your limit");
-        }
-        if (profile.maxWeight() != null && profile.maxWeight().compareTo(BigDecimal.ZERO) > 0) {
-            matches.add(chinese
-                    ? "BGG 复杂度 " + oneDecimal(details.averageWeight()) + " / 5，在你的上限内"
-                    : "BGG complexity " + oneDecimal(details.averageWeight()) + " / 5 is within your limit");
-        }
-        interactionExplanation(details, profile.interaction(), chinese, matches, tradeoffs);
-        retrievalPlan.features().stream()
-                .filter(feature -> feature.source() == FeatureSource.BGG_METADATA)
-                .filter(feature -> feature.mode() != FeatureMode.AVOID)
-                .flatMap(feature -> matchingFeatureValue(game, feature)
-                        .map(value -> featureMatchExplanation(feature, value, chinese))
-                        .stream())
-                .distinct()
-                .forEach(matches::add);
-        List<RecommendationReason> reasons = matches.stream()
-                .map(text -> new RecommendationReason(ReasonKind.BGG_FACT, text, List.of()))
+        return java.util.stream.Stream.of(
+                        java.util.stream.Stream.of(
+                                game.ranking().sourceName(), details.name(), details.officialChineseName()),
+                        details.categories().stream(),
+                        details.mechanics().stream(),
+                        details.families().stream(),
+                        details.designers().stream(),
+                        details.publishers().stream())
+                .flatMap(java.util.function.Function.identity())
+                .filter(java.util.Objects::nonNull)
                 .toList();
-        return new RecommendedGame(game, matches, tradeoffs, reasons);
     }
 
-    private String featureMatchExplanation(FeatureConstraint feature, String matchedValue, boolean chinese) {
-        if (feature.basedOn() != null && feature.basedOn().startsWith("reference: ")) {
-            return chinese
-                    ? "与参考游戏共享 BGG 记录的机制或类型“" + matchedValue + "”"
-                    : "Shares the BGG-recorded mechanic or category “" + matchedValue
-                            + "” with the reference game";
-        }
-        return chinese
-                ? "BGG 元数据命中你提到的“" + feature.basedOn() + "”"
-                : "BGG metadata matches your request: “" + feature.basedOn() + "”";
+    private List<String> bounded(List<String> values, int maximum) {
+        return values.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(String::strip)
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(maximum)
+                .toList();
     }
 
-    private void interactionExplanation(
-            Details game,
-            InteractionPreference preference,
-            boolean chinese,
-            List<String> matches,
-            List<String> tradeoffs) {
-        if (preference == InteractionPreference.ANY) return;
-        if (interactionFit(game, preference) == 2) {
-            String value = switch (preference) {
-                case COOPERATIVE -> chinese ? "BGG 标注了合作游戏机制" : "BGG lists the Cooperative Game mechanism";
-                case TEAM -> chinese ? "BGG 标注了团队游戏机制" : "BGG lists the Team-Based Game mechanism";
-                case COMPETITIVE -> chinese ? "BGG 机制资料未标为合作或团队游戏" : "BGG mechanics do not label it cooperative or team-based";
-                case ANY -> "";
-            };
-            if (!value.isBlank()) matches.add(value);
-        } else {
-            tradeoffs.add(chinese
-                    ? "互动方式没有完全命中你的偏好，选择前可打开详情确认"
-                    : "Its interaction style is not an exact match; inspect the details before choosing");
-        }
+    private String normalized(String value) {
+        return Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^\\p{L}\\p{N}]+", " ")
+                .strip()
+                .replaceAll("\\s+", " ");
     }
 
     private String oneDecimal(BigDecimal value) {
-        return value.setScale(1, java.math.RoundingMode.HALF_UP).toPlainString();
-    }
-
-    record CandidatePool(
-            SelectionStatus status,
-            int candidatesEvaluated,
-            List<Game> candidates,
-            RetrievalPlan retrievalPlan,
-            Set<Integer> discoveredBggIds) {
-        CandidatePool {
-            candidates = List.copyOf(candidates);
-            retrievalPlan = retrievalPlan == null ? RetrievalPlan.empty() : retrievalPlan;
-            discoveredBggIds = discoveredBggIds == null ? Set.of() : Set.copyOf(discoveredBggIds);
-        }
-    }
-
-    enum SelectionStatus {
-        READY,
-        NO_DETAILS,
-        NO_MATCH
+        return value.setScale(1, RoundingMode.HALF_UP).toPlainString();
     }
 }

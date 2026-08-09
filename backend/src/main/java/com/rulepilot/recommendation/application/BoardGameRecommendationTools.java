@@ -3,8 +3,8 @@ package com.rulepilot.recommendation.application;
 import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
-import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
@@ -16,9 +16,8 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 /**
- * Allow-listed read tools for the recommendation Agent. The planner selects which
- * tools are useful; every result is a bounded typed observation consumed by the
- * next model step rather than trusted as a final recommendation.
+ * Allow-listed read capabilities for the recommendation ReAct Agent. Every result
+ * becomes a bounded observation consumed by the next model step.
  */
 @Component
 @Profile("!test")
