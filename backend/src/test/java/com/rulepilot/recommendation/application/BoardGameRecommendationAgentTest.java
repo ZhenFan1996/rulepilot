@@ -439,6 +439,62 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void sourceResolvesAPriorNamedGameAfterCorrectionInsteadOfRepeatingAPlannerGuess() {
+        Plan plan = new Plan(
+                DialogueAct.ASK,
+                new PreferencePatch(null, null, null, null, null),
+                new UserModel(
+                        "可能喜欢拼图搭建",
+                        List.of(new PreferenceHypothesis("可能偏好拼图", Confidence.LOW, "类似白塔庭院"))),
+                "那你更喜欢板块放置还是建筑堆叠？",
+                "更喜欢哪一种？",
+                false,
+                "",
+                new RetrievalPlan(
+                        List.of(),
+                        List.of(new FeatureConstraint(
+                                "Tile Placement",
+                                FeatureMode.PREFERRED,
+                                FeatureSource.BGG_METADATA,
+                                "我想找一款类似白塔庭院的桌游")),
+                        false));
+        Fixture fixture = new Fixture(
+                request -> Optional.of(plan),
+                request -> {
+                    assertThat(request.act()).isEqualTo(DialogueAct.RECOMMEND);
+                    assertThat(request.referenceGame()).isNotNull();
+                    assertThat(request.referenceGame().bggId()).isEqualTo(20);
+                    assertThat(request.referenceGame().mechanics())
+                            .contains("Card Drafting", "Worker Placement")
+                            .doesNotContain("Tile Placement");
+                    assertThat(request.candidates()).extracting(BoardGameRecommendationAdvisor.Candidate::bggId)
+                            .doesNotContain(20);
+                    return Optional.of(new Slate(
+                            "我已经按 BGG 资料重新核对参考游戏。",
+                            "",
+                            List.of(new Choice(30, List.of("共享已核对的机制"), List.of(), List.of()))));
+                },
+                new NoResearch());
+
+        var response = fixture.agent.converse(new ConversationRequest(
+                RecommendationProfile.empty(),
+                "你根本不了解它",
+                List.of(),
+                List.of(
+                        new DialogueMessage("user", "我想找一款类似白塔庭院的桌游"),
+                        new DialogueMessage("assistant", "它可能有拼图式搭建。"),
+                        new DialogueMessage("user", "你根本不了解它")),
+                null), "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.assistantMessage()).contains("BGG 资料重新核对");
+        assertThat(response.userModel().summary()).contains("BGG 已核对");
+        assertThat(response.userModel().hypotheses()).isEmpty();
+        assertThat(response.harness().actions())
+                .contains("RESOLVE_BGG_REFERENCE", "SEARCH_BGG_CATALOG", "COMPOSE_RECOMMENDATIONS");
+    }
+
+    @Test
     void keepsAPlannerQuestionConversationalAfterPreferencesAlreadyExist() {
         Plan plan = new Plan(
                 DialogueAct.ASK,
@@ -1064,6 +1120,7 @@ class BoardGameRecommendationAgentTest {
                     recommendationTools,
                     new BoardGamePreferenceDialogue(),
                     new BoardGameRecommendationQueryCoverage(),
+                    new BoardGameReferenceIntent(),
                     candidateAgent,
                     new BoardGameRecommendationSelector(properties),
                     advisor,
@@ -1164,7 +1221,9 @@ class BoardGameRecommendationAgentTest {
 
         @Override
         public List<SearchResult> search(String query) {
-            return List.of();
+            return "白塔庭院".equals(query)
+                    ? List.of(new SearchResult(20, "白塔庭院", 2025))
+                    : List.of();
         }
 
         @Override

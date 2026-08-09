@@ -45,6 +45,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
   await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
     const body = route.request().postDataJSON() as {
       profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
+      message: string
       focusedBggId: number | null
       transcript: { role: string; text: string }[]
     }
@@ -58,6 +59,18 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
         return
       }
       await route.fulfill({ json: payload })
+    }
+    if (body.message.includes('白塔庭院')) {
+      await fulfill({
+        outcome: 'recommendations', mode: 'model_assisted',
+        assistantMessage: '我先在 BGG 核对了《白塔庭院（Ivory Courtyard）》；没有沿用未经来源验证的玩法猜测。下面的候选只按实际记录的共同机制和类型生成，每张卡片都会分别说明真正重合的点与取舍。',
+        profile: { ...body.profile, type: 'all', interaction: 'any' }, clarification: null,
+        sourceCount: 179737, candidatesEvaluated: 8,
+        userModel: { summary: '正在以 BGG 已核对的《白塔庭院》作为参照。', hypotheses: [] },
+        harness: { modelCalls: 2, catalogCalls: 3, webResearchCalls: 0, fallbackUsed: false, actions: ['PLAN_DIALOGUE', 'RESOLVE_BGG_REFERENCE', 'SEARCH_BGG_BY_NAME', 'LOOKUP_BGG_CANDIDATES'] },
+        games: [{ game: catalog.games[0], matches: ['共享已核对的机制'], tradeoffs: [] }],
+      })
+      return
     }
     if (body.focusedBggId === 266192) {
       await fulfill({
@@ -222,6 +235,28 @@ test('keeps full-catalog discovery usable without horizontal overflow at 390 px'
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   )
   expect(hasHorizontalOverflow).toBe(false)
+})
+
+test('keeps a source-grounded comparison reply visible above the composer on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await mockPublicDiscovery(page)
+  await page.goto('/discover')
+
+  await page.getByLabel('说说你想玩的桌游').fill('我想找一款类似白塔庭院的桌游')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+
+  const reply = page.getByText(/我先在 BGG 核对了《白塔庭院/)
+  await expect(reply).toBeVisible()
+  await expect(page.getByText('在 BGG 核对参考游戏')).toBeVisible()
+  const viewportAtBottom = await page.getByTestId('recommendation-conversation').evaluate(element =>
+    element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+  )
+  expect(viewportAtBottom).toBe(true)
+  const replyBox = await reply.boundingBox()
+  const composerBox = await page.getByLabel('说说你想玩的桌游').boundingBox()
+  expect(replyBox).not.toBeNull()
+  expect(composerBox).not.toBeNull()
+  expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
 })
 
 test('selects a recommendation, reviews an official rulebook, and hands recovery to teaching', async ({ page }) => {
