@@ -26,6 +26,7 @@ import org.springframework.stereotype.Component;
 public class SpringAiBoardGameRecommendationModel implements BoardGameRecommendationModel {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiBoardGameRecommendationModel.class);
+    static final int QWEN_THINKING_BUDGET = 512;
 
     private final RuntimeModelConfiguration models;
 
@@ -48,10 +49,18 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         ToolCallingChatOptions.Builder<?> options;
         if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
-            builder.toolChoice("required").parallelToolCalls(false);
             if ("qwen".equals(models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION))) {
-                builder.extraBody(Map.of("enable_thinking", false));
+                // Qwen 3.7 rejects tool_choice=required while thinking is enabled. The Agent prompt
+                // requires one action and the application loop independently enforces that contract.
+                builder.toolChoice("auto");
+                builder.extraBody(Map.of(
+                        "enable_thinking", true,
+                        "thinking_budget", QWEN_THINKING_BUDGET,
+                        "preserve_thinking", false));
+            } else {
+                builder.toolChoice("required");
             }
+            builder.parallelToolCalls(false);
             options = builder;
         } else if (model.getDefaultOptions() instanceof ToolCallingChatOptions defaults) {
             options = defaults.mutate();

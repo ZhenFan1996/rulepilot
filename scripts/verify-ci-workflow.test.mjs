@@ -57,12 +57,23 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_HOURLY_LIMIT=30/)
   assert.match(
     deploymentWorkflow,
-    /const recommendationPrompt = '5 人，90 分钟，想要谈判、互坑，不要合作，而且别太难教'/,
+    /const openingPrompt = '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'/,
+  )
+  assert.match(deploymentWorkflow, /openingResult = openingStreamed\.result/)
+  assert.match(deploymentWorkflow, /\{ role: 'assistant', text: openingResult\.assistantMessage \}/)
+  assert.match(deploymentWorkflow, /knownGames: openingGames\.map/)
+  assert.match(deploymentWorkflow, /shownBggIds: openingGames\.map/)
+  assert.match(
+    deploymentWorkflow,
+    /const recommendationPrompt = '我想换成能谈判、互相骗一骗的；有两个新手，90 分钟内。你直接挑三款吧。'/,
   )
   assert.match(deploymentWorkflow, /message: recommendationPrompt/)
-  assert.match(deploymentWorkflow, /transcript: \[\{ role: 'user', text: recommendationPrompt \}\]/)
+  assert.match(deploymentWorkflow, /\{ role: 'user', text: recommendationPrompt \}/)
+  assert.doesNotMatch(deploymentWorkflow, /transcript: \[\{ role: 'user', text: recommendationPrompt \}\]/)
   assert.doesNotMatch(deploymentWorkflow, /4 人，60 分钟，想玩合作游戏/)
   assert.match(deploymentWorkflow, /RECOMMEND_GAMES/)
+  assert.match(deploymentWorkflow, /outcome: agentResult\.outcome/)
+  assert.match(deploymentWorkflow, /actions: Array\.isArray\(agentActions\)/)
   assert.doesNotMatch(deploymentWorkflow, /COMPOSE_RECOMMENDATIONS/)
   assert.doesNotMatch(deploymentWorkflow, /RANK_STRUCTURED_CANDIDATES/)
   assert.doesNotMatch(deploymentWorkflow, /MODEL_SELECT_TOOLS/)

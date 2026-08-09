@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.adapter.out.research;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Request;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.WebResearchUnavailableException;
 import com.rulepilot.catalog.BggGameType;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -52,6 +54,44 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                 .hasMessageContaining("qwen-plus")
                 .hasMessageContaining("prohibited");
         org.mockito.Mockito.verifyNoInteractions(calls);
+    }
+
+    @Test
+    void surfacesATransportFailureSoTheAgentCanOpenItsPerRunCircuitBreaker() throws Exception {
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+        okhttp3.Call call = mock(okhttp3.Call.class);
+        when(calls.newCall(any(okhttp3.Request.class))).thenReturn(call);
+        when(call.execute()).thenThrow(new IOException("synthetic transport failure"));
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(anyString())).thenReturn(null);
+        when(values.increment(anyString())).thenReturn(1L);
+        var adapter = new ResponsesApiBoardGameRecommendationWebResearch(
+                calls,
+                new ObjectMapper(),
+                redis,
+                true,
+                "secret-test-key",
+                "https://research.example/v1",
+                "research-model",
+                Duration.ofDays(7),
+                20,
+                2,
+                Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC));
+
+        DiscoveryRequest request = new DiscoveryRequest(
+                "synthetic low-conflict spatial games",
+                List.of(BggGameType.ABSTRACT),
+                "en");
+        assertThatThrownBy(() -> adapter.discover(request))
+                .isInstanceOf(WebResearchUnavailableException.class)
+                .hasMessage("PROVIDER_IO_ERROR");
+        assertThatThrownBy(() -> adapter.discover(request))
+                .isInstanceOf(WebResearchUnavailableException.class)
+                .hasMessage("PROVIDER_BACKOFF");
+        org.mockito.Mockito.verify(call, org.mockito.Mockito.times(1)).execute();
     }
 
     @Test
@@ -126,6 +166,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             JsonNode sent = json.readTree(body.get());
             assertThat(sent.path("tools")).singleElement().satisfies(tool ->
                     assertThat(tool.path("type").asText()).isEqualTo("web_search"));
+            assertThat(sent.path("tool_choice").asText()).isEqualTo("required");
             assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("minimal");
             assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(1_600);
             assertThat(sent.path("store").asBoolean()).isFalse();
@@ -137,7 +178,7 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
     }
 
     @Test
-    void discoversCandidateIdsFromAnAgentWrittenSemanticQueryWithoutReceivingThePrivateTranscript() throws Exception {
+    void discoversSourceBackedTitleHypothesesWithoutDoingBggIdentityResolution() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/v1/responses", exchange -> {
@@ -146,10 +187,9 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
                     {
                       "output": [
                         {"type":"web_search_call","action":{"sources":[
-                          {"title":"BGG item","url":"https://boardgamegeek.com/boardgame/60/example"},
-                          {"title":"Review","url":"https://reviews.example/game-60"}
+                          {"title":"BGG item","url":"https://boardgamegeek.com/boardgame/60/example"}
                         ]}},
-                        {"type":"message","content":[{"type":"output_text","text":"{\\\"candidates\\\":[{\\\"bggId\\\":60,\\\"name\\\":\\\"Example Game\\\",\\\"fitObservation\\\":\\\"Reviews describe the requested table experience.\\\",\\\"sourceIndexes\\\":[1,2]}]}"}]}
+                        {"type":"message","content":[{"type":"output_text","text":"{\\\"candidates\\\":[{\\\"name\\\":\\\"Example Game\\\",\\\"fitObservation\\\":\\\"The search result describes the requested table experience.\\\",\\\"sourceIndexes\\\":[1]}]}"}]}
                       ]
                     }
                     """);
@@ -176,13 +216,19 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
 
             assertThat(result).hasValueSatisfying(discovery -> {
                 assertThat(discovery.candidates()).singleElement().satisfies(candidate -> {
-                    assertThat(candidate.bggId()).isEqualTo(60);
+                    assertThat(candidate.name()).isEqualTo("Example Game");
                     assertThat(candidate.fitObservation()).contains("requested table experience");
-                    assertThat(candidate.sourceIndexes()).containsExactly(1, 2);
+                    assertThat(candidate.sourceIndexes()).containsExactly(1);
                 });
-                assertThat(discovery.sources()).hasSize(2);
+                assertThat(discovery.sources()).hasSize(1);
             });
-            assertThat(body.get()).contains("Science Fiction", "THEMATIC");
+            JsonNode sent = json.readTree(body.get());
+            assertThat(sent.path("tool_choice").asText()).isEqualTo("required");
+            assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("none");
+            assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(700);
+            assertThat(sent.path("input").asText())
+                    .contains("Run exactly one broad web search", "Science Fiction", "THEMATIC")
+                    .doesNotContain("\"bggId\"");
             assertThat(body.get()).doesNotContain("科幻主题", "secret-test-key");
         } finally {
             server.stop(0);
