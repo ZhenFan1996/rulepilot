@@ -37,6 +37,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
   })
 
   it('shows the selected game and edition handed off from discovery', async () => {
+    const openSource = vi.fn()
+    vi.stubGlobal('open', openSource)
     const fetchMock = mockApplicationFetch(
       () => 'READY', 'COMPLETED', [], undefined, undefined,
       (options) => response({
@@ -53,6 +55,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
         candidates: [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+        }, {
+          title: 'BGG 文件页', url: 'https://boardgamegeek.com/filepage/123/rules', publisher: '',
+          language: 'zh-CN', edition: 'First', sourceDomain: 'boardgamegeek.com', officialDomainVerified: false,
+          sourceType: 'COMMUNITY_PLATFORM', acquisitionMode: 'SOURCE_PAGE',
         }],
       })
       if (String(input).includes('/api/v1/games')) return response([{
@@ -72,10 +79,15 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
     expect(wrapper.get('select').element.value).toBe('edition-1')
-    await wrapper.findAll('button').find(button => button.text().includes('帮我找官方规则书'))!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('帮我找规则书'))!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Catalog Game Rules')
-    expect(wrapper.text()).toContain('域名匹配出版社')
+    expect(wrapper.text()).toContain('出版社 / 权利方来源')
+    await wrapper.findAll('button').find(button => button.text() === '打开来源页')!.trigger('click')
+    expect(openSource).toHaveBeenCalledWith(
+      'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
+    )
+    expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('')
     await wrapper.findAll('button').find(button => button.text() === '选择并继续核对')!.trigger('click')
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
@@ -214,7 +226,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('现在拍一页')
     expect(wrapper.text()).toContain('添加已拍页面')
     expect(wrapper.text()).toContain('想自己起标题？')
-    expect(wrapper.text()).toContain('可选：关联游戏、官方链接和讲解偏好')
+    expect(wrapper.text()).toContain('可选：关联游戏、规则书来源和讲解偏好')
     expect(wrapper.text()).not.toContain('让 RulePilot 自动创建')
     expect(wrapper.find('#rulebook-file').attributes('accept')).toContain('application/pdf')
     expect(wrapper.find('#rulebook-camera').attributes('capture')).toBe('environment')

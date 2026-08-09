@@ -72,13 +72,13 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 
-  await page.getByRole('button', { name: '帮我找官方规则书' }).click()
+  await page.getByRole('button', { name: '帮我找规则书' }).click()
   await expect(page.getByText('publisher.example')).toBeVisible()
   await page.getByRole('button', { name: '选择并继续核对' }).click()
   const officialButton = page.getByRole('button', { name: '下载规则书' })
   await expect(officialButton).toBeDisabled()
-  await expect(page.getByRole('textbox', { name: /官方原文链接/ })).toHaveValue('https://publisher.example/rules.pdf')
-  await page.getByRole('checkbox', { name: /我确认这是官方来源/ }).check()
+  await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toHaveValue('https://publisher.example/rules.pdf')
+  await page.getByRole('checkbox', { name: /我确认该来源有权提供这份规则书/ }).check()
   await expect(officialButton).toBeEnabled()
   await officialButton.click()
   await expect.poll(() => officialImport).toEqual({
@@ -235,6 +235,7 @@ async function mockOnboardingApis(page: Page, options: {
         candidates: [{
           title: 'Catalog Game Rules', url: 'https://publisher.example/rules.pdf', publisher: 'Publisher',
           language: 'zh-CN', edition: 'First', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
         }],
       } })
     }

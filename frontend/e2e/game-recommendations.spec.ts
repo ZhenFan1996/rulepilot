@@ -151,6 +151,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf',
       publisher: 'Stonemaier Games', language: 'English', edition: 'Base game',
       sourceDomain: 'publisher.example', officialDomainVerified: true,
+      sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
     }],
   } }))
   await page.route('**/api/v1/documents/official-imports', route => route.fulfill({ status: 201, json: {
@@ -270,7 +271,7 @@ test('selects a recommendation, reviews an official rulebook, and hands recovery
 
   await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()
   await expect(page.getByText('Wingspan Rulebook')).toBeVisible()
-  await expect(page.getByText('域名匹配出版社')).toBeVisible()
+  await expect(page.getByText('出版社 / 权利方来源')).toBeVisible()
   await page.getByRole('button', { name: '选择这份' }).click()
   const handoff = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(handoff).toBeDisabled()

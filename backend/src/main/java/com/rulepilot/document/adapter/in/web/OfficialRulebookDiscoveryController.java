@@ -37,7 +37,9 @@ public class OfficialRulebookDiscoveryController {
             String language,
             String edition,
             String sourceDomain,
-            boolean officialDomainVerified) {
+            boolean officialDomainVerified,
+            OfficialRulebookDiscoveryService.SourceType sourceType,
+            OfficialRulebookDiscoveryService.AcquisitionMode acquisitionMode) {
         static CandidateResponse from(OfficialRulebookDiscoveryService.Candidate candidate) {
             return new CandidateResponse(
                     candidate.title(),
@@ -46,7 +48,9 @@ public class OfficialRulebookDiscoveryController {
                     candidate.language(),
                     candidate.edition(),
                     candidate.sourceDomain(),
-                    candidate.officialDomainVerified());
+                    candidate.officialDomainVerified(),
+                    candidate.sourceType(),
+                    candidate.acquisitionMode());
         }
     }
 }

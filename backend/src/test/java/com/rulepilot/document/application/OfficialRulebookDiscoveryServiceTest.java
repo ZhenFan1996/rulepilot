@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
 import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.AcquisitionMode;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.Candidate;
+import com.rulepilot.document.application.OfficialRulebookDiscoveryService.SourceType;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -14,25 +17,42 @@ class OfficialRulebookDiscoveryServiceTest {
     private static final UUID EDITION_ID = UUID.fromString("26ba0d70-51e3-445b-9245-d50754562a13");
 
     @Test
-    void validatesAndRanksPublisherCandidatesWithoutTrustingModelUrls() {
+    void validatesClassifiesAndRanksCandidatesWithoutTrustingModelUrls() {
         var finder = new FakeFinder(List.of(
                 new OfficialRulebookCandidateFinder.Candidate(
                         "Rules", "https://cdn.example.net/rules.pdf", "Unknown Publisher", "en", "First"),
                 new OfficialRulebookCandidateFinder.Candidate(
                         "Official Rules", "https://stonemaiergames.com/files/rules.pdf", "Stonemaier Games", "en", "First"),
                 new OfficialRulebookCandidateFinder.Candidate(
+                        "Trusted source page", "https://trusted.example/wingspan", "", "en", "First"),
+                new OfficialRulebookCandidateFinder.Candidate(
                         "Private", "http://127.0.0.1/rules.pdf", "Stonemaier Games", "en", "First"),
                 new OfficialRulebookCandidateFinder.Candidate(
-                        "Page", "https://stonemaiergames.com/rules", "Stonemaier Games", "en", "First")));
+                        "Publisher page", "https://stonemaiergames.com/rules", "Stonemaier Games", "en", "First"),
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "Untrusted page", "https://random.example/rules", "", "en", "First")));
         var service = new OfficialRulebookDiscoveryService(catalog(), sourceIdentity(), finder, "trusted.example");
 
         var result = service.discover(EDITION_ID, "en");
 
         assertThat(result.configured()).isTrue();
-        assertThat(result.candidates()).hasSize(2);
+        assertThat(result.candidates()).hasSize(5);
         assertThat(result.candidates().getFirst().officialDomainVerified()).isTrue();
         assertThat(result.candidates().getFirst().sourceDomain()).isEqualTo("stonemaiergames.com");
-        assertThat(result.candidates().getLast().officialDomainVerified()).isFalse();
+        assertThat(result.candidates()).extracting(Candidate::sourceType).containsExactly(
+                SourceType.PUBLISHER,
+                SourceType.PUBLISHER,
+                SourceType.TRUSTED_REPOSITORY,
+                SourceType.COMMUNITY_PLATFORM,
+                SourceType.PUBLIC_WEB);
+        assertThat(result.candidates()).extracting(Candidate::acquisitionMode).containsExactly(
+                AcquisitionMode.DIRECT_PDF,
+                AcquisitionMode.SOURCE_PAGE,
+                AcquisitionMode.SOURCE_PAGE,
+                AcquisitionMode.SOURCE_PAGE,
+                AcquisitionMode.DIRECT_PDF);
+        assertThat(result.candidates()).extracting(Candidate::url)
+                .contains("https://boardgamegeek.com/files/thing/266192");
     }
 
     @Test
@@ -88,6 +108,7 @@ class OfficialRulebookDiscoveryServiceTest {
             calls++;
             assertThat(request.gameName()).isEqualTo("Wingspan");
             assertThat(request.publishers()).containsExactly("Stonemaier Games");
+            assertThat(request.trustedDomains()).containsExactly("trusted.example");
             return candidates;
         }
     }

@@ -24,7 +24,9 @@ class OfficialRulebookDiscoveryControllerTest {
                         "en",
                         "First",
                         "publisher.example",
-                        true))));
+                        true,
+                        OfficialRulebookDiscoveryService.SourceType.PUBLISHER,
+                        OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF))));
 
         var response = new OfficialRulebookDiscoveryController(discovery).discover(editionId, "en");
 
@@ -32,6 +34,9 @@ class OfficialRulebookDiscoveryControllerTest {
         assertThat(response.candidates()).singleElement().satisfies(candidate -> {
             assertThat(candidate.sourceDomain()).isEqualTo("publisher.example");
             assertThat(candidate.officialDomainVerified()).isTrue();
+            assertThat(candidate.sourceType()).isEqualTo(OfficialRulebookDiscoveryService.SourceType.PUBLISHER);
+            assertThat(candidate.acquisitionMode())
+                    .isEqualTo(OfficialRulebookDiscoveryService.AcquisitionMode.DIRECT_PDF);
         });
     }
 }
