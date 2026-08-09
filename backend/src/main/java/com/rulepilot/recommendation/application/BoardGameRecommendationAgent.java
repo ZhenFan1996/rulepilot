@@ -274,7 +274,7 @@ public class BoardGameRecommendationAgent {
                 && tools.webResearchConfigured();
         boolean nativeCandidateDiscovery = !focusedDiscussion
                 && candidateAgent.configured()
-                && needsNativeCandidateDiscovery(retrievalPlan);
+                && (modelWantsCandidateWork || needsNativeCandidateDiscovery(retrievalPlan));
         boolean nativeCandidateSucceeded = false;
         if (nativeCandidateDiscovery) {
             progress.accept(ProgressStage.SELECTING_TOOLS);
@@ -282,6 +282,11 @@ public class BoardGameRecommendationAgent {
                     candidateAgent.discover(
                             retrievalPlan,
                             turn.profile(),
+                            new BoardGameRecommendationCandidateAgent.DiscoveryContext(
+                                    userModel,
+                                    request.transcript(),
+                                    effectiveExcludedBggIds,
+                                    properties.resultCount()),
                             locale,
                             step -> progress.accept(switch (step) {
                                 case MODEL_SELECTING -> ProgressStage.SELECTING_TOOLS;
@@ -473,12 +478,19 @@ public class BoardGameRecommendationAgent {
         CandidatePool completedPool = pool;
         Game completedReferenceGame = referenceGame;
         RetrievalPlan completedRetrievalPlan = retrievalPlan;
+        boolean needsConversationalComposition = request.transcript().size() > 1
+                || !userModel.hypotheses().isEmpty()
+                || namedReference.isPresent();
         boolean fastNativeResponse = nativeCandidatesComplete
                 && !focusedDiscussion
-                && !researchUseful;
+                && !researchUseful
+                && !needsConversationalComposition;
         boolean evidenceBoundFocusedResponse = focusedDiscussion && !researchUseful;
-        boolean structuredRanking = fastNativeResponse || evidenceBoundFocusedResponse || canUseStructuredRanking(
-                request, planned, completedRetrievalPlan, research, researchUseful);
+        boolean structuredRanking = fastNativeResponse
+                || evidenceBoundFocusedResponse
+                || (!needsConversationalComposition
+                        && canUseStructuredRanking(
+                                request, planned, completedRetrievalPlan, research, researchUseful));
         Optional<Slate> slate = Optional.empty();
         if (planned.isPresent() && !structuredRanking) {
             progress.accept(ProgressStage.COMPOSING_RESPONSE);

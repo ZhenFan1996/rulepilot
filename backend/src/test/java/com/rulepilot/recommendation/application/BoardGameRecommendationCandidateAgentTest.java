@@ -12,7 +12,9 @@ import com.rulepilot.catalog.BoardGameRecommendationCatalog.Ranking;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureConstraint;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureSource;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Request;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.ToolCall;
@@ -59,13 +61,46 @@ class BoardGameRecommendationCandidateAgentTest {
                         "MODEL_SELECT_TOOLS",
                         "SEARCH_BGG_BY_NAME",
                         "LOOKUP_BGG_CANDIDATES");
-        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(60);
+        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(60, 61);
         assertThat(result.games()).allSatisfy(game ->
                 assertThat(game.details().mechanics()).contains("Area Control"));
         assertThat(steps).containsExactly(
                 BoardGameRecommendationCandidateAgent.Step.MODEL_SELECTING,
                 BoardGameRecommendationCandidateAgent.Step.SEARCHING_NAMES,
                 BoardGameRecommendationCandidateAgent.Step.LOOKING_UP_DETAILS);
+    }
+
+    @Test
+    void givesTheAgentConversationContextAndFiltersGamesAlreadyShownToThePlayer() {
+        BoardGameRecommendationCandidateModel model = new BoardGameRecommendationCandidateModel() {
+            @Override
+            public boolean configured() {
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                assertThat(request.messages().get(1).content())
+                        .contains("想要更强的对抗感", "不想再看上一批", "低随机性", "\"alreadyShownBggIds\":[60]");
+                return new Turn("", List.of(new ToolCall(
+                        "search-context",
+                        BoardGameRecommendationCandidateAgent.SEARCH_TOOL,
+                        "{\"names\":[\"Kemet\",\"Inis\"]}")));
+            }
+        };
+        var context = new BoardGameRecommendationCandidateAgent.DiscoveryContext(
+                new UserModel("想要更强的对抗感", List.of()),
+                List.of(
+                        new DialogueMessage("assistant", "上一批有 Kemet。"),
+                        new DialogueMessage("user", "不想再看上一批，最好低随机性")),
+                List.of(60),
+                1);
+
+        var result = agent(model, new FakeCatalog(List.of(61)))
+                .discover(areaControl(), profile(), context, "zh-CN", ignored -> {});
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.games()).extracting(game -> game.ranking().bggId()).containsExactly(61);
     }
 
     @Test
@@ -160,6 +195,16 @@ class BoardGameRecommendationCandidateAgentTest {
     }
 
     private static final class FakeCatalog implements BoardGameRecommendationCatalog {
+        private final List<Integer> expectedLookupIds;
+
+        private FakeCatalog() {
+            this(List.of(60, 61));
+        }
+
+        private FakeCatalog(List<Integer> expectedLookupIds) {
+            this.expectedLookupIds = List.copyOf(expectedLookupIds);
+        }
+
         @Override
         public CandidateSet findCandidates(BggGameType requiredType, List<BggGameType> suggestedTypes, int maximum) {
             throw new AssertionError("native candidate retrieval must not query a ranked prefix");
@@ -175,11 +220,11 @@ class BoardGameRecommendationCandidateAgentTest {
 
         @Override
         public List<Game> findGamesByIds(List<Integer> bggIds) {
-            assertThat(bggIds).containsExactly(60, 61);
-            return List.of(new Game(
-                    ranking(60, "Kemet"),
+            assertThat(bggIds).containsExactlyElementsOf(expectedLookupIds);
+            return expectedLookupIds.stream().map(id -> new Game(
+                    ranking(id, id == 60 ? "Kemet" : "Inis"),
                     new Details(
-                            "Kemet",
+                            id == 60 ? "Kemet" : "Inis",
                             "",
                             "",
                             2,
@@ -198,7 +243,8 @@ class BoardGameRecommendationCandidateAgentTest {
                             100,
                             List.of(),
                             List.of(),
-                            List.of())));
+                            List.of())))
+                    .toList();
         }
 
         @Override

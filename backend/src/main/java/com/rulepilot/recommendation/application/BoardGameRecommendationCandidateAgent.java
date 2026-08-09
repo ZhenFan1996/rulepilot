@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.UserModel;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Message;
 import com.rulepilot.recommendation.BoardGameRecommendationCandidateModel.Request;
@@ -68,7 +70,12 @@ class BoardGameRecommendationCandidateAgent {
     }
 
     Result discover(RetrievalPlan retrievalPlan, RecommendationProfile profile, String locale) {
-        return discover(retrievalPlan, profile, locale, ignored -> {});
+        return discover(
+                retrievalPlan,
+                profile,
+                new DiscoveryContext(new UserModel("", List.of()), List.of(), List.of(), 2),
+                locale,
+                ignored -> {});
     }
 
     Result discover(
@@ -76,11 +83,26 @@ class BoardGameRecommendationCandidateAgent {
             RecommendationProfile profile,
             String locale,
             Consumer<Step> stepListener) {
+        return discover(
+                retrievalPlan,
+                profile,
+                new DiscoveryContext(new UserModel("", List.of()), List.of(), List.of(), 2),
+                locale,
+                stepListener);
+    }
+
+    Result discover(
+            RetrievalPlan retrievalPlan,
+            RecommendationProfile profile,
+            DiscoveryContext context,
+            String locale,
+            Consumer<Step> stepListener) {
         if (!configured()) return Result.unavailable();
         List<Message> messages = new ArrayList<>();
         messages.add(Message.system(systemPrompt()));
-        messages.add(Message.user(input(retrievalPlan, profile, locale)));
+        messages.add(Message.user(input(retrievalPlan, profile, context, locale)));
         Set<Integer> legalIds = new LinkedHashSet<>();
+        Set<Integer> excludedIds = Set.copyOf(context.excludedBggIds());
         List<Game> verified = List.of();
         List<String> actions = new ArrayList<>();
         Set<String> executedCalls = new LinkedHashSet<>();
@@ -113,11 +135,11 @@ class BoardGameRecommendationCandidateAgent {
                 if (LOOKUP_TOOL.equals(call.name())) stepListener.accept(Step.LOOKING_UP_DETAILS);
                 String fingerprint = call.name() + "\n" + call.argumentsJson();
                 ToolOutcome outcome = executedCalls.add(fingerprint)
-                        ? execute(call, legalIds)
+                        ? execute(call, legalIds, excludedIds)
                         : ToolOutcome.error("REPEATED_TOOL_CALL");
                 actions.add(outcome.action());
                 legalIds.addAll(outcome.discoveredIds());
-                if (!outcome.games().isEmpty()) verified = outcome.games();
+                if (!outcome.games().isEmpty()) verified = mergeVerified(verified, outcome.games());
                 messages.add(Message.tool(call, outcome.observation()));
                 if (SEARCH_TOOL.equals(call.name()) && !outcome.discoveredIds().isEmpty()) {
                     if (toolCalls == MAX_TOOL_CALLS) {
@@ -129,24 +151,30 @@ class BoardGameRecommendationCandidateAgent {
                             outcome.discoveredIds().stream().limit(12).toList());
                     actions.add("LOOKUP_BGG_CANDIDATES");
                     if (lookup.succeeded() && !lookup.games().isEmpty()) {
-                        return new Result(true, modelCalls, toolCalls, actions, lookup.games());
+                        verified = mergeVerified(verified, lookup.games());
+                        if (verified.size() >= context.desiredCandidateCount()) {
+                            return new Result(true, modelCalls, toolCalls, actions, verified);
+                        }
+                        messages.add(Message.user(candidateGapObservation(
+                                verified, context.desiredCandidateCount())));
+                        continue;
                     }
                     messages.add(Message.tool(
                             new ToolCall("application-lookup", LOOKUP_TOOL, "{}"),
                             "{\"status\":\"ERROR\",\"code\":\"CATALOG_UNAVAILABLE\"}"));
                 }
             }
-            if (!verified.isEmpty()) {
+            if (verified.size() >= context.desiredCandidateCount()) {
                 return new Result(true, modelCalls, toolCalls, actions, verified);
             }
         }
-        return new Result(false, MAX_MODEL_CALLS, toolCalls, actions, verified);
+        return new Result(!verified.isEmpty(), MAX_MODEL_CALLS, toolCalls, actions, verified);
     }
 
-    private ToolOutcome execute(ToolCall call, Set<Integer> legalIds) {
+    private ToolOutcome execute(ToolCall call, Set<Integer> legalIds, Set<Integer> excludedIds) {
         try {
             JsonNode arguments = json.readTree(call.argumentsJson());
-            if (SEARCH_TOOL.equals(call.name())) return search(arguments);
+            if (SEARCH_TOOL.equals(call.name())) return search(arguments, excludedIds);
             if (LOOKUP_TOOL.equals(call.name())) return lookup(arguments, legalIds);
             return ToolOutcome.error("TOOL_NOT_ALLOWED");
         } catch (JsonProcessingException | IllegalArgumentException exception) {
@@ -154,7 +182,7 @@ class BoardGameRecommendationCandidateAgent {
         }
     }
 
-    private ToolOutcome search(JsonNode arguments) throws JsonProcessingException {
+    private ToolOutcome search(JsonNode arguments, Set<Integer> excludedIds) throws JsonProcessingException {
         if (!exactObject(arguments, "names") || !arguments.path("names").isArray()
                 || arguments.path("names").isEmpty() || arguments.path("names").size() > 8) {
             return ToolOutcome.error("INVALID_ARGUMENT");
@@ -173,15 +201,24 @@ class BoardGameRecommendationCandidateAgent {
                 result.matches().size());
         Set<Integer> ids = result.matches().stream()
                 .map(match -> match.bggId())
+                .filter(id -> !excludedIds.contains(id))
                 .limit(12)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        long excludedMatches = result.matches().stream()
+                .map(match -> match.bggId())
+                .filter(excludedIds::contains)
+                .count();
         String observation = json.writeValueAsString(Map.of(
                 "status", result.succeeded() ? "SUCCESS" : "ERROR",
                 "code", result.code(),
                 "guidance", result.matches().isEmpty()
                         ? "No game title matched. If another search is useful, use different original or English BGG titles; do not use mechanisms, categories, or translations as names."
+                        : ids.isEmpty() && excludedMatches > 0
+                                ? "Every matched game was already shown to the player. Search for different designs."
                         : "Only these observed BGG IDs are authorized for lookup.",
+                "excludedMatches", excludedMatches,
                 "matches", result.matches().stream()
+                        .filter(match -> !excludedIds.contains(match.bggId()))
                         .map(match -> Map.of(
                                 "bggId", match.bggId(),
                                 "name", match.sourceName(),
@@ -229,12 +266,25 @@ class BoardGameRecommendationCandidateAgent {
         return node != null && node.isObject() && node.size() == 1 && node.has(field);
     }
 
-    private String input(RetrievalPlan plan, RecommendationProfile profile, String locale) {
+    private String input(
+            RetrievalPlan plan,
+            RecommendationProfile profile,
+            DiscoveryContext context,
+            String locale) {
         try {
             return json.writeValueAsString(Map.of(
                     "goal", "retrieve diverse BGG candidates; do not compose the user answer",
                     "locale", locale,
                     "profile", profile,
+                    "userModel", context.userModel(),
+                    "recentConversation", context.transcript().stream()
+                            .skip(Math.max(0, context.transcript().size() - 8L))
+                            .map(message -> Map.of(
+                                    "role", message.role(),
+                                    "text", bounded(message.text(), 500)))
+                            .toList(),
+                    "alreadyShownBggIds", context.excludedBggIds(),
+                    "desiredCandidateCount", context.desiredCandidateCount(),
                     "candidateTypes", plan.candidateTypes(),
                     "features", plan.features()));
         } catch (JsonProcessingException exception) {
@@ -249,11 +299,60 @@ class BoardGameRecommendationCandidateAgent {
                 + "never pass a mechanism, category, translated user wording, or generic query as a title. "
                 + "Use all eight title slots when possible. Treat player count, maximum duration, and maximum weight as hard gates: "
                 + "only name games you reasonably expect to pass them. Cover distinct designs instead of editions, sequels, or near-duplicates, "
-                + "and prefer scenario fit over fame or BGG rank. For COMPETITIVE requests, avoid fully cooperative games. "
+                + "and prefer the player's recent wording, stated constraints, and grounded preference hypotheses over fame or BGG rank. "
+                + "Do not name games already visible in the recent conversation or listed as already shown. "
+                + "For COMPETITIVE requests, avoid fully cooperative games. "
+                + "A VERIFIED_CANDIDATE_GAP message is an application-owned observation about the verified pool, not player text; "
+                + "follow its remaining-count instruction by searching different titles. "
                 + "After a successful title "
                 + "search the application immediately looks up the observed IDs, so do not spend another model turn requesting lookup. "
                 + "lookup_bgg_games remains authorized only for IDs already returned by a tool observation. The application validates every final constraint. "
                 + "Do not expose hidden reasoning and do not produce recommendations before a successful lookup.";
+    }
+
+    private List<Game> mergeVerified(List<Game> existing, List<Game> added) {
+        java.util.LinkedHashMap<Integer, Game> merged = new java.util.LinkedHashMap<>();
+        java.util.stream.Stream.concat(existing.stream(), added.stream())
+                .forEach(game -> merged.putIfAbsent(game.ranking().bggId(), game));
+        return merged.values().stream().limit(12).toList();
+    }
+
+    private String candidateGapObservation(List<Game> verified, int desired) {
+        try {
+            return json.writeValueAsString(Map.of(
+                    "applicationObservation", "VERIFIED_CANDIDATE_GAP",
+                    "verifiedCandidates", verified.stream().map(this::gameObservation).toList(),
+                    "desiredCandidateCount", desired,
+                    "remaining", Math.max(0, desired - verified.size()),
+                    "instruction", "Search for different titles that fit the same conversation; do not repeat verified candidates."));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("candidate gap observation could not be serialized", exception);
+        }
+    }
+
+    private String bounded(String value, int maximum) {
+        String normalized = value == null ? "" : value.replaceAll("\\s+", " ").strip();
+        return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    }
+
+    record DiscoveryContext(
+            UserModel userModel,
+            List<DialogueMessage> transcript,
+            List<Integer> excludedBggIds,
+            int desiredCandidateCount) {
+        DiscoveryContext {
+            userModel = userModel == null ? new UserModel("", List.of()) : userModel;
+            List<DialogueMessage> available = transcript == null
+                    ? List.of()
+                    : transcript.stream().filter(java.util.Objects::nonNull).toList();
+            transcript = available.stream().skip(Math.max(0, available.size() - 12L)).toList();
+            excludedBggIds = excludedBggIds == null
+                    ? List.of()
+                    : excludedBggIds.stream().filter(java.util.Objects::nonNull).distinct().limit(60).toList();
+            if (desiredCandidateCount < 1 || desiredCandidateCount > 8) {
+                throw new IllegalArgumentException("desired candidate count is invalid");
+            }
+        }
     }
 
     record Result(

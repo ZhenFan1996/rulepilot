@@ -63,6 +63,6 @@ class BoardGameRecommendationSelectorTest {
         assertThat(result).singleElement().satisfies(game ->
                 assertThat(game.matches())
                         .contains("与参考游戏共享 BGG 记录的机制或类型“Card Drafting”")
-                        .noneMatch(value -> value.contains("current game")));
+                        .noneMatch(value -> value.contains("current game") || value.contains("BGG 总榜")));
     }
 }
