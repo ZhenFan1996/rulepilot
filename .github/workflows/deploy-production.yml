@@ -138,7 +138,7 @@ jobs:
           found=false
           qwen_enabled=false
           qwen_key_present=false
-          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL '
+          managed_recommendation_keys=' BGG_RECOMMENDATION_AGENT_ENABLED BGG_RECOMMENDATION_PROVIDER BGG_RECOMMENDATION_MODEL_PROVIDER BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT WEB_SEARCH_MODEL QWEN_MODEL QWEN_VISION_CAPABLE RULEBOOK_DISCOVERY_MODEL RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL RULEBOOK_DISCOVERY_HOURLY_LIMIT RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY '
           while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == BGG_API_TOKEN=* ]]; then
               printf 'BGG_API_TOKEN=%s\n' "$token"
@@ -169,7 +169,13 @@ jobs:
             'BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT=8' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_ENABLED=true' \
             'BGG_RECOMMENDATION_WEB_RESEARCH_TIMEOUT=PT25S' \
-            'WEB_SEARCH_MODEL=qwen3.5-plus' >> "$temporary_env"
+            'WEB_SEARCH_MODEL=qwen3.5-plus' \
+            'QWEN_MODEL=qwen3.7-plus' \
+            'QWEN_VISION_CAPABLE=true' \
+            'RULEBOOK_DISCOVERY_MODEL=qwen3.7-plus' \
+            'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
+            'RULEBOOK_DISCOVERY_HOURLY_LIMIT=30' \
+            'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' >> "$temporary_env"
           chmod 600 "$temporary_env"
           mv "$temporary_env" "$env_file"
           unset token
@@ -360,7 +366,8 @@ jobs:
             if (result == null) throw new Error('recommendation stream completed without a result event')
             return { result, firstProgressMillis }
           }
-          for (let attempt = 1; attempt <= 3; attempt += 1) {
+          // This path invokes paid models. Run it once; application budgets and diagnostics make failure actionable.
+          for (let attempt = 1; attempt <= 1; attempt += 1) {
             try {
               const page = await fetch(`${process.env.RULEPILOT_PUBLIC_URL}/`, {
                 signal: AbortSignal.timeout(10_000),
@@ -410,7 +417,8 @@ jobs:
                   || agentActions.includes('RANK_STRUCTURED_CANDIDATES'))
               const usedNativeBggTools = Array.isArray(agentActions)
                 && agentActions.includes('MODEL_SELECT_TOOLS')
-                && agentActions.includes('SEARCH_BGG_BY_NAME')
+                && (agentActions.includes('SEARCH_BGG_BY_NAME')
+                  || agentActions.includes('DISCOVER_CANDIDATES'))
                 && agentActions.includes('LOOKUP_BGG_CANDIDATES')
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0

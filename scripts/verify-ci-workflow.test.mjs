@@ -48,7 +48,12 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /accept: 'text\/event-stream'/)
   assert.match(deploymentWorkflow, /firstProgressMillis > 20_000/)
   assert.match(deploymentWorkflow, /AbortSignal\.timeout\(120_000\)/)
-  assert.match(deploymentWorkflow, /attempt <= 3/)
+  assert.match(deploymentWorkflow, /attempt <= 1/)
+  assert.doesNotMatch(deploymentWorkflow, /attempt <= 3/)
+  assert.match(deploymentWorkflow, /QWEN_MODEL=qwen3\.7-plus/)
+  assert.match(deploymentWorkflow, /QWEN_VISION_CAPABLE=true/)
+  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-plus/)
+  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_HOURLY_LIMIT=30/)
   assert.match(
     deploymentWorkflow,
     /const recommendationPrompt = '5 人，90 分钟，想要谈判、互坑，不要合作，而且别太难教'/,
@@ -60,6 +65,7 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /RANK_STRUCTURED_CANDIDATES/)
   assert.match(deploymentWorkflow, /MODEL_SELECT_TOOLS/)
   assert.match(deploymentWorkflow, /SEARCH_BGG_BY_NAME/)
+  assert.match(deploymentWorkflow, /DISCOVER_CANDIDATES/)
   assert.match(deploymentWorkflow, /LOOKUP_BGG_CANDIDATES/)
 })
 

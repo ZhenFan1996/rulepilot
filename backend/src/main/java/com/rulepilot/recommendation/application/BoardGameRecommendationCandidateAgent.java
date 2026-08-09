@@ -341,8 +341,8 @@ class BoardGameRecommendationCandidateAgent {
                 "maxMinutes", details == null || details.maximumPlayTimeMinutes() == null
                         ? -1
                         : details.maximumPlayTimeMinutes(),
-                "categories", details == null ? List.of() : details.categories(),
-                "mechanics", details == null ? List.of() : details.mechanics());
+                "categories", details == null ? List.of() : bounded(details.categories(), 12, 100),
+                "mechanics", details == null ? List.of() : bounded(details.mechanics(), 12, 100));
     }
 
     private boolean exactObject(JsonNode node, String field) {
@@ -448,6 +448,17 @@ class BoardGameRecommendationCandidateAgent {
     private String bounded(String value, int maximum) {
         String normalized = value == null ? "" : value.replaceAll("\\s+", " ").strip();
         return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
+    }
+
+    private List<String> bounded(List<String> values, int maximumItems, int maximumCharacters) {
+        if (values == null) return List.of();
+        return values.stream()
+                .filter(java.util.Objects::nonNull)
+                .map(value -> bounded(value, maximumCharacters))
+                .filter(value -> !value.isBlank())
+                .distinct()
+                .limit(maximumItems)
+                .toList();
     }
 
     record DiscoveryContext(

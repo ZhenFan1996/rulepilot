@@ -1,10 +1,13 @@
 package com.rulepilot.document.adapter.out.source;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -106,6 +109,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             assertThat(requestBody.get()).contains(
                     "\"tools\":[{\"type\":\"web_search\"}]",
                     "\"max_output_tokens\":1100",
+                    "\"reasoning\":{\"effort\":\"minimal\"}",
                     "Do not stop",
                     "BoardGameGeek Files",
                     "Catalog Game",
@@ -127,6 +131,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.opsForValue()).thenReturn(values);
         when(values.get(anyString())).thenAnswer(ignored -> cached.get());
+        when(values.increment(anyString())).thenReturn(1L);
         doAnswer(invocation -> {
             cached.set(invocation.getArgument(1));
             return null;
@@ -175,5 +180,102 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void rejectsTheLegacyQwenPlusFamilyBeforeAnyHttpCall() {
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+
+        assertThatThrownBy(() -> new ResponsesApiOfficialRulebookCandidateFinder(
+                        calls,
+                        new ObjectMapper(),
+                        true,
+                        "secret-key",
+                        "https://dashscope.aliyuncs.com/api/v1",
+                        "qwen-plus"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("qwen-plus")
+                .hasMessageContaining("prohibited");
+        org.mockito.Mockito.verifyNoInteractions(calls);
+    }
+
+    @Test
+    void negativelyCachesASuccessfulEmptySearchSoUiRetriesDoNotRepayTheProvider() throws Exception {
+        AtomicReference<String> cached = new AtomicReference<>();
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(anyString())).thenAnswer(ignored -> cached.get());
+        when(values.increment(anyString())).thenReturn(1L);
+        doAnswer(invocation -> {
+            cached.set(invocation.getArgument(1));
+            return null;
+        }).when(values).set(anyString(), anyString(), any(java.time.Duration.class));
+
+        java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            requests.incrementAndGet();
+            ObjectMapper json = new ObjectMapper();
+            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
+                    Map.of("type", "web_search_call", "action", Map.of("sources", List.of())),
+                    Map.of("type", "message", "content", List.of(Map.of(
+                            "type", "output_text", "text", "{\"candidates\":[]}"))))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    redis,
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "qwen3.7-plus",
+                    java.time.Duration.ofDays(30));
+            var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
+
+            assertThat(finder.find(request)).isEmpty();
+            assertThat(finder.find(request)).isEmpty();
+
+            assertThat(requests).hasValue(1);
+            assertThat(cached).hasValue("[]");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void refusesAProviderCallAfterTheHourlyDiscoveryBudgetIsExhausted() {
+        @SuppressWarnings("unchecked")
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(anyString())).thenReturn(null);
+        when(values.increment(anyString())).thenReturn(2L);
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+        var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                calls,
+                new ObjectMapper(),
+                redis,
+                true,
+                "secret-key",
+                "https://dashscope.aliyuncs.com/api/v1",
+                "qwen3.7-plus",
+                java.time.Duration.ofDays(30),
+                java.time.Duration.ofMinutes(10),
+                1,
+                1,
+                java.time.Clock.systemUTC());
+
+        assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
+                        42, "Catalog Game", "Base", 2024, "en")))
+                .isEmpty();
+
+        verify(calls, never()).newCall(any());
     }
 }
