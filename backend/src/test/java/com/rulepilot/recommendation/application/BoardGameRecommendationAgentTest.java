@@ -475,6 +475,85 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void citesStableUserMessageIdsForHardPreferencesWithoutAFormattingRetry() {
+        TrackingCatalog catalog = catalogWithThreeShortGames();
+        ScriptedModel model = new ScriptedModel(List.of(
+                request -> {
+                    assertThat(request.tools())
+                            .extracting(tool -> tool.name())
+                            .contains(BoardGameRecommendationAgent.SEARCH_TOOL)
+                            .doesNotContain(
+                                    BoardGameRecommendationAgent.BROWSE_TOOL,
+                                    BoardGameRecommendationAgent.DISCOVER_TOOL);
+                    assertThat(request.messages().get(1).content())
+                            .contains(
+                                    "\"evidenceId\":\"U1\"",
+                                    "\"evidenceId\":\"U2\"",
+                                    "我们四个人聚会",
+                                    "90 分钟内");
+                    assertThat(request.tools().stream()
+                                    .filter(tool -> BoardGameRecommendationAgent.SEARCH_TOOL.equals(tool.name()))
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .inputSchema())
+                            .contains("\"enum\":[\"U1\",\"U2\"]")
+                            .doesNotContain("Copy one exact contiguous substring");
+                    return action(
+                            "inspect-with-message-citations",
+                            BoardGameRecommendationAgent.SEARCH_TOOL,
+                            "{\"titles\":[\"Glass Orchard\",\"Loom City\",\"Signal Bazaar\"],"
+                                    + "\"preferenceUpdates\":["
+                                    + "{\"field\":\"players\",\"value\":4,\"evidence\":\"U1\"},"
+                                    + "{\"field\":\"maxMinutes\",\"value\":90,\"evidence\":\"U2\"},"
+                                    + "{\"field\":\"interaction\",\"value\":\"COMPETITIVE\",\"evidence\":\"U2\"}]} ");
+                },
+                request -> {
+                    assertThat(request.tools())
+                            .extracting(tool -> tool.name())
+                            .containsExactly(BoardGameRecommendationAgent.RECOMMEND_TOOL);
+                    assertThat(requestCharacters(request)).isLessThan(14_000);
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "\"players\":4",
+                                    "\"maxMinutes\":90",
+                                    "\"interaction\":\"ANY\"",
+                                    "INTERACTION_EVIDENCE_MISMATCH");
+                    return action(
+                            "recommend-without-repeating-preferences",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"人数和时间都记下了，我先给你三款经过核对的方向。\","
+                                    + "\"selections\":[{\"bggId\":60},{\"bggId\":61},{\"bggId\":63}]} ");
+                }));
+        List<DialogueMessage> transcript = List.of(
+                new DialogueMessage("user", "嗨，我们四个人聚会，但还没想清楚玩什么。"),
+                new DialogueMessage("assistant", "你更想要轻松热闹，还是有一点对抗？"),
+                new DialogueMessage("user", "想要图案构筑，有两个新手，90 分钟内。"));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "想要图案构筑，有两个新手，90 分钟内。",
+                        List.of(),
+                        transcript,
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.profile().players()).isEqualTo(4);
+        assertThat(response.profile().maxMinutes()).isEqualTo(90);
+        assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.ANY);
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
+        assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_PREFERENCE_UPDATE:INTERACTION_EVIDENCE_MISMATCH",
+                "UPDATE_PREFERENCES",
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "RECOMMEND_GAMES");
+    }
+
+    @Test
     void doesNotTurnQualitativeHeavinessIntoANumericComplexityCeiling() {
         TrackingCatalog catalog = catalog();
         ScriptedModel model = new ScriptedModel(List.of(
@@ -501,6 +580,55 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.profile().maxWeight()).isNull();
         assertThat(response.harness().actions())
                 .contains("REJECTED_PREFERENCE_UPDATE:WEIGHT_EVIDENCE_MISMATCH", "RECOMMEND_GAMES");
+    }
+
+    @Test
+    void acceptsAnExplicitPositiveInteractionMode() {
+        ScriptedModel model = new ScriptedModel(List.of(ignored -> action(
+                "ask-with-explicit-mode",
+                BoardGameRecommendationAgent.ASK_TOOL,
+                "{\"question\":\"竞争模式记下了。你更偏短局还是长局？\","
+                        + "\"preferenceUpdates\":[{\"field\":\"interaction\",\"value\":\"COMPETITIVE\",\"evidence\":\"U1\"}]}")));
+
+        var response = agent(model, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "这次明确想玩竞争对抗模式"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.NEEDS_CLARIFICATION);
+        assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
+        assertThat(response.harness().actions()).containsExactly("UPDATE_PREFERENCES", "ASK_USER");
+    }
+
+    @Test
+    void rejectsANegatedInteractionModeWithoutDiscardingTheUsefulCatalogRead() {
+        TrackingCatalog catalog = catalog();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "inspect-with-negated-mode",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\"],"
+                                + "\"preferenceUpdates\":[{\"field\":\"interaction\",\"value\":\"COOPERATIVE\",\"evidence\":\"U1\"}]}"),
+                request -> {
+                    assertThat(request.messages().getLast().content())
+                            .contains("INTERACTION_EVIDENCE_MISMATCH", "Glass Orchard");
+                    return action(
+                            "recommend",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"合作口味不会被误记成硬条件，我先给你一个经过核对的方向。\","
+                                    + "\"selections\":[{\"bggId\":60}]} ");
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "合作游戏已经玩腻了，想换换口味"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.profile().interaction()).isEqualTo(InteractionPreference.ANY);
+        assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_PREFERENCE_UPDATE:INTERACTION_EVIDENCE_MISMATCH",
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "RECOMMEND_GAMES");
     }
 
     @Test
@@ -622,7 +750,7 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
-    void rejectsProseThatBypassesFactualCardsAndLetsTheAgentRewriteIt() {
+    void sanitizesProseThatDuplicatesFactualCardsWithoutAnotherModelTurn() {
         TrackingCatalog catalog = catalog();
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(
@@ -634,26 +762,23 @@ class BoardGameRecommendationAgentTest {
                         BoardGameRecommendationAgent.RECOMMEND_TOOL,
                         "{\"message\":\"我推荐 Glass Orchard；Long Mosaic 也很适合，而且节奏更轻松。\","
                                 + "\"referenceBggIds\":[],"
-                                + "\"selections\":[{\"bggId\":60}]}"),
-                request -> {
-                    assertThat(request.messages().getLast().content())
-                            .contains("MESSAGE_NAMES_CARD_GAME");
-                    return action(
-                            "rewritten-copy",
-                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
-                            "{\"message\":\"我只保留已经入选且证据足够的这一款；卡片里是核对过的共同机制。\","
-                                    + "\"referenceBggIds\":[],"
-                                    + "\"selections\":[{\"bggId\":60}]} ");
-                }));
+                                + "\"selections\":[{\"bggId\":60}]}")));
 
         var response = agent(model, catalog, noResearch()).converse(
                 new ConversationRequest(RecommendationProfile.empty(), "推荐一款图案构筑游戏"),
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
-        assertThat(response.assistantMessage()).doesNotContain("Long Mosaic");
+        assertThat(response.assistantMessage())
+                .contains("具体差异都在卡片里")
+                .doesNotContain("Glass Orchard", "Long Mosaic");
+        assertThat(response.harness().modelCalls()).isEqualTo(2);
         assertThat(response.harness().actions())
-                .contains("REJECTED_ACTION:MESSAGE_NAMES_CARD_GAME", "RECOMMEND_GAMES");
+                .containsExactly(
+                        "SEARCH_BGG_BY_NAME",
+                        "LOOKUP_BGG_CANDIDATES",
+                        "SANITIZED_CARD_MESSAGE",
+                        "RECOMMEND_GAMES");
     }
 
     @Test
@@ -1062,6 +1187,17 @@ class BoardGameRecommendationAgentTest {
                 "Glass Orchard", 60,
                 "Loom City", 61,
                 "Long Mosaic", 62));
+    }
+
+    private TrackingCatalog catalogWithThreeShortGames() {
+        Map<Integer, Game> games = new LinkedHashMap<>();
+        games.put(60, game(60, "Glass Orchard", 55, List.of("Abstract Strategy"), List.of("Pattern Building")));
+        games.put(61, game(61, "Loom City", 60, List.of("Abstract Strategy"), List.of("Tile Placement", "Open Drafting")));
+        games.put(63, game(63, "Signal Bazaar", 75, List.of("Negotiation"), List.of("Trading", "Bluffing")));
+        return new TrackingCatalog(games, Map.of(
+                "Glass Orchard", 60,
+                "Loom City", 61,
+                "Signal Bazaar", 63));
     }
 
     private static Game game(

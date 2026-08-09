@@ -75,7 +75,6 @@ public class BoardGameRecommendationAgent {
     private final BoardGameRecommendationSelector selector;
     private final BoardGameRecommendationProperties properties;
     private final ObjectMapper json;
-    private final List<ToolSpec> actions;
     private final ExecutorService boundedCalls;
     private final long maximumRunMillis;
 
@@ -90,7 +89,6 @@ public class BoardGameRecommendationAgent {
         this.selector = selector;
         this.properties = properties;
         this.json = json;
-        this.actions = actions(properties.resultCount());
         this.boundedCalls = Executors.newThreadPerTaskExecutor(
                 Thread.ofVirtual().name("recommendation-bounded-call-", 0).factory());
         this.maximumRunMillis = properties.timeout().toMillis();
@@ -117,6 +115,9 @@ public class BoardGameRecommendationAgent {
         AgentState state = new AgentState(request, startedAt);
         if (!model.configured()) return unavailable(state, locale, "MODEL_NOT_CONFIGURED");
 
+        List<String> preferenceEvidenceIds = preferenceEvidence(request).keySet().stream().toList();
+        List<ToolSpec> actions = actions(properties.resultCount(), preferenceEvidenceIds);
+
         List<Message> foundation = List.of(
                 Message.system(systemPrompt()),
                 Message.user(agentInput(request, locale)));
@@ -127,7 +128,7 @@ public class BoardGameRecommendationAgent {
             progress.accept(ProgressStage.SELECTING_TOOLS);
             state.modelCalls++;
             BoardGameRecommendationModel.Turn turn;
-            List<ToolSpec> currentActions = availableActions(state);
+            List<ToolSpec> currentActions = availableActions(state, actions, preferenceEvidenceIds);
             try {
                 List<Message> turnMessages = messages;
                 turn = withinDeadline(
@@ -142,6 +143,10 @@ public class BoardGameRecommendationAgent {
                 return unavailable(state, locale, "MODEL_CALL_FAILED");
             }
             if (turn.toolCalls().size() != 1) {
+                LOGGER.warn(
+                        "Recommendation ReAct turn returned {} actions (textCharacters={})",
+                        turn.toolCalls().size(),
+                        turn.text().length());
                 state.actions.add("INVALID_ACTION_COUNT");
                 return unavailable(state, locale, "INVALID_ACTION_COUNT");
             }
@@ -272,13 +277,44 @@ public class BoardGameRecommendationAgent {
             JsonNode arguments,
             AgentState state,
             ConversationRequest request) {
-        try {
-            applyPreferenceUpdates(arguments, state, request);
+        if (!arguments.has("preferenceUpdates")) return "";
+        if (state.referenceFactsObserved) {
+            state.actions.add("IGNORED_POST_REFERENCE_PREFERENCE_UPDATE");
             return "";
-        } catch (InvalidAction invalid) {
-            state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
-            return invalid.code;
         }
+        JsonNode updates = arguments.path("preferenceUpdates");
+        if (!updates.isArray()) {
+            try {
+                applyPreferenceUpdates(arguments, state, request);
+                return "";
+            } catch (InvalidAction invalid) {
+                state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
+                return invalid.code;
+            }
+        }
+        if (updates.isEmpty() || updates.size() > PROFILE_FIELDS.size()) {
+            state.actions.add("REJECTED_PREFERENCE_UPDATE:EMPTY_PREFERENCE_UPDATE");
+            return "EMPTY_PREFERENCE_UPDATE";
+        }
+        boolean updated = false;
+        Set<String> seen = new LinkedHashSet<>();
+        List<String> warnings = new ArrayList<>();
+        for (JsonNode update : updates) {
+            try {
+                String field = text(update.path("field"), 1, 40);
+                if (!seen.add(field)) throw new InvalidAction("PREFERENCE_FIELD_INVALID");
+                state.profile = updatedProfileFromList(
+                        json.createArrayNode().add(update), state.profile, request);
+                updated = true;
+            } catch (InvalidAction invalid) {
+                if (!warnings.contains(invalid.code)) {
+                    warnings.add(invalid.code);
+                    state.actions.add("REJECTED_PREFERENCE_UPDATE:" + invalid.code);
+                }
+            }
+        }
+        if (updated) state.actions.add("UPDATE_PREFERENCES");
+        return String.join(",", warnings);
     }
 
     private RecommendationProfile updatedProfile(
@@ -311,7 +347,9 @@ public class BoardGameRecommendationAgent {
             if (maxWeight.compareTo(BigDecimal.ZERO) < 0 || maxWeight.compareTo(new BigDecimal("5")) > 0) {
                 throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
             }
-            requireNumericWeightEvidence(text(update.path("evidence"), 1, 160), maxWeight);
+            requireNumericWeightEvidence(
+                    groundedEvidenceText(text(update.path("evidence"), 1, 160), request),
+                    maxWeight);
         }
         if (arguments.has("type")) {
             JsonNode update = preference(arguments.path("type"), request);
@@ -319,7 +357,11 @@ public class BoardGameRecommendationAgent {
         }
         if (arguments.has("interaction")) {
             JsonNode update = preference(arguments.path("interaction"), request);
-            interaction = enumValue(InteractionPreference.class, update.path("value"), "INTERACTION_INVALID");
+            InteractionPreference value = enumValue(
+                    InteractionPreference.class, update.path("value"), "INTERACTION_INVALID");
+            requirePositiveInteractionEvidence(
+                    groundedEvidenceText(text(update.path("evidence"), 1, 160), request), value);
+            interaction = value;
         }
         return new RecommendationProfile(players, maxMinutes, maxWeight, type, interaction);
     }
@@ -340,7 +382,7 @@ public class BoardGameRecommendationAgent {
                 throw new InvalidAction("PREFERENCE_FIELD_INVALID");
             }
             String evidence = text(update.path("evidence"), 1, 160);
-            requireGroundedEvidence(evidence, request);
+            String groundedEvidence = groundedEvidenceText(evidence, request);
             JsonNode value = update.path("value");
             result = switch (field) {
                 case "players" -> new RecommendationProfile(
@@ -359,7 +401,7 @@ public class BoardGameRecommendationAgent {
                             || weight.compareTo(new BigDecimal("5")) > 0) {
                         throw new InvalidAction("WEIGHT_OUT_OF_RANGE");
                     }
-                    requireNumericWeightEvidence(evidence, weight);
+                    requireNumericWeightEvidence(groundedEvidence, weight);
                     yield new RecommendationProfile(
                             result.players(), result.maxMinutes(), weight, result.type(), result.interaction());
                 }
@@ -367,9 +409,13 @@ public class BoardGameRecommendationAgent {
                         result.players(), result.maxMinutes(), result.maxWeight(),
                         enumValue(BggGameType.class, value, "GAME_TYPE_INVALID"),
                         result.interaction());
-                case "interaction" -> new RecommendationProfile(
-                        result.players(), result.maxMinutes(), result.maxWeight(), result.type(),
-                        enumValue(InteractionPreference.class, value, "INTERACTION_INVALID"));
+                case "interaction" -> {
+                    InteractionPreference preference = enumValue(
+                            InteractionPreference.class, value, "INTERACTION_INVALID");
+                    requirePositiveInteractionEvidence(groundedEvidence, preference);
+                    yield new RecommendationProfile(
+                            result.players(), result.maxMinutes(), result.maxWeight(), result.type(), preference);
+                }
                 default -> throw new InvalidAction("PREFERENCE_FIELD_INVALID");
             };
         }
@@ -379,17 +425,20 @@ public class BoardGameRecommendationAgent {
     private JsonNode preference(JsonNode value, ConversationRequest request) {
         requireObject(value, Set.of("value", "evidence"), Set.of());
         String evidence = text(value.path("evidence"), 1, 160);
-        requireGroundedEvidence(evidence, request);
+        groundedEvidenceText(evidence, request);
         return value;
     }
 
-    private void requireGroundedEvidence(String evidence, ConversationRequest request) {
+    private String groundedEvidenceText(String evidence, ConversationRequest request) {
+        String citedMessage = preferenceEvidence(request).get(evidence);
+        if (citedMessage != null) return citedMessage;
         boolean grounded = request.transcript().stream()
                 .filter(message -> "user".equals(message.role()))
                 .map(DialogueMessage::text)
                 .map(this::normalizedEvidence)
                 .anyMatch(message -> message.contains(normalizedEvidence(evidence)));
         if (!grounded) throw new InvalidAction("PREFERENCE_EVIDENCE_NOT_GROUNDED");
+        return evidence;
     }
 
     private void requireNumericWeightEvidence(String evidence, BigDecimal weight) {
@@ -405,6 +454,43 @@ public class BoardGameRecommendationAgent {
             }
         }
         throw new InvalidAction("WEIGHT_EVIDENCE_MISMATCH");
+    }
+
+    private void requirePositiveInteractionEvidence(
+            String evidence,
+            InteractionPreference interaction) {
+        String normalized = normalizedEvidence(evidence).toLowerCase(Locale.ROOT);
+        boolean explicit = switch (interaction) {
+            case ANY -> containsPositiveTerm(
+                    normalized, "随意", "都可以", "无所谓", "any interaction", "any mode");
+            case COMPETITIVE -> containsPositiveTerm(
+                    normalized, "竞争", "竞技", "对抗", "competitive", "competition", "versus", " vs ");
+            case COOPERATIVE -> containsPositiveTerm(
+                    normalized, "合作", "协作", "cooperative", "co-op", "coop");
+            case TEAM -> containsPositiveTerm(normalized, "组队", "分组", "团队", "team", "teams");
+        };
+        if (!explicit) throw new InvalidAction("INTERACTION_EVIDENCE_MISMATCH");
+    }
+
+    private boolean containsPositiveTerm(String value, String... candidates) {
+        for (String candidate : candidates) {
+            int from = 0;
+            while (from < value.length()) {
+                int index = value.indexOf(candidate, from);
+                if (index < 0) break;
+                int windowStart = Math.max(0, index - 12);
+                int windowEnd = Math.min(value.length(), index + candidate.length() + 12);
+                String window = value.substring(windowStart, windowEnd);
+                if (java.util.Arrays.stream(new String[] {
+                            "不", "别", "避免", "厌", "腻", "not", "no ", "avoid", "without", "tired"
+                        })
+                        .noneMatch(window::contains)) {
+                    return true;
+                }
+                from = index + candidate.length();
+            }
+        }
+        return false;
     }
 
     private ActionOutcome resolve(
@@ -617,7 +703,8 @@ public class BoardGameRecommendationAgent {
                 Set.of("message", "selections"),
                 Set.of("referenceBggIds", "preferenceUpdates"));
         applyPreferenceUpdates(arguments, state, request);
-        String message = text(arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
+        String proposedMessage = text(
+                arguments.path("message"), 1, MAX_RECOMMENDATION_MESSAGE_CHARACTERS);
         List<Integer> rawReferenceIds = arguments.has("referenceBggIds")
                 ? ids(arguments.path("referenceBggIds"), 0, MAX_VERIFIED_GAMES)
                 : List.of();
@@ -649,10 +736,15 @@ public class BoardGameRecommendationAgent {
                 .filter(id -> !selectedIds.contains(id))
                 .limit(2)
                 .toList();
-        if (state.verified.entrySet().stream()
+        boolean messageNamesCardGame = state.verified.entrySet().stream()
                 .anyMatch(entry -> !referenceIds.contains(entry.getKey())
-                        && mentionsObservedTitle(message, entry.getValue()))) {
-            throw new InvalidAction("MESSAGE_NAMES_CARD_GAME");
+                        && mentionsObservedTitle(proposedMessage, entry.getValue()));
+        String message = proposedMessage;
+        if (messageNamesCardGame) {
+            state.actions.add("SANITIZED_CARD_MESSAGE");
+            message = chinese(locale)
+                    ? "我按你刚补充的线索挑了几款经过核对、方向略有不同的候选；具体差异都在卡片里，你可以继续告诉我更喜欢哪一类。"
+                    : "I picked a few verified options in different directions from what you just added. The cards hold the details, and you can tell me which direction feels closer.";
         }
         progress.accept(ProgressStage.COMPOSING_RESPONSE);
         state.actions.add("RECOMMEND_GAMES");
@@ -678,7 +770,7 @@ public class BoardGameRecommendationAgent {
             case "MESSAGE_NAMES_CARD_GAME", "REPLY_RECOMMENDATION_REQUIRES_CARDS" ->
                 "New candidate recommendations must use recommend_games so the UI can render verified cards. Its brief connective message may name a declared reference game, but no candidate; cards contain candidate names and facts.";
             case "PREFERENCE_EVIDENCE_NOT_GROUNDED" ->
-                "Copy the evidence substring exactly from a user-authored message, or continue without changing the typed profile.";
+                "Use the exact evidenceId shown beside the user-authored message that states this hard constraint, or continue without changing the typed profile.";
             case "FINAL_ID_FAILS_HARD_GATES" ->
                 "Select only IDs listed in runMemory.recommendableBggIds; those IDs already satisfy the current typed hard gates.";
             default -> "Correct the action arguments using the supplied JSON schema and current runMemory.";
@@ -768,15 +860,41 @@ public class BoardGameRecommendationAgent {
                 response.harness().actions());
     }
 
+    private Map<String, String> preferenceEvidence(ConversationRequest request) {
+        Map<String, String> evidence = new LinkedHashMap<>();
+        for (DialogueMessage message : request.transcript()) {
+            if ("user".equals(message.role())) {
+                evidence.put("U" + (evidence.size() + 1), message.text());
+            }
+        }
+        return evidence;
+    }
+
+    private List<Map<String, String>> conversationEvidence(ConversationRequest request) {
+        Map<String, String> evidence = preferenceEvidence(request);
+        int userIndex = 0;
+        List<Map<String, String>> conversation = new ArrayList<>();
+        for (DialogueMessage message : request.transcript()) {
+            Map<String, String> turn = new LinkedHashMap<>();
+            turn.put("role", message.role());
+            turn.put("text", message.text());
+            if ("user".equals(message.role())) {
+                turn.put("evidenceId", "U" + (++userIndex));
+            }
+            conversation.add(Map.copyOf(turn));
+        }
+        if (userIndex != evidence.size()) {
+            throw new IllegalStateException("recommendation evidence indexing is inconsistent");
+        }
+        return List.copyOf(conversation);
+    }
+
     private String agentInput(ConversationRequest request, String locale) {
         try {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("locale", locale);
             data.put("currentProfile", request.profile());
-            data.put("recentConversation", request.transcript().stream()
-                    .skip(Math.max(0, request.transcript().size() - 12L))
-                    .map(message -> Map.of("role", message.role(), "text", message.text()))
-                    .toList());
+            data.put("recentConversation", conversationEvidence(request));
             data.put("focusedBggId", request.focusedBggId());
             data.put("knownGames", request.knownGames().stream()
                     .skip(Math.max(0, request.knownGames().size() - 24L))
@@ -807,7 +925,7 @@ public class BoardGameRecommendationAgent {
 
                 Conversation comes first. Reply naturally in the requested locale and match the player's level of detail. A short title, correction, pronoun, rejection, or preference fragment usually continues the recent goal; do not treat it as an isolated new request without considering context. You may use reply_to_user immediately for greetings, ordinary chat, acknowledgement, a user-named game, or the currently focused game. Never introduce a recommendation candidate through reply_to_user: every new candidate must use recommend_games so the player receives a verified card. Use ask_user only when one answer can materially change your next action. Ask one natural question at a time. Never demand player count, duration, or complexity merely because a field is empty; when a request is clear enough, act and let the player refine after seeing useful options.
 
-                Explicit player count, duration, numeric complexity ceiling, game type, or positive interaction mode must persist as typed hard gates. A preference update is allowed only when its copied evidence independently states that hard constraint; facts learned from a named reference game never become preferences. "Games like X" is a per-turn comparison goal, not permission to persist X's type, complexity, or interaction. If the same user message independently states a hard constraint, attach that update to resolve_bgg_reference before reference facts become visible; later updates are ignored to prevent contamination. Mechanics and table feel such as negotiation, bluffing, drafting, take-that, or "not cooperative" stay semantic and do not map to the narrower interaction enum. maxWeight needs an explicit number, never qualitative 重策. Attach grounded updates to the same read action, copy evidence exactly, and never resend fields already in currentProfile.
+                Explicit player count, duration, numeric complexity ceiling, game type, or positive interaction mode must persist as typed hard gates. A preference update is allowed only when its evidence ID points to a user-authored message that independently states that hard constraint; facts learned from a named reference game never become preferences. Use the exact U-number shown beside that user message—never copy or paraphrase its text. "Games like X" is a per-turn comparison goal, not permission to persist X's type, complexity, or interaction. If the same user message independently states a hard constraint, attach that update to resolve_bgg_reference before reference facts become visible; later updates are ignored to prevent contamination. Mechanics and table feel such as negotiation, bluffing, drafting, take-that, or "not cooperative" stay semantic and do not map to the narrower interaction enum. maxWeight needs an explicit number, never qualitative 重策. Attach grounded updates to the same read action and never resend fields already in currentProfile.
 
                 Game identity and facts must come from observations. Resolve a player-named game before relying on its taxonomy. For ordinary recommendations, generate a diverse slate of plausible original titles and prefer inspect_bgg_titles; hypotheses are not evidence, and unresolved identities are discarded. Do not browse merely because a request is semantic. Public discovery unlocks after title inspection as a fallback for an insufficient verified slate. For similarity, inspect the reference first, then follow the same policy. Title inspection and discovery already hydrate BGG details, so never reread those candidates. lookup_bgg_games is only for an observed ID lacking details; catalog browse is broad exploration, not semantic retrieval. Rank is not fit evidence. In reply_to_user, cite every verified ID whose facts you use; ordinary chat uses none.
 
@@ -817,9 +935,15 @@ public class BoardGameRecommendationAgent {
                 """;
     }
 
-    private List<ToolSpec> availableActions(AgentState state) {
+    private List<ToolSpec> availableActions(
+            AgentState state,
+            List<ToolSpec> actions,
+            List<String> preferenceEvidenceIds) {
         List<Integer> recommendableIds = recommendableIds(state);
-        boolean discoveryCanFinish = state.discoveryAttempted && !recommendableIds.isEmpty();
+        boolean verifiedSlateCanFinish = !recommendableIds.isEmpty()
+                && (state.discoveryAttempted
+                        || state.titleInspectionAttempted
+                                && recommendableIds.size() >= properties.resultCount());
         return actions.stream()
                 .filter(action -> state.webResearchAvailable
                         || !DISCOVER_TOOL.equals(action.name()) && !RESEARCH_TOOL.equals(action.name()))
@@ -827,13 +951,15 @@ public class BoardGameRecommendationAgent {
                 .filter(action -> !RECOMMEND_TOOL.equals(action.name()) || !recommendableIds.isEmpty())
                 .filter(action -> state.legalIds.stream().anyMatch(id -> !state.verified.containsKey(id))
                         || !LOOKUP_TOOL.equals(action.name()))
-                .filter(action -> state.titleInspectionAttempted || !DISCOVER_TOOL.equals(action.name()))
+                .filter(action -> state.titleInspectionAttempted
+                        || !DISCOVER_TOOL.equals(action.name()) && !BROWSE_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryAttempted || !DISCOVER_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryAttempted || !BROWSE_TOOL.equals(action.name()))
                 .filter(action -> !state.discoveryAttempted || !RESEARCH_TOOL.equals(action.name()))
-                .filter(action -> !discoveryCanFinish || RECOMMEND_TOOL.equals(action.name()))
+                .filter(action -> !verifiedSlateCanFinish || RECOMMEND_TOOL.equals(action.name()))
                 .map(action -> RECOMMEND_TOOL.equals(action.name())
-                        ? recommendationAction(properties.resultCount(), recommendableIds)
+                        ? recommendationAction(
+                                properties.resultCount(), recommendableIds, preferenceEvidenceIds)
                         : action)
                 .toList();
     }
@@ -846,8 +972,8 @@ public class BoardGameRecommendationAgent {
                 .toList();
     }
 
-    private static List<ToolSpec> actions(int resultCount) {
-        String preferences = preferenceSchema();
+    private static List<ToolSpec> actions(int resultCount, List<String> preferenceEvidenceIds) {
+        String preferences = preferenceSchema(preferenceEvidenceIds);
         return List.of(
                 new ToolSpec(
                         REPLY_TOOL,
@@ -893,10 +1019,13 @@ public class BoardGameRecommendationAgent {
                         RESEARCH_TOOL,
                         "Research an explicit, separate current-reception or player-reported-experience question for one to five verified games. Do not use for ordinary recommendation fit or after public discovery.",
                         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggIds\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"integer\",\"minimum\":1}},\"question\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":300}},\"required\":[\"bggIds\",\"question\"]}"),
-                recommendationAction(resultCount, List.of()));
+                recommendationAction(resultCount, List.of(), preferenceEvidenceIds));
     }
 
-    private static ToolSpec recommendationAction(int resultCount, List<Integer> recommendableIds) {
+    private static ToolSpec recommendationAction(
+            int resultCount,
+            List<Integer> recommendableIds,
+            List<String> preferenceEvidenceIds) {
         String idConstraint = recommendableIds.isEmpty()
                 ? "\"minimum\":1"
                 : "\"enum\":" + recommendableIds;
@@ -908,15 +1037,23 @@ public class BoardGameRecommendationAgent {
                         + ",\"uniqueItems\":true,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"bggId\":{\"type\":\"integer\","
                         + idConstraint
                         + "}},\"required\":[\"bggId\"]}},\"preferenceUpdates\":"
-                        + preferenceSchema()
+                        + preferenceSchema(preferenceEvidenceIds)
                         + "},\"required\":[\"message\",\"selections\"]}");
     }
 
-    private static String preferenceSchema() {
+    private static String preferenceSchema(List<String> preferenceEvidenceIds) {
+        List<String> evidenceIds = preferenceEvidenceIds.isEmpty()
+                ? List.of("NO_USER_EVIDENCE")
+                : preferenceEvidenceIds;
+        String evidenceEnum = evidenceIds.stream()
+                .map(value -> "\"" + value + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
         return "{\"type\":\"array\",\"minItems\":1,\"maxItems\":5,\"items\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
                 + "\"field\":{\"type\":\"string\",\"enum\":[\"players\",\"maxMinutes\",\"maxWeight\",\"type\",\"interaction\"]},"
                 + "\"value\":{\"description\":\"Numeric fields use numbers. Interaction enums require an explicit positive mode; mechanics and exclusions stay semantic.\",\"anyOf\":[{\"type\":\"number\"},{\"type\":\"string\",\"enum\":[\"ALL\",\"ABSTRACT\",\"CUSTOMIZABLE\",\"CHILDREN\",\"FAMILY\",\"PARTY\",\"STRATEGY\",\"THEMATIC\",\"WAR\",\"EXPANSION\",\"ANY\",\"COMPETITIVE\",\"COOPERATIVE\",\"TEAM\"]}]},"
-                + "\"evidence\":{\"type\":\"string\",\"description\":\"Copy one exact contiguous substring from a user message; do not paraphrase or add words.\",\"minLength\":1,\"maxLength\":160}},"
+                + "\"evidence\":{\"type\":\"string\",\"description\":\"Use the exact evidenceId of the user message that independently states this hard constraint; never copy or paraphrase message text.\",\"enum\":"
+                + evidenceEnum
+                + "}},"
                 + "\"required\":[\"field\",\"value\",\"evidence\"]}}";
     }
 
