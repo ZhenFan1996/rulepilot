@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.CandidateDiscovery;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.DiscoveryRequest;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
+import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.WebResearchUnavailableException;
 import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -115,6 +116,9 @@ public class BoardGameRecommendationTools {
             return webResearch.discover(request)
                     .map(value -> new DiscoveryObservation(ToolStatus.SUCCESS, value, ""))
                     .orElseGet(() -> new DiscoveryObservation(ToolStatus.PARTIAL, null, "NO_DISCOVERY_RESULT"));
+        } catch (WebResearchUnavailableException exception) {
+            LOGGER.warn("Recommendation candidate-discovery capability degraded ({})", exception.code());
+            return new DiscoveryObservation(ToolStatus.ERROR, null, exception.code());
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation candidate-discovery tool failed");
             return new DiscoveryObservation(ToolStatus.ERROR, null, "DISCOVERY_UNAVAILABLE");
@@ -127,6 +131,9 @@ public class BoardGameRecommendationTools {
             return webResearch.research(new BoardGameRecommendationWebResearch.Request(candidates, locale, question))
                     .map(value -> new ResearchObservation(ToolStatus.SUCCESS, value, ""))
                     .orElseGet(() -> new ResearchObservation(ToolStatus.PARTIAL, Research.empty(), "NO_RESEARCH_RESULT"));
+        } catch (WebResearchUnavailableException exception) {
+            LOGGER.warn("Recommendation game-fit research capability degraded ({})", exception.code());
+            return new ResearchObservation(ToolStatus.ERROR, Research.empty(), exception.code());
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation game-fit research tool failed");
             return new ResearchObservation(ToolStatus.ERROR, Research.empty(), "RESEARCH_UNAVAILABLE");

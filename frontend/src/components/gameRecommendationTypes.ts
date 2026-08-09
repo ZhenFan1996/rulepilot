@@ -70,7 +70,12 @@ export type RecommendationAgentResponse = {
   games: RecommendedGame[]
 }
 
-export type RecommendationMessage = { id: number; role: 'assistant' | 'user'; text: string }
+export type RecommendationMessage = {
+  id: number
+  role: 'assistant' | 'user'
+  text: string
+  response?: RecommendationAgentResponse
+}
 
 export type RecommendationProgressStage =
   | 'understanding_request'
