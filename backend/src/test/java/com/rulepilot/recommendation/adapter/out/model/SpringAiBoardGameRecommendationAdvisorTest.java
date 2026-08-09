@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.CompositionRequest;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ConversationGame;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.FeatureMode;
@@ -59,13 +60,14 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     @Test
     void plansAConversationWithTentativePreferencesInsteadOfOnlyClassifyingSlots() {
         Fixture fixture = fixture("""
-                {"act":"RECOMMEND","players":4,"maxMinutes":null,"maxWeight":null,
-                 "type":"THEMATIC","interaction":"COOPERATIVE",
+                {"act":"RECOMMEND",
+                 "profileUpdates":[{"field":"PLAYERS","value":"4","basedOn":"4 个人"}],
                  "profileSummary":"四人聚会，可能更重视共同讨论和故事感",
                  "hypotheses":[{"text":"可能喜欢共同决策","confidence":"MEDIUM","basedOn":"想一起讨论剧情"}],
                  "assistantMessage":"我大概抓到方向了，先看看几款。","nextQuestion":null,
                  "researchRequested":false,"researchQuestion":null,
-                 "referenceTitle":null,"candidateTypes":["THEMATIC","Science Fiction"],
+                 "referenceTitle":null,"contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":["THEMATIC","Science Fiction"],
                  "featureConstraints":[{"term":"Adventure","mode":"PREFERRED","source":"BGG_METADATA","basedOn":"讨论剧情"}],
                  "candidateDiscoveryRequested":true}
                 """);
@@ -96,10 +98,11 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     @Test
     void extractsAnUnquotedReferenceTitleAsGroundedStructuredAgentOutput() {
         Fixture fixture = fixture("""
-                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
-                 "type":null,"interaction":null,"profileSummary":"以明确提到的游戏为参照","hypotheses":[],
+                {"act":"RECOMMEND","profileUpdates":[],
+                 "profileSummary":"以明确提到的游戏为参照","hypotheses":[],
                  "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
                  "researchRequested":false,"researchQuestion":null,"referenceTitle":"白塔庭院",
+                 "contextBggId":null,"excludeShownCandidates":false,
                  "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
                 """);
 
@@ -117,16 +120,57 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 .extracting(message -> message.getText())
                 .singleElement()
                 .asString()
-                .contains("referenceTitle", "before or after comparison wording", "Return null when no named game");
+                .contains(
+                        "referenceTitle",
+                        "short\nstandalone title",
+                        "Preserve every letter",
+                        "contextBggId",
+                        "excludeShownCandidates");
+    }
+
+    @Test
+    void bindsAnExactStandaloneTitleToThePriorUnresolvedComparison() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","profileUpdates":[],
+                 "profileSummary":"以澄清后的标题为参照","hypotheses":[],
+                 "assistantMessage":"明白，你说的是 Azul。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"Azul",
+                 "contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+        var transcript = List.of(
+                new DialogueMessage("user", "我想玩花砖物语类似机制的游戏"),
+                new DialogueMessage("assistant", "请补充原文名，我会再查一次。"),
+                new DialogueMessage("user", "Azul"));
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(transcript, profile(), null, "zh-CN")))
+                .hasValueSatisfying(plan -> {
+                    assertThat(plan.act()).isEqualTo(DialogueAct.RECOMMEND);
+                    assertThat(plan.referenceTitle()).isEqualTo("Azul");
+                });
+    }
+
+    @Test
+    void rejectsATruncatedLatinReferenceEvenWhenItIsACharacterSubstring() {
+        Fixture fixture = fixture("""
+                {"act":"RECOMMEND","profileUpdates":[],"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":"zul",
+                 "contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
+                """);
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "Azul")), profile(), null, "zh-CN"))).isEmpty();
     }
 
     @Test
     void rejectsAnAgentReferenceTitleThatDoesNotAppearInPlayerMessages() {
         Fixture fixture = fixture("""
-                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
-                 "type":null,"interaction":null,"profileSummary":"","hypotheses":[],
+                {"act":"RECOMMEND","profileUpdates":[],"profileSummary":"","hypotheses":[],
                  "assistantMessage":"我先核对参考游戏。","nextQuestion":null,
                  "researchRequested":false,"researchQuestion":null,"referenceTitle":"模型猜出的标题",
+                 "contextBggId":null,"excludeShownCandidates":false,
                  "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":true}
                 """);
 
@@ -140,18 +184,18 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     @Test
     void downgradesAnUnsupportedRequiredFeatureUnlessTheUserCalledItNonNegotiable() {
         Fixture soft = fixture("""
-                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
-                 "type":null,"interaction":null,"profileSummary":"想要强互动","hypotheses":[],
+                {"act":"RECOMMEND","profileUpdates":[],"profileSummary":"想要强互动","hypotheses":[],
                  "assistantMessage":"我按强互动来找。","nextQuestion":null,
-                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,"candidateTypes":[],
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":null,"excludeShownCandidates":false,"candidateTypes":[],
                  "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"希望有明显互动"}],
                  "candidateDiscoveryRequested":true}
                 """);
         Fixture hard = fixture("""
-                {"act":"RECOMMEND","players":null,"maxMinutes":null,"maxWeight":null,
-                 "type":null,"interaction":null,"profileSummary":"必须强互动","hypotheses":[],
+                {"act":"RECOMMEND","profileUpdates":[],"profileSummary":"必须强互动","hypotheses":[],
                  "assistantMessage":"我会把强互动作为硬条件。","nextQuestion":null,
-                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,"candidateTypes":[],
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":null,"excludeShownCandidates":false,"candidateTypes":[],
                  "featureConstraints":[{"term":"strong interaction","mode":"REQUIRED","source":"EXPERIENCE","basedOn":"必须有明显互动"}],
                  "candidateDiscoveryRequested":true}
                 """);
@@ -168,13 +212,15 @@ class SpringAiBoardGameRecommendationAdvisorTest {
     }
 
     @Test
-    void removesInventedNumericHardConstraintsWhenTheLatestTurnContainsNoNumericEvidence() {
+    void rejectsProfileUpdatesWhoseClaimedEvidenceIsNotInTheLatestTurn() {
         Fixture fixture = fixture("""
-                {"act":"RECOMMEND","players":4,"maxMinutes":90,"maxWeight":2.3,
-                 "type":"FAMILY","interaction":null,"profileSummary":"第一次带家人玩",
+                {"act":"RECOMMEND",
+                 "profileUpdates":[{"field":"PLAYERS","value":"4","basedOn":"四个人"}],
+                 "profileSummary":"第一次带家人玩",
                  "hypotheses":[],"assistantMessage":"先试几款。","nextQuestion":"",
                  "researchRequested":false,"researchQuestion":"",
-                 "referenceTitle":null,"candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
+                 "referenceTitle":null,"contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(
@@ -183,21 +229,21 @@ class SpringAiBoardGameRecommendationAdvisorTest {
                 null,
                 "zh-CN"));
 
-        assertThat(result).hasValueSatisfying(plan -> {
-            assertThat(plan.explicitPatch().players()).isNull();
-            assertThat(plan.explicitPatch().maxMinutes()).isNull();
-            assertThat(plan.explicitPatch().maxWeight()).isNull();
-        });
+        assertThat(result).isEmpty();
     }
 
     @Test
-    void preservesModelSlotsWhenTheLatestTurnUsesChineseNumberWords() {
+    void acceptsAgentInferencesGroundedInExactNaturalLanguageSpans() {
         Fixture fixture = fixture("""
-                {"act":"RECOMMEND","players":5,"maxMinutes":90,"maxWeight":null,
-                 "type":null,"interaction":"COMPETITIVE","profileSummary":"五人九十分钟竞争局",
+                {"act":"RECOMMEND","profileUpdates":[
+                 {"field":"PLAYERS","value":"5","basedOn":"五个人"},
+                 {"field":"MAX_MINUTES","value":"90","basedOn":"最多九十分钟"},
+                 {"field":"INTERACTION","value":"COMPETITIVE","basedOn":"明确不要合作"}],
+                 "profileSummary":"五人九十分钟竞争局",
                  "hypotheses":[],"assistantMessage":"明白，按五人九十分钟来找。","nextQuestion":"",
                  "researchRequested":false,"researchQuestion":"",
-                 "referenceTitle":null,"candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
+                 "referenceTitle":null,"contextBggId":null,"excludeShownCandidates":false,
+                 "candidateTypes":[],"featureConstraints":[],"candidateDiscoveryRequested":false}
                 """);
 
         var result = fixture.adapter.plan(new PlanningRequest(
@@ -211,6 +257,50 @@ class SpringAiBoardGameRecommendationAdvisorTest {
             assertThat(plan.explicitPatch().maxMinutes()).isEqualTo(90);
             assertThat(plan.explicitPatch().interaction()).isEqualTo(InteractionPreference.COMPETITIVE);
         });
+    }
+
+    @Test
+    void bindsAContextGameOnlyFromTheApplicationSuppliedConversationState() {
+        Fixture fixture = fixture("""
+                {"act":"EXPLAIN","profileUpdates":[],"profileSummary":"继续了解前一款","hypotheses":[],
+                 "assistantMessage":"我来说说它。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":102,"excludeShownCandidates":false,"candidateTypes":[],
+                 "featureConstraints":[],"candidateDiscoveryRequested":false}
+                """);
+
+        var result = fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "第二款怎么玩？")),
+                profile(),
+                101,
+                List.of(new ConversationGame(101, "Candidate One", "Candidate One"),
+                        new ConversationGame(102, "Candidate Two", "Candidate Two")),
+                List.of(101, 102),
+                "zh-CN"));
+
+        assertThat(result).hasValueSatisfying(plan -> {
+            assertThat(plan.contextBggId()).isEqualTo(102);
+            assertThat(plan.act()).isEqualTo(DialogueAct.EXPLAIN);
+        });
+    }
+
+    @Test
+    void rejectsAContextGameInventedOutsideTheConversationState() {
+        Fixture fixture = fixture("""
+                {"act":"EXPLAIN","profileUpdates":[],"profileSummary":"","hypotheses":[],
+                 "assistantMessage":"我来说说它。","nextQuestion":null,
+                 "researchRequested":false,"researchQuestion":null,"referenceTitle":null,
+                 "contextBggId":999,"excludeShownCandidates":false,"candidateTypes":[],
+                 "featureConstraints":[],"candidateDiscoveryRequested":false}
+                """);
+
+        assertThat(fixture.adapter.plan(new PlanningRequest(
+                List.of(new DialogueMessage("user", "说说第一款")),
+                profile(),
+                null,
+                List.of(new ConversationGame(101, "Candidate One", "Candidate One")),
+                List.of(101),
+                "zh-CN"))).isEmpty();
     }
 
     @Test

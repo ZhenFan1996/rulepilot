@@ -17,7 +17,29 @@ public interface BoardGameRecommendationAdvisor {
             List<DialogueMessage> transcript,
             ProfileView currentProfile,
             Integer focusedBggId,
-            String locale) {}
+            List<ConversationGame> knownGames,
+            List<Integer> shownBggIds,
+            String locale) {
+        public PlanningRequest(
+                List<DialogueMessage> transcript,
+                ProfileView currentProfile,
+                Integer focusedBggId,
+                String locale) {
+            this(transcript, currentProfile, focusedBggId, List.of(), List.of(), locale);
+        }
+
+        public PlanningRequest {
+            knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
+            shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
+        }
+    }
+
+    record ConversationGame(int bggId, String name, String originalName) {
+        public ConversationGame {
+            name = name == null ? "" : name;
+            originalName = originalName == null ? "" : originalName;
+        }
+    }
 
     record CompositionRequest(
             List<DialogueMessage> transcript,
@@ -87,7 +109,33 @@ public interface BoardGameRecommendationAdvisor {
             boolean researchRequested,
             String researchQuestion,
             RetrievalPlan retrievalPlan,
-            String referenceTitle) {
+            String referenceTitle,
+            Integer contextBggId,
+            boolean excludeShownCandidates) {
+        public Plan(
+                DialogueAct act,
+                PreferencePatch explicitPatch,
+                UserModel userModel,
+                String assistantMessage,
+                String nextQuestion,
+                boolean researchRequested,
+                String researchQuestion,
+                RetrievalPlan retrievalPlan,
+                String referenceTitle) {
+            this(
+                    act,
+                    explicitPatch,
+                    userModel,
+                    assistantMessage,
+                    nextQuestion,
+                    researchRequested,
+                    researchQuestion,
+                    retrievalPlan,
+                    referenceTitle,
+                    null,
+                    false);
+        }
+
         public Plan(
                 DialogueAct act,
                 PreferencePatch explicitPatch,
@@ -106,7 +154,9 @@ public interface BoardGameRecommendationAdvisor {
                     researchRequested,
                     researchQuestion,
                     retrievalPlan,
-                    "");
+                    "",
+                    null,
+                    false);
         }
 
         public Plan(
@@ -126,7 +176,9 @@ public interface BoardGameRecommendationAdvisor {
                     researchRequested,
                     researchQuestion,
                     RetrievalPlan.empty(),
-                    "");
+                    "",
+                    null,
+                    false);
         }
 
         public Plan {

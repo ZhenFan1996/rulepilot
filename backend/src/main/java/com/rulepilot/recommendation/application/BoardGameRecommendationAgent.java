@@ -3,6 +3,7 @@ package com.rulepilot.recommendation.application;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueAct;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
+import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ConversationGame;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.Plan;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.ProfileView;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.RetrievalPlan;
@@ -44,7 +45,6 @@ public class BoardGameRecommendationAgent {
 
     private final BoardGameRecommendationTools tools;
     private final BoardGamePreferenceDialogue dialogue;
-    private final BoardGameRecommendationQueryCoverage queryCoverage;
     private final BoardGameReferenceIntent referenceIntent;
     private final BoardGameRecommendationCandidateAgent candidateAgent;
     private final BoardGameRecommendationSelector selector;
@@ -54,7 +54,6 @@ public class BoardGameRecommendationAgent {
     public BoardGameRecommendationAgent(
             BoardGameRecommendationTools tools,
             BoardGamePreferenceDialogue dialogue,
-            BoardGameRecommendationQueryCoverage queryCoverage,
             BoardGameReferenceIntent referenceIntent,
             BoardGameRecommendationCandidateAgent candidateAgent,
             BoardGameRecommendationSelector selector,
@@ -62,7 +61,6 @@ public class BoardGameRecommendationAgent {
             BoardGameRecommendationProperties properties) {
         this.tools = tools;
         this.dialogue = dialogue;
-        this.queryCoverage = queryCoverage;
         this.referenceIntent = referenceIntent;
         this.candidateAgent = candidateAgent;
         this.selector = selector;
@@ -100,17 +98,20 @@ public class BoardGameRecommendationAgent {
                 planned.map(Plan::explicitPatch).orElse(null),
                 locale);
         UserModel userModel = planned.map(Plan::userModel).orElse(emptyUserModel());
-        RetrievalPlan retrievalPlan = planned
-                .map(plan -> queryCoverage.preserveUncoveredExpression(
-                        plan.retrievalPlan(), request.message(), turn.profile()))
-                .orElseGet(RetrievalPlan::empty);
+        RetrievalPlan retrievalPlan = planned.map(Plan::retrievalPlan).orElseGet(RetrievalPlan::empty);
         int sourceCount = tools.catalogGameCount();
-        Optional<ReferenceIntent> agentReference = request.focusedBggId() == null
+        Integer contextBggId = planned.isPresent()
+                ? planned.orElseThrow().contextBggId()
+                : request.focusedBggId();
+        if (planned.map(Plan::contextBggId).isPresent()) actions.add("BIND_CONVERSATION_GAME");
+        Optional<ReferenceIntent> agentReference = contextBggId == null
                 ? planned.flatMap(plan -> referenceIntent.resolveAgent(
                         plan.referenceTitle(), request.transcript(), request.message()))
                 : Optional.empty();
-        Optional<ReferenceIntent> namedReference = request.focusedBggId() == null
-                ? agentReference.or(() -> referenceIntent.resolve(request.transcript(), request.message()))
+        Optional<ReferenceIntent> namedReference = contextBggId == null
+                ? planned.isPresent()
+                        ? agentReference
+                        : referenceIntent.resolve(request.transcript(), request.message())
                 : Optional.empty();
         if (agentReference.isPresent()) actions.add("INTERPRET_BGG_REFERENCE");
         Game resolvedNamedReference = null;
@@ -174,7 +175,7 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
         if (planned.filter(plan -> plan.act() == DialogueAct.EXPLAIN).isPresent()
-                && request.focusedBggId() == null
+                && contextBggId == null
                 && resolvedNamedReference == null) {
             Plan plan = planned.orElseThrow();
             String question = !plan.nextQuestion().isBlank()
@@ -199,7 +200,7 @@ public class BoardGameRecommendationAgent {
                 .orElse(false) || resolvedNamedReference != null;
         if (!turn.hasPreferenceSignal()
                 && !plannedPreferenceSignal
-                && request.focusedBggId() == null
+                && contextBggId == null
                 && !modelWantsCandidateWork) {
             return response(
                     Outcome.NEEDS_CLARIFICATION,
@@ -215,15 +216,21 @@ public class BoardGameRecommendationAgent {
                     List.of());
         }
 
-        boolean focusedDiscussion = request.focusedBggId() != null
+        boolean focusedDiscussion = contextBggId != null
                 && planned.map(plan -> plan.act() == DialogueAct.EXPLAIN).orElse(true);
+        List<Integer> priorExclusions = java.util.stream.Stream.concat(
+                        request.excludedBggIds().stream(),
+                        planned.filter(Plan::excludeShownCandidates)
+                                .stream()
+                                .flatMap(ignored -> request.shownBggIds().stream()))
+                .distinct()
+                .limit(60)
+                .toList();
         Game namedReferenceGame = resolvedNamedReference;
         List<Integer> effectiveExcludedBggIds = java.util.stream.Stream.concat(
-                        request.excludedBggIds().stream(),
+                        priorExclusions.stream(),
                         java.util.stream.Stream.of(
-                                        !focusedDiscussion && request.focusedBggId() != null
-                                                ? request.focusedBggId()
-                                                : null,
+                                        !focusedDiscussion ? contextBggId : null,
                                         namedReferenceGame == null
                                                 ? null
                                                 : namedReferenceGame.ranking().bggId())
@@ -237,7 +244,7 @@ public class BoardGameRecommendationAgent {
         if (focusedDiscussion) {
             progress.accept(ProgressStage.READING_GAME_DETAILS);
             catalogCalls++;
-            CatalogObservation catalogObservation = tools.lookupGame(request.focusedBggId());
+            CatalogObservation catalogObservation = tools.lookupGame(contextBggId);
             actions.add(catalogObservation.tool().name());
             if (!catalogObservation.succeeded()) {
                 return unavailable(turn, locale, userModel, modelCalls, catalogCalls, researchCalls, actions);
@@ -245,10 +252,10 @@ public class BoardGameRecommendationAgent {
             sourceGames = catalogObservation.games();
             sourceCount = catalogObservation.sourceCount();
         } else {
-            if (request.focusedBggId() != null) {
+            if (contextBggId != null) {
                 progress.accept(ProgressStage.READING_GAME_DETAILS);
                 catalogCalls++;
-                CatalogObservation referenceObservation = tools.lookupGame(request.focusedBggId());
+                CatalogObservation referenceObservation = tools.lookupGame(contextBggId);
                 actions.add("LOOKUP_REFERENCE_GAME");
                 if (referenceObservation.succeeded() && !referenceObservation.games().isEmpty()) {
                     referenceGame = referenceObservation.games().getFirst();
@@ -292,6 +299,7 @@ public class BoardGameRecommendationAgent {
                                 case MODEL_SELECTING -> ProgressStage.SELECTING_TOOLS;
                                 case SEARCHING_NAMES -> ProgressStage.SEARCHING_BGG_CATALOG;
                                 case LOOKING_UP_DETAILS -> ProgressStage.VERIFYING_BGG_CANDIDATES;
+                                case DISCOVERING_PUBLIC_CANDIDATES -> ProgressStage.DISCOVERING_CANDIDATES;
                             }));
             modelCalls += discovered.modelCalls();
             catalogCalls += (int) discovered.actions().stream()
@@ -444,7 +452,7 @@ public class BoardGameRecommendationAgent {
             return response(
                     Outcome.NO_MATCH,
                     mode(planned),
-                    noMatchMessage(locale, !request.excludedBggIds().isEmpty()),
+                    noMatchMessage(locale, !priorExclusions.isEmpty()),
                     turn.profile(),
                     null,
                     sourceCount,
@@ -501,9 +509,9 @@ public class BoardGameRecommendationAgent {
                     userModel,
                     selector.advisorCandidates(completedPool),
                     research,
-                    request.focusedBggId(),
+                    focusedDiscussion ? contextBggId : null,
                     locale,
-                    completedReferenceGame != null && request.focusedBggId() == null
+                    completedReferenceGame != null && !focusedDiscussion
                             ? DialogueAct.RECOMMEND
                             : planned.orElseThrow().act(),
                     completedReferenceGame == null ? null : selector.advisorCandidate(completedReferenceGame)));
@@ -526,7 +534,7 @@ public class BoardGameRecommendationAgent {
         boolean fallback = slate.isEmpty() && !structuredRanking;
         String assistantMessage = slate.map(Slate::assistantMessage)
                 .filter(value -> !value.isBlank())
-                .orElseGet(() -> completedReferenceGame != null && request.focusedBggId() == null
+                .orElseGet(() -> completedReferenceGame != null && !focusedDiscussion
                         ? referenceSummary(locale, completedReferenceGame)
                         : structuredRanking
                         ? fastNativeResponse
@@ -546,7 +554,7 @@ public class BoardGameRecommendationAgent {
         }
         Clarification responseClarification = !nextQuestion.isBlank()
                 ? conversationalClarification(nextQuestion)
-                : focusedDiscussion ? null : turn.clarification();
+                : planned.isEmpty() && !focusedDiscussion ? turn.clarification() : null;
         return response(
                 Outcome.RECOMMENDATIONS,
                 mode(planned),
@@ -579,7 +587,14 @@ public class BoardGameRecommendationAgent {
     private Optional<Plan> safePlan(ConversationRequest request, String locale) {
         try {
             return advisor.plan(new BoardGameRecommendationAdvisor.PlanningRequest(
-                    request.transcript(), profile(request.profile()), request.focusedBggId(), locale));
+                    request.transcript(),
+                    profile(request.profile()),
+                    request.focusedBggId(),
+                    request.knownGames().stream()
+                            .map(game -> new ConversationGame(game.bggId(), game.name(), game.originalName()))
+                            .toList(),
+                    request.shownBggIds(),
+                    locale));
         } catch (RuntimeException exception) {
             LOGGER.warn("Recommendation dialogue planning failed; using deterministic fallback");
             return Optional.empty();
@@ -793,6 +808,27 @@ public class BoardGameRecommendationAgent {
         if (input.focusedBggId() != null && input.focusedBggId() <= 0) {
             throw new IllegalArgumentException("focusedBggId must be positive");
         }
+        List<KnownGame> knownGames = input.knownGames() == null
+                ? List.of()
+                : input.knownGames().stream()
+                        .map(this::validatedKnownGame)
+                        .collect(java.util.stream.Collectors.toMap(
+                                KnownGame::bggId,
+                                java.util.function.Function.identity(),
+                                (left, right) -> left,
+                                java.util.LinkedHashMap::new))
+                        .values()
+                        .stream()
+                        .toList();
+        if (knownGames.size() > 60) {
+            throw new IllegalArgumentException("knownGames must contain at most sixty distinct games");
+        }
+        List<Integer> shownBggIds = input.shownBggIds() == null
+                ? List.of()
+                : input.shownBggIds().stream().filter(Objects::nonNull).distinct().toList();
+        if (shownBggIds.size() > 60 || shownBggIds.stream().anyMatch(id -> id <= 0)) {
+            throw new IllegalArgumentException("shownBggIds must contain at most sixty positive ids");
+        }
         List<DialogueMessage> transcript = input.transcript() == null
                 ? new ArrayList<>()
                 : input.transcript().stream().map(this::validatedMessage).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
@@ -807,7 +843,21 @@ public class BoardGameRecommendationAgent {
                 message,
                 excluded,
                 List.copyOf(transcript),
-                input.focusedBggId());
+                input.focusedBggId(),
+                knownGames,
+                shownBggIds);
+    }
+
+    private KnownGame validatedKnownGame(KnownGame game) {
+        if (game == null || game.bggId() <= 0) {
+            throw new IllegalArgumentException("known game must have a positive BGG id");
+        }
+        String name = normalized(game.name(), 160, true);
+        String originalName = normalized(game.originalName(), 160, true);
+        if (name.isBlank() && originalName.isBlank()) {
+            throw new IllegalArgumentException("known game must have a name");
+        }
+        return new KnownGame(game.bggId(), name, originalName);
     }
 
     private DialogueMessage validatedMessage(DialogueMessage message) {
@@ -1097,20 +1147,35 @@ public class BoardGameRecommendationAgent {
             String message,
             List<Integer> excludedBggIds,
             List<DialogueMessage> transcript,
-            Integer focusedBggId) {
+            Integer focusedBggId,
+            List<KnownGame> knownGames,
+            List<Integer> shownBggIds) {
         public ConversationRequest(RecommendationProfile profile, String message) {
-            this(profile, message, List.of(), List.of(), null);
+            this(profile, message, List.of(), List.of(), null, List.of(), List.of());
         }
 
         public ConversationRequest(RecommendationProfile profile, String message, List<Integer> excludedBggIds) {
-            this(profile, message, excludedBggIds, List.of(), null);
+            this(profile, message, excludedBggIds, List.of(), null, List.of(), List.of());
+        }
+
+        public ConversationRequest(
+                RecommendationProfile profile,
+                String message,
+                List<Integer> excludedBggIds,
+                List<DialogueMessage> transcript,
+                Integer focusedBggId) {
+            this(profile, message, excludedBggIds, transcript, focusedBggId, List.of(), List.of());
         }
 
         public ConversationRequest {
             excludedBggIds = excludedBggIds == null ? List.of() : List.copyOf(excludedBggIds);
             transcript = transcript == null ? List.of() : List.copyOf(transcript);
+            knownGames = knownGames == null ? List.of() : List.copyOf(knownGames);
+            shownBggIds = shownBggIds == null ? List.of() : List.copyOf(shownBggIds);
         }
     }
+
+    public record KnownGame(int bggId, String name, String originalName) {}
 
     public enum ProgressStage {
         UNDERSTANDING_REQUEST,

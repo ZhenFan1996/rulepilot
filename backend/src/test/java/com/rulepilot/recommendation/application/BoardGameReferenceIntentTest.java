@@ -32,6 +32,42 @@ class BoardGameReferenceIntentTest {
     }
 
     @Test
+    void preservesAShortEnglishTitleSuppliedAsAStandaloneClarification() {
+        var transcript = List.of(
+                new DialogueMessage("user", "我想玩花砖物语类似机制的游戏"),
+                new DialogueMessage("assistant", "请补充原文名，我会再查一次。"),
+                new DialogueMessage("user", "azul"));
+
+        assertThat(resolver.resolveAgent("azul", transcript, "azul"))
+                .hasValueSatisfying(intent -> {
+                    assertThat(intent.title()).isEqualTo("azul");
+                    assertThat(intent.basedOn()).isEqualTo("azul");
+                });
+        assertThat(resolver.resolveAgent("zul", transcript, "azul")).isEmpty();
+    }
+
+    @Test
+    void keepsLeadingLettersThatOnlyLookLikeEnglishArticles() {
+        assertThat(resolver.resolveAgent("Azul", List.of(), "Azul"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("Azul"));
+        assertThat(resolver.resolveAgent("Android: Netrunner", List.of(), "Android: Netrunner"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("Android: Netrunner"));
+        assertThat(resolver.resolveAgent("Thebes", List.of(), "Thebes"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("Thebes"));
+        assertThat(resolver.resolveAgent("The Game", List.of(), "The Game"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("The Game"));
+    }
+
+    @Test
+    void rejectsLatinTitleFragmentsButAllowsTitlesNextToChineseProse() {
+        assertThat(resolver.resolveAgent("zul", List.of(), "azul")).isEmpty();
+        assertThat(resolver.resolveAgent("Azul", List.of(), "我说的是Azul这款游戏"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("Azul"));
+        assertThat(resolver.resolveAgent("白塔庭院", List.of(), "我想玩和白塔庭院类似的游戏"))
+                .hasValueSatisfying(intent -> assertThat(intent.title()).isEqualTo("白塔庭院"));
+    }
+
+    @Test
     void recoversThePriorNamedReferenceAfterAPlayerCorrection() {
         var transcript = List.of(
                 new DialogueMessage("user", "我想找一款类似白塔庭院的桌游"),

@@ -8,6 +8,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Con
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ConversationResponse;
 import com.rulepilot.recommendation.BoardGameRecommendationAdvisor.DialogueMessage;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
+import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.KnownGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendationProfile;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
@@ -70,16 +71,27 @@ public class BggRecommendationAgentController {
             String message,
             List<Integer> excludedBggIds,
             List<DialogueMessageRequest> transcript,
-            Integer focusedBggId) {
+            Integer focusedBggId,
+            List<KnownGameRequest> knownGames,
+            List<Integer> shownBggIds) {
         RecommendationConversationRequest(RecommendationProfileRequest profile, String message) {
-            this(profile, message, List.of(), List.of(), null);
+            this(profile, message, List.of(), List.of(), null, List.of(), List.of());
         }
 
         RecommendationConversationRequest(
                 RecommendationProfileRequest profile,
                 String message,
                 List<Integer> excludedBggIds) {
-            this(profile, message, excludedBggIds, List.of(), null);
+            this(profile, message, excludedBggIds, List.of(), null, List.of(), List.of());
+        }
+
+        RecommendationConversationRequest(
+                RecommendationProfileRequest profile,
+                String message,
+                List<Integer> excludedBggIds,
+                List<DialogueMessageRequest> transcript,
+                Integer focusedBggId) {
+            this(profile, message, excludedBggIds, transcript, focusedBggId, List.of(), List.of());
         }
 
         ConversationRequest toCommand() {
@@ -90,11 +102,19 @@ public class BggRecommendationAgentController {
                     transcript == null
                             ? List.of()
                             : transcript.stream().map(value -> new DialogueMessage(value.role(), value.text())).toList(),
-                    focusedBggId);
+                    focusedBggId,
+                    knownGames == null
+                            ? List.of()
+                            : knownGames.stream()
+                                    .map(value -> new KnownGame(value.bggId(), value.name(), value.originalName()))
+                                    .toList(),
+                    shownBggIds == null ? List.of() : shownBggIds);
         }
     }
 
     record DialogueMessageRequest(String role, String text) {}
+
+    record KnownGameRequest(int bggId, String name, String originalName) {}
 
     record RecommendationProfileRequest(
             Integer players,

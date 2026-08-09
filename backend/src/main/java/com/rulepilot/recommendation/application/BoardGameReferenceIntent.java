@@ -54,10 +54,10 @@ class BoardGameReferenceIntent {
         Optional<String> checked = checkedTitle(interpretedTitle);
         if (checked.isEmpty()) return Optional.empty();
         String title = checked.orElseThrow();
-        boolean groundedInLatest = containsTitle(latestMessage, title);
+        boolean groundedInLatest = BoardGameTitleGrounding.occursInPlayerText(latestMessage, title);
         boolean groundedInTranscript = transcript != null && transcript.stream()
                 .filter(message -> message != null && "user".equals(message.role()))
-                .anyMatch(message -> containsTitle(message.text(), title));
+                .anyMatch(message -> BoardGameTitleGrounding.occursInPlayerText(message.text(), title));
         if (!groundedInLatest && !groundedInTranscript) return Optional.empty();
         return Optional.of(new ReferenceIntent(
                 title,
@@ -86,8 +86,6 @@ class BoardGameReferenceIntent {
         String title = Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC)
                 .strip()
                 .replaceAll("\\s+", " ")
-                .replaceFirst("(?iu)^(?:一款|一个|the|a|an)\\s*", "")
-                .replaceFirst("(?iu)\\s*(?:的)?(?:桌游|游戏|board game)$", "")
                 .strip();
         if (title.length() < 2 || title.length() > 80 || GENERIC_REFERENCE.matcher(title).matches()) {
             return Optional.empty();
@@ -98,13 +96,6 @@ class BoardGameReferenceIntent {
     private String bounded(String value) {
         String normalized = value == null ? "" : value.strip().replaceAll("\\s+", " ");
         return normalized.length() <= 500 ? normalized : normalized.substring(0, 500);
-    }
-
-    private boolean containsTitle(String message, String title) {
-        String normalizedMessage = Normalizer.normalize(message == null ? "" : message, Normalizer.Form.NFKC)
-                .toLowerCase(Locale.ROOT);
-        String normalizedTitle = Normalizer.normalize(title, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
-        return normalizedMessage.contains(normalizedTitle);
     }
 
     record ReferenceIntent(String title, String basedOn, boolean correction) {

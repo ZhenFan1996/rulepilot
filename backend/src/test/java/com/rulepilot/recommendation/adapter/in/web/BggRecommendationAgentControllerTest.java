@@ -140,4 +140,25 @@ class BggRecommendationAgentControllerTest {
                     assertThat(reason.text()).isEqualTo("与参考游戏共享 BGG 记录的机制或类型“卡牌轮抽”"));
         });
     }
+
+    @Test
+    void passesVerifiedConversationGamesAndShownIdsToTheAgentWithoutClientSideInterpretation() {
+        var request = new BggRecommendationAgentController.RecommendationConversationRequest(
+                null,
+                "它和第二款有什么不同？",
+                List.of(),
+                List.of(new BggRecommendationAgentController.DialogueMessageRequest(
+                        "user", "它和第二款有什么不同？")),
+                null,
+                List.of(
+                        new BggRecommendationAgentController.KnownGameRequest(101, "候选一", "Candidate One"),
+                        new BggRecommendationAgentController.KnownGameRequest(102, "候选二", "Candidate Two")),
+                List.of(101, 102));
+
+        var command = request.toCommand();
+
+        assertThat(command.focusedBggId()).isNull();
+        assertThat(command.knownGames()).extracting(game -> game.bggId()).containsExactly(101, 102);
+        assertThat(command.shownBggIds()).containsExactly(101, 102);
+    }
 }

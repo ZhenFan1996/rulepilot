@@ -68,7 +68,15 @@ const loadingCopy = {
 type LoadingStage = 'requesting' | RecommendationProgressStage
 
 type CopyKey = Exclude<keyof typeof copy['zh-CN'], 'starters'>
-type PendingRequest = { message: string; profile: RecommendationProfile; excludedBggIds: number[]; focusedBggId: number | null; transcript: RecommendationMessage[] }
+type PendingRequest = {
+  message: string
+  profile: RecommendationProfile
+  excludedBggIds: number[]
+  focusedBggId: number | null
+  transcript: RecommendationMessage[]
+  knownGames: { bggId: number; name: string; originalName: string }[]
+  shownBggIds: number[]
+}
 
 function t(key: CopyKey, parameters: Record<string, string | number> = {}) {
   return copy[locale.value][key].replace(/\{(\w+)\}/g, (placeholder, name: string) => parameters[name] === undefined ? placeholder : String(parameters[name]))
@@ -164,7 +172,15 @@ async function scrollConversationToLatest() {
 async function sendTurn(message: string, requestProfile: RecommendationProfile, userLabel?: string, excludedBggIds: number[] = [], focusedBggId: number | null = null) {
   if (userLabel) messages.value.push({ id: ++messageId, role: 'user', text: userLabel })
   const transcript = messages.value.slice(-24).map(item => ({ ...item }))
-  const pending = { message, profile: { ...requestProfile }, excludedBggIds: [...excludedBggIds], focusedBggId, transcript }
+  const pending = {
+    message,
+    profile: { ...requestProfile },
+    excludedBggIds: [...excludedBggIds],
+    focusedBggId,
+    transcript,
+    knownGames: knownGames.value.map(game => ({ bggId: game.bggId, name: game.name, originalName: game.originalName })),
+    shownBggIds: [...seenBggIds.value],
+  }
   lastRequest.value = pending
   beginLoading()
   failed.value = false
@@ -187,12 +203,6 @@ async function sendTurn(message: string, requestProfile: RecommendationProfile, 
     knownGames.value = [...parsed.games.map(entry => entry.game), ...knownGames.value]
       .filter((game, index, games) => games.findIndex(candidate => candidate.bggId === game.bggId) === index)
       .slice(0, 60)
-    const actions = parsed.harness?.actions ?? []
-    if (actions.includes('LOOKUP_BGG_GAME') && pending.focusedBggId !== null) {
-      activeFocusedBggId.value = pending.focusedBggId
-    } else if (actions.includes('SEARCH_BGG_CATALOG') || actions.includes('SEARCH_BGG_BY_NAME') || actions.includes('DISCOVER_CANDIDATES')) {
-      activeFocusedBggId.value = parsed.games.length === 1 ? parsed.games[0]!.game.bggId : null
-    }
     messages.value.push({ id: ++messageId, role: 'assistant', text: parsed.assistantMessage })
   } catch {
     failed.value = true
@@ -215,30 +225,7 @@ function submitMessage() {
   const message = draft.value.trim().replace(/\s+/g, ' ')
   if (!message || loading.value) return
   draft.value = ''
-  const wantsAnotherBatch = /(?:再(?:来|推荐|换|找)|换|不满意|不喜欢|太重|太轻|more|another|different)/i.test(message)
-  const referencedBggId = resolveKnownGameReference(message)
-  if (referencedBggId !== null) activeFocusedBggId.value = referencedBggId
-  if (wantsAnotherBatch) activeFocusedBggId.value = null
-  const focusedBggId = wantsAnotherBatch ? null : referencedBggId ?? activeFocusedBggId.value
-  void sendTurn(message, profile.value, message, wantsAnotherBatch ? seenBggIds.value : [], focusedBggId)
-}
-
-function resolveKnownGameReference(message: string): number | null {
-  const normalizedMessage = normalizeReference(message)
-  if (!normalizedMessage) return null
-  const matches = knownGames.value.flatMap(game => [game.name, game.originalName]
-    .map(normalizeReference)
-    .filter(title => title.length >= 3 || /\p{Script=Han}/u.test(title))
-    .filter(title => normalizedMessage.includes(title))
-    .map(title => ({ bggId: game.bggId, length: title.length })))
-  if (!matches.length) return null
-  const longest = Math.max(...matches.map(match => match.length))
-  const ids = [...new Set(matches.filter(match => match.length === longest).map(match => match.bggId))]
-  return ids.length === 1 ? ids[0]! : null
-}
-
-function normalizeReference(value: string) {
-  return value.normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+  void sendTurn(message, profile.value, message, [], activeFocusedBggId.value)
 }
 
 function moreGames() {
