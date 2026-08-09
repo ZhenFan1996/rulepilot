@@ -4,7 +4,8 @@ import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
 import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
-import com.rulepilot.document.application.OfficialRulebookImportService;
+import com.rulepilot.document.application.OfficialRulebookImportJobService;
+import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.application.UploadRuleDocumentService;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
@@ -38,7 +39,7 @@ public class UserRuleDocumentController {
     private final RuleDocumentRemovalService removals;
     private final RuleDocumentMetadataSuggestionService metadataSuggestions;
     private final RuleDocumentMetadataConfirmationService metadataConfirmations;
-    private final OfficialRulebookImportService officialImports;
+    private final OfficialRulebookImportJobService officialImports;
 
     public UserRuleDocumentController(
             UploadRuleDocumentService documents,
@@ -46,7 +47,7 @@ public class UserRuleDocumentController {
             RuleDocumentRemovalService removals,
             RuleDocumentMetadataSuggestionService metadataSuggestions,
             RuleDocumentMetadataConfirmationService metadataConfirmations,
-            OfficialRulebookImportService officialImports) {
+            OfficialRulebookImportJobService officialImports) {
         this.documents = documents;
         this.photographedDocuments = photographedDocuments;
         this.removals = removals;
@@ -140,16 +141,30 @@ public class UserRuleDocumentController {
     }
 
     @PostMapping("/official-imports")
-    @ResponseStatus(HttpStatus.CREATED)
-    RuleDocumentController.UploadResponse importOfficialRulebook(
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    OfficialRulebookImportJobResponse importOfficialRulebook(
             @RequestBody OfficialRulebookImportRequest request, Principal principal) {
-        return RuleDocumentController.UploadResponse.from(officialImports.importRulebook(
+        var launch = officialImports.enqueue(new OfficialRulebookImportJobService.Command(
                 request.editionId(),
                 request.title(),
                 request.sourceType(),
                 request.officialSourceUrl(),
-                request.rightsConfirmed(),
-                principal.getName()));
+                request.rightsConfirmed()), principal.getName());
+        return OfficialRulebookImportJobResponse.from(launch.job(), launch.reused());
+    }
+
+    @GetMapping("/official-imports")
+    List<OfficialRulebookImportJobResponse> officialRulebookImports(Principal principal) {
+        return officialImports.recentOwned(principal.getName()).stream()
+                .map(job -> OfficialRulebookImportJobResponse.from(job, false))
+                .toList();
+    }
+
+    @GetMapping("/official-imports/{jobId}")
+    OfficialRulebookImportJobResponse officialRulebookImport(
+            @PathVariable UUID jobId, Principal principal) {
+        return OfficialRulebookImportJobResponse.from(
+                officialImports.requireOwned(jobId, principal.getName()), false);
     }
 
     private List<PhotographedRulebookUploadService.PhotoPage> photoPages(List<MultipartFile> photos) throws IOException {
@@ -242,4 +257,35 @@ public class UserRuleDocumentController {
             DocumentSourceType sourceType,
             String officialSourceUrl,
             boolean rightsConfirmed) {}
+
+    record OfficialRulebookImportJobResponse(
+            UUID id,
+            String title,
+            String sourceDomain,
+            OfficialRulebookImportJob.Stage stage,
+            long downloadedBytes,
+            Long totalBytes,
+            UUID documentVersionId,
+            boolean duplicate,
+            String errorCode,
+            java.time.Instant createdAt,
+            java.time.Instant updatedAt,
+            boolean reused) {
+
+        static OfficialRulebookImportJobResponse from(OfficialRulebookImportJob job, boolean reused) {
+            return new OfficialRulebookImportJobResponse(
+                    job.id(),
+                    job.title(),
+                    java.net.URI.create(job.sourceUrl()).getHost(),
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    job.createdAt(),
+                    job.updatedAt(),
+                    reused);
+        }
+    }
 }

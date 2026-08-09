@@ -5,24 +5,11 @@ import { RouterLink, useRoute } from 'vue-router'
 import ProductMark from '@/components/ProductMark.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import BackgroundWorkCenter from '@/components/BackgroundWorkCenter.vue'
 import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
-import {
-  parseBackgroundTeachingItems,
-  reconcileBackgroundTeaching,
-  type BackgroundTeachingItem,
-} from '@/lib/backgroundTeachingStatus'
-import { playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
-import {
-  TEACHING_LAUNCHED_EVENT,
-  teachingLaunchDetail,
-} from '@/lib/teachingLaunch'
 
-const props = withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
-
-interface TeachingPlanSummary { id: string; gameTitle: string }
-interface ActiveTeachingRun { id: string; subjectId: string }
-interface TeachingRunDetails { run: { id: string; state: string } }
+withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
 
 const route = useRoute()
 const { t } = useLocale()
@@ -43,17 +30,6 @@ const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
 const roles = ref<string[]>([])
 const loginReminderVisible = ref(false)
-const activeTeaching = ref<BackgroundTeachingItem[]>([])
-const completedTeaching = ref<BackgroundTeachingItem[]>([])
-const teachingStatusUnavailable = ref(false)
-const ACTIVE_TEACHING_KEY = 'rulepilot:active-teaching-runs'
-const COMPLETED_TEACHING_KEY = 'rulepilot:completed-teaching-runs'
-const ACTIVE_TEACHING_REFRESH_MS = 5000
-const IDLE_TEACHING_REFRESH_MS = 15_000
-let teachingTimer: ReturnType<typeof setTimeout> | undefined
-let disposed = false
-const teachingTitles = new Map<string, string>()
-const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
@@ -77,16 +53,6 @@ const loginTarget = computed(() => ({
   name: 'login',
   query: route.name === 'login' ? undefined : { redirect: route.fullPath },
 }))
-const detailedTeachingRoute = computed(() => route.name === 'lessons' || route.name === 'lesson')
-const backgroundStatusVisible = computed(() => !props.immersive && !detailedTeachingRoute.value)
-const activeTeachingText = computed(() => {
-  if (activeTeaching.value.length === 1) return t('shell.lesson.oneActive', { title: activeTeaching.value[0]!.gameTitle })
-  return t('shell.lesson.manyActive', { count: activeTeaching.value.length })
-})
-const completedTeachingText = computed(() => {
-  if (completedTeaching.value.length === 1) return t('shell.lesson.oneFinished', { title: completedTeaching.value[0]!.gameTitle })
-  return t('shell.lesson.manyFinished', { count: completedTeaching.value.length })
-})
 
 function applyAppearance(nextAppearance: Appearance, persist = true) {
   appearance.value = nextAppearance
@@ -106,8 +72,6 @@ async function loadSession() {
       const session = await response.json() as { username: string; roles?: string[] }
       username.value = session.username
       roles.value = Array.isArray(session.roles) ? session.roles : []
-      completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(COMPLETED_TEACHING_KEY))
-      await refreshTeachingStatus()
     }
   } catch {
     username.value = ''
@@ -115,109 +79,10 @@ async function loadSession() {
   }
 }
 
-function clearTeachingTimer() {
-  if (teachingTimer) clearTimeout(teachingTimer)
-  teachingTimer = undefined
-}
-
-function scheduleTeachingRefresh(delay?: number) {
-  clearTeachingTimer()
-  if (disposed || !username.value || document.visibilityState === 'hidden') return
-  const refreshDelay = delay ?? (activeTeaching.value.length || teachingStatusUnavailable.value
-    ? ACTIVE_TEACHING_REFRESH_MS
-    : IDLE_TEACHING_REFRESH_MS)
-  teachingTimer = setTimeout(() => {
-    teachingTimer = undefined
-    void refreshTeachingStatus()
-  }, refreshDelay)
-}
-
-async function refreshTeachingStatus() {
-  if (!username.value || disposed || document.visibilityState === 'hidden') return
-  try {
-    const runsResponse = await fetch('/api/v1/assistant-runs/active?mode=TEACHING', { credentials: 'include' })
-    if (!runsResponse.ok) throw new Error('background teaching status is unavailable')
-    const runs = await runsResponse.json() as ActiveTeachingRun[]
-    if (runs.some((run) => !teachingTitles.has(run.subjectId))) {
-      const plansResponse = await fetch('/api/v1/teaching-plans', { credentials: 'include' })
-      if (!plansResponse.ok) throw new Error('background teaching titles are unavailable')
-      const plans = await plansResponse.json() as TeachingPlanSummary[]
-      for (const plan of plans) teachingTitles.set(plan.id, playerFacingTitle(plan.gameTitle))
-    }
-    const active = runs.map((run) => ({
-      runId: run.id,
-      planId: run.subjectId,
-      gameTitle: teachingTitles.get(run.subjectId) ?? t('shell.lesson.unavailable'),
-    }))
-    const previous = parseBackgroundTeachingItems(sessionStorage.getItem(ACTIVE_TEACHING_KEY))
-    const activePlanIds = new Set(active.map((item) => item.planId))
-    const missing = previous.filter((item) => !activePlanIds.has(item.planId))
-    let uncertainStatus = false
-    const confirmations = await Promise.all(missing.map(async (item) => {
-      try {
-        const response = await fetch(`/api/v1/assistant-runs/${encodeURIComponent(item.runId)}`, { credentials: 'include' })
-        if (!response.ok) {
-          uncertainStatus = true
-          return item
-        }
-        const details = await response.json() as TeachingRunDetails
-        return terminalTeachingStates.has(details.run.state) ? null : item
-      } catch {
-        uncertainStatus = true
-        return item
-      }
-    }))
-    const retained = confirmations.filter((item): item is BackgroundTeachingItem => item !== null)
-    const transition = reconcileBackgroundTeaching(previous, [...active, ...retained])
-    activeTeaching.value = transition.active
-    sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(transition.active))
-    if (transition.finished.length) {
-      const notices = new Map(completedTeaching.value.map((item) => [item.planId, item]))
-      for (const item of transition.finished) notices.set(item.planId, item)
-      completedTeaching.value = [...notices.values()]
-      sessionStorage.setItem(COMPLETED_TEACHING_KEY, JSON.stringify(completedTeaching.value))
-    }
-    teachingStatusUnavailable.value = uncertainStatus
-  } catch {
-    teachingStatusUnavailable.value = true
-  } finally {
-    scheduleTeachingRefresh()
-  }
-}
-
-function dismissCompletedTeaching() {
-  completedTeaching.value = []
-  sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
-}
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    clearTeachingTimer()
-  } else if (username.value) {
-    void refreshTeachingStatus()
-  }
-}
-
 function showLoginReminder() {
   username.value = ''
   roles.value = []
-  clearTeachingTimer()
   loginReminderVisible.value = true
-}
-
-function handleTeachingLaunched(event: Event) {
-  const detail = teachingLaunchDetail(event)
-  if (!detail || !username.value) return
-  const gameTitle = detail.gameTitle ?? teachingTitles.get(detail.planId) ?? t('shell.lesson.unavailable')
-  if (detail.gameTitle) teachingTitles.set(detail.planId, detail.gameTitle)
-  const items = new Map(activeTeaching.value.map((item) => [item.planId, item]))
-  items.set(detail.planId, { runId: detail.runId, planId: detail.planId, gameTitle })
-  activeTeaching.value = [...items.values()]
-  sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(activeTeaching.value))
-  completedTeaching.value = completedTeaching.value.filter((item) => item.planId !== detail.planId)
-  sessionStorage.setItem(COMPLETED_TEACHING_KEY, JSON.stringify(completedTeaching.value))
-  teachingStatusUnavailable.value = false
-  void refreshTeachingStatus()
 }
 
 async function logout() {
@@ -228,24 +93,16 @@ async function logout() {
   if (!response.ok) return
   username.value = ''
   roles.value = []
-  activeTeaching.value = []
-  completedTeaching.value = []
-  sessionStorage.removeItem(ACTIVE_TEACHING_KEY)
-  sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
+  sessionStorage.removeItem('rulepilot:active-teaching-runs')
+  sessionStorage.removeItem('rulepilot:completed-teaching-runs')
   notifySessionCleared()
 }
 
 onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
-onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
 onMounted(() => window.addEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder))
-onMounted(() => window.addEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched))
 onBeforeUnmount(() => {
-  disposed = true
-  clearTeachingTimer()
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
   window.removeEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder)
-  window.removeEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)
 })
 </script>
 
@@ -267,7 +124,6 @@ onBeforeUnmount(() => {
         >
           <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-[#f5f0e8]/48 group-hover:text-[#f5f0e8]'" />
           <span>{{ t(item.labelKey) }}</span>
-          <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-auto rounded-full bg-copper px-2 py-0.5 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
         </RouterLink>
         <RouterLink
           v-if="isAdmin"
@@ -321,23 +177,7 @@ onBeforeUnmount(() => {
       <slot />
     </main>
 
-    <aside v-if="backgroundStatusVisible && (completedTeaching.length || activeTeaching.length)" class="fixed bottom-20 left-4 right-4 z-30 rounded-xl border border-ink/10 bg-paper p-4 elevation-lg-ink sm:left-auto sm:max-w-md lg:bottom-6 lg:right-6" :aria-live="completedTeaching.length ? 'polite' : 'off'">
-      <div v-if="completedTeaching.length" class="flex items-start gap-3">
-        <div class="min-w-0 flex-1">
-          <p class="font-semibold">{{ completedTeachingText }}</p>
-          <p class="mt-1 text-sm leading-6 text-ink/55">{{ t('shell.lesson.finishedDetail') }}</p>
-          <RouterLink :to="{ name: 'lessons' }" class="mt-2 inline-flex min-h-11 items-center text-sm font-semibold text-indigo">{{ t('shell.lesson.viewResult') }}</RouterLink>
-        </div>
-        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.lesson.closeNotice')" @click="dismissCompletedTeaching">×</button>
-      </div>
-      <div v-else class="flex items-center justify-between gap-4" role="status">
-        <div class="min-w-0">
-          <p class="truncate font-semibold">{{ activeTeachingText }}</p>
-          <p class="mt-1 text-sm text-ink/50">{{ t('shell.lesson.activeDetail') }}</p>
-        </div>
-        <RouterLink :to="{ name: 'lessons' }" class="shrink-0 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('shell.lesson.viewProgress') }}</RouterLink>
-      </div>
-    </aside>
+    <BackgroundWorkCenter v-if="username && !immersive" :username="username" />
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink
@@ -349,7 +189,6 @@ onBeforeUnmount(() => {
       >
         <TabletopGlyph :name="item.icon" :size="18" />
         <span>{{ t(item.labelKey) }}</span>
-        <span v-if="item.name === 'lessons' && activeTeaching.length" class="ml-1 inline-grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] font-bold text-white" :aria-label="t('shell.lesson.badge', { count: activeTeaching.length })">{{ activeTeaching.length }}</span>
       </RouterLink>
     </nav>
   </div>

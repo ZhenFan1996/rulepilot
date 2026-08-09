@@ -27,6 +27,24 @@ public class OfficialRulebookImportService {
             String officialSourceUrl,
             boolean rightsConfirmed,
             String ownerUsername) {
+        return importRulebook(
+                editionId,
+                title,
+                sourceType,
+                officialSourceUrl,
+                rightsConfirmed,
+                ownerUsername,
+                OfficialRulebookSourceFetcher.ProgressListener.none());
+    }
+
+    public UploadRuleDocumentService.UploadResult importRulebook(
+            UUID editionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            boolean rightsConfirmed,
+            String ownerUsername,
+            OfficialRulebookSourceFetcher.ProgressListener progress) {
         if (!rightsConfirmed) {
             throw new IllegalArgumentException("official source rights confirmation is required");
         }
@@ -36,8 +54,9 @@ public class OfficialRulebookImportService {
         } catch (IllegalArgumentException exception) {
             throw new IllegalArgumentException("official rulebook source URL is invalid", exception);
         }
-        var fetched = sources.fetch(source);
+        var fetched = sources.fetch(source, progress);
         byte[] content = fetched.content();
+        progress.saving();
         return documents.upload(
                 editionId,
                 title,

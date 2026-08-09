@@ -124,7 +124,7 @@ class PublicLessonQuestionServiceTest {
                 "test",
                 Instant.now());
         when(lessons.find(planId)).thenReturn(Optional.of(new PublicLessonReader.PublicLesson(
-                planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, illustrated)));
+                planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, null, illustrated)));
         RuleAnswering.Answer answer = new RuleAnswering.Answer(
                 "ANSWERED",
                 "骑士回合分为两个阶段。",
@@ -258,6 +258,7 @@ class PublicLessonQuestionServiceTest {
                         "设置图", List.of(2), List.of(chunk, unrelatedChunk),
                         List.of(sameEvidenceButUnrelatedVisual, visual, example, unrelatedSamePage, unrelatedExample, otherPage))),
                 "test", Instant.now());
-        return new PublicLessonReader.PublicLesson(planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, lesson);
+        return new PublicLessonReader.PublicLesson(
+                planId, versionId, "规则书", "https://publisher.example/rules.pdf", null, null, lesson);
     }
 }

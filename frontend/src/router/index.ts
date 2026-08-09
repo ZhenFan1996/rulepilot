@@ -86,6 +86,11 @@ const router = createRouter({
       component: () => import('@/views/LessonQuestionsView.vue'),
     },
     {
+      path: '/rulebooks/:versionId',
+      name: 'rulebook-reader',
+      component: () => import('@/views/RulebookReaderView.vue'),
+    },
+    {
       path: '/read/:planId',
       name: 'public-lesson',
       component: () => import('@/views/PublicLessonView.vue'),

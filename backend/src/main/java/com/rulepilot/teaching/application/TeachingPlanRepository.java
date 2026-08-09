@@ -27,11 +27,12 @@ public interface TeachingPlanRepository {
 
     void delete(UUID planId);
 
-    record PlanReference(UUID teachingPlanId, UUID documentVersionId) {
+    record PlanReference(UUID teachingPlanId, UUID documentVersionId, String gameTitle) {
         public PlanReference {
-            if (teachingPlanId == null || documentVersionId == null) {
+            if (teachingPlanId == null || documentVersionId == null || gameTitle == null || gameTitle.isBlank()) {
                 throw new IllegalArgumentException("teaching plan reference is invalid");
             }
+            gameTitle = gameTitle.strip();
         }
     }
 }

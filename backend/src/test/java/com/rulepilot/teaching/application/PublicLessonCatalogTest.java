@@ -7,6 +7,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
+import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import java.util.List;
@@ -20,7 +21,8 @@ class PublicLessonCatalogTest {
     private final IllustratedLessonRepository lessons = mock(IllustratedLessonRepository.class);
     private final PublicRulebookReferenceLookup rulebooks = mock(PublicRulebookReferenceLookup.class);
     private final PublicGameCoverLookup covers = mock(PublicGameCoverLookup.class);
-    private final PublicLessonCatalog catalog = new PublicLessonCatalog(plans, lessons, rulebooks, covers);
+    private final PublicGameIdentityLookup identities = mock(PublicGameIdentityLookup.class);
+    private final PublicLessonCatalog catalog = new PublicLessonCatalog(plans, lessons, rulebooks, covers, identities);
 
     @Test
     void lists_only_distinct_usable_lessons_with_an_official_rulebook_source() {
@@ -39,10 +41,14 @@ class PublicLessonCatalogTest {
                         missingSource.documentVersionId(),
                         reference(missingSource.documentVersionId(), null)));
         when(covers.findByEditions(List.of())).thenReturn(Map.of());
+        when(identities.findByTitles(List.of("Orbit", "Orbit", "Orbit"))).thenReturn(Map.of(
+                "Orbit", new PublicGameIdentityLookup.Identity(
+                        123, "Orbit", "https://boardgamegeek.com/boardgame/123")));
 
         assertThat(catalog.latest(24)).singleElement().satisfies(entry -> {
             assertThat(entry.teachingPlanId()).isEqualTo(first.teachingPlanId());
             assertThat(entry.rulebookTitle()).isEqualTo("Orbit Rules");
+            assertThat(entry.publicGame().bggId()).isEqualTo(123);
             assertThat(entry.sectionCount()).isEqualTo(1);
             assertThat(entry.stepCount()).isEqualTo(1);
         });
@@ -50,8 +56,26 @@ class PublicLessonCatalogTest {
         verify(plans, times(1)).findRecentReferences(200);
     }
 
+    @Test
+    void keepsPublicLessonsReadableWhenOptionalBggIdentityLookupIsUnavailable() {
+        UUID documentVersionId = UUID.randomUUID();
+        TeachingPlanRepository.PlanReference plan = plan(documentVersionId);
+        when(plans.findRecentReferences(200)).thenReturn(List.of(plan));
+        when(lessons.findLatestSummariesByPlans(List.of(plan.teachingPlanId())))
+                .thenReturn(List.of(summary(plan.teachingPlanId())));
+        when(rulebooks.findReferences(List.of(documentVersionId))).thenReturn(Map.of(
+                documentVersionId, reference(documentVersionId, "https://publisher.example/first.pdf")));
+        when(covers.findByEditions(List.of())).thenReturn(Map.of());
+        when(identities.findByTitles(List.of("Orbit"))).thenThrow(new IllegalStateException("snapshot unavailable"));
+
+        assertThat(catalog.latest(12)).singleElement().satisfies(entry -> {
+            assertThat(entry.rulebookTitle()).isEqualTo("Orbit Rules");
+            assertThat(entry.publicGame()).isNull();
+        });
+    }
+
     private TeachingPlanRepository.PlanReference plan(UUID documentVersionId) {
-        return new TeachingPlanRepository.PlanReference(UUID.randomUUID(), documentVersionId);
+        return new TeachingPlanRepository.PlanReference(UUID.randomUUID(), documentVersionId, "Orbit");
     }
 
     private IllustratedLessonRepository.LessonSummary summary(UUID planId) {

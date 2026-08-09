@@ -9,6 +9,7 @@ import com.rulepilot.teaching.application.LessonLocalizationService;
 import com.rulepilot.teaching.application.PublicCoverThumbnailService;
 import com.rulepilot.teaching.application.RulebookIconGlossaryService;
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.catalog.PublicGameIdentityLookup;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -191,6 +192,7 @@ public class PublicLessonController {
             String rulebookTitle,
             String officialSourceUrl,
             PublicLessonReader.PublicCover gameCover,
+            PublicGameIdentityLookup.Identity publicGame,
             com.rulepilot.teaching.domain.IllustratedLesson lesson,
             String contentLanguage,
             String localizationStatus) {
@@ -202,6 +204,7 @@ public class PublicLessonController {
                     source.rulebookTitle(),
                     source.officialSourceUrl(),
                     source.gameCover(),
+                    source.publicGame(),
                     localized.lesson(),
                     localized.lesson() == null ? "zh-CN" : localized.language() == PlayerLocale.EN
                             && localized.status() == com.rulepilot.teaching.domain.LessonLocalization.Status.READY ? "en" : "zh-CN",

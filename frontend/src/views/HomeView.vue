@@ -1,304 +1,262 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
 import { useLocale } from '@/lib/locale'
-import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 
-interface TeachingPlan {
-  id: string
-  gameTitle: string
-  playerCount: number
-  durationMinutes: number
-  createdAt: string
+interface HotGame {
+  rank: number
+  bggId: number
+  name: string
+  originalName: string
+  nameLocalized: boolean
+  publicationYear: number | null
+  thumbnailUrl: string
+  bggUrl: string
 }
 
+const { locale } = useLocale()
 const username = ref('')
-const plans = ref<TeachingPlan[]>([])
-const { t } = useLocale()
-const latestPlan = computed(() => plans.value[0] ?? null)
-const latestPlanTitle = computed(() => latestPlan.value ? playerFacingTitle(latestPlan.value.gameTitle) : '')
-const recentPlanCount = computed(() => groupPlansForReading(plans.value).length)
+const hotGames = ref<HotGame[]>([])
+const loadingGames = ref(true)
+const gameError = ref(false)
+const randomOffset = ref(0)
 
-async function loadPersonalHome() {
+const copy = computed(() => locale.value === 'zh-CN' ? {
+  greeting: username.value ? `${username.value}，今晚想玩什么？` : '今晚想玩什么？',
+  title: '把想玩的，变成今晚真的能开桌。',
+  lede: '从热门桌游找灵感，随机碰一款新游戏，或者直接把规则书交给 RulePilot。找资料、读规则、生成讲解都能在后台继续。',
+  recommend: '说说这桌人的偏好', catalog: '浏览全部桌游', source: '桌游资料来自 BGG',
+  hotEyebrow: '桌游圈正在关注', hotTitle: 'BGG 热门桌游', hotHint: '热度只代表近期关注，不等于最适合你的排名。',
+  randomEyebrow: '不想做功课？', randomTitle: '随机碰三款', randomHint: '从当前热门里随机抽取，点开后再看人数、时长和机制。',
+  shuffle: '换一批', inspect: '查看游戏并找规则书', yearUnknown: '年份未知', loading: '正在读取 BGG 热门桌游…',
+  unavailable: '暂时没拿到 BGG 热门资料。推荐对话、完整目录和规则书上传仍然可用。',
+  guideEyebrow: '从想玩到开桌', guideTitle: '所有入口，最后汇成同一条路',
+  guide: [
+    { number: '01', title: '先找到想玩的', detail: '聊偏好、看热门或直接逛完整目录。', action: '开始找桌游', route: 'game-recommendations', icon: 'meeple' },
+    { number: '02', title: '拿到可信规则书', detail: '优先搜索出版社官网，也可以上传 PDF 或拍摄页面。', action: '添加规则书', route: 'teach', icon: 'rulebook' },
+    { number: '03', title: '让讲解在后台完成', detail: '继续浏览或离开页面，随时从“后台任务”查看进度。', action: '打开讲解中心', route: 'lessons', icon: 'cards' },
+  ],
+  boundary: 'BGG 只用于游戏识别、目录资料和封面；规则讲解与答疑只引用你确认的规则书。',
+} : {
+  greeting: username.value ? `${username.value}, what should we play tonight?` : 'What should we play tonight?',
+  title: 'Turn a game idea into a table that is ready tonight.',
+  lede: 'Start with what is hot, stumble onto something new, or hand RulePilot a rulebook. Discovery, reading, and lesson generation keep moving in the background.',
+  recommend: 'Describe this group', catalog: 'Browse every game', source: 'Game data from BGG',
+  hotEyebrow: 'What players are watching', hotTitle: 'Trending on BGG', hotHint: 'Hotness reflects recent attention, not an objective best-game ranking.',
+  randomEyebrow: 'Skip the homework', randomTitle: 'Three random picks', randomHint: 'Drawn from the current hot list; open one to inspect players, time, and mechanics.',
+  shuffle: 'Shuffle', inspect: 'View game and find its rulebook', yearUnknown: 'Year unknown', loading: 'Loading BGG hot games…',
+  unavailable: 'BGG hot data is unavailable right now. Recommendations, the complete catalog, and rulebook upload still work.',
+  guideEyebrow: 'From idea to table', guideTitle: 'Every entry joins the same continuous path',
+  guide: [
+    { number: '01', title: 'Find a game', detail: 'Talk through preferences, browse what is hot, or search the full catalog.', action: 'Find a game', route: 'game-recommendations', icon: 'meeple' },
+    { number: '02', title: 'Get a trusted rulebook', detail: 'Search publisher sites first, upload a PDF, or photograph pages.', action: 'Add a rulebook', route: 'teach', icon: 'rulebook' },
+    { number: '03', title: 'Let the lesson finish backstage', detail: 'Keep browsing or leave; Background work keeps every task findable.', action: 'Open lesson center', route: 'lessons', icon: 'cards' },
+  ],
+  boundary: 'BGG is used only for game identity, catalog data, and covers. Lessons and answers cite only your confirmed rulebook.',
+})
+
+const featuredGames = computed(() => hotGames.value.slice(0, 4))
+const randomGames = computed(() => {
+  if (!hotGames.value.length) return []
+  const source = hotGames.value.slice(4).length >= 3 ? hotGames.value.slice(4) : hotGames.value
+  return Array.from({ length: Math.min(3, source.length) }, (_, index) => source[(randomOffset.value + index * 3) % source.length]!)
+})
+
+function shuffleRandomGames() {
+  const size = hotGames.value.length > 4 ? hotGames.value.length - 4 : hotGames.value.length
+  if (size <= 1) return
+  const step = 1 + Math.floor(Math.random() * (size - 1))
+  randomOffset.value = (randomOffset.value + step) % size
+}
+
+async function load() {
+  loadingGames.value = true
+  gameError.value = false
   try {
-    const sessionResponse = await fetch('/api/auth/session', { credentials: 'include' })
-    if (!sessionResponse.ok) return
-    username.value = ((await sessionResponse.json()) as { username: string }).username
-    const plansResponse = await fetch('/api/v1/teaching-plans', { credentials: 'include' })
-    if (plansResponse.ok) plans.value = await plansResponse.json() as TeachingPlan[]
+    const [sessionResponse, hotResponse] = await Promise.all([
+      fetch('/api/auth/session', { credentials: 'include' }).catch(() => null),
+      fetch(`/api/v1/bgg/recommendations?locale=${encodeURIComponent(locale.value)}`, { credentials: 'include' }),
+    ])
+    if (sessionResponse?.ok) username.value = ((await sessionResponse.json()) as { username: string }).username
+    else username.value = ''
+    if (!hotResponse.ok) throw new Error('hot games unavailable')
+    hotGames.value = (await hotResponse.json() as HotGame[]).filter(game => game.thumbnailUrl).slice(0, 12)
+    randomOffset.value = hotGames.value.length > 4 ? Math.floor(Math.random() * (hotGames.value.length - 4)) : 0
   } catch {
-    username.value = ''
+    gameError.value = true
+    hotGames.value = []
+  } finally {
+    loadingGames.value = false
   }
 }
 
-onMounted(loadPersonalHome)
+onMounted(load)
+watch(locale, load)
 </script>
 
 <template>
   <AppShell>
-    <main class="home-stage tabletop-page">
-      <section class="start-board" aria-labelledby="home-title">
-        <div class="start-board__path" aria-hidden="true">
-          <span class="path-token path-token--one">1</span>
-          <span class="path-token path-token--two">2</span>
-          <span class="path-token path-token--three">3</span>
-        </div>
-
-        <header class="relative z-10 max-w-3xl">
-          <p class="home-kicker">{{ username ? t('home.personal', { username }) : t('home.greeting') }}</p>
-          <h1 id="home-title" class="home-title">{{ latestPlan ? t('home.continueTitle') : t('home.startTitle') }}</h1>
-          <p class="home-lede">{{ latestPlan ? t('home.continueDescription') : t('home.startDescription') }}</p>
-        </header>
-
-        <div class="relative z-10 mt-9 grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(17rem,0.55fr)]">
-          <RouterLink
-            v-if="latestPlan"
-            :to="{ name: 'lesson', params: { planId: latestPlan.id } }"
-            class="primary-card group"
-          >
-            <span class="primary-card__number" aria-hidden="true">01</span>
-            <span class="primary-card__label">{{ t('home.lastOpened') }}</span>
-            <strong class="primary-card__title">{{ latestPlanTitle }}</strong>
-            <span class="primary-card__meta">{{ t('home.duration', { players: latestPlan.playerCount, minutes: latestPlan.durationMinutes }) }}</span>
-            <span class="primary-card__action">{{ t('home.continue') }} <TabletopGlyph name="arrow" :size="20" /></span>
-          </RouterLink>
-
-          <RouterLink v-else :to="{ name: 'game-recommendations' }" class="primary-card group">
-            <span class="primary-card__number" aria-hidden="true">01</span>
-            <span class="primary-card__label">{{ t('home.primaryEyebrow') }}</span>
-            <strong class="primary-card__title">{{ t('home.primaryTitle') }}</strong>
-            <span class="primary-card__meta">{{ t('home.primaryDescription') }}</span>
-            <span class="primary-card__action">{{ t('home.primaryAction') }} <TabletopGlyph name="arrow" :size="20" /></span>
-          </RouterLink>
-
-          <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
-            <RouterLink :to="{ name: latestPlan ? 'game-recommendations' : 'game-catalog-browse' }" class="side-card side-card--blue group">
-              <span class="side-card__token"><TabletopGlyph name="meeple" :size="22" /></span>
-              <span>
-                <strong>{{ latestPlan ? t('home.discoverAnother') : t('home.browseCatalog') }}</strong>
-                <small>{{ latestPlan ? t('home.discoverHint') : t('home.browseCatalogHint') }}</small>
-              </span>
-              <TabletopGlyph name="arrow" :size="18" class="ml-auto transition-transform group-hover:translate-x-1" />
+    <main class="tabletop-page max-w-7xl">
+      <section class="home-hero player-board overflow-hidden" aria-labelledby="home-title">
+        <div class="home-hero__copy">
+          <p class="tabletop-kicker">{{ copy.greeting }}</p>
+          <h1 id="home-title" class="mt-3 max-w-[11ch] font-display text-[clamp(2.8rem,6vw,5.8rem)] font-semibold leading-[0.94] tracking-[-0.055em]">{{ copy.title }}</h1>
+          <p class="mt-6 max-w-xl text-base leading-8 text-ink/62">{{ copy.lede }}</p>
+          <div class="mt-7 flex flex-col gap-3 sm:flex-row">
+            <RouterLink :to="{ name: 'game-recommendations' }" class="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-copper px-6 font-semibold text-white hover:bg-copper/90">
+              {{ copy.recommend }} <TabletopGlyph name="arrow" :size="18" />
             </RouterLink>
-            <RouterLink :to="{ name: 'teach' }" class="side-card side-card--yellow group">
-              <span class="side-card__token"><TabletopGlyph name="rulebook" :size="22" /></span>
-              <span>
-                <strong>{{ t('home.upload') }}</strong>
-                <small>{{ t('home.uploadHint') }}</small>
-              </span>
-              <TabletopGlyph name="arrow" :size="18" class="ml-auto transition-transform group-hover:translate-x-1" />
+            <RouterLink :to="{ name: 'game-catalog-browse' }" class="inline-flex min-h-12 items-center justify-center rounded-xl border border-ink/15 bg-paper/80 px-6 font-semibold text-indigo hover:border-indigo/40">
+              {{ copy.catalog }}
             </RouterLink>
           </div>
-        </div>
-
-        <footer class="relative z-10 mt-7 flex flex-col gap-3 border-t border-ink/12 pt-5 text-sm text-ink/55 sm:flex-row sm:items-center sm:justify-between">
-          <p>{{ latestPlan ? t('home.keep') : t('home.noSetup') }}</p>
-          <div class="flex flex-wrap gap-x-5 gap-y-2 font-semibold text-indigo">
-            <RouterLink :to="{ name: 'public-library' }">{{ t('home.public') }} →</RouterLink>
-            <RouterLink v-if="recentPlanCount" :to="{ name: 'lessons' }">{{ t('home.allMine', { count: recentPlanCount }) }} →</RouterLink>
+          <div class="mt-8 flex flex-wrap items-center gap-3 border-t border-ink/10 pt-5">
+            <span class="text-xs font-semibold text-ink/45">{{ copy.source }}</span>
+            <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
           </div>
-        </footer>
+        </div>
+        <div class="home-hero__art" aria-hidden="true">
+          <img src="/illustrations/tabletop-gathering-v2.webp" alt="" width="1672" height="941" fetchpriority="high">
+        </div>
+      </section>
+
+      <section class="mt-14" aria-labelledby="hot-games-title">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p class="tabletop-kicker">{{ copy.hotEyebrow }}</p>
+            <h2 id="hot-games-title" class="mt-2 font-display text-3xl font-semibold sm:text-4xl">{{ copy.hotTitle }}</h2>
+            <p class="mt-2 text-sm leading-6 text-ink/50">{{ copy.hotHint }}</p>
+          </div>
+          <a href="https://boardgamegeek.com/hotness" target="_blank" rel="noopener noreferrer" class="shrink-0"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
+        </div>
+        <p v-if="loadingGames" class="mt-6 rounded-xl border border-dashed border-ink/15 bg-paper p-8 text-center text-sm text-ink/45" role="status">{{ copy.loading }}</p>
+        <p v-else-if="gameError || featuredGames.length === 0" class="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-950">{{ copy.unavailable }}</p>
+        <ol v-else class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <li v-for="game in featuredGames" :key="game.bggId">
+            <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="game-card group">
+              <div class="game-card__cover">
+                <img :src="game.thumbnailUrl" :alt="game.name" loading="lazy" referrerpolicy="no-referrer">
+                <span class="game-card__rank">#{{ game.rank }}</span>
+              </div>
+              <div class="p-4">
+                <h3 class="font-display text-xl font-semibold leading-tight">{{ game.name }}</h3>
+                <p v-if="game.nameLocalized && game.originalName !== game.name" class="mt-1 text-xs text-ink/45">{{ game.originalName }}</p>
+                <p class="mt-2 text-xs text-ink/45">{{ game.publicationYear ?? copy.yearUnknown }}</p>
+                <span class="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-indigo">{{ copy.inspect }} <TabletopGlyph name="arrow" :size="16" /></span>
+              </div>
+            </RouterLink>
+          </li>
+        </ol>
+      </section>
+
+      <section v-if="randomGames.length" class="random-board mt-14" aria-labelledby="random-games-title">
+        <div class="relative z-10 max-w-sm">
+          <p class="tabletop-kicker !text-gold">{{ copy.randomEyebrow }}</p>
+          <h2 id="random-games-title" class="mt-2 font-display text-3xl font-semibold text-white sm:text-4xl">{{ copy.randomTitle }}</h2>
+          <p class="mt-3 text-sm leading-6 text-white/60">{{ copy.randomHint }}</p>
+          <button type="button" class="mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-gold px-5 font-semibold text-ink" @click="shuffleRandomGames">↻ {{ copy.shuffle }}</button>
+        </div>
+        <ul class="relative z-10 grid min-w-0 flex-1 gap-3 sm:grid-cols-3">
+          <li v-for="game in randomGames" :key="`${randomOffset}-${game.bggId}`">
+            <RouterLink :to="{ name: 'game-discovery', params: { bggId: game.bggId } }" class="flex h-full min-h-36 items-center gap-3 rounded-xl border border-white/10 bg-white/7 p-3 text-white transition hover:-translate-y-1 hover:bg-white/12">
+              <img :src="game.thumbnailUrl" :alt="game.name" loading="lazy" referrerpolicy="no-referrer" class="h-24 w-20 shrink-0 rounded-lg bg-paper object-contain">
+              <span class="min-w-0">
+                <strong class="block font-display text-lg leading-tight">{{ game.name }}</strong>
+                <small class="mt-2 block text-white/50">#{{ game.rank }} · {{ game.publicationYear ?? copy.yearUnknown }}</small>
+              </span>
+            </RouterLink>
+          </li>
+        </ul>
+      </section>
+
+      <section class="mt-16 border-t border-ink/10 pt-10" aria-labelledby="guide-title">
+        <p class="tabletop-kicker">{{ copy.guideEyebrow }}</p>
+        <h2 id="guide-title" class="mt-2 max-w-2xl font-display text-3xl font-semibold sm:text-4xl">{{ copy.guideTitle }}</h2>
+        <ol class="mt-7 grid gap-4 lg:grid-cols-3">
+          <li v-for="item in copy.guide" :key="item.number" class="guide-card">
+            <div class="flex items-start justify-between gap-4">
+              <span class="text-xs font-black tracking-[0.15em] text-copper">{{ item.number }}</span>
+              <span class="grid size-10 place-items-center rounded-full bg-felt text-white"><TabletopGlyph :name="item.icon" :size="20" /></span>
+            </div>
+            <h3 class="mt-8 font-display text-2xl font-semibold">{{ item.title }}</h3>
+            <p class="mt-2 min-h-12 text-sm leading-6 text-ink/52">{{ item.detail }}</p>
+            <RouterLink :to="{ name: item.route }" class="mt-5 inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-indigo">{{ item.action }} <TabletopGlyph name="arrow" :size="16" /></RouterLink>
+          </li>
+        </ol>
+        <p class="mt-7 border-l-2 border-indigo/35 pl-4 text-xs leading-6 text-ink/45">{{ copy.boundary }}</p>
       </section>
     </main>
   </AppShell>
 </template>
 
 <style scoped>
-.home-stage {
-  display: grid;
-  min-height: calc(100vh - 3rem);
-  align-items: center;
-}
-
-.start-board {
+.home-hero {
   position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-ink) 14%, transparent);
-  border-radius: 2rem;
-  padding: clamp(1.5rem, 4.5vw, 4.75rem);
-  background:
-    linear-gradient(115deg, color-mix(in srgb, var(--color-paper) 98%, transparent) 0 64%, color-mix(in srgb, var(--color-indigo) 10%, var(--color-paper)) 64% 100%);
-  box-shadow: 0 30px 90px -58px rgb(24 34 67 / 65%);
-}
-
-.start-board::before {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0.75rem;
-  height: 100%;
-  background: var(--color-copper);
-  content: '';
-}
-
-.home-kicker {
-  color: var(--color-copper);
-  font-size: 0.75rem;
-  font-weight: 800;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-}
-
-.home-title {
-  max-width: 13ch;
-  margin-top: 0.75rem;
-  font-family: var(--font-display);
-  font-size: clamp(2.7rem, 6.5vw, 5.6rem);
-  font-weight: 650;
-  line-height: 0.94;
-  letter-spacing: -0.055em;
-}
-
-.home-lede {
-  max-width: 37rem;
-  margin-top: 1.25rem;
-  color: color-mix(in srgb, var(--color-ink) 62%, transparent);
-  font-size: 1rem;
-  line-height: 1.8;
-}
-
-.start-board__path {
-  position: absolute;
-  z-index: -1;
-  top: -4rem;
-  right: -2rem;
-  width: min(38vw, 31rem);
-  aspect-ratio: 1;
-  border: 5rem solid color-mix(in srgb, var(--color-indigo) 10%, transparent);
-  border-radius: 50%;
-}
-
-.path-token {
-  position: absolute;
   display: grid;
-  width: 3.25rem;
-  aspect-ratio: 1;
-  place-items: center;
-  border: 4px solid var(--color-paper);
-  border-radius: 50%;
-  color: #20252c;
-  background: var(--color-gold);
-  box-shadow: 0 6px 0 rgb(32 37 44 / 12%);
-  font-size: 0.75rem;
-  font-weight: 900;
+  min-height: min(42rem, calc(100vh - 5rem));
+  border: 1px solid color-mix(in srgb, var(--color-ink) 12%, transparent);
+  background: var(--color-paper);
+  box-shadow: 0 30px 90px -60px rgb(24 34 67 / 70%);
 }
 
-.path-token--one { bottom: -1.3rem; left: 2rem; }
-.path-token--two { right: 1rem; bottom: 5rem; color: white; background: var(--color-copper); }
-.path-token--three { top: 2rem; left: 1rem; color: white; background: var(--color-indigo); }
-
-.primary-card {
+.home-hero__copy {
   position: relative;
+  z-index: 2;
   display: flex;
-  min-height: 20rem;
   flex-direction: column;
+  justify-content: center;
+  padding: clamp(1.6rem, 5vw, 5rem);
+}
+
+.home-hero__art {
+  position: relative;
+  min-height: 22rem;
   overflow: hidden;
-  border-radius: 1.5rem 1.5rem 3.5rem 1.5rem;
-  padding: clamp(1.5rem, 3vw, 2.5rem);
-  color: #fffaf2;
-  background: var(--color-ink-panel);
-  box-shadow: 0 18px 0 color-mix(in srgb, var(--color-indigo) 28%, transparent);
-  transition: translate 180ms ease, box-shadow 180ms ease;
+  background: #f3ead8;
 }
 
-.primary-card:hover {
-  box-shadow: 0 22px 0 color-mix(in srgb, var(--color-indigo) 38%, transparent);
-  translate: 0 -4px;
+.home-hero__art img { width: 100%; height: 100%; object-fit: cover; object-position: 67% center; }
+
+.game-card {
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-ink) 11%, transparent);
+  border-radius: 1rem 1rem 2rem 1rem;
+  background: var(--color-paper);
+  box-shadow: 0 8px 0 color-mix(in srgb, var(--color-indigo) 10%, transparent);
+  transition: transform 180ms ease, box-shadow 180ms ease;
 }
 
-.primary-card::after {
-  position: absolute;
-  right: -2.4rem;
-  bottom: -3.2rem;
-  width: 12rem;
-  aspect-ratio: 1;
-  border: 2.3rem solid var(--color-indigo);
-  border-radius: 50%;
-  content: '';
+.game-card:hover { transform: translateY(-4px); box-shadow: 0 12px 0 color-mix(in srgb, var(--color-indigo) 18%, transparent); }
+.game-card__cover { position: relative; display: grid; min-height: 15rem; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--color-canvas) 78%, var(--color-indigo) 4%); }
+.game-card__cover img { width: 100%; height: 15rem; object-fit: contain; padding: 1rem; transition: transform 220ms ease; }
+.game-card:hover .game-card__cover img { transform: scale(1.035); }
+.game-card__rank { position: absolute; top: 0.75rem; left: 0.75rem; display: grid; min-width: 2.5rem; height: 2.5rem; place-items: center; border: 3px solid var(--color-paper); border-radius: 999px; color: white; background: var(--color-copper); font-size: 0.72rem; font-weight: 900; }
+
+.random-board { position: relative; display: flex; flex-direction: column; gap: 2rem; overflow: hidden; border-radius: 1.75rem 1.75rem 4rem 1.75rem; padding: clamp(1.5rem, 4vw, 3.5rem); background: var(--color-ink-panel); }
+.random-board::after { position: absolute; right: -8rem; bottom: -10rem; width: 28rem; aspect-ratio: 1; border: 4rem solid rgb(55 90 160 / 32%); border-radius: 50%; content: ''; }
+.guide-card { border-top: 3px solid var(--color-copper); border-radius: 0 0 1.25rem 1.25rem; padding: 1.5rem; background: var(--color-paper); box-shadow: 0 10px 28px -26px rgb(24 34 67 / 60%); }
+
+@media (min-width: 1024px) {
+  .home-hero { grid-template-columns: minmax(0, 0.92fr) minmax(30rem, 1.08fr); }
+  .home-hero__art { min-height: 100%; }
+  .home-hero__art::before { position: absolute; z-index: 1; inset: 0 auto 0 0; width: 22%; background: linear-gradient(90deg, var(--color-paper), transparent); content: ''; }
+  .random-board { flex-direction: row; align-items: center; }
 }
 
-.primary-card__number {
-  position: absolute;
-  top: 1.4rem;
-  right: 1.6rem;
-  color: var(--color-gold);
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-}
-
-.primary-card__label {
-  color: var(--color-gold);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.primary-card__title {
-  position: relative;
-  z-index: 1;
-  max-width: 15ch;
-  margin-top: 1.2rem;
-  font-family: var(--font-display);
-  font-size: clamp(2.1rem, 4vw, 3.8rem);
-  font-weight: 650;
-  line-height: 1;
-  letter-spacing: -0.04em;
-}
-
-.primary-card__meta {
-  position: relative;
-  z-index: 1;
-  max-width: 34rem;
-  margin-top: 1rem;
-  color: rgb(255 250 242 / 62%);
-  line-height: 1.6;
-}
-
-.primary-card__action {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-top: auto;
-  padding-top: 2rem;
-  font-weight: 750;
-}
-
-.side-card {
-  display: flex;
-  min-height: 9.5rem;
-  align-items: center;
-  gap: 1rem;
-  border: 1px solid rgb(32 37 44 / 12%);
-  border-radius: 1.25rem;
-  padding: 1.25rem;
-  color: #20252c;
-  transition: translate 180ms ease, box-shadow 180ms ease;
-}
-
-.side-card:hover { box-shadow: -8px 8px 0 rgb(32 37 44 / 8%); translate: 4px 0; }
-.side-card--blue { background: color-mix(in srgb, var(--color-indigo) 18%, #fffaf2); }
-.side-card--yellow { background: color-mix(in srgb, var(--color-gold) 54%, #fffaf2); }
-.side-card__token { display: grid; width: 3rem; aspect-ratio: 1; flex: none; place-items: center; border-radius: 50%; color: white; background: var(--color-indigo); }
-.side-card--yellow .side-card__token { background: var(--color-copper); }
-.side-card strong { display: block; font-family: var(--font-display); font-size: 1.2rem; }
-.side-card small { display: block; margin-top: 0.35rem; color: rgb(32 37 44 / 58%); line-height: 1.45; }
-
-@media (max-width: 47.99rem) {
-  .start-board { border-radius: 1.3rem; }
-  .start-board__path { width: 16rem; opacity: 0.65; }
-  .primary-card { min-height: 17rem; }
+@media (max-width: 639px) {
+  .home-hero__copy { padding: 1.35rem; }
+  .home-hero__art { min-height: 15rem; order: -1; }
+  .home-hero__art img { object-position: 70% center; }
+  #home-title { font-size: 2.45rem; line-height: 0.96; }
+  .game-card__cover, .game-card__cover img { min-height: 12rem; height: 12rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .primary-card,
-  .side-card { transition: none; }
+  .game-card, .game-card__cover img { transition: none; }
 }
 </style>

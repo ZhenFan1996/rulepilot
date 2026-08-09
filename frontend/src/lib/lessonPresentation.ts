@@ -1,6 +1,7 @@
 export interface LessonTitleIdentity {
   rulebookTitle: string
   gameCover: { gameName: string } | null
+  publicGame?: { name: string } | null
 }
 
 export interface PublicLessonIdentity extends LessonTitleIdentity {
@@ -34,7 +35,7 @@ export function playerFacingTitle(rawTitle: string): string {
 }
 
 export function publicLessonTitle(lesson: LessonTitleIdentity): string {
-  return playerFacingTitle(lesson.gameCover?.gameName || lesson.rulebookTitle)
+  return playerFacingTitle(lesson.publicGame?.name || lesson.gameCover?.gameName || lesson.rulebookTitle)
 }
 
 export function deduplicatePublicLessons<T extends PublicLessonIdentity>(lessons: T[]): PresentedPublicLesson<T>[] {

@@ -54,6 +54,18 @@ interface RulebookCandidate {
   officialDomainVerified: boolean
 }
 interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
+interface OfficialRulebookImportJob {
+  id: string
+  title: string
+  sourceDomain: string
+  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
+  downloadedBytes: number
+  totalBytes: number | null
+  documentVersionId: string | null
+  duplicate: boolean
+  errorCode: string | null
+  reused: boolean
+}
 interface TeachingPlanResponse { id: string }
 interface TeachingPreparationLaunch { assistantRunId: string; state: string; reused: boolean }
 interface TeachingPreparationRun {
@@ -101,6 +113,7 @@ const durationMinutes = ref(25)
 const loading = ref(true)
 const uploading = ref(false)
 const importingOfficial = ref(false)
+const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
@@ -135,6 +148,7 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   empty: '没有找到可信的官方 PDF 候选。请改用官方链接或本地上传。',
   error: '官方规则书搜索暂时不可用，手动入口仍可使用。', verified: '域名匹配出版社', review: '需要人工核对域名',
   use: '选择并继续核对', publisher: '出版社', language: '语言', edition: '版本',
+  searchSteps: ['核对 BGG 的原名与出版社', '优先搜索出版社官网', '检查语言、版本和 PDF 直链'],
 } : {
   action: 'Find an official rulebook', loading: 'Searching publisher sources…', title: 'Official rulebook candidates',
   detail: 'Candidates come from web search; you must still review the URL and source. Download starts only after confirmation, and content becomes evidence only after processing.',
@@ -142,12 +156,27 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   empty: 'No credible official PDF candidate was found. Use an official URL or local upload instead.',
   error: 'Official rulebook search is temporarily unavailable. Manual options still work.', verified: 'Domain matches publisher', review: 'Review domain manually',
   use: 'Choose and review', publisher: 'Publisher', language: 'Language', edition: 'Edition',
+  searchSteps: ['Check BGG names and publishers', 'Search publisher sites first', 'Verify language, edition, and direct PDF links'],
+})
+const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
+  title: '规则书正在后台获取', safe: '可以离开这一页；下载、核验和后续读取会继续。',
+  QUEUED: '等待下载', CONNECTING: '正在连接出版社', DOWNLOADING: '正在下载 PDF',
+  VERIFYING_FILE: '正在核验文件格式与大小', SAVING: '正在保存并交给规则书读取',
+  COMPLETED: '下载完成，正在衔接规则书读取', FAILED: '下载失败，需要重新选择来源',
+  background: '在任意页面打开“后台任务”都能找回这次进度。',
+} : {
+  title: 'Getting the rulebook in the background', safe: 'You can leave this page; download, verification, and reading will continue.',
+  QUEUED: 'Waiting to download', CONNECTING: 'Connecting to publisher', DOWNLOADING: 'Downloading PDF',
+  VERIFYING_FILE: 'Verifying file format and size', SAVING: 'Saving and handing off for reading',
+  COMPLETED: 'Download complete; handing off to rulebook reading', FAILED: 'Download failed; choose another source',
+  background: 'Open Background work from any page to return to this progress.',
 })
 const canUpload = computed(() => Boolean(
   (file.value || photographedPages.value.length)
   && !preparingPhotos.value
   && !uploading.value
   && !importingOfficial.value
+  && !officialImportJob.value
   && !preparingVersionId.value,
 ))
 const canImportOfficial = computed(() => Boolean(
@@ -155,6 +184,7 @@ const canImportOfficial = computed(() => Boolean(
   && officialImportRightsConfirmed.value
   && !uploading.value
   && !importingOfficial.value
+  && !officialImportJob.value
   && !preparingVersionId.value,
 ))
 const visualProvider = computed(() => modelConfiguration.value?.providers.find(
@@ -338,7 +368,8 @@ async function load() {
     const requestedEdition = typeof route.query.editionId === 'string' ? route.query.editionId : ''
     editionId.value = editionOptions.value.some((item) => item.id === requestedEdition) ? requestedEdition : ''
     await loadDocuments()
-    await recoverPendingHandoff()
+    await recoverOfficialImportFromRoute()
+    if (!officialImportJob.value) await recoverPendingHandoff()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
@@ -574,33 +605,6 @@ async function openPreparedLesson(preferences: PendingRulebookLesson, csrf: Csrf
   await router.push({ name: 'lessons', query: { started: plan.id, run: launch.assistantRunId } })
 }
 
-async function resumeOrStartLesson(pending: PendingRulebookLesson) {
-  let snapshot: TeachingPreparationRun | null = null
-  try {
-    const response = await checkedFetch(
-      `/api/v1/assistant-runs/latest?mode=TEACHING_PREPARATION&subjectId=${pending.versionId}`,
-    )
-    if (response.ok) snapshot = await response.json() as TeachingPreparationRun
-  } catch {
-    // A missing run is safe to recover through the idempotent launch endpoint.
-  }
-  if (snapshot && (snapshot.run.state === 'FAILED' || snapshot.run.state === 'DEGRADED')) {
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-    throw new Error(t('documents.error'))
-  }
-  if (snapshot) {
-    beginPreparation(pending.versionId, snapshot.run.state)
-    const csrf = await csrfToken()
-    try {
-      await waitForTeachingPreparation(snapshot.run.id, pending, csrf, snapshot)
-    } finally {
-      if (preparingVersionId.value === pending.versionId) endPreparation()
-    }
-    return
-  }
-  await startLesson(pending.versionId, pending)
-}
-
 function closeProgressConnection(versionId: string) {
   progressConnections.get(versionId)?.close()
   progressConnections.delete(versionId)
@@ -647,9 +651,8 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
-    await resumeOrStartLesson(pending).catch((error: unknown) => {
-      errorMessage.value = error instanceof Error ? error.message : t('documents.error')
-    })
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+    message.value = t('documents.readyToRead')
     return
   }
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -771,7 +774,8 @@ async function continueUploadedRulebook(result: { duplicate: boolean; version: {
   officialImportRightsConfirmed.value = false
   await loadDocuments()
   if (result.version.status === 'READY') {
-    await startLesson(result.version.id, pending)
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
+    message.value = t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
     await handleTerminalProgress(pending, 'FAILED')
   } else {
@@ -809,15 +813,81 @@ async function importOfficialRulebook() {
       }),
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
-    await continueUploadedRulebook(await response.json() as {
-      duplicate: boolean
-      version: { id: string; status: string }
-    })
+    officialImportJob.value = await response.json() as OfficialRulebookImportJob
+    await router.replace({ query: { ...route.query, importJob: officialImportJob.value.id } })
+    void waitForOfficialImport(officialImportJob.value.id)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
   } finally {
     importingOfficial.value = false
   }
+}
+
+async function recoverOfficialImportFromRoute() {
+  const jobId = typeof route.query.importJob === 'string' ? route.query.importJob : ''
+  if (!jobId) return
+  try {
+    officialImportJob.value = await fetchOfficialImport(jobId)
+    if (officialImportJob.value.stage === 'COMPLETED') await finishOfficialImport(officialImportJob.value)
+    else if (officialImportJob.value.stage !== 'FAILED') void waitForOfficialImport(jobId)
+  } catch {
+    officialImportJob.value = null
+  }
+}
+
+async function fetchOfficialImport(jobId: string) {
+  const response = await checkedFetch(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`)
+  if (!response.ok) throw new Error(t('documents.officialImport.error'))
+  return await response.json() as OfficialRulebookImportJob
+}
+
+async function waitForOfficialImport(jobId: string) {
+  while (!disposed && officialImportJob.value?.id === jobId) {
+    try {
+      const job = await fetchOfficialImport(jobId)
+      officialImportJob.value = job
+      if (job.stage === 'COMPLETED') {
+        await finishOfficialImport(job)
+        return
+      }
+      if (job.stage === 'FAILED') {
+        errorMessage.value = t('documents.officialImport.error')
+        return
+      }
+    } catch {
+      message.value = t('documents.progress.reconnect')
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+}
+
+async function finishOfficialImport(job: OfficialRulebookImportJob) {
+  if (!job.documentVersionId) throw new Error(t('documents.officialImport.error'))
+  await loadDocuments()
+  const entry = documents.value.find(candidate => candidate.latestVersion.id === job.documentVersionId)
+  await continueUploadedRulebook({
+    duplicate: job.duplicate,
+    version: { id: job.documentVersionId, status: entry?.latestVersion.status ?? 'UPLOADED' },
+  })
+  officialImportJob.value = null
+  const query = { ...route.query }
+  delete query.importJob
+  await router.replace({ query })
+}
+
+function officialImportProgress() {
+  const job = officialImportJob.value
+  if (!job || job.stage !== 'DOWNLOADING' || !job.totalBytes) return null
+  return Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
+}
+
+function officialImportBytes() {
+  const job = officialImportJob.value
+  if (!job || job.downloadedBytes <= 0) return ''
+  const format = (bytes: number) => bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return job.totalBytes ? `${format(job.downloadedBytes)} / ${format(job.totalBytes)}` : format(job.downloadedBytes)
 }
 
 async function deleteRulebook(entry: DocumentResponse) {
@@ -890,6 +960,12 @@ onBeforeUnmount(() => {
           <button type="button" :disabled="rulebookDiscoveryStatus === 'loading'" class="min-h-11 rounded-xl bg-indigo px-5 text-sm font-semibold text-white disabled:opacity-50" @click="discoverOfficialRulebooks">
             {{ rulebookDiscoveryStatus === 'loading' ? rulebookDiscoveryCopy.loading : rulebookDiscoveryCopy.action }}
           </button>
+          <ol v-if="rulebookDiscoveryStatus === 'loading'" class="mt-4 grid gap-2 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4 text-sm sm:grid-cols-3" role="status">
+            <li v-for="(step, index) in rulebookDiscoveryCopy.searchSteps" :key="step" class="flex items-center gap-2 text-ink/60">
+              <span class="grid size-6 shrink-0 place-items-center rounded-full bg-indigo/10 text-xs font-bold text-indigo">{{ index + 1 }}</span>
+              <span>{{ step }}</span>
+            </li>
+          </ol>
           <section v-if="rulebookDiscoveryStatus === 'success'" class="mt-4 rounded-xl border border-indigo/15 bg-paper p-4 sm:p-5" aria-live="polite">
             <h2 class="font-display text-xl font-semibold">{{ rulebookDiscoveryCopy.title }}</h2>
             <p class="mt-1 text-xs leading-5 text-ink/50">{{ rulebookDiscoveryCopy.detail }}</p>
@@ -1014,6 +1090,25 @@ onBeforeUnmount(() => {
           </button>
         </form>
 
+        <section v-if="officialImportJob" class="mt-5 rounded-xl border border-copper/20 bg-paper p-5 text-left" role="status" aria-live="polite">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <p class="tabletop-kicker">{{ officialImportCopy.title }}</p>
+              <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
+              <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportCopy[officialImportJob.stage] }}</p>
+              <p class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
+            </div>
+            <span v-if="officialImportBytes()" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes() }}</span>
+          </div>
+          <div v-if="officialImportProgress() !== null" class="mt-4 h-2 overflow-hidden rounded-full bg-ink/10" :aria-label="`${officialImportProgress()}%`">
+            <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${officialImportProgress()}%` }" />
+          </div>
+          <div v-else-if="officialImportJob.stage !== 'COMPLETED' && officialImportJob.stage !== 'FAILED'" class="mt-4 flex gap-1.5" aria-hidden="true">
+            <span v-for="index in 5" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
+          </div>
+          <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
+        </section>
+
         <p v-if="message && !preparingVersionId" class="mt-5 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" aria-live="polite">{{ message }}</p>
         <div v-if="preparingVersionId" class="mt-5 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-left" role="status" aria-live="polite">
           <div class="flex items-start justify-between gap-4">
@@ -1055,6 +1150,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="flex shrink-0 flex-wrap gap-2">
                 <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
+                <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
                 <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
                 <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>

@@ -11,6 +11,7 @@ const shellRoutes = [
   { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
   { path: '/account', name: 'account', component: { template: '<div />' } },
   { path: '/login', name: 'login', component: { template: '<div />' } },
+  { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
 ]
 
 describe('PublicLessonView', () => {
@@ -33,6 +34,7 @@ describe('PublicLessonView', () => {
         gameName: 'Wingspan', imageUrl: 'https://cf.geekdo-images.com/wingspan.jpg',
         attributionUrl: 'https://boardgamegeek.com/boardgame/266192', attributionLabel: 'BoardGameGeek',
       },
+      publicGame: { bggId: 266192, name: '翼展', bggUrl: 'https://boardgamegeek.com/boardgame/266192' },
       lesson: {
         id: 'lesson-1', status: 'DRAFT_READY', sections: [{
           position: 1, title: '摆好鸟类保护区', visualCaption: '先把玩家板放在自己面前。', steps: [{
@@ -71,7 +73,11 @@ describe('PublicLessonView', () => {
     expect(wrapper.find('header.tabletop-hero').exists()).toBe(true)
     expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-[#f5f0e8]'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
-    expect(wrapper.get('img[alt="Wingspan 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
+    expect(wrapper.get('img[alt="翼展 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
+    expect(wrapper.text()).toContain('关联桌游')
+    expect(wrapper.text()).toContain('翼展')
+    expect(wrapper.get('a[href="/discover/266192"]').text()).toContain('查看桌游资料')
+    expect(wrapper.get('img[alt="Powered by BoardGameGeek"]').attributes('src')).toBe('/powered-by-bgg-rgb.svg')
     expect(wrapper.text()).toContain('放置玩家板')
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('玩家板左侧排列资源标记，右侧是行动格。')

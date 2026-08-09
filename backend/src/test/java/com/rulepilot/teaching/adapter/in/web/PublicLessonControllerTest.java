@@ -127,6 +127,7 @@ class PublicLessonControllerTest {
                 "Orbit Rules",
                 "https://publisher.example/orbit-rules.pdf",
                 null,
+                null,
                 source);
     }
 }

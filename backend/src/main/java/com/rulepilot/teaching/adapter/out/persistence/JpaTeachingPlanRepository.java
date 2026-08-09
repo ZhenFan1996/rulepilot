@@ -86,7 +86,7 @@ public class JpaTeachingPlanRepository implements TeachingPlanRepository {
                 .setMaxResults(limit)
                 .getResultList()
                 .stream()
-                .map(plan -> new PlanReference(plan.id, plan.documentVersionId))
+                .map(plan -> new PlanReference(plan.id, plan.documentVersionId, plan.gameTitle))
                 .toList();
     }
 

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentPageImages.PageImage;
 import com.rulepilot.document.DocumentProcessing;
+import com.rulepilot.document.DocumentVersionScopeLookup;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
@@ -17,17 +18,21 @@ import java.util.UUID;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
+import org.springframework.web.server.ResponseStatusException;
 
 class DocumentPageControllerTest {
 
     private final DocumentProcessing documents = mock(DocumentProcessing.class);
     private final DocumentPageImages pageImages = mock(DocumentPageImages.class);
+    private final DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
     private final DocumentPageController controller =
-            new DocumentPageController(documents, pageImages, new RulePageImageCropper());
+            new DocumentPageController(documents, pageImages, new RulePageImageCropper(), versions);
 
     @Test
     void servesTheWholeEvidencePageAsANormalizedBrowserSafeJpeg() throws Exception {
         UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "player", "Rules")));
         BufferedImage source = new BufferedImage(80, 120, BufferedImage.TYPE_4BYTE_ABGR);
         var graphics = source.createGraphics();
         graphics.setColor(new Color(20, 40, 80, 180));
@@ -38,12 +43,24 @@ class DocumentPageControllerTest {
         when(pageImages.read(versionId, Set.of(1)))
                 .thenReturn(List.of(new PageImage(1, "image/png", encoded.toByteArray(), 80, 120)));
 
-        var response = controller.pageImage(versionId, 1);
+        var response = controller.pageImage(versionId, 1, () -> "player");
 
         assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_JPEG);
         BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(response.getBody()));
         assertThat(decoded.getWidth()).isEqualTo(80);
         assertThat(decoded.getHeight()).isEqualTo(120);
         assertThat(decoded.getColorModel().hasAlpha()).isFalse();
+    }
+
+    @Test
+    void hidesPagesFromAnotherOwner() {
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId)).thenReturn(java.util.Optional.of(
+                new DocumentVersionScopeLookup.VersionScope(versionId, null, "READY", "someone-else", "Rules")));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> controller.pages(versionId, () -> "player"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404 NOT_FOUND");
     }
 }

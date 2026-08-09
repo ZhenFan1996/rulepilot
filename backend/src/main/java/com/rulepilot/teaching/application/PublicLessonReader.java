@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.application;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
+import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
@@ -21,16 +22,19 @@ public class PublicLessonReader {
     private final IllustratedLessonRepository lessons;
     private final PublicRulebookReferenceLookup rulebooks;
     private final PublicGameCoverLookup covers;
+    private final PublicGameIdentityLookup gameIdentities;
 
     public PublicLessonReader(
             TeachingPlanRepository plans,
             IllustratedLessonRepository lessons,
             PublicRulebookReferenceLookup rulebooks,
-            PublicGameCoverLookup covers) {
+            PublicGameCoverLookup covers,
+            PublicGameIdentityLookup gameIdentities) {
         this.plans = plans;
         this.lessons = lessons;
         this.rulebooks = rulebooks;
         this.covers = covers;
+        this.gameIdentities = gameIdentities;
     }
 
     @Transactional(readOnly = true)
@@ -45,6 +49,7 @@ public class PublicLessonReader {
                         rulebook.title(),
                         rulebook.officialSourceUrl(),
                         cover(rulebook),
+                        gameIdentity(plan.gameTitle(), rulebook),
                 lesson))));
     }
 
@@ -65,6 +70,22 @@ public class PublicLessonReader {
                 : new PublicCover(rulebook.title(), rulebook.officialCoverUrl(), rulebook.officialSourceUrl(), "出版方官方封面");
     }
 
+    private PublicGameIdentityLookup.Identity gameIdentity(
+            String gameTitle, PublicRulebookReferenceLookup.Reference rulebook) {
+        if (rulebook.gameEditionId() != null) {
+            var cover = covers.findByEdition(rulebook.gameEditionId());
+            if (cover.isPresent()) {
+                var value = cover.orElseThrow();
+                return new PublicGameIdentityLookup.Identity(value.bggId(), value.gameName(), value.bggUrl());
+            }
+        }
+        try {
+            return gameIdentities.findByTitle(gameTitle).orElse(null);
+        } catch (RuntimeException unavailableOptionalMetadata) {
+            return null;
+        }
+    }
+
     @Transactional(readOnly = true)
     public PublicLesson requireCitedPage(UUID teachingPlanId, int pageNumber) {
         if (pageNumber < 1) throw new IllegalArgumentException("rulebook page does not exist");
@@ -82,6 +103,7 @@ public class PublicLessonReader {
             String rulebookTitle,
             String officialSourceUrl,
             PublicCover gameCover,
+            PublicGameIdentityLookup.Identity publicGame,
             IllustratedLesson lesson) {
         public PublicLesson {
             if (teachingPlanId == null || documentVersionId == null || rulebookTitle == null || rulebookTitle.isBlank()

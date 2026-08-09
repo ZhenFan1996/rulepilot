@@ -3,6 +3,7 @@ package com.rulepilot.document.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.catalog.CatalogGamePresentationLookup;
+import com.rulepilot.catalog.CatalogGameSourceIdentityLookup;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,7 +24,7 @@ class OfficialRulebookDiscoveryServiceTest {
                         "Private", "http://127.0.0.1/rules.pdf", "Stonemaier Games", "en", "First"),
                 new OfficialRulebookCandidateFinder.Candidate(
                         "Page", "https://stonemaiergames.com/rules", "Stonemaier Games", "en", "First")));
-        var service = new OfficialRulebookDiscoveryService(catalog(), finder, "trusted.example");
+        var service = new OfficialRulebookDiscoveryService(catalog(), sourceIdentity(), finder, "trusted.example");
 
         var result = service.discover(EDITION_ID, "en");
 
@@ -38,7 +39,7 @@ class OfficialRulebookDiscoveryServiceTest {
     void degradesWithoutCallingAnUnconfiguredFinder() {
         FakeFinder finder = new FakeFinder(List.of());
         finder.configured = false;
-        var service = new OfficialRulebookDiscoveryService(catalog(), finder, "");
+        var service = new OfficialRulebookDiscoveryService(catalog(), sourceIdentity(), finder, "");
 
         var result = service.discover(EDITION_ID, "zh-CN");
 
@@ -63,6 +64,11 @@ class OfficialRulebookDiscoveryServiceTest {
                 "https://boardgamegeek.com/boardgame/266192"));
     }
 
+    private CatalogGameSourceIdentityLookup sourceIdentity() {
+        return bggId -> Optional.of(new CatalogGameSourceIdentityLookup.Identity(
+                "Wingspan", List.of("Wingspan", "展翅翱翔"), List.of("Stonemaier Games")));
+    }
+
     private static final class FakeFinder implements OfficialRulebookCandidateFinder {
         private final List<Candidate> candidates;
         private boolean configured = true;
@@ -81,6 +87,7 @@ class OfficialRulebookDiscoveryServiceTest {
         public List<Candidate> find(Request request) {
             calls++;
             assertThat(request.gameName()).isEqualTo("Wingspan");
+            assertThat(request.publishers()).containsExactly("Stonemaier Games");
             return candidates;
         }
     }

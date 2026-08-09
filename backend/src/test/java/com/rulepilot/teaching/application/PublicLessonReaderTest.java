@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.PublicGameCoverLookup;
+import com.rulepilot.catalog.PublicGameIdentityLookup;
 import com.rulepilot.document.PublicRulebookReferenceLookup;
 import com.rulepilot.teaching.domain.IllustratedLesson;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -21,7 +22,8 @@ class PublicLessonReaderTest {
     private final IllustratedLessonRepository lessons = mock(IllustratedLessonRepository.class);
     private final PublicRulebookReferenceLookup rulebooks = mock(PublicRulebookReferenceLookup.class);
     private final PublicGameCoverLookup covers = mock(PublicGameCoverLookup.class);
-    private final PublicLessonReader reader = new PublicLessonReader(plans, lessons, rulebooks, covers);
+    private final PublicGameIdentityLookup identities = mock(PublicGameIdentityLookup.class);
+    private final PublicLessonReader reader = new PublicLessonReader(plans, lessons, rulebooks, covers, identities);
 
     @Test
     void exposes_a_read_only_lesson_projection_without_an_owner() {
@@ -29,6 +31,8 @@ class PublicLessonReaderTest {
         when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
         when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(fixture.lesson));
         when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
+        when(identities.findByTitle("Orbit")).thenReturn(Optional.of(new PublicGameIdentityLookup.Identity(
+                123, "Orbit", "https://boardgamegeek.com/boardgame/123")));
 
         var publicLesson = reader.find(fixture.plan.id());
 
@@ -36,6 +40,7 @@ class PublicLessonReaderTest {
             assertThat(value.rulebookTitle()).isEqualTo("Orbit Rules");
             assertThat(value.officialSourceUrl()).isEqualTo("https://publisher.example/rules.pdf");
             assertThat(value.gameCover()).isNull();
+            assertThat(value.publicGame().bggId()).isEqualTo(123);
             assertThat(value.citedPages()).containsExactlyInAnyOrder(2, 5);
         });
     }
@@ -57,6 +62,7 @@ class PublicLessonReaderTest {
             assertThat(value.gameCover().imageUrl()).isEqualTo(cover.thumbnailUrl());
             assertThat(value.gameCover().attributionLabel()).isEqualTo("BoardGameGeek");
             assertThat(value.gameCover().gameName()).isEqualTo("Orbit");
+            assertThat(value.publicGame().bggId()).isEqualTo(123);
         });
     }
 
@@ -76,6 +82,20 @@ class PublicLessonReaderTest {
         assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
             assertThat(value.gameCover().imageUrl()).isEqualTo("https://publisher.example/orbit-cover.jpg");
             assertThat(value.gameCover().attributionLabel()).isEqualTo("出版方官方封面");
+        });
+    }
+
+    @Test
+    void keepsTheLessonReadableWhenOptionalBggIdentityLookupIsUnavailable() {
+        Fixture fixture = fixture();
+        when(plans.findById(fixture.plan.id())).thenReturn(Optional.of(fixture.plan));
+        when(lessons.findLatestByPlan(fixture.plan.id())).thenReturn(Optional.of(fixture.lesson));
+        when(rulebooks.findReference(fixture.plan.documentVersionId())).thenReturn(Optional.of(fixture.reference));
+        when(identities.findByTitle("Orbit")).thenThrow(new IllegalStateException("snapshot unavailable"));
+
+        assertThat(reader.find(fixture.plan.id())).hasValueSatisfying(value -> {
+            assertThat(value.rulebookTitle()).isEqualTo("Orbit Rules");
+            assertThat(value.publicGame()).isNull();
         });
     }
 
