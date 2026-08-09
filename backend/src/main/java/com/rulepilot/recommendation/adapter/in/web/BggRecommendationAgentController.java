@@ -221,14 +221,16 @@ public class BggRecommendationAgentController {
             int catalogCalls,
             int webResearchCalls,
             boolean fallbackUsed,
-            List<String> actions) {
+            List<String> actions,
+            long totalElapsedMs) {
         static HarnessResponse from(BoardGameRecommendationAgent.HarnessTrace trace) {
             return new HarnessResponse(
                     trace.modelCalls(),
                     trace.catalogCalls(),
                     trace.webResearchCalls(),
                     trace.fallbackUsed(),
-                    trace.actions());
+                    trace.actions(),
+                    trace.totalElapsedMs());
         }
     }
 
@@ -339,9 +341,7 @@ public class BggRecommendationAgentController {
                 .sorted((left, right) -> Integer.compare(right.getKey().length(), left.getKey().length()))
                 .toList();
         for (Map.Entry<String, String> translation : translations) {
-            localized = localized
-                    .replace("“" + translation.getKey() + "”", "“" + translation.getValue() + "”")
-                    .replace("\"" + translation.getKey() + "\"", "\"" + translation.getValue() + "\"");
+            localized = localized.replace(translation.getKey(), translation.getValue());
         }
         return localized;
     }

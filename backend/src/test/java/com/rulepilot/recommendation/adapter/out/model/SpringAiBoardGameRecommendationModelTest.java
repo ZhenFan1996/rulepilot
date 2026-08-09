@@ -69,6 +69,7 @@ class SpringAiBoardGameRecommendationModelTest {
                         "thinking_budget",
                         SpringAiBoardGameRecommendationModel.QWEN_THINKING_BUDGET)
                 .containsEntry("preserve_thinking", false);
+        assertThat(SpringAiBoardGameRecommendationModel.QWEN_THINKING_BUDGET).isEqualTo(256);
         assertThat(options.getToolCallbacks()).singleElement().satisfies(callback ->
                 assertThat(callback.getToolDefinition().name()).isEqualTo("reply_to_user"));
     }

@@ -66,6 +66,32 @@ public class BoardGameRecommendationTools {
         return lookupGames(bggIds, ToolName.LOOKUP_BGG_CANDIDATES);
     }
 
+    /**
+     * Resolves title hypotheses and hydrates their BGG details as one Agent-facing read.
+     * The two catalog operations are mechanically dependent and do not need another
+     * model decision between them.
+     */
+    CatalogObservation inspectTitles(List<String> names) {
+        try {
+            List<Integer> ids = catalog.searchByNames(names).stream()
+                    .map(BoardGameRecommendationCatalog.Ranking::bggId)
+                    .distinct()
+                    .toList();
+            List<Game> games = ids.isEmpty() ? List.of() : catalog.findGamesByIds(ids);
+            return new CatalogObservation(
+                    ToolStatus.SUCCESS,
+                    ToolName.INSPECT_BGG_TITLES,
+                    catalog.gameCount(),
+                    games,
+                    "");
+        } catch (IllegalArgumentException exception) {
+            return CatalogObservation.error(ToolName.INSPECT_BGG_TITLES, "INVALID_ARGUMENT");
+        } catch (RuntimeException exception) {
+            LOGGER.warn("Recommendation BGG title-inspection tool failed");
+            return CatalogObservation.error(ToolName.INSPECT_BGG_TITLES, "CATALOG_UNAVAILABLE");
+        }
+    }
+
     NameSearchObservation searchByNames(List<String> names) {
         try {
             return new NameSearchObservation(
@@ -152,6 +178,7 @@ public class BoardGameRecommendationTools {
         SEARCH_BGG_CATALOG,
         LOOKUP_BGG_GAME,
         LOOKUP_BGG_CANDIDATES,
+        INSPECT_BGG_TITLES,
         SEARCH_BGG_BY_NAME,
         RESOLVE_BGG_REFERENCE,
         DISCOVER_CANDIDATES,
