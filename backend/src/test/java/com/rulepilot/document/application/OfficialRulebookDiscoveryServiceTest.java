@@ -124,7 +124,6 @@ class OfficialRulebookDiscoveryServiceTest {
     @Test
     void followsAGstoneRulebookLinkAndPromotesItsExplicitPageImageViewerForImport() {
         var finder = new FakeFinder(List.of());
-        finder.configured = false;
         GstoneRulebookCatalogLookup gstoneCatalog = request -> {
             assertThat(request.gameName()).isEqualTo("Wingspan");
             return List.of(new OfficialRulebookCandidateFinder.Candidate(
@@ -180,6 +179,51 @@ class OfficialRulebookDiscoveryServiceTest {
                 .noneMatch(candidate -> candidate.url().endsWith("/game/doc-2222.html"));
         assertThat(finder.refinementCalls).isZero();
         assertThat(finder.calls).isZero();
+    }
+
+    @Test
+    void fallsBackToModelSearchWhenGstoneOnlyHasADifferentLanguage() {
+        var finder = new FakeFinder(List.of(new OfficialRulebookCandidateFinder.Candidate(
+                "Chinese publisher rulebook",
+                "https://stonemaiergames.com/files/wingspan-zh-rules.pdf",
+                "Stonemaier Games",
+                "zh-CN",
+                "First")));
+        GstoneRulebookCatalogLookup gstoneCatalog = request -> List.of(
+                new OfficialRulebookCandidateFinder.Candidate(
+                        "目录游戏",
+                        "https://www.gstonegames.com/game/info-1234.html",
+                        "集石",
+                        "zh-CN",
+                        "基础版"));
+        OfficialRulebookSourceInspector inspector = source -> {
+            if (source.getPath().equals("/game/info-1234.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source,
+                        OfficialRulebookSourceInspector.MediaType.HTML,
+                        List.of(new OfficialRulebookSourceInspector.Link(
+                                URI.create("https://www.gstonegames.com/game/doc-1111.html"),
+                                "Official Rulebook"))));
+            }
+            if (source.getPath().equals("/game/doc-1111.html")) {
+                return Optional.of(new OfficialRulebookSourceInspector.Inspection(
+                        source, OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY, List.of()));
+            }
+            return Optional.empty();
+        };
+        var service = new OfficialRulebookDiscoveryService(
+                catalog(), sourceIdentity(), finder, gstoneCatalog, inspector, "");
+
+        var result = service.discover(EDITION_ID, "zh-CN");
+
+        assertThat(finder.calls).isEqualTo(1);
+        assertThat(result.candidates())
+                .anySatisfy(candidate -> {
+                    assertThat(candidate.url())
+                            .isEqualTo("https://stonemaiergames.com/files/wingspan-zh-rules.pdf");
+                    assertThat(candidate.language()).isEqualTo("zh-CN");
+                    assertThat(candidate.acquisitionMode()).isEqualTo(AcquisitionMode.DIRECT_PDF);
+                });
     }
 
     @Test

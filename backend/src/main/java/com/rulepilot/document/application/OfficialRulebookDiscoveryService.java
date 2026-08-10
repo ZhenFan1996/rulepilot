@@ -94,27 +94,37 @@ public class OfficialRulebookDiscoveryService {
                 identity.officialNames(),
                 identity.publishers(),
                 trustedDomains.stream().sorted().toList());
-        var discovered = new ArrayList<>(gstoneCatalog.find(request));
-        if (!modelSearchConfigured && discovered.isEmpty()) return new Result(false, List.of());
-        if (modelSearchConfigured) {
-            discovered.addAll(finder.find(request));
-            discovered.add(new OfficialRulebookCandidateFinder.Candidate(
-                    "BoardGameGeek Files",
-                    "https://boardgamegeek.com/files/thing/" + game.bggId(),
-                    "BoardGameGeek",
-                    checkedLanguage,
-                    game.editionName()));
-        }
-        List<Candidate> initialCandidates = discovered.stream()
+        List<OfficialRulebookCandidateFinder.Candidate> catalogDiscovered = gstoneCatalog.find(request);
+        List<Candidate> catalogCandidates = catalogDiscovered.stream()
                 .map(candidate -> validate(candidate, identity.publishers()))
                 .filter(java.util.Objects::nonNull)
                 .toList();
-        List<Candidate> resolvedCandidates = resolveSourcePages(initialCandidates, request);
         var allCandidates = new ArrayList<Candidate>();
-        allCandidates.addAll(initialCandidates);
-        allCandidates.addAll(resolvedCandidates);
-        if (modelSearchConfigured && allCandidates.stream().noneMatch(this::isImportable)) {
-            List<OfficialRulebookCandidateFinder.Candidate> observedPages = initialCandidates.stream()
+        allCandidates.addAll(catalogCandidates);
+        allCandidates.addAll(resolveSourcePages(catalogCandidates, request));
+        if (allCandidates.stream().anyMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
+            return new Result(true, rankedCandidates(allCandidates));
+        }
+        if (!modelSearchConfigured) {
+            return new Result(!catalogDiscovered.isEmpty(), rankedCandidates(allCandidates));
+        }
+
+        var modelDiscovered = new ArrayList<>(finder.find(request));
+        modelDiscovered.add(new OfficialRulebookCandidateFinder.Candidate(
+                "BoardGameGeek Files",
+                "https://boardgamegeek.com/files/thing/" + game.bggId(),
+                "BoardGameGeek",
+                checkedLanguage,
+                game.editionName()));
+        List<Candidate> modelCandidates = modelDiscovered.stream()
+                .map(candidate -> validate(candidate, identity.publishers()))
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        allCandidates.addAll(modelCandidates);
+        allCandidates.addAll(resolveSourcePages(modelCandidates, request));
+        if (allCandidates.stream().noneMatch(candidate -> isImportableForLanguage(candidate, checkedLanguage))) {
+            List<OfficialRulebookCandidateFinder.Candidate> observedPages = java.util.stream.Stream.concat(
+                            catalogCandidates.stream(), modelCandidates.stream())
                     .filter(candidate -> candidate.acquisitionMode() == AcquisitionMode.SOURCE_PAGE)
                     .filter(candidate -> candidate.sourceType() != SourceType.PUBLIC_WEB)
                     .limit(6)
@@ -125,6 +135,10 @@ public class OfficialRulebookDiscoveryService {
                     .filter(java.util.Objects::nonNull)
                     .forEach(allCandidates::add);
         }
+        return new Result(true, rankedCandidates(allCandidates));
+    }
+
+    private List<Candidate> rankedCandidates(List<Candidate> allCandidates) {
         var uniqueCandidates = new LinkedHashMap<String, Candidate>();
         allCandidates.stream()
                 .filter(candidate -> candidate.sourceType() != SourceType.PUBLIC_WEB
@@ -132,10 +146,10 @@ public class OfficialRulebookDiscoveryService {
                 .forEach(candidate -> uniqueCandidates.putIfAbsent(candidate.url(), candidate));
         List<Candidate> candidates = uniqueCandidates.values().stream()
                 .sorted(java.util.Comparator.comparingInt((Candidate candidate) -> sourcePriority(candidate.sourceType()))
-                        .thenComparingInt(candidate -> acquisitionPriority(candidate.acquisitionMode())))
+                .thenComparingInt(candidate -> acquisitionPriority(candidate.acquisitionMode())))
                 .limit(8)
                 .toList();
-        return new Result(true, candidates);
+        return candidates;
     }
 
     private List<Candidate> resolveSourcePages(
@@ -375,6 +389,19 @@ public class OfficialRulebookDiscoveryService {
     private boolean isImportable(Candidate candidate) {
         return candidate.acquisitionMode() == AcquisitionMode.DIRECT_PDF
                 || candidate.acquisitionMode() == AcquisitionMode.IMAGE_GALLERY;
+    }
+
+    private boolean isImportableForLanguage(Candidate candidate, String requestedLanguage) {
+        if (!isImportable(candidate)) return false;
+        String requested = primaryLanguage(requestedLanguage);
+        if (requested.isBlank() || "und".equals(requested)) return true;
+        return requested.equals(primaryLanguage(candidate.language()));
+    }
+
+    private String primaryLanguage(String language) {
+        String normalized = language == null ? "" : language.strip().toLowerCase(Locale.ROOT).replace('_', '-');
+        int separator = normalized.indexOf('-');
+        return separator < 0 ? normalized : normalized.substring(0, separator);
     }
 
     private boolean requiresBrowserHandoff(URI source) {

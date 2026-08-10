@@ -293,14 +293,32 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                         "When does this action end?",
                         "I still don't understand. Walk me through one concrete example.",
                         PlayerLocale.EN,
-                        LearningIntent.EXAMPLE),
+                        LearningIntent.EXAMPLE,
+                        "example"),
+                new DialogueIntentCase(
+                        "cx-source-deepseek",
+                        "deepseek",
+                        "这个行动为什么会立刻结束？",
+                        "这条规则在规则书哪里？我想自己翻一下。",
+                        PlayerLocale.ZH_CN,
+                        LearningIntent.SOURCE,
+                        "source"),
                 new DialogueIntentCase(
                         "cx-adapt-qwen",
                         "qwen",
                         "这个行动的费用什么时候支付？",
                         "还是有点绕，能先用更简单的话重新讲一遍吗？",
                         PlayerLocale.ZH_CN,
-                        LearningIntent.SIMPLIFY));
+                        LearningIntent.SIMPLIFY,
+                        "simplify"),
+                new DialogueIntentCase(
+                        "cx-exception-qwen",
+                        "qwen",
+                        "执行完这个步骤后回合就结束吗？",
+                        "那有没有例外情况？",
+                        PlayerLocale.ZH_CN,
+                        LearningIntent.EXCEPTIONS,
+                        "exception"));
         List<Map<String, Object>> results = new ArrayList<>();
 
         for (DialogueIntentCase case_ : cases) {
@@ -318,24 +336,39 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                             null,
                             case_.locale()))
                     .orElseThrow(() -> new AssertionError(
-                            case_.provider() + " did not return a valid semantic teaching plan"));
+                            case_.caseId() + "/" + case_.provider()
+                                    + " did not return a valid semantic teaching plan"));
             long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
 
-            assertThat(draft.referenceBinding()).isEqualTo(ReferenceBinding.PREVIOUS_QUESTION);
-            assertThat(draft.learningIntent()).isEqualTo(case_.expectedIntent());
-            assertThat(draft.subquestions()).isNotEmpty();
+            assertThat(draft.referenceBinding())
+                    .as(case_.caseId() + " must bind the supplied previous question")
+                    .isEqualTo(ReferenceBinding.PREVIOUS_QUESTION);
+            assertThat(draft.learningIntent())
+                    .as(case_.caseId() + " must infer the natural teaching move")
+                    .isEqualTo(case_.expectedIntent());
+            assertThat(draft.subquestions()).as(case_.caseId() + " must plan fresh evidence").isNotEmpty();
             assertThat(latencyMs).isLessThan(45_000);
-            results.add(Map.of(
-                    "caseId", case_.caseId(),
-                    "provider", case_.provider(),
-                    "model", configured.model(),
-                    "referenceBinding", draft.referenceBinding().name(),
-                    "learningIntent", draft.learningIntent().name(),
-                    "subquestionCount", draft.subquestions().size(),
-                    "modelCalls", 1,
-                    "toolCalls", 0,
-                    "latencyMs", latencyMs));
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("caseId", case_.caseId());
+            result.put("provider", case_.provider());
+            result.put("model", configured.model());
+            result.put("referenceBinding", draft.referenceBinding().name());
+            result.put("learningIntent", draft.learningIntent().name());
+            result.put("interactionTag", case_.interactionTag());
+            result.put("naturalTurnCount", 2);
+            result.put("subquestionCount", draft.subquestions().size());
+            result.put("modelCalls", 1);
+            result.put("toolCalls", 0);
+            result.put("latencyMs", latencyMs);
+            results.add(Map.copyOf(result));
         }
+
+        assertThat(results).hasSize(4);
+        assertThat(results).extracting(result -> result.get("provider"))
+                .containsOnly("deepseek", "qwen")
+                .hasSize(4);
+        assertThat(results).extracting(result -> result.get("learningIntent"))
+                .containsExactlyInAnyOrder("EXAMPLE", "SOURCE", "SIMPLIFY", "EXCEPTIONS");
 
         Path output = root.resolve(".local/agent-evaluation/teaching-dialogue-intent-real.json");
         Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
@@ -441,6 +474,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         result.put("caseId", case_.caseId());
         result.put("provider", case_.provider().provider());
         result.put("interactionTags", List.copyOf(tags));
+        result.put("naturalTurnCount", 3);
+        result.put("model", case_.provider().model());
         result.put("addedEvidence", refined.evidence().size() - deterministic.evidence().size());
         result.put("toolCalls", audited.toolCalls);
         result.put("modelCalls", audited.modelCalls);
@@ -709,7 +744,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             String previousQuestion,
             String followUp,
             PlayerLocale locale,
-            LearningIntent expectedIntent) {}
+            LearningIntent expectedIntent,
+            String interactionTag) {}
 
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;

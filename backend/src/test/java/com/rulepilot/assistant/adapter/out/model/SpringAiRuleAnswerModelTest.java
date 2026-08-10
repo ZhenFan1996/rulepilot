@@ -25,6 +25,8 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
+import org.springframework.ai.openai.OpenAiChatOptions;
 
 class SpringAiRuleAnswerModelTest {
 
@@ -75,6 +77,8 @@ class SpringAiRuleAnswerModelTest {
                                 "teaching move",
                                 "learningIntent",
                                 "GENERAL_QUESTION",
+                                "fallback hint",
+                                "PREVIOUS_QUESTION even if deterministicMissingContext",
                                 "MUST contain between one and four"));
     }
 
@@ -89,6 +93,26 @@ class SpringAiRuleAnswerModelTest {
         assertThat(fixture.model.interpretQuestion(request())).isEmpty();
     }
 
+    @Test
+    void requestsJsonModeAndDisablesThinkingForDeepSeekInterpretation() {
+        Fixture fixture = fixture("""
+                {"questionType":"RULE_QUERY","referenceBinding":"PREVIOUS_QUESTION","terms":[],
+                 "missingContext":[],"learningIntent":"SOURCE",
+                 "subquestions":[{"questionSpan":"这条规则在规则书哪里？","evidenceNeeds":["DIRECT_RULE"]}]}
+                """, true);
+
+        assertThat(fixture.model.interpretQuestion(request())).isPresent();
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(fixture.chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("deepseek-v4-flash");
+        assertThat(options.getMaxTokens()).isEqualTo(384);
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
+        assertThat(options.getExtraBody())
+                .containsEntry("thinking", java.util.Map.of("type", "disabled"));
+    }
+
     private QuestionInterpretationRequest request() {
         return new QuestionInterpretationRequest(
                 "它也是这样吗？",
@@ -101,12 +125,29 @@ class SpringAiRuleAnswerModelTest {
     }
 
     private Fixture fixture(String response) {
+        return fixture(response, false);
+    }
+
+    private Fixture fixture(String response, boolean deepSeek) {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
         when(configuration.usesFake(Role.ANSWER)).thenReturn(false);
         when(configuration.modelFor(Role.ANSWER)).thenReturn(chatModel);
-        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
-        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        if (deepSeek) {
+            when(configuration.providerFor(Role.ANSWER)).thenReturn("deepseek");
+            when(configuration.modelNameFor(Role.ANSWER)).thenReturn("deepseek-v4-flash");
+            when(configuration.usesDeepSeekNonThinkingGeneration(Role.ANSWER)).thenReturn(true);
+            OpenAiChatOptions providerOptions = OpenAiChatOptions.builder()
+                    .apiKey("test-key")
+                    .baseUrl("https://provider.example/v1")
+                    .model("deepseek-v4-flash")
+                    .build();
+            when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
+            when(chatModel.getOptions()).thenReturn(providerOptions);
+        } else {
+            when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+            when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        }
         when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
                 new AssistantMessage(response)))));
         return new Fixture(

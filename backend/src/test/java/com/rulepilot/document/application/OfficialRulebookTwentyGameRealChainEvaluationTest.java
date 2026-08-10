@@ -104,7 +104,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 jobs, imports, Runnable::run, Clock.fixed(NOW, ZoneOffset.UTC));
         var gstone = new HttpGstoneRulebookCatalogLookup(json, true, Duration.ofSeconds(8));
         var inspector = new HttpOfficialRulebookSourceInspector(Duration.ofSeconds(8), 1024 * 1024);
-        OfficialRulebookCandidateFinder disabledModelFinder = disabledModelFinder();
+        OfficialRulebookCandidateFinder configuredModelFinder = unreachableConfiguredModelFinder();
         var results = new ArrayList<Map<String, Object>>();
         var failures = new ArrayList<String>();
         long totalPdfBytes = 0;
@@ -114,7 +114,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
             long started = System.nanoTime();
             var result = baseResult(case_);
             try {
-                var discovery = discovery(case_, gstone, inspector, disabledModelFinder);
+                var discovery = discovery(case_, gstone, inspector, configuredModelFinder);
                 var discovered = discovery.discover(case_.editionId(), case_.language());
                 String expectedGamePage = "https://www.gstonegames.com/game/info-%d.html".formatted(case_.gstoneId());
                 String expectedDocument = "https://www.gstonegames.com/game/doc-%d.html".formatted(case_.documentId());
@@ -209,7 +209,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 "controls",
                 Map.of(
                         "explicitConsentUsed", true,
-                        "modelSearchUsed", false,
+                        "configuredModelSearchSkipped", true,
                         "credentialsUsed", false,
                         "loginStateUsed", false,
                         "rawPdfPersisted", false,
@@ -258,16 +258,16 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         return new OfficialRulebookDiscoveryService(catalog, identities, finder, gstone, inspector, "");
     }
 
-    private OfficialRulebookCandidateFinder disabledModelFinder() {
+    private OfficialRulebookCandidateFinder unreachableConfiguredModelFinder() {
         return new OfficialRulebookCandidateFinder() {
             @Override
             public boolean configured() {
-                return false;
+                return true;
             }
 
             @Override
             public List<Candidate> find(Request request) {
-                throw new AssertionError("model search must stay disabled in the deterministic 20-game route");
+                throw new AssertionError("a matching Gstone rulebook must bypass configured model search");
             }
         };
     }

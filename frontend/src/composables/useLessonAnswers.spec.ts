@@ -19,6 +19,21 @@ function createAnswers() {
   })
 }
 
+function createSessionAnswers() {
+  return useLessonAnswers({
+    currentContext: () => ({
+      planId: 'plan-1',
+      documentVersionId: 'document-1',
+      locale: 'en',
+      gameSessionId: 'session-1',
+    }),
+    currentLessonRequest: () => 1,
+    isCurrentLessonLoad: () => true,
+    requestLogin: vi.fn(),
+    onReceived: vi.fn(),
+  })
+}
+
 describe('useLessonAnswers', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -145,6 +160,35 @@ describe('useLessonAnswers', () => {
       question: 'Search again and verify the previous answer.',
       previousQuestion: 'When does this action score?',
       learningIntent: 'VERIFY',
+    })
+  })
+
+  it('attaches the durable game session when the answer workspace provides one', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
+      if (path.includes('/answers') && init?.method === 'POST') {
+        requestBody = JSON.parse(String(init.body)) as Record<string, unknown>
+        return Response.json({
+          assistantRunId: '11111111-1111-4111-8111-111111111111',
+          answer: {
+            status: 'ANSWERED', shortVerdict: 'Verified.', explanation: 'Supported.', citations: [],
+            exceptions: [], confidence: 'HIGH', official: false, confirmedRulingId: null,
+            confirmedRulingVersion: null, clarification: null, warnings: [],
+          },
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const answers = createSessionAnswers()
+
+    await answers.submitQuestion('When does this resolve?', null)
+
+    expect(requestBody).toMatchObject({
+      question: 'When does this resolve?',
+      gameSessionId: 'session-1',
+      language: 'en',
     })
   })
 

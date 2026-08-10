@@ -119,19 +119,17 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             assertThat(authorization.get()).isEqualTo("Bearer secret-key");
             assertThat(requestBody.get()).contains(
                     "\"tools\":[{\"type\":\"web_search\"}]",
-                    "\"max_output_tokens\":900",
+                    "\"max_output_tokens\":500",
                     "\"reasoning\":{\"effort\":\"minimal\"}",
+                    "one bounded publisher-first search pass",
                     "filetype:pdf",
-                    "BoardGameGeek Files",
-                    "gstonegames.com",
-                    "1jour-1jeu.com",
-                    "/file/download_redirect/",
                     "Catalog Game",
                     "目录游戏",
                     "Publisher Studio",
                     "rules.example",
                     "\\\"bggId\\\":42");
-            assertThat(requestBody.get()).doesNotContain("secret-key");
+            assertThat(requestBody.get()).doesNotContain(
+                    "secret-key", "BoardGameGeek Files", "gstonegames.com", "1jour-1jeu.com");
         } finally {
             server.stop(0);
         }
@@ -256,7 +254,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
     }
 
     @Test
-    void usesQwenNonThinkingSearchAndParsesTheFinalMessageAfterToolProgress() throws Exception {
+    void streamsQwenMaxSearchAndParsesTheCompletedResponseAfterToolProgress() throws Exception {
         AtomicReference<String> requestBody = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
         server.createContext("/responses", exchange -> {
@@ -269,7 +267,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     "language", "en",
                     "edition", "Base",
                     "sourceIndexes", List.of(1)))));
-            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
+            Map<String, Object> completed = Map.of("output", List.of(
                     Map.of("type", "message", "content", List.of(Map.of(
                             "type", "output_text", "text", "I will search the official publisher."))),
                     Map.of(
@@ -277,9 +275,17 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                             "action", Map.of("sources", List.of(Map.of(
                                     "url", "https://publisher.example/rules.pdf")))),
                     Map.of("type", "message", "content", List.of(Map.of(
-                            "type", "output_text", "text", content))))));
-            exchange.sendResponseHeaders(200, response.length);
-            exchange.getResponseBody().write(response);
+                            "type", "output_text", "text", content)))));
+            String response = "data:" + json.writeValueAsString(Map.of(
+                            "type", "response.web_search_call.completed"))
+                    + "\n\n"
+                    + "data:" + json.writeValueAsString(Map.of(
+                            "type", "response.completed", "response", completed))
+                    + "\n\n";
+            byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, responseBytes.length);
+            exchange.getResponseBody().write(responseBytes);
             exchange.close();
         });
         server.start();
@@ -290,7 +296,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     true,
                     "secret-key",
                     "http://127.0.0.1:" + server.getAddress().getPort(),
-                    "qwen3.7-plus");
+                    "qwen3.7-max");
 
             assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
                             42, "Catalog Game", "Base", 2024, "en")))
@@ -298,8 +304,56 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     .extracting(OfficialRulebookCandidateFinder.Candidate::url)
                     .isEqualTo("https://publisher.example/rules.pdf");
             assertThat(requestBody.get())
-                    .contains("\"enable_thinking\":false", "\"tools\":[{\"type\":\"web_search\"}]")
-                    .doesNotContain("\"reasoning\"");
+                    .contains(
+                            "\"reasoning\":{\"effort\":\"minimal\"}",
+                            "\"tools\":[{\"type\":\"web_search\"}]",
+                            "\"stream\":true")
+                    .doesNotContain("\"enable_thinking\"");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void recoversObservedTrustedPdfSourcesWhenAStreamEndsBeforeResponseCompleted() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            ObjectMapper json = new ObjectMapper();
+            Map<String, Object> item = Map.of(
+                    "type", "web_search_call",
+                    "action", Map.of("sources", List.of(Map.of(
+                            "url", "https://publisher.example/Catalog-Game-Base-Rulebook.pdf"))));
+            String response = "data:" + json.writeValueAsString(Map.of(
+                            "type", "response.output_item.done", "item", item))
+                    + "\n\n";
+            byte[] responseBytes = response.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=UTF-8");
+            exchange.sendResponseHeaders(200, responseBytes.length);
+            exchange.getResponseBody().write(responseBytes);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "qwen3.7-max");
+
+            assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
+                            42,
+                            "Catalog Game",
+                            "Base",
+                            2024,
+                            "en",
+                            List.of("Catalog Game"),
+                            List.of("Publisher Studio"),
+                            List.of("publisher.example"))))
+                    .singleElement()
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .isEqualTo("https://publisher.example/Catalog-Game-Base-Rulebook.pdf");
         } finally {
             server.stop(0);
         }
@@ -334,7 +388,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     true,
                     "secret-key",
                     "http://127.0.0.1:" + server.getAddress().getPort(),
-                    "qwen3.7-plus");
+                    "qwen3.7-max");
 
             var candidates = finder.find(new OfficialRulebookCandidateFinder.Request(
                     42,
@@ -350,8 +404,8 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     .extracting(OfficialRulebookCandidateFinder.Candidate::url)
                     .containsExactly(
                             "https://publisher.example/Catalog-Game-Base-Game-Rulebook.pdf",
-                            "https://publisher.example/Catalog-Game-Landmarks-Rulebook.pdf",
-                            "https://publisher.example/Catalog-Game-rulebook.pdf");
+                            "https://publisher.example/Catalog-Game-rulebook.pdf",
+                            "https://publisher.example/Catalog-Game-Landmarks-Rulebook.pdf");
             assertThat(candidates).allSatisfy(candidate ->
                     assertThat(candidate.publisher()).isEqualTo("Publisher Studio"));
         } finally {
@@ -380,7 +434,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     true,
                     "secret-key",
                     "http://127.0.0.1:" + server.getAddress().getPort(),
-                    "qwen3.7-plus");
+                    "qwen3.7-max");
 
             assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
                             42,
@@ -413,6 +467,23 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("qwen-plus")
                 .hasMessageContaining("prohibited");
+        org.mockito.Mockito.verifyNoInteractions(calls);
+    }
+
+    @Test
+    void rejectsQwen37PlusBecauseResponsesWebSearchRequiresADedicatedModel() {
+        okhttp3.Call.Factory calls = mock(okhttp3.Call.Factory.class);
+
+        assertThatThrownBy(() -> new ResponsesApiOfficialRulebookCandidateFinder(
+                        calls,
+                        new ObjectMapper(),
+                        true,
+                        "secret-key",
+                        "https://dashscope.aliyuncs.com/api/v1",
+                        "qwen3.7-plus"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("qwen3.7-plus")
+                .hasMessageContaining("Responses web-search");
         org.mockito.Mockito.verifyNoInteractions(calls);
     }
 
@@ -452,7 +523,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                     true,
                     "secret-key",
                     "http://127.0.0.1:" + server.getAddress().getPort(),
-                    "qwen3.7-plus",
+                    "qwen3.7-max",
                     java.time.Duration.ofDays(30));
             var request = new OfficialRulebookCandidateFinder.Request(42, "Catalog Game", "Base", 2024, "en");
 
@@ -482,7 +553,7 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                 true,
                 "secret-key",
                 "https://dashscope.aliyuncs.com/api/v1",
-                "qwen3.7-plus",
+                "qwen3.7-max",
                 java.time.Duration.ofDays(30),
                 java.time.Duration.ofMinutes(10),
                 1,

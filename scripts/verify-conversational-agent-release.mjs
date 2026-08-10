@@ -8,6 +8,7 @@ const REPORT_KEYS = Object.freeze([
   'recommendation',
   'acquisition',
   'teachingDialogue',
+  'answerDialogue',
   'answerEvidence',
   'teachingEvidence',
   'security',
@@ -19,6 +20,7 @@ const LIMITS = Object.freeze({
   recommendationCatalogCalls: [1, 20],
   recommendationWebCalls: [0, 2],
   adaptiveIntentLatencyMs: [1_000, 120_000],
+  answerDialogueLatencyMs: [1_000, 120_000],
   acquisitionDiscoveryLatencyMs: [1_000, 300_000],
   acquisitionDownloadLatencyMs: [1_000, 900_000],
   acquisitionMaximumBytes: [1_024, 512 * 1024 * 1024],
@@ -128,8 +130,40 @@ function verifyRecommendation(report, limits) {
     providers.add(result.provider)
     requireInvariant(result.outcome === 'RECOMMENDATIONS', stage,
       `${result.caseId} recommendation did not reach a useful terminal state`)
+    requireInvariant(Array.isArray(result.scenarioTags)
+        && ['comparison-correction', 'direct-target', 'everyday-refinement']
+          .every((tag) => result.scenarioTags.includes(tag)),
+    stage, `${result.caseId} does not cover the required everyday recommendation scenarios`)
     requireInvariant(result.continuationResolved === true, stage,
       `${result.caseId} did not preserve the context-dependent player goal`)
+    requireInvariant(result.targetOutcome === 'RECOMMENDATIONS' && result.targetSelected === true,
+      stage, `${result.caseId} did not turn a player-selected named game into a selectable card`)
+    requireInvariant(result.targetRecommendationCount === 1,
+      stage, `${result.caseId} mixed unrelated games into a direct named-game selection`)
+    requireInvariant(Number.isInteger(result.targetLatencyMs)
+        && result.targetLatencyMs > 0 && result.targetLatencyMs <= limits.recommendationLatencyMs,
+      stage, `${result.caseId} named-game target latency budget failed`)
+    requireInvariant(Array.isArray(result.targetActions)
+        && result.targetActions.includes('RESOLVE_BGG_REFERENCE')
+        && result.targetActions.includes('RECOMMEND_GAMES'),
+      stage, `${result.caseId} named-game target did not use the observable selection handoff`)
+    requireInvariant(result.everydayOutcome === 'RECOMMENDATIONS'
+        && result.everydayPlayers === 4
+        && result.everydayMaxMinutes === 60
+        && result.everydayPreferenceUpdates === true,
+    stage, `${result.caseId} did not preserve an everyday refinement into hard preferences`)
+    requireInvariant(Number.isInteger(result.everydayNaturalTurnCount) && result.everydayNaturalTurnCount >= 3,
+      stage, `${result.caseId} everyday refinement is not multi-turn`)
+    requireInvariant(Number.isInteger(result.everydayRecommendationCount)
+        && result.everydayRecommendationCount >= 2,
+    stage, `${result.caseId} everyday refinement did not produce a useful slate`)
+    requireInvariant(Number.isInteger(result.everydayLatencyMs)
+        && result.everydayLatencyMs > 0 && result.everydayLatencyMs <= limits.recommendationLatencyMs,
+    stage, `${result.caseId} everyday refinement latency budget failed`)
+    requireInvariant(Array.isArray(result.everydayActions)
+        && result.everydayActions.includes('UPDATE_PREFERENCES')
+        && result.everydayActions.includes('RECOMMEND_GAMES'),
+    stage, `${result.caseId} everyday refinement did not expose preference and recommendation actions`)
     requireInvariant(result.referenceExcluded === true, stage,
       `${result.caseId} recommended the player's comparison target back to them`)
     requireInvariant(result.referenceGrounded === true, stage,
@@ -170,8 +204,10 @@ function verifyRecommendation(report, limits) {
 function verifyAdaptiveDialogue(report, limits) {
   const stage = 'SEMANTIC_READY'
   const results = Array.isArray(report?.results) ? report.results : []
-  requireInvariant(results.length >= 2, stage, 'adaptive dialogue needs at least two real provider results')
+  requireInvariant(results.length >= 4, stage, 'adaptive dialogue needs four everyday real-provider moves')
   const providers = new Set()
+  const providerCounts = new Map()
+  const observedIntents = new Set()
   for (const result of results) {
     requireInvariant(opaqueCaseId(result?.caseId), stage, 'adaptive dialogue case ID must be opaque')
     requireInvariant(typeof result?.provider === 'string' && result.provider.length > 0,
@@ -179,10 +215,16 @@ function verifyAdaptiveDialogue(report, limits) {
     requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
       stage, `${result?.caseId} adaptive model is prohibited or missing`)
     providers.add(result.provider)
+    providerCounts.set(result.provider, (providerCounts.get(result.provider) ?? 0) + 1)
+    observedIntents.add(result.learningIntent)
     requireInvariant(result.referenceBinding === 'PREVIOUS_QUESTION', stage,
       `${result.caseId} did not bind the prior player question`)
     requireInvariant(['SIMPLIFY', 'EXAMPLE', 'DEFINE', 'WHY', 'EXCEPTIONS', 'SOURCE', 'VERIFY']
       .includes(result.learningIntent), stage, `${result.caseId} has no adaptive teaching move`)
+    requireInvariant(typeof result.interactionTag === 'string' && result.interactionTag.length > 0,
+      stage, `${result.caseId} has no everyday interaction tag`)
+    requireInvariant(Number.isInteger(result.naturalTurnCount) && result.naturalTurnCount >= 2,
+      stage, `${result.caseId} is not grounded in a prior conversational turn`)
     requireInvariant(Number.isInteger(result.subquestionCount)
         && result.subquestionCount >= 1 && result.subquestionCount <= 4,
       stage, `${result.caseId} evidence plan is incomplete`)
@@ -193,6 +235,11 @@ function verifyAdaptiveDialogue(report, limits) {
       stage, `${result.caseId} adaptive intent latency budget failed`)
   }
   requireInvariant(providers.size >= 2, stage, 'adaptive dialogue needs two distinct providers')
+  requireInvariant([...providerCounts.values()].every((count) => count >= 2), stage,
+    'adaptive dialogue needs at least two everyday moves per provider')
+  for (const intent of ['SIMPLIFY', 'EXAMPLE', 'SOURCE', 'EXCEPTIONS']) {
+    requireInvariant(observedIntents.has(intent), stage, `adaptive dialogue is missing ${intent}`)
+  }
   const controls = report?.controls ?? {}
   requireInvariant(controls.explicitEnumInjected === false, stage,
     'adaptive dialogue evaluation injected a learning-intent enum')
@@ -202,6 +249,54 @@ function verifyAdaptiveDialogue(report, limits) {
     'adaptive dialogue retained raw model output')
   requireInvariant(controls.prohibitedQwenPlusUsed === false, stage,
     'adaptive dialogue used qwen-plus')
+  return providers
+}
+
+function verifyAnswerDialogue(report, limits) {
+  const stage = 'SEMANTIC_READY'
+  const results = Array.isArray(report?.results) ? report.results : []
+  requireInvariant(results.length >= 2, stage, 'Answer dialogue needs two grounded real-rulebook conversations')
+  const providers = new Set()
+  const interactionTags = new Set()
+  for (const result of results) {
+    requireInvariant(/^rr-[a-z0-9-]+$/.test(result?.caseId ?? ''), stage,
+      'Answer dialogue case ID must identify a sanitized real-rulebook case')
+    requireInvariant(typeof result?.provider === 'string' && result.provider.length > 0,
+      stage, `${result?.caseId} Answer dialogue provider is missing`)
+    requireInvariant(typeof result?.model === 'string' && result.model.length > 0 && !prohibitedModel(result.model),
+      stage, `${result?.caseId} Answer dialogue model is prohibited or missing`)
+    providers.add(result.provider)
+    requireInvariant(Array.isArray(result.interactionTags) && result.interactionTags.length >= 3,
+      stage, `${result.caseId} Answer dialogue is not a rich everyday follow-up`)
+    result.interactionTags.forEach((tag) => interactionTags.add(tag))
+    requireInvariant(Number.isInteger(result.naturalTurnCount) && result.naturalTurnCount >= 3,
+      stage, `${result.caseId} Answer dialogue did not preserve the prior exchange`)
+    requireInvariant(result.refinementRequired === true
+        && result.freshCanonicalExpectedPage === true
+        && result.sameVersionOnly === true
+        && result.toolPortfolioRegistered === true,
+    stage, `${result.caseId} Answer follow-up was not regrounded in the bound rulebook`)
+    requireInvariant(Number.isInteger(result.toolCalls) && result.toolCalls >= 1 && result.toolCalls <= 6,
+      stage, `${result.caseId} Answer dialogue tool-call budget failed`)
+    requireInvariant(Number.isInteger(result.modelCalls) && result.modelCalls >= 1 && result.modelCalls <= 6,
+      stage, `${result.caseId} Answer dialogue model-call budget failed`)
+    requireInvariant(result.withinLatencyBudget === true
+        && Number.isInteger(result.latencyMs)
+        && result.latencyMs > 0
+        && result.latencyMs <= limits.answerDialogueLatencyMs,
+    stage, `${result.caseId} Answer dialogue latency budget failed`)
+  }
+  requireInvariant(providers.size >= 2, stage, 'Answer dialogue needs two distinct providers')
+  for (const tag of ['pronoun', 'why', 'simplify', 'example', 'exception']) {
+    requireInvariant(interactionTags.has(tag), stage, `Answer dialogue is missing ${tag}`)
+  }
+  const controls = report?.controls ?? {}
+  requireInvariant(controls.priorAnswerIsEvidence === false, stage,
+    'Answer dialogue promoted a prior answer to rule evidence')
+  requireInvariant(controls.providerDowngradeKeepsDeterministicEvidence === true, stage,
+    'Answer dialogue loses deterministic evidence on provider downgrade')
+  requireInvariant(controls.staleSchemaRejectedBeforeToolExecution === true, stage,
+    'Answer dialogue can execute stale tool schemas')
   return providers
 }
 
@@ -291,7 +386,12 @@ export function verifyConversationalRelease({
 
   const recommendationProviders = verifyRecommendation(reports.recommendation, matrix.limits)
   const adaptiveProviders = verifyAdaptiveDialogue(reports.teachingDialogue, matrix.limits)
-  const semanticProviders = new Set([...recommendationProviders, ...adaptiveProviders])
+  const answerDialogueProviders = verifyAnswerDialogue(reports.answerDialogue, matrix.limits)
+  const semanticProviders = new Set([
+    ...recommendationProviders,
+    ...adaptiveProviders,
+    ...answerDialogueProviders,
+  ])
 
   verifyAcquisition(reports.acquisition, matrix.limits)
   const evidenceProviders = verifyGroundedEvidence(reports.answerEvidence, reports.teachingEvidence)
@@ -314,6 +414,7 @@ export function verifyConversationalRelease({
     evidenceProviders: [...evidenceProviders].sort(),
     recommendationCases: reports.recommendation.results.length,
     adaptiveDialogueCases: reports.teachingDialogue.results.length,
+    answerDialogueCases: reports.answerDialogue.results.length,
     acquisitionCases: reports.acquisition.results.length,
     releaseDecision: 'CANARY_READY',
   }

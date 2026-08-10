@@ -146,6 +146,7 @@ interface AnswerContext {
   planId: string
   documentVersionId: string
   locale: AppLocale
+  gameSessionId?: string
 }
 
 interface UseLessonAnswersOptions {
@@ -242,6 +243,7 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
         headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
         body: JSON.stringify({
           question: text,
+          gameSessionId: context.gameSessionId,
           previousQuestion: previousTurn?.question,
           learningIntent,
           language: context.locale,

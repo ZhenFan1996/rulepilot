@@ -1,0 +1,205 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+
+import LessonChapterList from '@/components/LessonChapterList.vue'
+import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
+import { useLocale } from '@/lib/locale'
+import { mergeTeachingRunProgress, teachingActivityText, type TeachingRunProgress } from '@/lib/teachingProgress'
+
+interface TeachingPlan {
+  id: string
+  documentVersionId: string
+  gameTitle: string
+  premise: string
+  sections: Array<{ position: number; title: string; visualEvidenceRecommended: boolean }>
+}
+
+interface VisualFocus {
+  pageNumber: number
+  label: string
+  visibleDescription?: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface LessonSection {
+  position: number
+  topicKey: string
+  coverageTags: string[]
+  title: string
+  required: boolean
+  evidenceStatus: string
+  visualKind: string
+  visualCaption: string
+  visualSourcePages: number[]
+  visualSourceChunkIds: string[]
+  steps: Array<{
+    position: number
+    heading: string
+    kind: string
+    text: string
+    sourcePages: number[]
+    visualFocus: VisualFocus | null
+  }>
+}
+
+interface IllustratedLesson {
+  id: string
+  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
+  sections: LessonSection[]
+}
+
+const props = defineProps<{ open: boolean; planId: string }>()
+const emit = defineEmits<{ close: []; 'ask-questions': [] }>()
+const { locale } = useLocale()
+const plan = ref<TeachingPlan | null>(null)
+const lesson = ref<IllustratedLesson | null>(null)
+const run = ref<TeachingRunProgress | null>(null)
+const loading = ref(false)
+const error = ref(false)
+const refreshWarning = ref(false)
+let requestSequence = 0
+let timer: ReturnType<typeof setTimeout> | null = null
+
+const copy = computed(() => locale.value === 'zh-CN' ? {
+  dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
+  draft: '已有 {done} / {total} 章可以阅读；后台会继续生成和核对。', complete: '完整讲解已经生成。', incomplete: '当前讲解只发布了有足够规则依据的内容。',
+  refresh: '暂时无法刷新最新章节，已显示的内容仍可继续阅读。', ask: '切换到规则答疑', source: '每个步骤都保留原规则书页码；答疑只使用同一份规则书。',
+} : {
+  dialog: 'Generated guide reader', close: 'Close guide', eyebrow: 'Rulebook guide', loading: 'Opening generated guide content…', error: 'The guide cannot be opened right now.', retry: 'Retry',
+  draft: '{done} / {total} chapters are readable while generation and review continue.', complete: 'The complete guide is ready.', incomplete: 'This guide publishes only content with enough rulebook support.',
+  refresh: 'The latest chapter update is unavailable. Confirmed content remains readable.', ask: 'Switch to rules Q&A', source: 'Every step retains original rulebook page references; Q&A uses the same rulebook.',
+})
+
+const active = computed(() => teachingRunIsActive(run.value?.run.state))
+const statusText = computed(() => {
+  if (!plan.value || !lesson.value) return ''
+  if (lesson.value.status === 'COMPLETE' && run.value?.run.state === 'COMPLETED') return copy.value.complete
+  if (lesson.value.status === 'INCOMPLETE') return copy.value.incomplete
+  return copy.value.draft
+    .replace('{done}', String(lesson.value.sections.length))
+    .replace('{total}', String(plan.value.sections.length))
+})
+const progress = computed(() => {
+  const total = plan.value?.sections.length ?? 0
+  if (!total) return 0
+  return Math.min(100, Math.round((lesson.value?.sections.length ?? 0) / total * 100))
+})
+const activityText = computed(() => {
+  if (!plan.value || !run.value?.activities.length) return ''
+  return teachingActivityText(plan.value, run.value.activities, run.value.activities.at(-1), locale.value)
+})
+
+function pageImageUrl(page: number) {
+  return plan.value ? `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${page}/image` : ''
+}
+
+function focusedPageImageUrl(focus: VisualFocus) {
+  if (!plan.value) return ''
+  const query = new URLSearchParams({
+    x: String(focus.x), y: String(focus.y), width: String(focus.width), height: String(focus.height),
+  })
+  return `/api/v1/document-versions/${encodeURIComponent(plan.value.documentVersionId)}/pages/${focus.pageNumber}/image/crop?${query}`
+}
+
+async function optionalJson<T>(path: string): Promise<T | null> {
+  const response = await fetch(path, { credentials: 'include' })
+  if (response.status === 404) return null
+  if (!response.ok) throw new Error('request failed')
+  return await response.json() as T
+}
+
+async function load() {
+  if (!props.open || !props.planId) return
+  const request = ++requestSequence
+  clearTimer()
+  loading.value = true
+  error.value = false
+  refreshWarning.value = false
+  try {
+    const [incomingPlan, incomingLesson, incomingRun] = await Promise.all([
+      optionalJson<TeachingPlan>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}`),
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+    ])
+    if (request !== requestSequence || !incomingPlan || !incomingLesson) return
+    plan.value = incomingPlan
+    lesson.value = acceptProgressiveLesson(lesson.value?.id === incomingLesson.id ? lesson.value : null, incomingLesson)
+    run.value = mergeTeachingRunProgress(run.value, incomingRun)
+  } catch {
+    if (request === requestSequence) error.value = true
+  } finally {
+    if (request === requestSequence) {
+      loading.value = false
+      scheduleRefresh()
+    }
+  }
+}
+
+async function refresh() {
+  if (!props.open || !props.planId) return
+  const request = requestSequence
+  try {
+    const [incomingLesson, incomingRun] = await Promise.all([
+      optionalJson<IllustratedLesson>(`/api/v1/teaching-plans/${encodeURIComponent(props.planId)}/illustrated-lessons/latest`),
+      optionalJson<TeachingRunProgress>(`/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=${encodeURIComponent(props.planId)}`),
+    ])
+    if (request !== requestSequence) return
+    if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
+    run.value = mergeTeachingRunProgress(run.value, incomingRun)
+    refreshWarning.value = false
+  } catch {
+    if (request === requestSequence) refreshWarning.value = true
+  } finally {
+    if (request === requestSequence) scheduleRefresh(refreshWarning.value ? 4_000 : 1_500)
+  }
+}
+
+function scheduleRefresh(delay = 1_500) {
+  clearTimer()
+  if (props.open && active.value) timer = setTimeout(() => { void refresh() }, delay)
+}
+
+function clearTimer() {
+  if (timer) clearTimeout(timer)
+  timer = null
+}
+
+watch(() => [props.open, props.planId] as const, ([open]) => {
+  if (open) void load()
+  else {
+    requestSequence += 1
+    clearTimer()
+  }
+}, { immediate: true })
+</script>
+
+<template>
+  <div v-if="open" class="fixed inset-0 z-50 overflow-y-auto bg-ink/45 backdrop-blur-[2px]" @click.self="emit('close')">
+    <section class="mx-auto min-h-screen w-full max-w-[100rem] bg-canvas text-ink sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+      <header class="sticky top-0 z-20 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ plan?.gameTitle ?? copy.dialog }}</h2><p v-if="plan?.premise" class="mt-1 max-w-3xl text-xs leading-5 text-ink/50">{{ plan.premise }}</p></div>
+          <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
+        </div>
+        <div v-if="plan && lesson" class="mt-3">
+          <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ lesson.sections.length }} / {{ plan.sections.length }}</span></div>
+          <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div class="h-full rounded-full bg-indigo transition-[width] duration-500" :style="{ width: `${progress}%` }" /></div>
+          <p v-if="activityText" class="mt-2 text-xs text-ink/50">{{ activityText }}</p>
+          <p v-if="refreshWarning" class="mt-2 text-xs font-semibold text-amber-800" role="status">{{ copy.refresh }}</p>
+        </div>
+      </header>
+
+      <main class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
+        <p v-if="loading" class="rounded-xl bg-paper p-10 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
+        <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
+        <template v-else>
+          <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
+          <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :focused-page-image-url="focusedPageImageUrl" />
+        </template>
+      </main>
+    </section>
+  </div>
+</template>

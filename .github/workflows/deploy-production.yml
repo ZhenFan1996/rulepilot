@@ -173,7 +173,7 @@ jobs:
             'WEB_SEARCH_MODEL=qwen3.7-plus' \
             'QWEN_MODEL=qwen3.7-plus' \
             'QWEN_VISION_CAPABLE=true' \
-            'RULEBOOK_DISCOVERY_MODEL=qwen3.7-plus' \
+            'RULEBOOK_DISCOVERY_MODEL=qwen3.7-max' \
             'RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL=PT10M' \
             'RULEBOOK_DISCOVERY_HOURLY_LIMIT=30' \
             'RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY=1' >> "$temporary_env"

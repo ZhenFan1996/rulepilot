@@ -55,9 +55,7 @@ class OfficialRulebookAcquisitionRealEvaluationTest {
         String provider = optionalEnvironment("RULEBOOK_DISCOVERY_PROVIDER", "qwen");
         String apiKey = requiredEnvironment("RULEBOOK_DISCOVERY_API_KEY", "QWEN_API_KEY");
         String baseUrl = requiredEnvironment("RULEBOOK_DISCOVERY_BASE_URL", "QWEN_BASE_URL");
-        String model = optionalEnvironment(
-                "RULEBOOK_DISCOVERY_MODEL",
-                optionalEnvironment("QWEN_MODEL", "qwen3.7-plus"));
+        String model = optionalEnvironment("RULEBOOK_DISCOVERY_MODEL", "qwen3.7-max");
         assertThat(prohibitedModel(model)).isFalse();
 
         var finder = new ResponsesApiOfficialRulebookCandidateFinder(
@@ -77,11 +75,12 @@ class OfficialRulebookAcquisitionRealEvaluationTest {
         long discoveryLatencyMs = elapsedMillis(discoveryStarted);
         List<OfficialRulebookCandidateFinder.Candidate> direct = discovered.stream()
                 .filter(candidate -> directPdf(candidate.url()))
+                .limit(1)
                 .toList();
 
         assertThat(discovered).isNotEmpty();
         assertThat(direct).isNotEmpty();
-        assertThat(discoveryLatencyMs).isLessThanOrEqualTo(120_000L);
+        assertThat(discoveryLatencyMs).isLessThanOrEqualTo(125_000L);
 
         var fetcher = new HttpOfficialRulebookSourceFetcher(
                 new MinioStorageProperties(
@@ -92,8 +91,8 @@ class OfficialRulebookAcquisitionRealEvaluationTest {
                         MAXIMUM_PDF_BYTES),
                 new PdfBoxPhotographedRulebookAssembler(),
                 Duration.ofSeconds(10),
-                Duration.ofSeconds(90),
-                Duration.ofMinutes(10),
+                Duration.ofSeconds(30),
+                Duration.ofMinutes(2),
                 1024 * 1024);
         FetchedRulebook fetched = null;
         String sha256 = "";

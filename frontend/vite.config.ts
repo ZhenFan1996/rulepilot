@@ -103,6 +103,7 @@ export default defineConfig({
           'assets/LessonView-*.js',
           'assets/LessonModeNav-*.js',
           'assets/LessonChapterList-*.js',
+          'assets/liveLesson-*.js',
           'assets/offlineKnowledge-*.js',
           'assets/teachingProgress-*.js',
         ],

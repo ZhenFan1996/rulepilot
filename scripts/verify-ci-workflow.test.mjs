@@ -57,7 +57,7 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /QWEN_MODEL=qwen3\.7-plus/)
   assert.match(deploymentWorkflow, /WEB_SEARCH_MODEL=qwen3\.7-plus/)
   assert.match(deploymentWorkflow, /QWEN_VISION_CAPABLE=true/)
-  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-plus/)
+  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-max/)
   assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_HOURLY_LIMIT=30/)
   assert.match(
     deploymentWorkflow,

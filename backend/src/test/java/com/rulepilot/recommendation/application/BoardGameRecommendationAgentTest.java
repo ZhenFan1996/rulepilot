@@ -39,6 +39,53 @@ import org.junit.jupiter.api.Test;
 class BoardGameRecommendationAgentTest {
 
     @Test
+    void returnsAPlayerNamedTargetAsASelectableRecommendationCard() {
+        TrackingCatalog catalog = catalog();
+        ScriptedModel model = new ScriptedModel(List.of(
+                request -> {
+                    assertThat(request.tools().stream()
+                                    .filter(tool -> BoardGameRecommendationAgent.RESOLVE_TOOL.equals(tool.name()))
+                                    .findFirst()
+                                    .orElseThrow()
+                                    .inputSchema())
+                            .contains(
+                                    "TARGET_GAME",
+                                    "COMPARISON_REFERENCE",
+                                    "DISCUSSION_SUBJECT",
+                                    "IDENTITY_ONLY");
+                    return action(
+                            "resolve-target",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"TARGET_GAME\"}");
+                },
+                request -> {
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .containsExactly(BoardGameRecommendationAgent.RECOMMEND_TOOL);
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "\"targetGameBggIds\":[50]",
+                                    "\"recommendableBggIds\":[50]")
+                            .doesNotContain("\"comparisonReferenceBggIds\":[50]");
+                    return action(
+                            "recommend-target",
+                            BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                            "{\"message\":\"就是你指定的这款；信息已经核对，可以继续为它找规则书。\","
+                                    + "\"selections\":[{\"bggId\":50}]}");
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "我想玩 Mosaic Field"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
+                .containsExactly(50);
+        assertThat(response.harness().actions()).containsExactly(
+                "RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
+        assertThat(catalog.calls).isEqualTo(1);
+    }
+
+    @Test
     void chatsNaturallyWithoutForcingAQuestionnaireOrTouchingTheCatalog() {
         ScriptedModel model = new ScriptedModel(List.of(request -> {
             assertThat(request.tools()).extracting(tool -> tool.name())
@@ -88,7 +135,7 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "resolve",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\","
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARISON_REFERENCE\","
                                     + "\"preferenceUpdates\":[{\"field\":\"type\",\"value\":\"STRATEGY\",\"evidence\":\"U1\"}]}");
                 },
                 request -> {
@@ -110,7 +157,7 @@ class BoardGameRecommendationAgentTest {
                             .contains(
                                     "Pattern Building",
                                     "Open Drafting",
-                                    "\"resolvedReferenceBggIds\":[50]");
+                                    "\"comparisonReferenceBggIds\":[50]");
                     return action(
                             "recommend",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
@@ -157,7 +204,7 @@ class BoardGameRecommendationAgentTest {
                 ignored -> action(
                         "truncated-reference",
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"osaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}"),
+                        "{\"title\":\"osaic Field\",\"purpose\":\"COMPARISON_REFERENCE\"}"),
                 request -> {
                     assertThat(catalog.calls).isZero();
                     assertThat(request.messages().getLast().content())
@@ -170,7 +217,7 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "intact-reference",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}");
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARISON_REFERENCE\"}");
                 },
                 ignored -> action(
                         "candidate-titles",
@@ -232,7 +279,7 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "resolve-reference",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}");
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARISON_REFERENCE\"}");
                 },
                 ignored -> action(
                         "candidate-titles",
@@ -276,7 +323,7 @@ class BoardGameRecommendationAgentTest {
                 ignored -> action(
                         "resolve-with-player-count",
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"Mosaic Field\",\"purpose\":\"DISCUSS_NAMED_GAME\",\"preferenceUpdates\":[{\"field\":\"players\",\"value\":2,\"evidence\":\"2 人\"}]}"),
+                        "{\"title\":\"Mosaic Field\",\"purpose\":\"DISCUSSION_SUBJECT\",\"preferenceUpdates\":[{\"field\":\"players\",\"value\":2,\"evidence\":\"2 人\"}]}"),
                 ignored -> action(
                         "reply",
                         BoardGameRecommendationAgent.REPLY_TOOL,

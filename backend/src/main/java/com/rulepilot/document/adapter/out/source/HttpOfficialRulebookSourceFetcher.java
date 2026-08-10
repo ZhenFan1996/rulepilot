@@ -70,8 +70,8 @@ public class HttpOfficialRulebookSourceFetcher implements OfficialRulebookSource
             PhotographedRulebookAssembler galleryAssembler,
             OfficialRulebookPdfCompressor pdfCompressor,
             @Value("${rulepilot.rulebook-import.connect-timeout:PT10S}") Duration connectTimeout,
-            @Value("${rulepilot.rulebook-import.read-timeout:PT1M30S}") Duration readTimeout,
-            @Value("${rulepilot.rulebook-import.call-timeout:PT10M}") Duration callTimeout,
+            @Value("${rulepilot.rulebook-import.read-timeout:PT30S}") Duration readTimeout,
+            @Value("${rulepilot.rulebook-import.call-timeout:PT2M}") Duration callTimeout,
             @Value("${rulepilot.rulebook-import.max-compressible-pdf-bytes:104857600}")
                     long maxCompressiblePdfBytes,
             @Value("${rulepilot.rulebook-discovery.max-source-page-bytes:1048576}") int maxHtmlBytes) {
