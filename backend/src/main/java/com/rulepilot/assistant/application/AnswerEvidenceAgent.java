@@ -31,6 +31,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AnswerEvidenceAgent.class);
     private static final int MAX_OBSERVED_EVIDENCE = 24;
+    private static final Set<String> RECOVERABLE_PARTIAL_RUN_REASONS = Set.of(
+            "EMPTY_MODEL_RESULT",
+            "COMPLETION_PROTOCOL_REJECTED",
+            "ITERATION_LIMIT",
+            "TOOL_CALL_LIMIT");
     private static final Pattern PRIOR_TURN_REFERENCE = Pattern.compile(
             "(?iu)\\b(?:this|that|it|these|those|then|there|former|latter|such)\\b|"
                     + "这个|那个|这样|那样|它|上述|前述|刚才|上面|这里|那里");
@@ -135,7 +140,8 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     384,
                     toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools(question, context),
-                    usesPriorPages(question, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4));
+                    usesPriorPages(question, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4,
+                    "EVIDENCE_READY"));
         } catch (RuntimeException failure) {
             LOGGER.warn(
                     "Answer evidence refinement failed for document version {}; preserving deterministic evidence",
@@ -144,11 +150,25 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         } finally {
             permit.close();
         }
-        if (result.status() != RunStatus.COMPLETED
-                || !"EVIDENCE_READY".equals(result.text().strip())
-                || result.toolCalls() == 0) return deterministic;
         List<Set<UUID>> exactPageGroups = NativeToolEvidenceHandles.exactPageObservationGroups(
                 result, 8, MAX_OBSERVED_EVIDENCE);
+        boolean declaredReady = result.status() == RunStatus.COMPLETED
+                && "EVIDENCE_READY".equals(result.text().strip())
+                && result.toolCalls() > 0;
+        boolean recoverablePartialRun = result.status() == RunStatus.FALLBACK
+                && RECOVERABLE_PARTIAL_RUN_REASONS.contains(result.reason())
+                && result.toolCalls() > 0
+                && !exactPageGroups.isEmpty();
+        if (!declaredReady && !recoverablePartialRun) return deterministic;
+        if (recoverablePartialRun) {
+            // The model already chose and completed exact-page reads; a later empty turn or
+            // budget edge must not erase canonical evidence. This does not accept model prose
+            // or declare coverage complete—the normal evidence selector and publication gates
+            // still decide whether the observed source can support the player's answer.
+            LOGGER.info(
+                    "Preserving validated exact-page observations from a partial Answer Agent run ({})",
+                    result.reason());
+        }
         Set<UUID> observedIds = exactPageGroups.stream()
                 .flatMap(Set::stream)
                 .limit(MAX_OBSERVED_EVIDENCE)

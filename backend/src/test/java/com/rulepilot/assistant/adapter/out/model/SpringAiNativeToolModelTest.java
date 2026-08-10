@@ -73,6 +73,7 @@ class SpringAiNativeToolModelTest {
         ToolCallingChatOptions options = (ToolCallingChatOptions) prompt.getValue().getOptions();
         assertThat(((OpenAiChatOptions) options).getExtraBody())
                 .containsEntry("thinking", java.util.Map.of("type", "disabled"));
+        assertThat(((OpenAiChatOptions) options).getParallelToolCalls()).isFalse();
         assertThat(options.getToolCallbacks()).singleElement().satisfies(callback ->
                 assertThat(callback.getToolDefinition().name()).isEqualTo("search_rule_evidence"));
         assertThat(options.getToolContext()).containsEntry("ownerUsername", "player")
@@ -114,5 +115,38 @@ class SpringAiNativeToolModelTest {
 
         when(configuration.supportsVision(RuntimeModelConfiguration.Role.VISUAL, "player")).thenReturn(false);
         assertThat(model.supports(Role.VISUAL, "player")).isFalse();
+    }
+
+    @Test
+    void explicitlyDisablesToolChoiceForAFinalOpenAiCompatibleSynthesisTurn() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.VISUAL, "player")).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.VISUAL, "player")).thenReturn("qwen");
+        when(configuration.supportsVision(RuntimeModelConfiguration.Role.VISUAL, "player")).thenReturn(true);
+        when(chatModel.getDefaultOptions()).thenReturn(OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("test-model")
+                .build());
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                AssistantMessage.builder().content("{\"regions\":[]}").build()))));
+        SpringAiNativeToolModel model = new SpringAiNativeToolModel(configuration);
+
+        model.next(new ModelRequest(
+                Role.VISUAL,
+                new ToolScope("player", UUID.randomUUID(), UUID.randomUUID(), Instant.now().plusSeconds(30)),
+                List.of(
+                        ConversationMessage.system("Compose from prior observations."),
+                        ConversationMessage.user("Return the final JSON now.")),
+                List.of(),
+                256));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getToolChoice()).isEqualTo("none");
+        assertThat(options.getToolCallbacks()).isEmpty();
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
     }
 }

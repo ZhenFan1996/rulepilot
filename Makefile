@@ -13,7 +13,7 @@ AGENT_BASELINE_MANIFEST ?= .local/agent-evaluation/manifest.json
 AGENT_BASELINE_OUTPUT ?= .local/agent-evaluation/application-harness-baseline.json
 AGENT_TOOL_PROBE_OUTPUT ?= .local/agent-evaluation/provider-capabilities.json
 
-.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-visual-real agent-context-real agent-security-real agent-release-real format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
+.PHONY: help bootstrap dev dev-split dev-stop demo-data product-eval corpus-preflight corpus-cover-discover corpus-generate agent-baseline agent-tool-probe agent-tool-loop-real agent-answer-real agent-teaching-real agent-visual-real agent-context-real agent-recommendation-real agent-rulebook-acquisition-real agent-security-real agent-release-real format backend-test frontend-test integration-test performance-test security-test e2e verify compose-up compose-down deployment-up deployment-down production-up production-down
 
 help: ## Show the available repository commands
 	@awk 'BEGIN {FS = ":.*##"; printf "RulePilot commands:\n\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-20s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
@@ -75,6 +75,12 @@ agent-visual-real: ## Evaluate capability-scoped multimodal tools on ignored rea
 agent-context-real: ## Evaluate multi-turn context, recovery, and fallback on ignored real rulebooks
 	@sh scripts/run-real-context-agent.sh
 
+agent-recommendation-real: ## Evaluate natural multi-turn recommendation ReAct behavior across paid providers
+	@sh scripts/run-real-recommendation-agent.sh
+
+agent-rulebook-acquisition-real: ## Discover and download one ignored real publisher rulebook through application gates
+	@sh scripts/run-real-rulebook-acquisition.sh
+
 agent-security-real: ## Validate adversarial tools and all five ignored real-rulebook families
 	@cd backend && ./mvnw -q -Dtest=NativeAgentSecurityEvaluationTest,NativeReadToolsTest,BoundedNativeToolAgentTest test
 	@node scripts/evaluate-agent-security.mjs --adversarial-verified
@@ -131,6 +137,7 @@ verify: ## Verify repository structure, Compose config, backend, and frontend
 	@node --test scripts/evaluate-agent-baseline.test.mjs
 	@node --test scripts/evaluate-agent-security.test.mjs
 	@node --test scripts/verify-complete-agent-release.test.mjs
+	@node --test scripts/verify-conversational-agent-release.test.mjs
 	@node --test scripts/probe-model-tool-capabilities.test.mjs
 	@node --test scripts/smoke-production-ordinary-user.test.mjs
 	@node --test scripts/manage-public-lesson-candidate.test.mjs

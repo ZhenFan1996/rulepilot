@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -91,7 +92,12 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 playerRequest(request),
                 "{\"regions\":[]}",
                 6,
-                512));
+                512,
+                Set.of("read_rule_page_image", "read_visual_page_facts", "crop_rule_page_image"),
+                Set.of(),
+                6,
+                "",
+                Map.of("crop_rule_page_image", visualResultBudget(request))));
         if (result.status() != RunStatus.COMPLETED) {
             return LocateGuideResult.unavailable(Diagnostic.MODEL_UNAVAILABLE);
         }
@@ -118,6 +124,15 @@ public class AgenticVisualRegionLocator implements VisualRegionLocator {
                 && request.modelConfigurationOwner() != null
                 && request.documentVersionId() != null
                 && request.runId() != null;
+    }
+
+    private int visualResultBudget(VisualLocationRequest request) {
+        long distinctSteps = request.claims().stream()
+                .map(VisualRegionLocator.Claim::stepPosition)
+                .filter(position -> position > 0)
+                .distinct()
+                .count();
+        return (int) Math.max(1, Math.min(2, distinctSteps));
     }
 
     private String playerRequest(VisualLocationRequest request) {

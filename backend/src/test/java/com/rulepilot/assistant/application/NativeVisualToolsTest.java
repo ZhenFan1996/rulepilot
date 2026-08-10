@@ -85,6 +85,12 @@ class NativeVisualToolsTest {
                         + "\",\"pageNumber\":4,\"x\":900,\"y\":0,\"width\":200,\"height\":20}",
                 scope());
         assertThat(normalized.data().get("rectangle").toString()).contains("width=100", "x=900");
+        var bottomRight = crop.execute(
+                "{\"evidenceId\":\"" + evidenceId
+                        + "\",\"pageNumber\":4,\"x\":988,\"y\":988,\"width\":200,\"height\":200}",
+                scope());
+        assertThat(bottomRight.data().get("rectangle").toString())
+                .contains("x=980", "y=980", "width=20", "height=20");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> crop.execute(
                         "{\"evidenceId\":\"" + evidenceId

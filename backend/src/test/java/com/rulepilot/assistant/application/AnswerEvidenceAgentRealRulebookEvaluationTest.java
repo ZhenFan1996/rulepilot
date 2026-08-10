@@ -288,14 +288,14 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         Path root = Path.of(System.getProperty("user.dir")).getParent();
         List<DialogueIntentCase> cases = List.of(
                 new DialogueIntentCase(
-                        "deepseek-natural-example",
+                        "cx-adapt-deepseek",
                         "deepseek",
                         "When does this action end?",
                         "I still don't understand. Walk me through one concrete example.",
                         PlayerLocale.EN,
                         LearningIntent.EXAMPLE),
                 new DialogueIntentCase(
-                        "qwen-natural-simplify",
+                        "cx-adapt-qwen",
                         "qwen",
                         "这个行动的费用什么时候支付？",
                         "还是有点绕，能先用更简单的话重新讲一遍吗？",
@@ -332,6 +332,8 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                     "referenceBinding", draft.referenceBinding().name(),
                     "learningIntent", draft.learningIntent().name(),
                     "subquestionCount", draft.subquestions().size(),
+                    "modelCalls", 1,
+                    "toolCalls", 0,
                     "latencyMs", latencyMs));
         }
 
@@ -343,6 +345,7 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 "controls", Map.of(
                         "explicitEnumInjected", false,
                         "rulebookTextUsedAsIntentEvidence", false,
+                        "rawModelOutputStored", false,
                         "prohibitedQwenPlusUsed", false))) + "\n", StandardCharsets.UTF_8);
     }
 

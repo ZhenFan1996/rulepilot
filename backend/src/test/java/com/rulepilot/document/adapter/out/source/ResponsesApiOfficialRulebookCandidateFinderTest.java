@@ -108,9 +108,9 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
             assertThat(authorization.get()).isEqualTo("Bearer secret-key");
             assertThat(requestBody.get()).contains(
                     "\"tools\":[{\"type\":\"web_search\"}]",
-                    "\"max_output_tokens\":1100",
+                    "\"max_output_tokens\":700",
                     "\"reasoning\":{\"effort\":\"minimal\"}",
-                    "Do not stop",
+                    "Stop expanding the search",
                     "BoardGameGeek Files",
                     "Catalog Game",
                     "目录游戏",
@@ -177,6 +177,150 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
 
             assertThat(requests).hasValue(1);
             assertThat(cached).hasValueSatisfying(value -> assertThat(value).contains("rules.pdf"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void usesQwenNonThinkingSearchAndParsesTheFinalMessageAfterToolProgress() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            ObjectMapper json = new ObjectMapper();
+            String content = json.writeValueAsString(Map.of("candidates", List.of(Map.of(
+                    "title", "Official rules",
+                    "url", "https://publisher.example/rules.pdf",
+                    "publisher", "Publisher",
+                    "language", "en",
+                    "edition", "Base",
+                    "sourceIndexes", List.of(1)))));
+            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
+                    Map.of("type", "message", "content", List.of(Map.of(
+                            "type", "output_text", "text", "I will search the official publisher."))),
+                    Map.of(
+                            "type", "web_search_call",
+                            "action", Map.of("sources", List.of(Map.of(
+                                    "url", "https://publisher.example/rules.pdf")))),
+                    Map.of("type", "message", "content", List.of(Map.of(
+                            "type", "output_text", "text", content))))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "qwen3.7-plus");
+
+            assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
+                            42, "Catalog Game", "Base", 2024, "en")))
+                    .singleElement()
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .isEqualTo("https://publisher.example/rules.pdf");
+            assertThat(requestBody.get())
+                    .contains("\"enable_thinking\":false", "\"tools\":[{\"type\":\"web_search\"}]")
+                    .doesNotContain("\"reasoning\"");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void recoversOnlyTitleBoundRulebookPdfsFromObservedTrustedSourcesWhenModelJsonIsMalformed() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            ObjectMapper json = new ObjectMapper();
+            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
+                    Map.of(
+                            "type", "web_search_call",
+                            "action", Map.of("sources", List.of(
+                                    Map.of("url", "https://publisher.example/Catalog-Game-Landmarks-Rulebook.pdf"),
+                                    Map.of("url", "https://publisher.example/Catalog-Game-rulebook.pdf"),
+                                    Map.of("url", "https://publisher.example/Catalog-Game-Base-Game-Rulebook.pdf"),
+                                    Map.of("url", "https://publisher.example/Catalog-Game-scoresheet.pdf"),
+                                    Map.of("url", "https://publisher.example/Other-Game-rulebook.pdf"),
+                                    Map.of("url", "https://untrusted.example/Catalog-Game-rulebook.pdf")))),
+                    Map.of("type", "message", "content", List.of(Map.of(
+                            "type", "output_text", "text", "candidate output was truncated: {"))))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "qwen3.7-plus");
+
+            var candidates = finder.find(new OfficialRulebookCandidateFinder.Request(
+                    42,
+                    "Catalog Game",
+                    "Base",
+                    2024,
+                    "en",
+                    List.of("Catalog Game"),
+                    List.of("Publisher Studio"),
+                    List.of("publisher.example")));
+
+            assertThat(candidates)
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .containsExactly(
+                            "https://publisher.example/Catalog-Game-Base-Game-Rulebook.pdf",
+                            "https://publisher.example/Catalog-Game-Landmarks-Rulebook.pdf",
+                            "https://publisher.example/Catalog-Game-rulebook.pdf");
+            assertThat(candidates).allSatisfy(candidate ->
+                    assertThat(candidate.publisher()).isEqualTo("Publisher Studio"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void recoversAnObservedTrustedRulebookWhenSearchCompletesWithoutAFinalModelMessage() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            ObjectMapper json = new ObjectMapper();
+            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(Map.of(
+                    "type", "web_search_call",
+                    "action", Map.of("sources", List.of(Map.of(
+                            "url", "https://publisher.example/Catalog-Game-Base-Rulebook.pdf")))))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "qwen3.7-plus");
+
+            assertThat(finder.find(new OfficialRulebookCandidateFinder.Request(
+                            42,
+                            "Catalog Game",
+                            "Base",
+                            2024,
+                            "en",
+                            List.of("Catalog Game"),
+                            List.of("Publisher Studio"),
+                            List.of("publisher.example"))))
+                    .singleElement()
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .isEqualTo("https://publisher.example/Catalog-Game-Base-Rulebook.pdf");
         } finally {
             server.stop(0);
         }
