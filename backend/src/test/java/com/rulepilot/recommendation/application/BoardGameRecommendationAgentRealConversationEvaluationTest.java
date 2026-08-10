@@ -60,9 +60,18 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
         assertThat(results).hasSize(2).allSatisfy(result -> {
             assertThat(result).containsEntry("outcome", "RECOMMENDATIONS")
                     .containsEntry("continuationResolved", true)
+                    .containsEntry("targetOutcome", "RECOMMENDATIONS")
+                    .containsEntry("targetSelected", true)
+                    .containsEntry("everydayOutcome", "RECOMMENDATIONS")
+                    .containsEntry("everydayPlayers", 4)
+                    .containsEntry("everydayMaxMinutes", 60)
+                    .containsEntry("everydayPreferenceUpdates", true)
                     .containsEntry("fallbackUsed", false);
             assertThat((Integer) result.get("recommendationCount")).isGreaterThanOrEqualTo(2);
+            assertThat((Integer) result.get("everydayRecommendationCount")).isGreaterThanOrEqualTo(2);
             assertThat((Long) result.get("totalLatencyMs")).isLessThanOrEqualTo(30_000L);
+            assertThat(result.get("scenarioTags"))
+                    .isEqualTo(List.of("comparison-correction", "direct-target", "everyday-refinement"));
         });
 
         Path root = Path.of(System.getProperty("user.dir")).getParent();
@@ -135,6 +144,8 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             assertThat(second.harness().actions()).contains("RECOMMEND_GAMES");
             assertThat(second.harness().fallbackUsed()).isFalse();
             assertThat(correctionLatencyMs).isLessThanOrEqualTo(30_000L);
+            TargetEvaluation target = runTargetSelection(provider);
+            EverydayRefinementEvaluation everyday = runEverydayRefinement(provider);
 
             Set<Integer> selected = new LinkedHashSet<>();
             second.games().forEach(game -> selected.add(game.game().ranking().bggId()));
@@ -149,19 +160,167 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
             result.put("naturalTurnCount", transcript.size());
             result.put("recommendationCount", second.games().size());
             result.put("uniqueRecommendationCount", selected.size());
-            result.put("modelCalls", Math.max(first.harness().modelCalls(), second.harness().modelCalls()));
-            result.put("catalogCalls", Math.max(first.harness().catalogCalls(), second.harness().catalogCalls()));
+            result.put("targetOutcome", target.outcome());
+            result.put("targetSelected", target.selected());
+            result.put("targetRecommendationCount", target.recommendationCount());
+            result.put("targetLatencyMs", target.latencyMs());
+            result.put("targetActions", target.actions());
+            result.put("everydayOutcome", everyday.outcome());
+            result.put("everydayNaturalTurnCount", everyday.naturalTurnCount());
+            result.put("everydayPlayers", everyday.players());
+            result.put("everydayMaxMinutes", everyday.maxMinutes());
+            result.put("everydayPreferenceUpdates", everyday.preferenceUpdates());
+            result.put("everydayRecommendationCount", everyday.recommendationCount());
+            result.put("everydayLatencyMs", everyday.latencyMs());
+            result.put("everydayActions", everyday.actions());
+            result.put("scenarioTags", List.of(
+                    "comparison-correction", "direct-target", "everyday-refinement"));
+            result.put("modelCalls", Math.max(
+                    everyday.modelCalls(),
+                    Math.max(target.modelCalls(), Math.max(first.harness().modelCalls(), second.harness().modelCalls()))));
+            result.put("catalogCalls", Math.max(
+                    everyday.catalogCalls(),
+                    Math.max(target.catalogCalls(), Math.max(first.harness().catalogCalls(), second.harness().catalogCalls()))));
             result.put("webResearchCalls", Math.max(
-                    first.harness().webResearchCalls(), second.harness().webResearchCalls()));
-            result.put("conversationModelCalls", first.harness().modelCalls() + second.harness().modelCalls());
-            result.put("fallbackUsed", first.harness().fallbackUsed() || second.harness().fallbackUsed());
-            result.put("totalLatencyMs", Math.max(openingLatencyMs, correctionLatencyMs));
-            result.put("conversationLatencyMs", openingLatencyMs + correctionLatencyMs);
-            result.put("actions", java.util.stream.Stream.concat(
-                            first.harness().actions().stream(), second.harness().actions().stream())
+                    everyday.webResearchCalls(),
+                    Math.max(
+                            target.webResearchCalls(),
+                            Math.max(first.harness().webResearchCalls(), second.harness().webResearchCalls()))));
+            result.put(
+                    "conversationModelCalls",
+                    first.harness().modelCalls()
+                            + second.harness().modelCalls()
+                            + everyday.conversationModelCalls());
+            result.put("fallbackUsed", first.harness().fallbackUsed()
+                    || second.harness().fallbackUsed()
+                    || target.fallbackUsed()
+                    || everyday.fallbackUsed());
+            result.put(
+                    "totalLatencyMs",
+                    Math.max(
+                            everyday.latencyMs(),
+                            Math.max(target.latencyMs(), Math.max(openingLatencyMs, correctionLatencyMs))));
+            result.put("conversationLatencyMs", openingLatencyMs + correctionLatencyMs + everyday.latencyMs());
+            result.put("actions", java.util.stream.Stream.of(
+                            first.harness().actions(),
+                            second.harness().actions(),
+                            target.actions(),
+                            everyday.actions())
+                    .flatMap(List::stream)
                     .distinct()
                     .toList());
             return Map.copyOf(result);
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    private TargetEvaluation runTargetSelection(Provider provider) {
+        UnlockableCatalog catalog = new UnlockableCatalog();
+        catalog.unlock();
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model(provider),
+                new BoardGameRecommendationTools(catalog, noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        try {
+            String request = "我已经决定了，今晚就玩 Mosaic Field。请直接选这款，接下来我要找它的规则书。";
+            long started = System.nanoTime();
+            var response = agent.converse(
+                    new ConversationRequest(RecommendationProfile.empty(), request),
+                    "zh-CN");
+            long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+            assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(response.games()).singleElement()
+                    .extracting(game -> game.game().ranking().bggId())
+                    .isEqualTo(50);
+            assertThat(catalog.resolvedTitle("Mosaic Field")).isTrue();
+            assertThat(response.harness().actions()).contains("RESOLVE_BGG_REFERENCE", "RECOMMEND_GAMES");
+            assertThat(response.harness().fallbackUsed()).isFalse();
+            assertThat(latencyMs).isLessThanOrEqualTo(30_000L);
+            return new TargetEvaluation(
+                    response.outcome().name(),
+                    true,
+                    response.games().size(),
+                    response.harness().modelCalls(),
+                    response.harness().catalogCalls(),
+                    response.harness().webResearchCalls(),
+                    response.harness().fallbackUsed(),
+                    latencyMs,
+                    response.harness().actions());
+        } finally {
+            agent.stopBoundedCalls();
+        }
+    }
+
+    private EverydayRefinementEvaluation runEverydayRefinement(Provider provider) {
+        UnlockableCatalog catalog = new UnlockableCatalog();
+        var properties = new BoardGameRecommendationProperties(
+                8, 3, new BigDecimal("0.66"), Duration.ofSeconds(30));
+        var agent = new BoardGameRecommendationAgent(
+                model(provider),
+                new BoardGameRecommendationTools(catalog, noResearch()),
+                new BoardGameRecommendationSelector(properties),
+                properties,
+                json);
+        try {
+            String opening = "周末想带爸妈玩一局，轻松一点就好。";
+            long openingStarted = System.nanoTime();
+            var first = agent.converse(new ConversationRequest(RecommendationProfile.empty(), opening), "zh-CN");
+            long openingLatencyMs = Duration.ofNanos(System.nanoTime() - openingStarted).toMillis();
+            assertThat(first.outcome()).isIn(Outcome.NEEDS_CLARIFICATION, Outcome.CONVERSATION);
+            assertThat(first.assistantMessage()).isNotBlank();
+            assertThat(first.harness().fallbackUsed()).isFalse();
+            assertThat(openingLatencyMs).isLessThanOrEqualTo(30_000L);
+
+            catalog.unlock();
+            String refinement = "一共 4 个人，最多 60 分钟。他们平时不太玩桌游，规则要容易上手；不用再问了，先推荐两三款。";
+            List<DialogueMessage> transcript = List.of(
+                    new DialogueMessage("user", opening),
+                    new DialogueMessage("assistant", first.assistantMessage()),
+                    new DialogueMessage("user", refinement));
+            long refinementStarted = System.nanoTime();
+            var second = agent.converse(
+                    new ConversationRequest(
+                            first.profile(),
+                            refinement,
+                            List.of(),
+                            transcript,
+                            null,
+                            List.of(),
+                            List.of()),
+                    "zh-CN");
+            long refinementLatencyMs = Duration.ofNanos(System.nanoTime() - refinementStarted).toMillis();
+
+            assertThat(second.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+            assertThat(second.profile().players()).isEqualTo(4);
+            assertThat(second.profile().maxMinutes()).isEqualTo(60);
+            assertThat(second.games()).hasSizeBetween(2, 3);
+            assertThat(second.harness().actions()).contains("UPDATE_PREFERENCES", "RECOMMEND_GAMES");
+            assertThat(second.harness().fallbackUsed()).isFalse();
+            assertThat(refinementLatencyMs).isLessThanOrEqualTo(30_000L);
+
+            return new EverydayRefinementEvaluation(
+                    second.outcome().name(),
+                    transcript.size(),
+                    second.profile().players(),
+                    second.profile().maxMinutes(),
+                    second.harness().actions().contains("UPDATE_PREFERENCES"),
+                    second.games().size(),
+                    Math.max(first.harness().modelCalls(), second.harness().modelCalls()),
+                    Math.max(first.harness().catalogCalls(), second.harness().catalogCalls()),
+                    Math.max(first.harness().webResearchCalls(), second.harness().webResearchCalls()),
+                    first.harness().fallbackUsed() || second.harness().fallbackUsed(),
+                    Math.max(openingLatencyMs, refinementLatencyMs),
+                    first.harness().modelCalls() + second.harness().modelCalls(),
+                    java.util.stream.Stream.concat(
+                                    first.harness().actions().stream(), second.harness().actions().stream())
+                            .distinct()
+                            .toList());
         } finally {
             agent.stopBoundedCalls();
         }
@@ -255,6 +414,32 @@ class BoardGameRecommendationAgentRealConversationEvaluationTest {
     }
 
     private record Provider(String name, String apiKey, String baseUrl, String model) {}
+
+    private record TargetEvaluation(
+            String outcome,
+            boolean selected,
+            int recommendationCount,
+            int modelCalls,
+            int catalogCalls,
+            int webResearchCalls,
+            boolean fallbackUsed,
+            long latencyMs,
+            List<String> actions) {}
+
+    private record EverydayRefinementEvaluation(
+            String outcome,
+            int naturalTurnCount,
+            Integer players,
+            Integer maxMinutes,
+            boolean preferenceUpdates,
+            int recommendationCount,
+            int modelCalls,
+            int catalogCalls,
+            int webResearchCalls,
+            boolean fallbackUsed,
+            long latencyMs,
+            int conversationModelCalls,
+            List<String> actions) {}
 
     private static final class UnlockableCatalog implements BoardGameRecommendationCatalog {
         private final Map<Integer, Game> games;

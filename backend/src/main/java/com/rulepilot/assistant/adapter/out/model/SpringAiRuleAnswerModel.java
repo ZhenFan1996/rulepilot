@@ -21,6 +21,8 @@ import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.ClassPathResource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -28,8 +30,9 @@ import org.springframework.stereotype.Component;
 public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Logger LOGGER = LoggerFactory.getLogger(SpringAiRuleAnswerModel.class);
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v3-system.txt");
+            "prompts/rule-answer-question-interpretation-v4-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
             "prompts/rule-answer-question-interpretation-v3-user.txt");
 
@@ -121,9 +124,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 } else {
                     options.extraBody(Map.of("enable_thinking", false));
                 }
-                if (usesQwen()) {
-                    options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-                }
+                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
                 prompt = prompt.options(options);
             }
             RetrievalQueryDraft draft = prompt
@@ -170,9 +171,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 } else {
                     options.extraBody(Map.of("enable_thinking", false));
                 }
-                if (usesQwen()) {
-                    options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-                }
+                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
                 prompt = prompt.options(options);
             } else {
                 prompt = prompt.options(ChatOptions.builder().maxTokens(384).temperature(0.0));
@@ -190,11 +189,22 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                             .param("outputLanguage", request.outputLanguage().promptName()))
                     .call()
                     .content();
-            return parseQuestionInterpretation(content);
+            Optional<QuestionInterpretationDraft> interpretation = parseQuestionInterpretation(content);
+            if (interpretation.isEmpty()) {
+                LOGGER.warn(
+                        "Answer question interpretation rejected: provider={}, status={}",
+                        providerId(),
+                        interpretationOutputStatus(content));
+            }
+            return interpretation;
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer question interpretation timed out", exception);
             }
+            LOGGER.warn(
+                    "Answer question interpretation failed: provider={}, failureType={}",
+                    providerId(),
+                    exception.getClass().getSimpleName());
             return Optional.empty();
         }
     }
@@ -209,9 +219,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
             }
-            if (usesQwen()) {
-                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
-            }
+            options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
             prompt = prompt.options(options);
         }
         return prompt
@@ -258,6 +266,22 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             return Optional.of(JSON.readValue(content, QuestionInterpretationDraft.class));
         } catch (IOException invalidOutput) {
             return Optional.empty();
+        }
+    }
+
+    private String interpretationOutputStatus(String content) {
+        if (content == null || content.isBlank()) return "BLANK";
+        if (content.length() > 4_000) return "TOO_LONG";
+        try {
+            JSON.readValue(content, QuestionInterpretationDraft.class);
+            return "VALID";
+        } catch (IOException invalidJson) {
+            try {
+                JSON.readTree(content);
+                return "INVALID_CONTRACT_" + invalidJson.getClass().getSimpleName().toUpperCase(java.util.Locale.ROOT);
+            } catch (IOException malformedJson) {
+                return "INVALID_JSON";
+            }
         }
     }
 

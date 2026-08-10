@@ -2,7 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
-import RecommendationRulebookHandoff from '@/components/RecommendationRulebookHandoff.vue'
+import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
+import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
+import RecommendationLessonDialog from '@/components/RecommendationLessonDialog.vue'
+import RecommendationRulebookDialog from '@/components/RecommendationRulebookDialog.vue'
+import RecommendationRulebookHandoff, { type RecommendationJourneyStatus } from '@/components/RecommendationRulebookHandoff.vue'
 import type {
   RecommendationAgentResponse,
   RecommendationClarification,
@@ -30,6 +34,9 @@ const copy = {
     toolNames: '完整目录按标题找候选', toolDetails: 'BGG 详情核对', toolDiscover: '公开资料发现候选', toolResearch: '体验资料查证',
     starters: ['想找和我喜欢的一款机制相近的', '先聊聊最近流行什么', '朋友聚会，想热闹但不要尴尬', '我不确定，先问我一个问题吧'],
     type: '类型：{value}', interaction: '互动：{value}',
+    journeyWorking: '正在为《{game}》获取规则书并生成讲解 · {progress}%', journeyReady: '《{game}》的讲解已经可以阅读',
+    journeyFailed: '《{game}》的准备流程需要处理', journeyOpen: '打开进度', journeyDialog: '规则书与讲解进度',
+    recommendationRole: '继续推荐', answerRole: '规则答疑', roleLabel: '切换 Agent 任务',
   },
   en: {
     eyebrow: 'Choose together', title: 'What should we play tonight?',
@@ -45,6 +52,9 @@ const copy = {
     toolNames: 'Find titles in the full catalog', toolDetails: 'Verify BGG details', toolDiscover: 'Discover from public sources', toolResearch: 'Verify play experience',
     starters: ['Find something mechanically similar to a game I like', 'Let’s chat about what is popular', 'Lively with friends, but not awkward', 'I am not sure—ask me one useful question'],
     type: 'Type: {value}', interaction: 'Interaction: {value}',
+    journeyWorking: 'Getting the rulebook and building a guide for {game} · {progress}%', journeyReady: 'The guide for {game} is ready to read',
+    journeyFailed: 'The preparation flow for {game} needs attention', journeyOpen: 'Open progress', journeyDialog: 'Rulebook and guide progress',
+    recommendationRole: 'Recommendations', answerRole: 'Rules Q&A', roleLabel: 'Switch Agent task',
   },
 } as const
 
@@ -104,6 +114,10 @@ const seenBggIds = ref<number[]>([])
 const knownGames = ref<RecommendationGame[]>([])
 const activeFocusedBggId = ref<number | null>(null)
 const selectedGame = ref<RecommendationGame | null>(null)
+const detailsGame = ref<RecommendationGame | null>(null)
+const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'lesson'>('none')
+const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
+const conversationRole = ref<'recommendation' | 'rule-qa'>('recommendation')
 const conversationScroller = ref<HTMLElement | null>(null)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
@@ -124,6 +138,20 @@ const profileLabels = computed(() => {
   if (profile.value.interaction !== 'any') labels.push(t('interaction', { value: profile.value.interaction }))
   return labels
 })
+
+const compactJourneyText = computed(() => {
+  if (!selectedGame.value) return ''
+  const parameters = { game: selectedGame.value.name, progress: journeyStatus.value?.projection.progress ?? 5 }
+  if (journeyStatus.value?.projection.state === 'failed' || journeyStatus.value?.projection.retryAction) return t('journeyFailed', parameters)
+  if (journeyStatus.value?.projection.canReadLesson) return t('journeyReady', parameters)
+  return t('journeyWorking', parameters)
+})
+
+const answerWorkspaceReady = computed(() => Boolean(
+  journeyStatus.value?.projection.canAskQuestions
+    && journeyStatus.value.plan?.id
+    && journeyStatus.value.importJob?.documentVersionId,
+))
 
 function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
   const actions = turnResponse?.harness?.actions ?? []
@@ -250,8 +278,58 @@ function introduce(bggId: number, name: string) {
 }
 
 function selectGame(game: RecommendationGame) {
+  if (selectedGame.value?.bggId !== game.bggId) {
+    journeyStatus.value = null
+    conversationRole.value = 'recommendation'
+  }
   selectedGame.value = game
   activeFocusedBggId.value = game.bggId
+  openSurface.value = 'journey'
+}
+
+function openDetails(game: RecommendationGame) {
+  detailsGame.value = game
+  openSurface.value = 'game-details'
+}
+
+function selectFromDetails(game: RecommendationGame) {
+  detailsGame.value = null
+  selectGame(game)
+}
+
+function updateJourneyStatus(value: RecommendationJourneyStatus) {
+  journeyStatus.value = value
+}
+
+function openRulebook(value: RecommendationJourneyStatus) {
+  journeyStatus.value = value
+  if (value.importJob?.documentVersionId) openSurface.value = 'rulebook'
+}
+
+function openLesson(value: RecommendationJourneyStatus) {
+  journeyStatus.value = value
+  if (value.plan?.id) openSurface.value = 'lesson'
+}
+
+function switchToQuestions(value?: RecommendationJourneyStatus) {
+  if (value) journeyStatus.value = value
+  if (!answerWorkspaceReady.value) {
+    if (selectedGame.value) openSurface.value = 'journey'
+    return
+  }
+  conversationRole.value = 'rule-qa'
+  openSurface.value = 'none'
+}
+
+function switchToRecommendations() {
+  conversationRole.value = 'recommendation'
+}
+
+function changeJourneyGame() {
+  selectedGame.value = null
+  journeyStatus.value = null
+  conversationRole.value = 'recommendation'
+  openSurface.value = 'none'
 }
 
 function retry() {
@@ -261,7 +339,7 @@ function retry() {
   void sendTurn(pending.message, pending.profile, undefined, pending.excludedBggIds, pending.focusedBggId)
 }
 
-function reset() {
+function reset(preserveJourney = false) {
   activeRequest?.abort()
   endLoading()
   profile.value = emptyProfile()
@@ -273,14 +351,20 @@ function reset() {
   seenBggIds.value = []
   knownGames.value = []
   activeFocusedBggId.value = null
-  selectedGame.value = null
+  if (!preserveJourney) {
+    selectedGame.value = null
+    detailsGame.value = null
+    journeyStatus.value = null
+    conversationRole.value = 'recommendation'
+    openSurface.value = 'none'
+  }
 }
 
 function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
   return t(confidence)
 }
 
-watch(locale, reset)
+watch(locale, () => reset(true))
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
@@ -310,41 +394,94 @@ onBeforeUnmount(() => {
             <p class="mt-3 text-sm leading-6 text-white/72">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="text-xs leading-5 text-white/58"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence) }}</span>{{ hypothesis.text }}<span class="block text-white/38">{{ t('basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <button type="button" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white" @click="reset">{{ t('reset') }}</button>
+          <button type="button" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white" @click="reset()">{{ t('reset') }}</button>
         </div>
 
         <div class="min-w-0 bg-paper text-ink">
-          <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[70vh] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[31rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[46rem]" aria-live="polite">
-            <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
-              <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
-              <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
-                <p class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72">{{ message.text }}</p>
+          <nav v-if="answerWorkspaceReady" data-testid="agent-role-switcher" class="flex gap-2 border-b border-ink/8 px-4 py-3 sm:px-6" :aria-label="t('roleLabel')">
+            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'recommendation' ? 'bg-felt text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'recommendation'" @click="switchToRecommendations">{{ t('recommendationRole') }}</button>
+            <button type="button" class="min-h-11 rounded-xl px-4 text-sm font-semibold" :class="conversationRole === 'rule-qa' ? 'bg-indigo text-white' : 'border border-ink/12 text-ink/60'" :aria-pressed="conversationRole === 'rule-qa'" @click="switchToQuestions()">{{ t('answerRole') }}</button>
+          </nav>
 
-                <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" aria-label="recommendation tool trail">
-                  <span class="font-semibold text-ink/58">{{ t('toolTrail') }}</span>
-                  <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
-                </div>
+          <div v-show="conversationRole === 'recommendation'">
+            <div ref="conversationScroller" data-testid="recommendation-conversation" class="max-h-[70vh] min-h-72 scroll-pb-8 stack-y-md overflow-y-auto px-4 py-5 pb-8 sm:min-h-[31rem] sm:px-6 sm:py-7 sm:pb-9 lg:max-h-[46rem]" aria-live="polite">
+              <div v-for="message in messages" :key="message.id" data-conversation-message :data-has-recommendations="message.response?.games.length ? 'true' : 'false'" class="flex min-w-0" :class="message.role === 'user' ? 'justify-end' : 'justify-start'">
+                <p v-if="message.role === 'user'" class="max-w-[88%] rounded-2xl rounded-br-sm bg-felt px-4 py-3 text-sm leading-6 text-white">{{ message.text }}</p>
+                <article v-else class="min-w-0 w-full" :data-testid="message.response?.games.length ? 'assistant-recommendation-turn' : 'assistant-conversation-turn'">
+                  <p class="max-w-[88%] rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm leading-6 text-ink/72">{{ message.text }}</p>
 
-                <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
-                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p class="text-xs leading-5 text-ink/48">{{ t('source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
-                    <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ t('more') }}</button>
+                  <div v-if="toolLabelsFor(message.response).length" class="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[0.6875rem] text-ink/45" aria-label="recommendation tool trail">
+                    <span class="font-semibold text-ink/58">{{ t('toolTrail') }}</span>
+                    <span v-for="label in toolLabelsFor(message.response)" :key="label" class="rounded-full border border-ink/10 bg-paper px-2.5 py-1">{{ label }}</span>
                   </div>
-                  <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                    <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" />
-                  </TransitionGroup>
-                </div>
-              </article>
+
+                  <div v-if="message.response?.games.length" class="mt-3 rounded-2xl border border-ink/8 bg-canvas/45 p-3 sm:p-4">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p class="text-xs leading-5 text-ink/48">{{ t('source', { source: message.response.sourceCount.toLocaleString(), count: message.response.candidatesEvaluated }) }}</p>
+                      <button v-if="message.response === response" type="button" :disabled="loading" class="min-h-11 self-start text-sm font-semibold text-copper underline decoration-copper-soft underline-offset-4 disabled:opacity-40 sm:self-auto" @click="moreGames(message.response)">{{ t('more') }}</button>
+                    </div>
+                    <TransitionGroup tag="div" name="tile" class="mt-3 grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                      <RecommendationGameCard v-for="entry in message.response.games" :key="entry.game.bggId" :entry="entry" :sources="message.response.researchSources ?? []" :loading="loading" @introduce="introduce" @select="selectGame" @details="openDetails" />
+                    </TransitionGroup>
+                  </div>
+                </article>
+              </div>
+              <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
             </div>
-            <div v-if="loading" class="flex items-center gap-3 rounded-2xl rounded-bl-sm border border-ink/8 bg-canvas px-4 py-3 text-sm text-ink/55" role="status"><span class="flex gap-1" aria-hidden="true"><span class="size-1.5 animate-pulse rounded-full bg-copper" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:160ms]" /><span class="size-1.5 animate-pulse rounded-full bg-copper [animation-delay:320ms]" /></span><span>{{ loadingMessage }}</span></div>
+            <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
+            <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
+            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
           </div>
-          <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
-          <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
-          <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
+
+          <RecommendationAnswerWorkspace
+            v-if="journeyStatus?.plan?.id && journeyStatus.importJob?.documentVersionId"
+            v-show="conversationRole === 'rule-qa'"
+            :active="conversationRole === 'rule-qa'"
+            :document-version-id="journeyStatus.importJob.documentVersionId"
+            :plan-id="journeyStatus.plan.id"
+            :edition-id="journeyStatus.imported?.edition.id"
+            :game-title="selectedGame?.name ?? journeyStatus.game.name"
+          />
         </div>
       </div>
     </div>
 
-    <RecommendationRulebookHandoff v-if="selectedGame" :key="selectedGame.bggId" class="mt-8" :game="selectedGame" :profile="profile" @close="selectedGame = null" />
+    <button v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-dock" type="button" class="mt-4 flex min-h-16 w-full items-center gap-3 rounded-2xl border border-copper/25 bg-paper px-4 py-3 text-left elevation-sm hover:border-copper/45" @click="openSurface = 'journey'">
+      <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
+      <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
+      <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t('journeyOpen') }}</span>
+    </button>
+
+    <div v-if="selectedGame" v-show="openSurface === 'journey'" class="fixed inset-0 z-50 overflow-y-auto bg-ink/40 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
+      <div class="mx-auto w-full max-w-3xl" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
+        <RecommendationRulebookHandoff
+          :key="selectedGame.bggId"
+          :game="selectedGame"
+          :profile="profile"
+          @close="openSurface = 'none'"
+          @change="changeJourneyGame"
+          @status="updateJourneyStatus"
+          @open-rulebook="openRulebook"
+          @open-lesson="openLesson"
+          @ask-questions="switchToQuestions"
+        />
+      </div>
+    </div>
+
+    <RecommendationGameDetailsDialog v-if="detailsGame" :game="detailsGame" :open="openSurface === 'game-details'" @close="openSurface = 'none'" @select="selectFromDetails" />
+    <RecommendationRulebookDialog
+      v-if="selectedGame && journeyStatus?.importJob?.documentVersionId"
+      :open="openSurface === 'rulebook'"
+      :version-id="journeyStatus.importJob.documentVersionId"
+      :title="selectedGame.name"
+      @close="openSurface = 'none'"
+    />
+    <RecommendationLessonDialog
+      v-if="journeyStatus?.plan?.id"
+      :open="openSurface === 'lesson'"
+      :plan-id="journeyStatus.plan.id"
+      @close="openSurface = 'none'"
+      @ask-questions="switchToQuestions()"
+    />
   </section>
 </template>

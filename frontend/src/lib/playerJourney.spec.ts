@@ -1,0 +1,191 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  acceptImportJob,
+  acceptJourneyRun,
+  derivePlayerJourney,
+  type PlayerJourneyImportJob,
+  type PlayerJourneyInput,
+  type PlayerJourneyRun,
+} from './playerJourney'
+
+function input(overrides: Partial<PlayerJourneyInput> = {}): PlayerJourneyInput {
+  return {
+    gameBound: false,
+    discovery: 'idle',
+    importJob: null,
+    documentProgress: null,
+    preparationRun: null,
+    plan: null,
+    teachingRun: null,
+    lesson: null,
+    ...overrides,
+  }
+}
+
+function importJob(overrides: Partial<PlayerJourneyImportJob> = {}): PlayerJourneyImportJob {
+  return {
+    id: 'import-1', stage: 'QUEUED', downloadedBytes: 0, totalBytes: null,
+    documentVersionId: null, errorCode: null, teachingHandoffState: 'WAITING_FOR_DOCUMENT',
+    teachingPreparationRunId: null, updatedAt: '2026-08-10T10:00:00Z', ...overrides,
+  }
+}
+
+function run(state: string, revision = 1): PlayerJourneyRun {
+  return {
+    run: { id: 'run-1', state, revision, updatedAt: `2026-08-10T10:00:0${revision}Z`, lastErrorCode: null },
+    activities: [],
+  }
+}
+
+describe('derivePlayerJourney', () => {
+  it('keeps source review distinct from work that has actually started', () => {
+    expect(derivePlayerJourney(input({ gameBound: true, discovery: 'review' }))).toMatchObject({
+      phase: 'SOURCE_REVIEW', state: 'waiting', progress: 18,
+    })
+  })
+
+  it('reports byte-backed download progress without calling it complete', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({ stage: 'DOWNLOADING', downloadedBytes: 50, totalBytes: 100 }),
+    }))).toMatchObject({ phase: 'IMPORT_DOWNLOADING', state: 'active', progress: 40 })
+  })
+
+  it('does not equate the teaching handoff with a readable lesson', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: run('COMPLETED'),
+    }))).toMatchObject({
+      phase: 'LESSON_GENERATION_QUEUED', state: 'active', canReadRulebook: true,
+      canReadLesson: false, canAskQuestions: false,
+    })
+  })
+
+  it('makes the rendered rulebook readable while teaching is still preparing', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'WAITING_FOR_DOCUMENT',
+      }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
+    }))).toMatchObject({
+      phase: 'DOCUMENT_PROCESSING', canReadRulebook: true, canReadLesson: false,
+    })
+  })
+
+  it('exposes preparation failure as a precise safe retry', () => {
+    const preparation = run('FAILED')
+    preparation.run.lastErrorCode = 'TEACHING_PREPARATION_FAILED'
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: preparation,
+    }))).toMatchObject({
+      phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+      errorCode: 'TEACHING_PREPARATION_FAILED',
+    })
+  })
+
+  it('makes the first published chapter readable while generation continues', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: run('COMPLETED'),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
+      ] },
+      teachingRun: run('LESSON_COMPOSITION'),
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_READABLE', state: 'ready', canReadLesson: true, canAskQuestions: true,
+      availableSections: 1, totalSections: 2,
+    })
+  })
+
+  it('requires both a complete lesson and completed run for final completion', () => {
+    const common = {
+      gameBound: true,
+      discovery: 'review' as const,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: run('COMPLETED'),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' },
+      ] },
+      lesson: { id: 'lesson-1', status: 'COMPLETE' as const, sections: [{ position: 1, title: 'Setup' }] },
+    }
+    expect(derivePlayerJourney(input({ ...common, teachingRun: run('CRITIQUING') })).phase)
+      .toBe('LESSON_READABLE')
+    expect(derivePlayerJourney(input({ ...common, teachingRun: run('COMPLETED') }))).toMatchObject({
+      phase: 'LESSON_COMPLETE', state: 'complete', progress: 100,
+    })
+  })
+
+  it('keeps a published draft readable when later review ends degraded', () => {
+    const teaching = run('DEGRADED')
+    teaching.run.lastErrorCode = 'REVIEW_UNAVAILABLE'
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      discovery: 'review',
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      preparationRun: run('COMPLETED'),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' },
+      ] },
+      teachingRun: teaching,
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      phase: 'LESSON_READABLE', state: 'ready', retryAction: 'GENERATE_LESSON',
+      errorCode: 'REVIEW_UNAVAILABLE', canReadLesson: true,
+    })
+  })
+})
+
+describe('journey snapshot acceptance', () => {
+  it('does not let an older active import overwrite a terminal handoff', () => {
+    const terminal = importJob({
+      stage: 'COMPLETED', teachingHandoffState: 'LAUNCHED', updatedAt: '2026-08-10T10:00:05Z',
+    })
+    const stale = importJob({
+      stage: 'DOWNLOADING', teachingHandoffState: 'WAITING_FOR_DOCUMENT', updatedAt: '2026-08-10T10:00:03Z',
+    })
+    expect(acceptImportJob(terminal, stale)).toBe(terminal)
+  })
+
+  it('keeps the newest run revision and merges activity history', () => {
+    const previous = {
+      ...run('LESSON_COMPOSITION', 3),
+      activities: [{ sequence: 1, operation: 'search', summary: 'Found rules', outcome: 'SUCCEEDED' }],
+    }
+    const incoming = {
+      ...run('CRITIQUING', 4),
+      activities: [{ sequence: 2, operation: 'review', summary: 'Reviewing', outcome: 'RUNNING' }],
+    }
+    expect(acceptJourneyRun(previous, incoming)).toMatchObject({
+      run: { state: 'CRITIQUING', revision: 4 },
+      activities: [{ sequence: 1 }, { sequence: 2 }],
+    })
+    expect(acceptJourneyRun(incoming, previous)).toEqual(incoming)
+  })
+})

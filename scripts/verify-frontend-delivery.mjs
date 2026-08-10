@@ -40,6 +40,26 @@ const serviceWorker = readFileSync(resolve(dist, 'sw.js'), 'utf8')
 const precachedAssets = [
   ...new Set([...serviceWorker.matchAll(/url:"([^"]+)"/g)].map((match) => match[1])),
 ].filter((asset) => !asset.startsWith('http'))
+const precachedAssetSet = new Set(precachedAssets.map((asset) => asset.replace(/^\//, '')))
+const initialAssetSet = new Set(initialAssets.map((asset) => asset.replace(/^\//, '')))
+const lessonReaderChunk = precachedAssets.find((asset) => /assets\/LessonView-[A-Za-z0-9_-]{8}\.js$/.test(asset))
+if (!lessonReaderChunk) throw new Error('offline lesson reader chunk is not precached')
+
+const lessonReaderSource = readFileSync(resolve(dist, lessonReaderChunk), 'utf8')
+const lessonReaderDependencies = [
+  ...new Set(
+    [...lessonReaderSource.matchAll(/from["']\.\/([^"']+\.js)["']/g)]
+      .map((match) => `assets/${match[1]}`),
+  ),
+]
+const unavailableOfflineDependencies = lessonReaderDependencies.filter(
+  (asset) => !precachedAssetSet.has(asset) && !initialAssetSet.has(asset),
+)
+if (unavailableOfflineDependencies.length > 0) {
+  throw new Error(
+    `offline lesson reader dependencies are neither precached nor loaded by the controlled app shell: ${unavailableOfflineDependencies.join(', ')}`,
+  )
+}
 const precacheBytes = precachedAssets.reduce((total, asset) => {
   const localPath = resolve(dist, asset)
   return total + statSync(localPath).size

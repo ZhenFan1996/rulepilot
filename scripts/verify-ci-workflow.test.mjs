@@ -8,6 +8,18 @@ const deploymentWorkflow = await readFile(
   'utf8',
 )
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
+const productionRecommendationWorkflow = await readFile(
+  new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
+  'utf8',
+)
+const productionRecommendationConfig = await readFile(
+  new URL('../frontend/playwright.recommendation-production.config.ts', import.meta.url),
+  'utf8',
+)
+const productionRecommendationSpec = await readFile(
+  new URL('../frontend/e2e/production-recommendation-journey.spec.ts', import.meta.url),
+  'utf8',
+)
 
 test('E2E CI uses a Node 24 artifact action and produces the uploaded HTML report', () => {
   assert.match(ciWorkflow, /uses:\s*actions\/upload-artifact@v(?:6|7)\b/)
@@ -18,6 +30,29 @@ test('E2E CI uses a Node 24 artifact action and produces the uploaded HTML repor
 
 test('E2E CI cannot regress to the deprecated Node 20 artifact action', () => {
   assert.doesNotMatch(ciWorkflow, /uses:\s*actions\/upload-artifact@v[1-5]\b/)
+})
+
+test('production recommendation journey tests the deployed main release without exposing its player credential', () => {
+  assert.match(productionRecommendationWorkflow, /uses:\s*actions\/checkout@v6[\s\S]*?ref:\s*main/)
+  assert.match(productionRecommendationWorkflow, /environment:\s*\n\s+name:\s*production/)
+  assert.match(productionRecommendationWorkflow, /expected_sha=\$\(git rev-parse HEAD\)/)
+  assert.match(productionRecommendationWorkflow, /"\$expected_sha"-\*\)/)
+  assert.match(productionRecommendationWorkflow, /::add-mask::\$player_username/)
+  assert.match(productionRecommendationWorkflow, /::add-mask::\$player_password/)
+  assert.match(productionRecommendationWorkflow, /RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true/)
+  assert.match(productionRecommendationWorkflow, /playwright\.recommendation-production\.config\.ts/)
+  assert.match(productionRecommendationConfig, /testMatch:\s*'production-recommendation-journey\.spec\.ts'/)
+  assert.match(productionRecommendationConfig, /trace:\s*'off'/)
+  assert.match(productionRecommendationConfig, /screenshot:\s*'off'/)
+  assert.match(productionRecommendationSpec, /gstoneCandidate/)
+  assert.match(productionRecommendationSpec, /expect\(launchedJob\.reused[^\n]*\)\.toBe\(false\)/)
+  assert.match(productionRecommendationSpec, /expect\(importRequestCount\)\.toBe\(1\)/)
+  assert.match(productionRecommendationSpec, /规则书已经可以阅读；讲解会继续在后台生成/)
+  assert.match(productionRecommendationSpec, /直接核对规则依据/)
+  assert.match(productionRecommendationSpec, /name: '继续推荐'/)
+  assert.match(productionRecommendationSpec, /name: '规则答疑'/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /echo "\$player_password"/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$player_password"/)
 })
 
 test('production deployment synchronizes the protected BGG credential without packaging or logging it', () => {
@@ -57,7 +92,7 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /QWEN_MODEL=qwen3\.7-plus/)
   assert.match(deploymentWorkflow, /WEB_SEARCH_MODEL=qwen3\.7-plus/)
   assert.match(deploymentWorkflow, /QWEN_VISION_CAPABLE=true/)
-  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-plus/)
+  assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_MODEL=qwen3\.7-max/)
   assert.match(deploymentWorkflow, /RULEBOOK_DISCOVERY_HOURLY_LIMIT=30/)
   assert.match(
     deploymentWorkflow,

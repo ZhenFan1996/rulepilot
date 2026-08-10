@@ -4,6 +4,7 @@
     "recommendation": ".local/agent-evaluation/recommendation-conversation-real.json",
     "acquisition": ".local/agent-evaluation/rulebook-acquisition-real.json",
     "teachingDialogue": ".local/agent-evaluation/teaching-dialogue-intent-real.json",
+    "answerDialogue": ".local/agent-evaluation/context-agent-real-rulebooks.json",
     "answerEvidence": ".local/agent-evaluation/answer-agent-real-rulebooks.json",
     "teachingEvidence": ".local/agent-evaluation/teaching-agent-real-rulebooks.json",
     "security": ".local/agent-evaluation/security-agent-release-gate.json"
@@ -14,6 +15,7 @@
     "recommendationCatalogCalls": 12,
     "recommendationWebCalls": 1,
     "adaptiveIntentLatencyMs": 45000,
+    "answerDialogueLatencyMs": 90000,
     "acquisitionDiscoveryLatencyMs": 120000,
     "acquisitionDownloadLatencyMs": 600000,
     "acquisitionMaximumBytes": 104857600

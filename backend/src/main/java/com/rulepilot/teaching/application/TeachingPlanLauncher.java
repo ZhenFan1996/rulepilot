@@ -4,6 +4,7 @@ import com.rulepilot.assistant.AssistantRunMode;
 import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
+import java.util.Objects;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,21 +84,18 @@ public class TeachingPlanLauncher {
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
-            var plan = plans.create(
-                    documentVersionId,
-                    learningGoal,
-                    ownerUsername,
-                    current.id());
+            RunSnapshot planningRun = current;
+            var plan = plans.latest(documentVersionId, ownerUsername)
+                    .filter(existingPlan -> Objects.equals(existingPlan.learningGoal(), learningGoal))
+                    .orElseGet(() -> plans.create(
+                            documentVersionId,
+                            learningGoal,
+                            ownerUsername,
+                            planningRun.id()));
+            lessons.launch(plan.id(), ownerUsername);
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.COMPLETED,
                     "Teaching plan is ready");
-            try {
-                lessons.launch(plan.id(), ownerUsername);
-            } catch (RuntimeException launchFailure) {
-                LOGGER.warn(
-                        "Teaching plan {} is ready but lesson generation did not start: {}",
-                        plan.id(), launchFailure.getClass().getSimpleName());
-            }
         } catch (RuntimeException failure) {
             failIfActive(current, ownerUsername, failure);
             LOGGER.warn("Teaching preparation failed for document version {}", documentVersionId, failure);

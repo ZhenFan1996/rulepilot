@@ -55,7 +55,66 @@ const similarToMosaicField = {
   bggUrl: 'https://boardgamegeek.com/boardgame/600061',
 }
 
+const teachingPlan = {
+  id: 'plan-1', documentVersionId: 'version-1', gameTitle: '展翅翱翔', premise: '先看目标，再按回合顺序练习。',
+  sections: [
+    { position: 1, title: '游戏目标', visualEvidenceRecommended: false },
+    { position: 2, title: '回合行动', visualEvidenceRecommended: false },
+  ],
+}
+
+function lessonSection(position: number, title: string, text: string) {
+  return {
+    position, topicKey: `TOPIC_${position}`, coverageTags: [], title, required: true, evidenceStatus: 'SUPPORTED',
+    visualKind: 'FLOW_DIAGRAM', visualCaption: '', visualSourcePages: [position + 1], visualSourceChunkIds: [`chunk-${position}`],
+    steps: [{ position: 1, heading: title, kind: 'DO', text, sourcePages: [position + 1], visualFocus: null }],
+  }
+}
+
+const draftLesson = {
+  id: 'lesson-1', status: 'DRAFT_READY',
+  sections: [lessonSection(1, '游戏目标', '通过鸟类、奖励牌和蛋获得分数。')],
+}
+
+const completeLesson = {
+  id: 'lesson-1', status: 'COMPLETE',
+  sections: [
+    ...draftLesson.sections,
+    lessonSection(2, '回合行动', '选择一个栖息地行动并依次结算。'),
+  ],
+}
+
+function assistantRun(id: string, state: string, revision: number) {
+  const updatedAt = `2026-08-10T08:00:0${revision}Z`
+  return {
+    run: {
+      id, state, revision, subjectId: id === 'teaching-run-1' ? 'plan-1' : 'version-1',
+      createdAt: '2026-08-10T08:00:00Z', updatedAt,
+      completedAt: state === 'COMPLETED' ? updatedAt : null, lastErrorCode: null,
+    },
+    budget: { usedModelCalls: revision, maxModelCalls: 12 },
+    activities: state === 'COMPLETED' ? [{
+      sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1', summary: 'CITED_BASE_SECTION_PUBLISHED',
+      outcome: 'SUCCEEDED', latencyMs: 12, occurredAt: updatedAt,
+    }] : [],
+  }
+}
+
+const ruleAnswer = {
+  status: 'ANSWERED',
+  shortVerdict: '获得食物后，再发动该栖息地中从右到左的棕色能力。',
+  explanation: '规则书把获得食物写在发动棕色能力之前，因此按这个顺序结算。',
+  citations: [{
+    chunkId: 'answer-chunk-1', sectionType: 'TURN', heading: '获得食物',
+    excerpt: '获得食物后，依次发动栖息地中的棕色能力。', pageFrom: 7, pageTo: 7,
+  }],
+  exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: true,
+  confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+}
+
 async function mockPublicDiscovery(page: import('@playwright/test').Page, authenticated = false) {
+  let teachingPoll = 0
+  let lessonPoll = 0
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -161,6 +220,16 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     edition: { id: 'edition-1', name: 'BGG 基础版' },
     alreadyImported: false,
   } }))
+  await page.route('**/api/v1/bgg/games/266192?*', route => route.fulfill({ json: {
+    ...catalog.games[0],
+    description: route.request().url().includes('translate=true') ? '在不同栖息地吸引鸟类并建立引擎。' : 'Attract birds to different habitats and build an engine.',
+    imageUrl: 'https://example.test/wingspan-large.jpg', minimumAge: 10,
+    designers: ['Elizabeth Hargrave'], publishers: ['Stonemaier Games'], editionImages: [],
+    officialNameLocalized: route.request().url().includes('translate=true'),
+    descriptionTranslated: route.request().url().includes('translate=true'),
+    categoriesTranslated: route.request().url().includes('translate=true'),
+    mechanicsTranslated: route.request().url().includes('translate=true'),
+  } }))
   await page.route('**/api/v1/documents/rulebook-candidates?*', route => route.fulfill({ json: {
     configured: true,
     candidates: [{
@@ -190,10 +259,53 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
   } }))
   await page.route('**/api/v1/documents', route => route.fulfill({ json: [{
     document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Wingspan Rulebook', officialSourceUrl: 'https://publisher.example/wingspan.pdf' },
-    latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'EXTRACTING' },
+    latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'READY' },
   }] }))
   await page.route('**/api/v1/document-versions/version-1/progress/snapshot', route => route.fulfill({ json: {
-    stage: 'EXTRACTING', percentage: 45, processedPages: 0, totalPages: 0, complete: false,
+    stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true,
+  } }))
+  await page.route('**/api/v1/document-versions/version-1/pages', route => route.fulfill({ json: [
+    { pageNumber: 1, text: 'Setup', characterCount: 1200 },
+    { pageNumber: 2, text: 'Goal', characterCount: 960 },
+    { pageNumber: 7, text: 'Gain food, then activate brown powers.', characterCount: 1100 },
+  ] }))
+  await page.route('**/api/v1/assistant-runs/preparation-run-1', route => route.fulfill({ json: assistantRun('preparation-run-1', 'COMPLETED', 1) }))
+  await page.route('**/api/v1/document-versions/version-1/teaching-plans/latest', route => route.fulfill({ json: teachingPlan }))
+  await page.route('**/api/v1/teaching-plans/plan-1', route => route.fulfill({ json: teachingPlan }))
+  await page.route('**/api/v1/assistant-runs/latest?*', route => {
+    const url = route.request().url()
+    if (url.includes('mode=QUESTION_ANSWER')) return route.fulfill({ status: 404 })
+    teachingPoll += 1
+    const completed = teachingPoll >= 3
+    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
+  })
+  await page.route('**/api/v1/assistant-runs/teaching-run-1', route => {
+    teachingPoll += 1
+    const completed = teachingPoll >= 3
+    return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
+  })
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => {
+    lessonPoll += 1
+    if (lessonPoll === 1) return route.fulfill({ status: 404 })
+    return route.fulfill({ json: lessonPoll >= 3 ? completeLesson : draftLesson })
+  })
+  await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons', route => route.fulfill({ status: 202, json: {
+    assistantRunId: 'teaching-run-1', state: 'RUNNING', reused: true,
+  } }))
+  await page.route('**/api/v1/game-sessions', route => route.fulfill({ json: {
+    id: 'session-1', gameId: 'game-1', editionId: 'edition-1', documentVersionId: 'version-1',
+    expansionIds: [], playerCount: 1, roundNumber: 1, phase: '规则问答', activePlayer: null,
+  } }))
+  await page.route('**/api/v1/game-sessions/session-1', route => route.fulfill({ json: {
+    id: 'session-1', gameId: 'game-1', editionId: 'edition-1', documentVersionId: 'version-1',
+    expansionIds: [], playerCount: 1, roundNumber: 1, phase: '规则问答', activePlayer: null,
+  } }))
+  await page.route('**/api/v1/document-versions/version-1/answers/conversation?*', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/document-versions/version-1/answers', route => route.fulfill({ json: {
+    assistantRunId: 'answer-run-1', answer: ruleAnswer, conversationTurnId: 'turn-1',
+  } }))
+  await page.route('**/api/v1/assistant-runs/answer-run-1', route => route.fulfill({ json: {
+    run: { id: 'answer-run-1', subjectId: 'version-1', createdAt: new Date().toISOString() }, activities: [],
   } }))
 }
 
@@ -305,13 +417,21 @@ test('keeps a corrected reference title in conversational context on mobile', as
   expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
 })
 
-test('selects a recommendation, reviews an official rulebook, and starts teaching in the background', async ({ page }) => {
+test('keeps recommendation, rulebook reading, progressive teaching, and grounded Q&A in one recoverable workspace', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
-  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
+  const recommendationComposer = page.getByLabel('和推荐 Agent 聊聊')
+  await recommendationComposer.fill('4 个人，90 分钟内，想要中等策略；朋友聚会，希望热闹但不要尴尬')
   await page.getByRole('button', { name: '发送', exact: true }).click()
-  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await recommendationComposer.fill('稍后还想继续找一款合作游戏')
+
+  await page.getByRole('button', { name: '查看完整资料：展翅翱翔' }).click()
+  const details = page.getByRole('dialog', { name: '桌游详细资料' })
+  await expect(details.getByText('在不同栖息地吸引鸟类并建立引擎。')).toBeVisible()
+  await expect(page).toHaveURL(/\/discover$/)
+  await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
 
   await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()
   await expect(page.getByText('Wingspan Rulebook')).toBeVisible()
@@ -334,13 +454,51 @@ test('selects a recommendation, reviews an official rulebook, and starts teachin
     learningGoal: null,
   })
   await expect(page).toHaveURL(/\/discover$/)
-  await expect(page.getByText('讲解已经在后台开始')).toBeVisible()
-  await expect(page.getByRole('link', { name: /打开我的桌游/ })).toHaveAttribute('href', '/catalog')
-  await expect(page.getByRole('link', { name: /查看讲解进度/ })).toHaveAttribute('href', '/lessons')
 
-  await page.getByRole('link', { name: /打开我的桌游/ }).click()
-  await expect(page).toHaveURL(/\/catalog$/)
-  await expect(page.getByRole('heading', { level: 1, name: '今晚想开哪一局？' })).toBeVisible()
-  await expect(page.getByRole('heading', { level: 2, name: '展翅翱翔' })).toBeVisible()
-  await expect(page.getByText('1 本规则书', { exact: true })).toBeVisible()
+  await expect(page.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible({ timeout: 8_000 })
+  await page.getByRole('button', { name: '先阅读原规则书' }).click()
+  const rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
+  await expect(rulebook.getByText('你可以先阅读原规则书；讲解仍在后台生成')).toBeVisible()
+  await expect(rulebook.getByRole('img', { name: '规则书第 1 页' })).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/1/image')
+  await rulebook.getByRole('button', { name: /第 7 页/ }).click()
+  await expect(rulebook.getByRole('img', { name: '规则书第 7 页' })).toHaveAttribute('src', '/api/v1/document-versions/version-1/pages/7/image')
+  await page.waitForTimeout(1_500)
+  await rulebook.getByRole('button', { name: '关闭规则书' }).click()
+
+  const journeyDock = page.getByTestId('player-journey-dock')
+  await expect(journeyDock).toContainText('讲解已经可以阅读', { timeout: 8_000 })
+  await journeyDock.click()
+  await page.getByRole('button', { name: '打开已生成的讲解' }).click()
+  const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expect(lesson.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
+  await expect(lesson.getByText('选择一个栖息地行动并依次结算。')).toBeVisible()
+  await expect(page).toHaveURL(/\/discover$/)
+
+  const sessionRequestPromise = page.waitForRequest(request =>
+    request.url().endsWith('/api/v1/game-sessions') && request.method() === 'POST')
+  await lesson.getByRole('button', { name: '切换到规则答疑' }).click()
+  const sessionRequest = await sessionRequestPromise
+  expect(sessionRequest.postDataJSON()).toMatchObject({
+    editionId: 'edition-1', documentVersionId: 'version-1', expansionIds: [], playerCount: 1,
+  })
+  await expect(page.getByTestId('recommendation-answer-workspace')).toContainText('已绑定规则书，可以开始提问')
+
+  const answerRequestPromise = page.waitForRequest(request =>
+    request.url().endsWith('/api/v1/document-versions/version-1/answers') && request.method() === 'POST')
+  await page.getByLabel('向规则书提问').fill('获得食物以后，什么时候发动棕色能力？')
+  await page.getByRole('button', { name: '提交问题' }).click()
+  const answerRequest = await answerRequestPromise
+  expect(answerRequest.postDataJSON()).toMatchObject({
+    question: '获得食物以后，什么时候发动棕色能力？',
+    gameSessionId: 'session-1',
+    language: 'zh-CN',
+  })
+  await expect(page.getByText('获得食物后，再发动该栖息地中从右到左的棕色能力。')).toBeVisible()
+  await expect(page.getByText('获得食物', { exact: true })).toBeVisible()
+
+  await page.getByTestId('agent-role-switcher').getByRole('button', { name: '继续推荐' }).click()
+  await expect(recommendationComposer).toBeVisible()
+  await expect(recommendationComposer).toHaveValue('稍后还想继续找一款合作游戏')
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await expect(page).toHaveURL(/\/discover$/)
 })

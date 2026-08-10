@@ -272,7 +272,7 @@ rulepilot:
     enabled: ${RULEBOOK_DISCOVERY_ENABLED:${QWEN_ENABLED:false}}
     api-key: ${RULEBOOK_DISCOVERY_API_KEY:${WEB_SEARCH_API_KEY:${QWEN_API_KEY:}}}
     base-url: ${RULEBOOK_DISCOVERY_BASE_URL:${WEB_SEARCH_BASE_URL:${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}}}
-    model: ${RULEBOOK_DISCOVERY_MODEL:qwen3.7-plus}
+    model: ${RULEBOOK_DISCOVERY_MODEL:qwen3.7-max}
     timeout: ${RULEBOOK_DISCOVERY_TIMEOUT:PT30S}
     cache-ttl: ${RULEBOOK_DISCOVERY_CACHE_TTL:P30D}
     negative-cache-ttl: ${RULEBOOK_DISCOVERY_NEGATIVE_CACHE_TTL:PT10M}
@@ -285,8 +285,8 @@ rulepilot:
   rulebook-import:
     queue-capacity: ${RULEBOOK_IMPORT_QUEUE_CAPACITY:8}
     connect-timeout: ${RULEBOOK_IMPORT_CONNECT_TIMEOUT:PT10S}
-    read-timeout: ${RULEBOOK_IMPORT_READ_TIMEOUT:PT1M30S}
-    call-timeout: ${RULEBOOK_IMPORT_CALL_TIMEOUT:PT10M}
+    read-timeout: ${RULEBOOK_IMPORT_READ_TIMEOUT:PT30S}
+    call-timeout: ${RULEBOOK_IMPORT_CALL_TIMEOUT:PT2M}
     max-compressible-pdf-bytes: ${RULEBOOK_IMPORT_MAX_COMPRESSIBLE_PDF_BYTES:104857600}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}

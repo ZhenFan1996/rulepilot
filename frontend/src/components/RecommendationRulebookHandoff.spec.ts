@@ -26,9 +26,33 @@ const game = {
   bggUrl: 'https://boardgamegeek.com/boardgame/266192',
 }
 
+function runSnapshot(id: string, state: string) {
+  return {
+    run: {
+      id, state, revision: 4,
+      updatedAt: '2026-08-10T10:00:04Z', lastErrorCode: null,
+    },
+    activities: [],
+  }
+}
+
+function planFixture(id: string, documentVersionId: string) {
+  return {
+    id, documentVersionId, gameTitle: 'Wingspan', premise: 'Learn the complete game',
+    sections: [{ position: 1, title: 'Setup' }],
+  }
+}
+
+function lessonFixture(id: string) {
+  return {
+    id, status: 'COMPLETE', sections: [{ position: 1, title: 'Setup' }],
+  }
+}
+
 describe('RecommendationRulebookHandoff', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     localStorage.setItem('rulepilot:locale', 'zh-CN')
   })
 
@@ -103,6 +127,18 @@ describe('RecommendationRulebookHandoff', () => {
         id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
       })
+      if (path === '/api/v1/assistant-runs/preparation-run-1') {
+        return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+        return Response.json(planFixture('plan-1', 'version-1'))
+      }
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+        return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        return Response.json(lessonFixture('lesson-1'))
+      }
       return new Response(null, { status: 404 })
     }))
     const { wrapper, router } = await mountHandoff()
@@ -146,10 +182,10 @@ describe('RecommendationRulebookHandoff', () => {
     })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     expect(router.currentRoute.value.name).toBe('home')
-    expect(wrapper.text()).toContain('已加入“我的桌游”')
-    expect(wrapper.text()).toContain('讲解已经在后台开始')
-    expect(wrapper.get('a[href="/catalog"]').text()).toContain('打开我的桌游')
-    expect(wrapper.get('a[href="/lessons"]').text()).toContain('查看讲解进度')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+    expect(wrapper.text()).toContain('打开已生成的讲解')
+    expect(wrapper.text()).toContain('切换为规则答疑')
+    expect(wrapper.get('a[href="/catalog"]').text()).toContain('我的桌游')
   })
 
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
@@ -186,6 +222,18 @@ describe('RecommendationRulebookHandoff', () => {
         id: 'gallery-import', stage: 'COMPLETED', documentVersionId: 'version-gallery', duplicate: false, errorCode: null,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-gallery',
       })
+      if (path === '/api/v1/assistant-runs/preparation-run-gallery') {
+        return Response.json(runSnapshot('preparation-run-gallery', 'COMPLETED'))
+      }
+      if (path === '/api/v1/document-versions/version-gallery/teaching-plans/latest') {
+        return Response.json(planFixture('plan-gallery', 'version-gallery'))
+      }
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-gallery') {
+        return Response.json(runSnapshot('teaching-run-gallery', 'COMPLETED'))
+      }
+      if (path === '/api/v1/teaching-plans/plan-gallery/illustrated-lessons/latest') {
+        return Response.json(lessonFixture('lesson-gallery'))
+      }
       return new Response(null, { status: 404 })
     }))
     const { wrapper } = await mountHandoff()
@@ -205,7 +253,115 @@ describe('RecommendationRulebookHandoff', () => {
       rightsConfirmed: true,
       startTeaching: true,
     })
-    expect(wrapper.text()).toContain('讲解已经在后台开始')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+  })
+
+  it('retries failed teaching preparation without downloading or binding the game twice', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' }, edition: { id: 'edition-1', name: 'BGG 版本' }, alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
+          language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+        }],
+      })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-failed',
+      }, { status: 202 })
+      if (path === '/api/v1/assistant-runs/preparation-failed') {
+        const snapshot = runSnapshot('preparation-failed', 'FAILED')
+        const failed = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'TEACHING_PREPARATION_FAILED' } }
+        return Response.json(failed)
+      }
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        return Response.json({ assistantRunId: 'preparation-retry', state: 'QUEUED', reused: false }, { status: 202 })
+      }
+      if (path === '/api/v1/assistant-runs/preparation-retry') return Response.json(runSnapshot('preparation-retry', 'COMPLETED'))
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') return Response.json(runSnapshot('teaching-run-1', 'COMPLETED'))
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') return Response.json(lessonFixture('lesson-1'))
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('TEACHING_PREPARATION_FAILED'))
+
+    await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+
+    expect(requests.filter(request => request.path === '/api/v1/bgg/games/266192/import')).toHaveLength(1)
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
+    const retry = requests.find(request => request.path === '/api/v1/document-versions/version-1/teaching-plans')
+    expect(JSON.parse(String(retry?.options?.body))).toEqual({ learningGoal: null })
+  })
+
+  it('keeps a published draft readable and exposes a safe retry when later teaching review degrades', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    let lessonRequest = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' }, edition: { id: 'edition-1', name: 'BGG 版本' }, alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: 'Wingspan Rulebook', url: 'https://publisher.example/wingspan.pdf', publisher: 'Stonemaier Games',
+          language: 'English', edition: 'Base game', sourceDomain: 'publisher.example', officialDomainVerified: true,
+          sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
+        }],
+      })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+      }, { status: 202 })
+      if (path === '/api/v1/assistant-runs/preparation-run-1') return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+      if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') return Response.json(planFixture('plan-1', 'version-1'))
+      if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+        const snapshot = runSnapshot('teaching-degraded', 'DEGRADED')
+        const degraded = { ...snapshot, run: { ...snapshot.run, lastErrorCode: 'REVIEW_UNAVAILABLE' } }
+        return Response.json(degraded)
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+        lessonRequest += 1
+        return Response.json(lessonRequest === 1
+          ? { ...lessonFixture('lesson-1'), status: 'DRAFT_READY' }
+          : lessonFixture('lesson-1'))
+      }
+      if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons' && options?.method === 'POST') {
+        return Response.json({ assistantRunId: 'teaching-retry', state: 'QUEUED', reused: false }, { status: 202 })
+      }
+      if (path === '/api/v1/assistant-runs/teaching-retry') return Response.json(runSnapshot('teaching-retry', 'COMPLETED'))
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.text()).toContain('已生成的章节仍可阅读'))
+    expect(wrapper.text()).toContain('REVIEW_UNAVAILABLE')
+    expect(wrapper.text()).toContain('打开已生成的讲解')
+    await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+
+    expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
+    expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(1)
   })
 
   it('turns an account-gated exact BGG download into an actionable browser handoff', async () => {
@@ -251,7 +407,7 @@ describe('RecommendationRulebookHandoff', () => {
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已经找到这份文件')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('已经找到这份文件'))
     const bggLink = wrapper.findAll('a').find(link => link.text().includes('在来源网站继续下载'))!
     expect(bggLink.attributes('href')).toBe(
       'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
