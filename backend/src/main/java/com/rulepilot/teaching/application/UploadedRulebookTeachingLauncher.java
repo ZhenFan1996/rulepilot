@@ -1,7 +1,7 @@
 package com.rulepilot.teaching.application;
 
-import com.rulepilot.document.RulebookTeachingHandoffs;
-import com.rulepilot.document.RulebookTeachingHandoffs.ReadyHandoff;
+import com.rulepilot.document.UploadedRulebookTeachingHandoffs;
+import com.rulepilot.document.UploadedRulebookTeachingHandoffs.ReadyHandoff;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,23 +11,23 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-/** Continues an explicitly requested rulebook-import journey after the bound document becomes ready. */
+/** Continues a player upload after document processing without relying on the originating browser page. */
 @Service
 @Profile("!test")
-public class ImportedRulebookTeachingLauncher {
+public class UploadedRulebookTeachingLauncher {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ImportedRulebookTeachingLauncher.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(UploadedRulebookTeachingLauncher.class);
 
-    private final RulebookTeachingHandoffs handoffs;
+    private final UploadedRulebookTeachingHandoffs handoffs;
     private final TeachingPlanLauncher plans;
     private final int batchSize;
 
-    public ImportedRulebookTeachingLauncher(
-            RulebookTeachingHandoffs handoffs,
+    public UploadedRulebookTeachingLauncher(
+            UploadedRulebookTeachingHandoffs handoffs,
             TeachingPlanLauncher plans,
             @Value("${rulepilot.teaching.import-handoff.batch-size}") int batchSize) {
         if (batchSize < 1 || batchSize > 20) {
-            throw new IllegalArgumentException("imported rulebook teaching handoff batch size is invalid");
+            throw new IllegalArgumentException("uploaded rulebook teaching handoff batch size is invalid");
         }
         this.handoffs = handoffs;
         this.plans = plans;
@@ -38,7 +38,7 @@ public class ImportedRulebookTeachingLauncher {
     synchronized void launchReadyHandoffs() {
         int unusable = handoffs.failUnusableDocuments();
         if (unusable > 0) {
-            LOGGER.warn("Failed {} imported-rulebook teaching handoffs whose documents could not be processed", unusable);
+            LOGGER.warn("Failed {} uploaded-rulebook teaching handoffs whose documents could not be processed", unusable);
         }
         for (ReadyHandoff handoff : handoffs.claimReady(batchSize)) {
             launch(handoff);
@@ -49,7 +49,7 @@ public class ImportedRulebookTeachingLauncher {
     synchronized void recoverAndLaunch() {
         int interrupted = handoffs.failInterruptedLaunches();
         if (interrupted > 0) {
-            LOGGER.warn("Marked {} interrupted imported-rulebook teaching launches for explicit retry", interrupted);
+            LOGGER.warn("Marked {} interrupted uploaded-rulebook teaching launches for explicit retry", interrupted);
         }
         launchReadyHandoffs();
     }
@@ -58,12 +58,12 @@ public class ImportedRulebookTeachingLauncher {
         try {
             var launched = plans.launch(
                     handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername());
-            handoffs.markLaunched(handoff.importJobId(), launched.assistantRunId());
+            handoffs.markLaunched(handoff.handoffId(), launched.assistantRunId());
         } catch (RuntimeException failure) {
-            handoffs.markFailed(handoff.importJobId(), failureCode(failure));
+            handoffs.markFailed(handoff.handoffId(), failureCode(failure));
             LOGGER.warn(
-                    "Imported rulebook teaching launch failed for importJobId={} with {}",
-                    handoff.importJobId(),
+                    "Uploaded rulebook teaching launch failed for handoffId={} with {}",
+                    handoff.handoffId(),
                     failure.getClass().getSimpleName());
         }
     }

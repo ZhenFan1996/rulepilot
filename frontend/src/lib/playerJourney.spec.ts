@@ -61,10 +61,27 @@ describe('derivePlayerJourney', () => {
         stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
         teachingPreparationRunId: 'preparation-1',
       }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
       preparationRun: run('COMPLETED'),
     }))).toMatchObject({
       phase: 'LESSON_GENERATION_QUEUED', state: 'active', canReadRulebook: true,
       canReadLesson: false, canAskQuestions: false,
+    })
+  })
+
+  it('does not mark the rulebook milestone from a teaching handoff without a readable document snapshot', () => {
+    expect(derivePlayerJourney(input({
+      gameBound: true,
+      importJob: importJob({
+        stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'preparation-1',
+      }),
+      plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
+        { position: 1, title: 'Setup' },
+      ] },
+      lesson: { id: 'lesson-1', status: 'DRAFT_READY', sections: [{ position: 1, title: 'Setup' }] },
+    }))).toMatchObject({
+      canReadRulebook: false, canReadLesson: true, canAskQuestions: false,
     })
   })
 
@@ -106,6 +123,7 @@ describe('derivePlayerJourney', () => {
         stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
         teachingPreparationRunId: 'preparation-1',
       }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
       preparationRun: run('COMPLETED'),
       plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
         { position: 1, title: 'Setup' }, { position: 2, title: 'Turns' },
@@ -126,6 +144,7 @@ describe('derivePlayerJourney', () => {
         stage: 'COMPLETED', documentVersionId: 'version-1', teachingHandoffState: 'LAUNCHED',
         teachingPreparationRunId: 'preparation-1',
       }),
+      documentProgress: { stage: 'READY', percentage: 100, processedPages: 16, totalPages: 16, complete: true },
       preparationRun: run('COMPLETED'),
       plan: { id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Example', premise: 'Learn', sections: [
         { position: 1, title: 'Setup' },

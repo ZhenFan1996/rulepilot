@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentPageImages;
 import com.rulepilot.document.DocumentVersionScopeLookup;
@@ -42,6 +43,7 @@ public class TeachingPlanService {
     private final DocumentProcessing documents;
     private final DocumentPageImages pageImages;
     private final DocumentVersionScopeLookup documentScopes;
+    private final CatalogEditionLookup catalog;
     private final VisualRulebookCataloger visualCataloger;
     private final TeachingOutlineModel outlines;
     private final AuditedAgentInvocations invocations;
@@ -53,6 +55,7 @@ public class TeachingPlanService {
             DocumentProcessing documents,
             DocumentPageImages pageImages,
             DocumentVersionScopeLookup documentScopes,
+            CatalogEditionLookup catalog,
             VisualRulebookCataloger visualCataloger,
             TeachingOutlineModel outlines,
             AuditedAgentInvocations invocations,
@@ -62,6 +65,7 @@ public class TeachingPlanService {
         this.documents = documents;
         this.pageImages = pageImages;
         this.documentScopes = documentScopes;
+        this.catalog = catalog;
         this.visualCataloger = visualCataloger;
         this.outlines = outlines;
         this.invocations = invocations;
@@ -81,6 +85,8 @@ public class TeachingPlanService {
         if (!"READY".equals(scope.processingStatus())) {
             throw new IllegalArgumentException("rule document is not ready for teaching");
         }
+        Optional<String> catalogGameTitle = boundCatalogGameTitle(scope, catalog);
+        String playerGameTitle = catalogGameTitle.orElse(scope.documentTitle());
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
@@ -103,7 +109,7 @@ public class TeachingPlanService {
         var initialOutlineRequest = new OutlineRequest(
                 pages, outlineImages, learningGoal, createdBy);
         var outline = preferDocumentTitle(
-                scope.documentTitle(),
+                playerGameTitle,
                 VisualOutlineEvidencePolicy.bindIconLegendEvidence(invokeModel(
                         assistantRunId,
                         "organizeTeachingOutline",
@@ -113,7 +119,7 @@ public class TeachingPlanService {
                         this::outlineOutputTokens), documentPages),
                 pages);
         outline = refineChapterOwnership(
-                initialOutlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+                initialOutlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
         OutlineRequest outlineRequest = initialOutlineRequest;
         if (textRulebookVisualCatalogAvailable) {
             List<PageFact> coverageFacts = visualCataloger.inspectUnownedSparseVisualPages(
@@ -127,9 +133,9 @@ public class TeachingPlanService {
         if (requiresModelSourcePageCoverageRevision(visualOnly)) {
             var outlineBeforeCoverageRevision = outline;
             outline = refineSourcePageCoverage(
-                    outlineRequest, outline, pages, assistantRunId, documentPages, scope.documentTitle());
+                    outlineRequest, outline, pages, assistantRunId, documentPages, playerGameTitle);
             if (TeachingOutlineRevisionPolicy.requiresChapterOwnershipRerun(outlineBeforeCoverageRevision, outline)) {
-                outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, scope.documentTitle());
+                outline = refineChapterOwnership(outlineRequest, outline, assistantRunId, documentPages, playerGameTitle);
             } else if (assistantRunId != null) {
                 invocations.record(
                         assistantRunId,
@@ -164,7 +170,7 @@ public class TeachingPlanService {
                         "Model outline was incomplete; continuing with a rulebook-derived lesson plan");
             }
             outline = preferDocumentTitle(
-                    scope.documentTitle(), VisualOutlineEvidencePolicy.bindIconLegendEvidence(
+                    playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
                             outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
             plans.validate(outline);
             if (visualOnly) {
@@ -188,7 +194,7 @@ public class TeachingPlanService {
                             "Model outline omitted source pages; source-derived sections were added");
                 }
                 var sourceOutline = preferDocumentTitle(
-                        scope.documentTitle(), VisualOutlineEvidencePolicy.bindIconLegendEvidence(
+                        playerGameTitle, VisualOutlineEvidencePolicy.bindIconLegendEvidence(
                                 outlines.fallback(outlineRequest), documentPages), outlineRequest.pages());
                 outline = VisualOutlineEvidencePolicy.augmentVisualCoverage(outline, sourceOutline);
                 if (outline.topics().size() > 10) {
@@ -226,6 +232,9 @@ public class TeachingPlanService {
                     "deferSelectedVisualPageCatalog",
                     ActivityOutcome.SUCCEEDED,
                     "Optional selected-page visual interpretation was removed from preparation; later visual workflows interpret evidence on demand");
+        }
+        if (catalogGameTitle.isPresent()) {
+            outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
         }
         log.info(
                 "Teaching outline generated for documentVersionId={}: gameTitle={}, topics={}",
@@ -363,6 +372,27 @@ public class TeachingPlanService {
                 outline.gameTitle(),
                 activeDocumentPages.stream().map(PageInput::text).toList());
         return new TeachingOutlineModel.OutlineDraft(selectedTitle, outline.premise(), outline.topics());
+    }
+
+    static String playerGameTitle(
+            DocumentVersionScopeLookup.VersionScope scope,
+            CatalogEditionLookup catalog) {
+        return boundCatalogGameTitle(scope, catalog).orElse(scope.documentTitle());
+    }
+
+    static Optional<String> boundCatalogGameTitle(
+            DocumentVersionScopeLookup.VersionScope scope,
+            CatalogEditionLookup catalog) {
+        if (scope.editionId() == null) return Optional.empty();
+        return catalog.findEdition(scope.editionId())
+                .map(CatalogEditionLookup.EditionReference::gameName)
+                .map(String::strip);
+    }
+
+    static TeachingOutlineModel.OutlineDraft withGameTitle(
+            String gameTitle,
+            TeachingOutlineModel.OutlineDraft outline) {
+        return new TeachingOutlineModel.OutlineDraft(gameTitle.strip(), outline.premise(), outline.topics());
     }
 
     private <T> T invokeModel(

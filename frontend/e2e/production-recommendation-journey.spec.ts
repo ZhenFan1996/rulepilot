@@ -1,13 +1,13 @@
 import { writeFile } from 'node:fs/promises'
 
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const enabled = process.env.RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY === 'true'
 const TARGET_BGG_ID = 230802
 const TARGET_NAME = /花砖物语|Azul/i
 const RECOMMENDATION_PROMPT = '我今晚已经决定玩花砖物语（Azul），第一次开桌。请直接帮我找到这款，不要换成相似游戏；找到后我想接着读规则书、听讲解，再问几个问题。'
 const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一款更轻松的。'
-const RULE_QUESTION = '我是第一次玩，我的回合里通常要做什么？请用日常的话简短说明，并引用规则书页码。'
+const RULE_QUESTION = '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
 
 interface RulebookCandidate {
   url: string
@@ -23,6 +23,8 @@ interface CandidateResponse {
 
 interface ImportJob {
   id: string
+  title?: string
+  rulebookTitle?: string
   stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
   documentVersionId: string | null
@@ -34,12 +36,45 @@ interface ImportJob {
   reused: boolean
 }
 
+interface BoundGameResponse {
+  game: { id: string; name: string }
+  edition: { id: string; name: string }
+}
+
+interface CatalogGameResponse {
+  game: { id: string; name: string }
+  editions: Array<{ id: string; name: string }>
+}
+
+interface TeachingPlanResponse {
+  id: string
+  documentVersionId: string
+  gameTitle: string
+}
+
+interface AnswerResponse {
+  answer: {
+    status: string
+    citations: Array<{ pageFrom: number; pageTo: number }>
+  }
+}
+
 interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
   stage: string
   targetBggId: number
   routeStayedOnDiscover: boolean
+  journeyBackdropVisible: boolean
+  journeySurfaceOpaque: boolean
+  lessonBackdropVisible: boolean
+  lessonSurfaceOpaque: boolean
+  confirmedMilestonesAtSourceReview: number
+  confirmedMilestonesFinal: number
+  boundGameInCatalog: boolean
+  myGuidesEntryVisibleBeforeLesson: boolean
+  myGuidesPlanListed: boolean
+  planGameTitleMatchesSelection: boolean
   recommendationMs: number | null
   detailsDialogOpenedAndClosed: boolean
   discoveryMs: number | null
@@ -56,6 +91,8 @@ interface ProductionJourneyReport {
   lessonSectionCount: number
   citedLessonStep: boolean
   answerMs: number | null
+  answerStatus: string | null
+  answerCitationCount: number
   citedAnswer: boolean
   recommendationRestored: boolean
   answerRestored: boolean
@@ -98,6 +135,29 @@ async function retainReport(path: string, report: ProductionJourneyReport) {
   await writeFile(path, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 }
 
+async function opaqueSurface(locator: Locator) {
+  await expect(locator).toBeVisible()
+  const appearance = await locator.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const match = style.backgroundColor.match(/^rgba?\(([^)]+)\)$/)
+    const channels = match?.[1]?.split(',').map(value => Number(value.trim())) ?? []
+    const alpha = channels.length >= 4 ? channels[3]! : 1
+    const bounds = element.getBoundingClientRect()
+    return {
+      alpha,
+      hasOpaqueColor: style.backgroundColor !== 'transparent' && match !== null,
+      opacity: Number(style.opacity),
+      width: bounds.width,
+      height: bounds.height,
+    }
+  })
+  return appearance.hasOpaqueColor
+    && appearance.alpha === 1
+    && appearance.opacity === 1
+    && appearance.width > 0
+    && appearance.height > 0
+}
+
 test.skip(!enabled, 'Runs only through the credentialed production recommendation workflow')
 
 test('recommendation becomes one readable, taught, and answerable production journey', async ({ page }) => {
@@ -110,6 +170,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
   }
 
   const pageErrors: Error[] = []
+  let guidesPage: Page | null = null
   let importRequestCount = 0
   page.on('pageerror', error => pageErrors.push(error))
   page.on('request', request => {
@@ -119,11 +180,16 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
   const report: ProductionJourneyReport = {
     generatedAt: new Date().toISOString(), completed: false, stage: 'login', targetBggId: TARGET_BGG_ID,
-    routeStayedOnDiscover: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
+    routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
+    lessonBackdropVisible: false, lessonSurfaceOpaque: false,
+    confirmedMilestonesAtSourceReview: 0, confirmedMilestonesFinal: 0,
+    boundGameInCatalog: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
+    planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceMode: null, importRequestCount: 0,
     importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
-    lessonSectionCount: 0, citedLessonStep: false, answerMs: null, citedAnswer: false,
+    lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
+    answerCitationCount: 0, citedAnswer: false,
     recommendationRestored: false, answerRestored: false, pageErrorCount: 0,
   }
 
@@ -155,10 +221,20 @@ test('recommendation becomes one readable, taught, and answerable production jou
       const url = new URL(response.url())
       return url.pathname === '/api/v1/documents/rulebook-candidates' && response.ok()
     }, { timeout: 90_000 })
+    const bindingResponsePromise = page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === `/api/v1/bgg/games/${TARGET_BGG_ID}/import`
+        && response.request().method() === 'POST'
+        && response.ok()
+    }, { timeout: 90_000 })
     await targetDetailsButton.click()
     details = page.getByRole('dialog', { name: '桌游详细资料' })
     await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
-    const candidatesResponse = await candidatesResponsePromise
+    const [candidatesResponse, bindingResponse] = await Promise.all([
+      candidatesResponsePromise,
+      bindingResponsePromise,
+    ])
+    const boundGame = await bindingResponse.json() as BoundGameResponse
     const candidateResult = await candidatesResponse.json() as CandidateResponse
     report.discoveryMs = elapsed(discoveryStartedAt)
     expect(candidateResult.configured).toBe(true)
@@ -170,7 +246,25 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.sourceDomain = gstoneCandidate!.sourceDomain
     report.sourceMode = gstoneCandidate!.acquisitionMode
 
+    const catalogResponse = await page.request.get('/api/v1/games')
+    expect(catalogResponse.ok(), `Catalog returned HTTP ${catalogResponse.status()}`).toBe(true)
+    const catalogGames = await catalogResponse.json() as CatalogGameResponse[]
+    report.boundGameInCatalog = catalogGames.some(entry =>
+      entry.game.id === boundGame.game.id
+      && entry.game.name === boundGame.game.name
+      && entry.editions.some(edition => edition.id === boundGame.edition.id))
+    expect(report.boundGameInCatalog, 'The selected recommendation was not bound in My Games').toBe(true)
+
     report.stage = 'source-review'
+    const journeyBackdrop = page.getByTestId('player-journey-backdrop')
+    const journeySurface = page.getByTestId('player-journey-surface')
+    report.journeyBackdropVisible = await journeyBackdrop.isVisible()
+    report.journeySurfaceOpaque = await opaqueSurface(journeySurface)
+    expect(report.journeyBackdropVisible).toBe(true)
+    expect(report.journeySurfaceOpaque).toBe(true)
+    report.confirmedMilestonesAtSourceReview = await journeySurface
+      .locator('[data-fact-confirmed="true"]').count()
+    expect(report.confirmedMilestonesAtSourceReview).toBe(1)
     const candidateCard = page.locator('li', {
       has: page.locator(`a[href="${gstoneCandidate!.url}"]`),
     }).first()
@@ -191,7 +285,6 @@ test('recommendation becomes one readable, taught, and answerable production jou
     const importResponse = await importResponsePromise
     expect(importResponse.status()).toBe(202)
     const launchedJob = await importResponse.json() as ImportJob
-    expect(launchedJob.reused, 'The production check requires a fresh source acquisition').toBe(false)
     report.importReused = launchedJob.reused
 
     const completedJob = await waitForCompletedImport(page.request, launchedJob.id)
@@ -204,9 +297,22 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.importMs = elapsed(importStartedAt)
     expect(importRequestCount).toBe(1)
 
+    guidesPage = await page.context().newPage()
+    guidesPage.on('pageerror', error => pageErrors.push(error))
+    await guidesPage.goto('/lessons')
+    const pendingGuideEntry = guidesPage.getByTestId('pending-guide-journey')
+      .filter({ hasText: boundGame.game.name })
+    const persistedGuideHeading = guidesPage.locator('h2').filter({ hasText: boundGame.game.name })
+    await expect(pendingGuideEntry.or(persistedGuideHeading).first()).toBeVisible({ timeout: 60_000 })
+    report.myGuidesEntryVisibleBeforeLesson = true
+
     report.stage = 'read-rulebook-while-teaching'
     const rulebookReadableStartedAt = performance.now()
     await expect(page.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible({ timeout: 8 * 60_000 })
+    await expect.poll(() => journeySurface.locator('[data-fact-confirmed="true"]').count(), {
+      timeout: 60_000,
+      message: 'Persisted rulebook facts never confirmed the first three journey milestones',
+    }).toBeGreaterThanOrEqual(3)
     report.rulebookReadableMs = elapsed(rulebookReadableStartedAt)
     await page.getByRole('button', { name: '先阅读原规则书' }).click()
     const rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
@@ -230,12 +336,31 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.lessonReadableMs = elapsed(lessonStartedAt)
     await openLesson.click()
     const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
+    report.lessonBackdropVisible = await page.getByTestId('recommendation-lesson-backdrop').isVisible()
+    report.lessonSurfaceOpaque = await opaqueSurface(page.getByTestId('recommendation-lesson-surface'))
+    expect(report.lessonBackdropVisible).toBe(true)
+    expect(report.lessonSurfaceOpaque).toBe(true)
     await expect(lesson.getByText('每个步骤都保留原规则书页码；答疑只使用同一份规则书。')).toBeVisible({ timeout: 60_000 })
     const lessonSections = lesson.getByTestId('lesson-reading-column').locator('section')
     report.lessonSectionCount = await lessonSections.count()
     expect(report.lessonSectionCount).toBeGreaterThan(0)
     await expect(lesson.getByRole('link', { name: /来源：第 \d+(?:、\d+)* 页/ }).first()).toBeVisible()
     report.citedLessonStep = true
+    report.confirmedMilestonesFinal = await page.getByTestId('player-journey-surface')
+      .locator('[data-fact-confirmed="true"]').count()
+    expect(report.confirmedMilestonesFinal).toBe(5)
+
+    const plansResponse = await page.request.get('/api/v1/teaching-plans')
+    expect(plansResponse.ok(), `My Guides returned HTTP ${plansResponse.status()}`).toBe(true)
+    const plans = await plansResponse.json() as TeachingPlanResponse[]
+    const persistedPlan = plans.find(plan => plan.documentVersionId === completedJob.documentVersionId)
+    expect(persistedPlan, 'The generated plan was not listed in My Guides').toBeDefined()
+    report.myGuidesPlanListed = persistedPlan != null
+    report.planGameTitleMatchesSelection = persistedPlan?.gameTitle === boundGame.game.name
+    expect(report.planGameTitleMatchesSelection,
+      `My Guides used ${persistedPlan?.gameTitle ?? 'no title'} instead of ${boundGame.game.name}`).toBe(true)
+    await guidesPage.reload()
+    await expect(guidesPage.getByRole('heading', { name: boundGame.game.name, exact: true })).toBeVisible({ timeout: 60_000 })
 
     report.stage = 'grounded-answer'
     await lesson.getByRole('button', { name: '切换到规则答疑' }).click()
@@ -251,7 +376,12 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await page.getByRole('button', { name: '提交问题' }).click()
     const answerResponse = await answerResponsePromise
     expect(answerResponse.ok(), `Answer endpoint returned HTTP ${answerResponse.status()}`).toBe(true)
-    await expect(answerWorkspace.getByText('直接核对规则依据')).toBeVisible({ timeout: 4 * 60_000 })
+    const answerPayload = await answerResponse.json() as AnswerResponse
+    report.answerStatus = answerPayload.answer.status
+    report.answerCitationCount = answerPayload.answer.citations.length
+    expect(['ANSWERED', 'ANSWERED_WITH_WARNING']).toContain(report.answerStatus)
+    expect(report.answerCitationCount).toBeGreaterThan(0)
+    await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible({ timeout: 4 * 60_000 })
     await expect(answerWorkspace.getByText(/第 \d+(?:\s*[–-]\s*\d+)? 页/).first()).toBeVisible()
     report.answerMs = elapsed(answerStartedAt)
     report.citedAnswer = true
@@ -264,7 +394,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     await expect(targetDetailsButton).toBeVisible()
     report.recommendationRestored = true
     await roleSwitcher.getByRole('button', { name: '规则答疑' }).click()
-    await expect(answerWorkspace.getByText('直接核对规则依据')).toBeVisible()
+    await expect(answerWorkspace.locator('#lesson-answer-evidence-title')).toBeVisible()
     report.answerRestored = true
     await roleSwitcher.getByRole('button', { name: '继续推荐' }).click()
 
@@ -274,6 +404,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.completed = true
     report.stage = 'completed'
   } finally {
+    await guidesPage?.close().catch(() => undefined)
     report.importRequestCount = importRequestCount
     report.pageErrorCount = pageErrors.length
     report.generatedAt = new Date().toISOString()

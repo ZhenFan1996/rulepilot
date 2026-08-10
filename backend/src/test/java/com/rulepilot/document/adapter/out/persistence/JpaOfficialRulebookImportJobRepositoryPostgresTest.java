@@ -71,6 +71,8 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
     @BeforeEach
     void clearImportJobs() {
         jdbc.update("DELETE FROM official_rulebook_import_job");
+        jdbc.update("DELETE FROM document_version WHERE object_key LIKE 'official-handoff-test/%'");
+        jdbc.update("DELETE FROM rule_document WHERE created_by = 'official-handoff-player'");
     }
 
     @Test
@@ -115,6 +117,75 @@ class JpaOfficialRulebookImportJobRepositoryPostgresTest {
                 "APPLICATION_RESTARTED",
                 recoveredAt,
                 recoveredAt);
+    }
+
+    @Test
+    void terminalizesTeachingWhenTheImportedDocumentCouldNotBeProcessed() {
+        Instant now = Instant.parse("2026-08-10T02:00:00Z");
+        UUID versionId = insertFailedDocument(now);
+        UUID jobId = UUID.randomUUID();
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO official_rulebook_import_job (
+                    id, owner_username, title, source_type, source_url, stage,
+                    downloaded_bytes, total_bytes, document_version_id, duplicate,
+                    teaching_handoff_state, teaching_handoff_updated_at,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, 'BASE_RULEBOOK', ?, 'COMPLETED', 1024, 1024, ?, FALSE,
+                          'WAITING_FOR_DOCUMENT', ?, ?, ?, ?)
+                """,
+                jobId,
+                "official-handoff-player",
+                "Unusable imported rules",
+                "https://publisher.example/" + jobId + ".pdf",
+                versionId,
+                timestamp,
+                timestamp,
+                timestamp,
+                timestamp);
+
+        int failed = inTransactionReturning(repository ->
+                repository.failTeachingForUnusableDocuments(now.plusSeconds(1)));
+
+        assertThat(failed).isEqualTo(1);
+        assertThat(jdbc.queryForMap(
+                        """
+                        SELECT teaching_handoff_state, teaching_error_code
+                        FROM official_rulebook_import_job
+                        WHERE id = ?
+                        """,
+                        jobId))
+                .containsEntry("teaching_handoff_state", "FAILED")
+                .containsEntry("teaching_error_code", "DOCUMENT_PROCESSING_FAILED");
+    }
+
+    private static UUID insertFailedDocument(Instant now) {
+        UUID documentId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        OffsetDateTime timestamp = OffsetDateTime.ofInstant(now, ZoneOffset.UTC);
+        jdbc.update(
+                """
+                INSERT INTO rule_document (id, game_edition_id, title, source_type, created_by, created_at)
+                VALUES (?, NULL, ?, 'BASE_RULEBOOK', 'official-handoff-player', ?)
+                """,
+                documentId,
+                "Unusable imported rules",
+                timestamp);
+        jdbc.update(
+                """
+                INSERT INTO document_version (
+                    id, document_id, version_number, original_filename, object_key,
+                    checksum, size_bytes, content_type, processing_status, created_at
+                ) VALUES (?, ?, 1, ?, ?, ?, 1024, 'application/pdf', 'FAILED', ?)
+                """,
+                versionId,
+                documentId,
+                "unusable-rules.pdf",
+                "official-handoff-test/" + versionId + ".pdf",
+                "b".repeat(64),
+                timestamp);
+        return versionId;
     }
 
     private static UUID insertJob(String teachingState, Instant teachingUpdatedAt, Instant createdAt) {

@@ -7,6 +7,14 @@ import { notifyLoginRequired } from '@/lib/authSession'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
 import { useLocale } from '@/lib/locale'
+import {
+  buildPendingGuideJourneys,
+  type PendingGuideCatalogGame,
+  type PendingGuideDocument,
+  type PendingGuideImport,
+  type PendingGuidePreparationRun,
+  type PendingGuideUploadHandoff,
+} from '@/lib/pendingGuideJourney'
 import { notifyTeachingLaunched, type TeachingLaunch } from '@/lib/teachingLaunch'
 import {
   mergeTeachingRunProgress,
@@ -40,6 +48,11 @@ type PlanFilter = 'READABLE' | 'PENDING' | 'ALL'
 const route = useRoute()
 const { locale, t } = useLocale()
 const plans = ref<TeachingPlan[]>([])
+const guideImports = ref<PendingGuideImport[]>([])
+const guideUploadHandoffs = ref<PendingGuideUploadHandoff[]>([])
+const preparationRuns = ref<PendingGuidePreparationRun[]>([])
+const guideDocuments = ref<PendingGuideDocument[]>([])
+const guideCatalog = ref<PendingGuideCatalogGame[]>([])
 const progress = ref<Record<string, PlanProgress>>({})
 const progressErrors = ref<Record<string, string>>({})
 const loading = ref(true)
@@ -57,11 +70,33 @@ const knownRunIds = new Map<string, string>()
 const requestVersions = new Map<string, number>()
 const terminalSettlingReads = new Map<string, number>()
 let pollTimer: ReturnType<typeof setTimeout> | undefined
+let journeyTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 
 const startedPlanId = computed(() => typeof route.query.started === 'string' ? route.query.started : '')
 const startedRunId = computed(() => typeof route.query.run === 'string' ? route.query.run : '')
+const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
+  eyebrow: '已进入我的讲解', title: '正在准备的讲解',
+  detail: '这些条目来自持久化下载、规则书读取或讲解准备任务；刷新、离开页面或换入口都不会丢失。',
+  rulebook: '规则书', downloading: '正在获取并核验规则书', reading: '规则书已保存，正在读取页面与建立检索',
+  preparing: '规则书已可用，正在建立讲解计划并启动逐章生成', failed: '任务需要处理',
+  progress: '已确认下载进度', openRulebook: '先读规则书', openSource: '查看任务入口',
+} : {
+  eyebrow: 'In My Guides', title: 'Guides being prepared',
+  detail: 'These entries come from persisted download, rulebook-reading, or guide-preparation work. Refreshing, leaving, or switching entry points will not lose them.',
+  rulebook: 'Rulebook', downloading: 'Acquiring and verifying the rulebook', reading: 'Rulebook saved; reading pages and building retrieval data',
+  preparing: 'Rulebook ready; building the guide plan and starting chapter generation', failed: 'This task needs attention',
+  progress: 'Confirmed download progress', openRulebook: 'Read rulebook now', openSource: 'Open task entry',
+})
+const pendingJourneys = computed(() => buildPendingGuideJourneys(
+  plans.value,
+  guideImports.value,
+  preparationRuns.value,
+  guideDocuments.value,
+  guideCatalog.value,
+  guideUploadHandoffs.value,
+))
 
 function stateOf(planId: string) {
   const item = progress.value[planId]
@@ -209,6 +244,15 @@ function createdLabel(value: string) {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
 }
 
+function pendingPhaseLabel(phase: (typeof pendingJourneys.value)[number]['phase']) {
+  return {
+    DOWNLOADING: pendingCopy.value.downloading,
+    READING_RULEBOOK: pendingCopy.value.reading,
+    PREPARING_GUIDE: pendingCopy.value.preparing,
+    FAILED: pendingCopy.value.failed,
+  }[phase]
+}
+
 async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1]) {
   const response = await fetch(path, { credentials: 'include', ...options })
   if (response.status === 401) {
@@ -216,6 +260,44 @@ async function checkedFetch(path: string, options?: Parameters<typeof fetch>[1])
     throw new Error(t('lessons.error.login'))
   }
   return response
+}
+
+async function optionalList<T>(path: string): Promise<T[]> {
+  const response = await checkedFetch(path)
+  if (response.status === 404) return []
+  if (!response.ok) throw new Error(t('lessons.error.load'))
+  const payload = await response.json() as unknown
+  if (!Array.isArray(payload)) throw new Error(t('lessons.error.load'))
+  return payload as T[]
+}
+
+async function handoffPreparationRuns(
+  imports: PendingGuideImport[],
+  uploads: PendingGuideUploadHandoff[],
+  active: PendingGuidePreparationRun[],
+) {
+  const byId = new Map(active.map(run => [run.id, run]))
+  const missingIds = [...new Set([
+    ...imports.map(job => job.teachingPreparationRunId),
+    ...uploads.map(handoff => handoff.preparationRunId),
+  ]
+    .filter((id): id is string => typeof id === 'string' && id.length > 0)
+    .filter(id => !byId.has(id)))]
+  const snapshots = await Promise.all(missingIds.map(async (runId) => {
+    try {
+      const response = await checkedFetch(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
+      if (response.status === 404) return null
+      if (!response.ok) throw new Error(t('lessons.error.load'))
+      const details = await response.json() as { run?: PendingGuidePreparationRun }
+      return details.run ?? null
+    } catch {
+      return null
+    }
+  }))
+  for (const snapshot of snapshots) {
+    if (snapshot) byId.set(snapshot.id, snapshot)
+  }
+  return [...byId.values()]
 }
 
 async function loadProgress(plan: TeachingPlan) {
@@ -294,21 +376,47 @@ async function refreshProgress(targetPlans = plans.value) {
   scheduleProgressRefresh()
 }
 
-async function loadPlans() {
-  loading.value = true
-  errorMessage.value = ''
+function clearJourneyTimer() {
+  if (journeyTimer) clearTimeout(journeyTimer)
+  journeyTimer = undefined
+}
+
+function scheduleJourneyRefresh() {
+  clearJourneyTimer()
+  if (disposed || pendingJourneys.value.length === 0) return
+  journeyTimer = setTimeout(() => { void loadPlans(true) }, 4_000)
+}
+
+async function loadPlans(background = false) {
+  if (!background) {
+    loading.value = true
+    errorMessage.value = ''
+  }
   try {
-    const response = await checkedFetch('/api/v1/teaching-plans')
+    const [response, imports, uploads, activePreparation, documents, catalog] = await Promise.all([
+      checkedFetch('/api/v1/teaching-plans'),
+      optionalList<PendingGuideImport>('/api/v1/documents/official-imports'),
+      optionalList<PendingGuideUploadHandoff>('/api/v1/documents/upload-teaching-handoffs'),
+      optionalList<PendingGuidePreparationRun>('/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION'),
+      optionalList<PendingGuideDocument>('/api/v1/documents'),
+      optionalList<PendingGuideCatalogGame>('/api/v1/games'),
+    ])
     if (!response.ok) throw new Error(t('lessons.error.load'))
     plans.value = (await response.json()) as TeachingPlan[]
+    guideImports.value = imports
+    guideUploadHandoffs.value = uploads
+    preparationRuns.value = await handoffPreparationRuns(imports, uploads, activePreparation)
+    guideDocuments.value = documents
+    guideCatalog.value = catalog
     if (startedPlanId.value && startedRunId.value && plans.value.some((plan) => plan.id === startedPlanId.value)) {
       knownRunIds.set(startedPlanId.value, startedRunId.value)
     }
     await refreshProgress()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
+    if (!background) errorMessage.value = error instanceof Error ? error.message : t('lessons.error.loadShort')
   } finally {
-    loading.value = false
+    if (!background) loading.value = false
+    scheduleJourneyRefresh()
   }
 }
 
@@ -405,6 +513,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   clearProgressTimer()
+  clearJourneyTimer()
   if (clockTimer) clearInterval(clockTimer)
 })
 </script>
@@ -437,26 +546,53 @@ onBeforeUnmount(() => {
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
       </div>
 
+      <section v-if="!loading && !errorMessage && pendingJourneys.length" class="mt-8 rounded-2xl border border-indigo/20 bg-indigo/[0.035] p-5 sm:p-6" aria-live="polite" data-testid="pending-guide-journeys">
+        <p class="text-xs font-bold uppercase tracking-[0.12em] text-indigo">{{ pendingCopy.eyebrow }}</p>
+        <h2 class="mt-1 font-display text-2xl font-semibold">{{ pendingCopy.title }}</h2>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-ink/55">{{ pendingCopy.detail }}</p>
+        <ol class="mt-5 grid gap-4 md:grid-cols-2">
+          <li v-for="journey in pendingJourneys" :key="journey.id" data-testid="pending-guide-journey" class="rounded-xl border bg-paper p-4" :class="journey.state === 'failed' ? 'border-red-200' : 'border-indigo/15'">
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <h3 class="truncate font-display text-xl font-semibold">{{ journey.title }}</h3>
+                <p v-if="journey.rulebookTitle" class="mt-1 truncate text-xs text-ink/45">{{ pendingCopy.rulebook }}：{{ journey.rulebookTitle }}</p>
+                <p class="mt-3 text-sm font-semibold" :class="journey.state === 'failed' ? 'text-red-700' : 'text-indigo'">{{ pendingPhaseLabel(journey.phase) }}</p>
+              </div>
+              <span v-if="journey.state === 'active'" class="mt-1 size-3 shrink-0 animate-pulse rounded-full bg-indigo" aria-hidden="true" />
+            </div>
+            <div v-if="journey.progress !== null" class="mt-4">
+              <div class="flex justify-between text-xs text-ink/45"><span>{{ pendingCopy.progress }}</span><span class="font-mono">{{ journey.progress }}%</span></div>
+              <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div class="h-full rounded-full bg-indigo" :style="{ width: `${journey.progress}%` }" /></div>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-4 text-sm font-semibold text-indigo">
+              <RouterLink v-if="journey.documentVersionId && journey.canReadRulebook" :to="{ name: 'rulebook-reader', params: { versionId: journey.documentVersionId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openRulebook }}</RouterLink>
+              <RouterLink v-if="journey.importJobId" :to="{ name: 'teach', query: { importJob: journey.importJobId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
+              <RouterLink v-else-if="journey.state === 'failed'" :to="{ name: 'teach' }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
+            </div>
+          </li>
+        </ol>
+      </section>
+
       <div v-if="loading" class="mt-8 rounded-xl border border-ink/10 bg-paper p-8 text-ink/50" role="status">{{ t('lessons.loading') }}</div>
 
       <div v-else-if="errorMessage" class="mt-10 rounded-3xl border border-red-200 bg-red-50 p-6 text-red-800" role="alert">
         <p>{{ errorMessage }}</p>
-        <button class="mt-4 text-sm font-semibold underline underline-offset-4" @click="loadPlans">{{ t('lessons.reload') }}</button>
+        <button class="mt-4 text-sm font-semibold underline underline-offset-4" @click="loadPlans()">{{ t('lessons.reload') }}</button>
       </div>
 
-      <div v-else-if="plans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
+      <div v-else-if="plans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.empty.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.empty.description') }}</p>
         <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">{{ t('lessons.empty.action') }}</RouterLink>
       </div>
 
-      <div v-else-if="displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
+      <div v-else-if="plans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.noReadable.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.noReadable.description') }}</p>
         <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">{{ t('lessons.noReadable.action') }}</button>
       </div>
 
-      <ol v-else class="score-track mt-10 grid gap-5 md:grid-cols-2">
+      <ol v-else-if="displayedPlans.length" class="score-track mt-10 grid gap-5 md:grid-cols-2">
         <li v-for="plan in displayedPlans" :key="plan.id" class="tabletop-panel player-board relative overflow-hidden p-6" :class="plan.id === startedPlanId ? 'ring-2 ring-copper/30' : ''">
           <div class="flex items-start justify-between gap-4">
             <div class="flex min-w-0 items-start gap-3">

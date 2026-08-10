@@ -242,10 +242,33 @@ const journeyStatus = computed<RecommendationJourneyStatus>(() => ({
   plan: plan.value,
   lesson: lesson.value,
 }))
+let lastEmittedStatus = ''
+
+function emitJourneyStatus(value: RecommendationJourneyStatus) {
+  const signature = JSON.stringify({
+    bggId: value.game.bggId,
+    phase: value.projection.phase,
+    state: value.projection.state,
+    progress: value.projection.progress,
+    retryAction: value.projection.retryAction,
+    canReadRulebook: value.projection.canReadRulebook,
+    canReadLesson: value.projection.canReadLesson,
+    canAskQuestions: value.projection.canAskQuestions,
+    importJobId: value.importJob?.id ?? null,
+    documentVersionId: value.importJob?.documentVersionId ?? null,
+    planId: value.plan?.id ?? null,
+    lessonId: value.lesson?.id ?? null,
+    lessonStatus: value.lesson?.status ?? null,
+    availableSections: value.lesson?.sections.length ?? 0,
+  })
+  if (signature === lastEmittedStatus) return
+  lastEmittedStatus = signature
+  emit('status', value)
+}
 const milestones = computed(() => {
   const values = [
-    { label: copy.value.gameBound, done: projection.value.progress >= 8 },
-    { label: copy.value.rulebook, done: projection.value.progress >= 60 },
+    { label: copy.value.gameBound, done: imported.value !== null },
+    { label: copy.value.rulebook, done: importJob.value?.stage === 'COMPLETED' && Boolean(importJob.value.documentVersionId) },
     { label: copy.value.document, done: projection.value.canReadRulebook },
     { label: copy.value.lesson, done: projection.value.canReadLesson },
     { label: copy.value.questions, done: projection.value.canAskQuestions },
@@ -447,7 +470,12 @@ async function refreshJourney(request = sequence) {
       if (incomingLesson) lesson.value = acceptProgressiveLesson(lesson.value, incomingLesson)
       if (!incomingRun && preparationRun.value?.run.state === 'COMPLETED' && !ensuredLessonPlans.has(targetPlanId)) {
         ensuredLessonPlans.add(targetPlanId)
-        await launchLesson(targetPlanId, false)
+        try {
+          await launchLesson(targetPlanId, false)
+        } catch (error) {
+          ensuredLessonPlans.delete(targetPlanId)
+          throw error
+        }
       }
     }
     pollingWarning.value = false
@@ -518,7 +546,7 @@ function scheduleJourney(delay: number) {
   clearJourneyTimer()
   if (!importJob.value || state.value === 'login') return
   const current = projection.value
-  const generationStillRunning = Boolean(teachingRunId.value && !teachingRun.value)
+  const generationStillRunning = Boolean(plan.value && !teachingRun.value)
     || teachingRunIsActive(teachingRun.value?.run.state)
   if (current.state === 'complete' || current.state === 'failed' || current.state === 'ready' && !generationStillRunning) return
   journeyTimer = setTimeout(() => { void refreshJourney() }, delay)
@@ -634,7 +662,7 @@ function startForCurrentGame() {
 }
 
 watch(() => props.game.bggId, startForCurrentGame)
-watch(journeyStatus, value => emit('status', value), { immediate: true })
+watch(journeyStatus, emitJourneyStatus, { immediate: true })
 onMounted(startForCurrentGame)
 onBeforeUnmount(() => {
   sequence += 1
@@ -644,7 +672,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside class="overflow-hidden rounded-2xl border border-copper/25 bg-copper/5" aria-live="polite">
+  <aside data-testid="player-journey-surface" class="isolate overflow-hidden rounded-2xl border border-copper/25 text-ink shadow-2xl" style="background-color: var(--color-paper); opacity: 1" aria-live="polite">
     <div class="flex items-start gap-4 border-b border-copper/15 p-4 sm:p-5">
       <img v-if="game.thumbnailUrl" :src="game.thumbnailUrl" :alt="game.name" class="h-20 w-16 shrink-0 rounded-lg bg-paper object-contain" referrerpolicy="no-referrer">
       <div class="min-w-0 flex-1">
@@ -664,6 +692,11 @@ onBeforeUnmount(() => {
       <template v-else-if="state === 'review'">
         <h4 class="font-display text-lg font-semibold">{{ copy.found }}</h4>
         <p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.detail }}</p>
+        <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
+          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
+            <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
+          </li>
+        </ol>
         <ul class="mt-4 stack-y-md">
           <li v-for="candidate in candidates" :key="candidate.url" class="rounded-xl border bg-paper p-4" :class="selected?.url === candidate.url ? 'border-copper/60 ring-2 ring-copper/10' : 'border-ink/10'">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -705,7 +738,7 @@ onBeforeUnmount(() => {
           <div class="h-full rounded-full bg-copper transition-[width] duration-500" :style="{ width: `${projection.progress}%` }" />
         </div>
         <ol class="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-5" :aria-label="copy.progress">
-          <li v-for="milestone in milestones" :key="milestone.label" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
+          <li v-for="milestone in milestones" :key="milestone.label" :data-fact-confirmed="milestone.done ? 'true' : 'false'" class="rounded-lg border px-2.5 py-2" :class="milestone.done ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : milestone.active ? 'border-copper/30 bg-copper/5 font-semibold text-copper' : 'border-ink/8 bg-paper text-ink/40'">
             <span class="mr-1" aria-hidden="true">{{ milestone.done ? '✓' : milestone.active ? '●' : '○' }}</span>{{ milestone.label }}
           </li>
         </ol>

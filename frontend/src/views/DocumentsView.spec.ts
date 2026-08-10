@@ -16,7 +16,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.unstubAllGlobals()
   })
 
-  it('returns a ready upload to direct reading without forcing lesson generation', async () => {
+  it('resumes a ready upload into the same persisted background guide flow', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
       versionId: 'version-1',
       learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
@@ -28,13 +28,14 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await flushPromises()
     await flushPromises()
 
-    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/document-versions/version-1/teaching-plans'))).toBe(false)
-    expect(router.currentRoute.value.name).toBe('teach')
-    expect(wrapper.text()).toContain('规则书已可阅读')
-    expect(wrapper.get('a[href="/rulebooks/version-1"]').text()).toContain('阅读规则书并答疑')
-    expect(wrapper.findAll('button').some(button => button.text() === '后台生成讲解')).toBe(true)
-    expect((wrapper.get('textarea[maxlength="500"]').element as HTMLTextAreaElement).value)
-      .toBe('先让我能带大家开局，再讲容易混淆的行动。')
+    const preparation = fetchMock.mock.calls.find(([input, options]) =>
+      String(input).includes('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
+    expect(JSON.parse(String(preparation?.[1]?.body))).toEqual({
+      learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
+    })
+    expect(router.currentRoute.value).toMatchObject({
+      name: 'lessons', query: { started: 'plan-1', run: 'lesson-run-1' },
+    })
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
     wrapper.unmount()
   })
@@ -49,6 +50,8 @@ describe('DocumentsView recoverable lesson handoff', () => {
         stage: options?.method === 'POST' ? 'CONNECTING' : 'COMPLETED',
         downloadedBytes: 2048, totalBytes: 2048, documentVersionId: 'selected-version',
         duplicate: false, errorCode: null, reused: false,
+        teachingHandoffState: options?.method === 'POST' ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+        teachingPreparationRunId: options?.method === 'POST' ? null : 'prep-selected', teachingErrorCode: null,
       }, options?.method === 'POST' ? 202 : 200),
     )
     fetchMock.mockImplementationOnce(async () => response({ username: 'player' }))
@@ -99,11 +102,15 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect((wrapper.get('input[type="url"]').element as HTMLInputElement).value).toBe('https://publisher.example/rules.pdf')
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
     await wrapper.get('input[type="checkbox"]').setValue(true)
-    await wrapper.findAll('button').find(button => button.text() === '下载规则书')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await flushPromises()
-    expect(readPendingRulebookLessons(localStorage, 'player')).toContainEqual({
-      versionId: 'selected-version', editionId: 'edition-1',
+    const importRequest = fetchMock.mock.calls.find(([input, options]) =>
+      String(input).endsWith('/api/v1/documents/official-imports') && options?.method === 'POST')
+    expect(JSON.parse(String(importRequest?.[1]?.body))).toMatchObject({
+      editionId: 'edition-1', startTeaching: true,
     })
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
   })
 
@@ -186,8 +193,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
-    await flushPromises()
 
     expect(wrapper.text()).toContain('正在阅读图文并组织讲解顺序')
     expect(wrapper.text()).toContain('已用时 0 秒')
@@ -236,8 +241,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
-    await flushPromises()
 
     expect(wrapper.text()).toContain('正在识别第 2 组页面里的组件、图标和示例')
     wrapper.unmount()
@@ -276,6 +279,43 @@ describe('DocumentsView recoverable lesson handoff', () => {
     wrapper.unmount()
   })
 
+  it('persists automatic teaching with the local upload instead of depending on the originating page', async () => {
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/api/v1/documents') && options?.method === 'POST') {
+        return response({ duplicate: false, version: { id: 'version-1', status: 'READY' } }, 201)
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments()
+    await flushPromises()
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'catalog_game_rules.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('textarea[maxlength="500"]').setValue('先讲清开局。')
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    await flushPromises()
+    await flushPromises()
+
+    const upload = fetchMock.mock.calls.find(([request, options]) =>
+      String(request).endsWith('/api/v1/documents') && options?.method === 'POST')
+    const form = upload?.[1]?.body as FormData
+    expect(form.get('startTeaching')).toBe('true')
+    expect(form.get('learningGoal')).toBe('先讲清开局。')
+    expect(fetchMock.mock.calls.some(([request, options]) =>
+      String(request).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')).toBe(false)
+    expect(router.currentRoute.value.name).toBe('teach')
+    expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    wrapper.unmount()
+  })
+
   it('requires a direct URL and explicit rights confirmation before importing an official PDF', async () => {
     let importOptions: RequestInit | undefined
     const fetchMock = mockApplicationFetch(
@@ -289,8 +329,11 @@ describe('DocumentsView recoverable lesson handoff', () => {
         return response({
           id: 'job-imported', title: 'wingspan rules', sourceDomain: 'publisher.example',
           stage: options?.method === 'POST' ? 'CONNECTING' : 'COMPLETED',
-          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'imported-version',
+          downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
           duplicate: false, errorCode: null, reused: false,
+          teachingHandoffState: options?.method === 'POST' ? 'WAITING_FOR_DOCUMENT' : 'LAUNCHED',
+          teachingPreparationRunId: options?.method === 'POST' ? null : 'prep-run-1',
+          teachingErrorCode: null,
         }, options?.method === 'POST' ? 202 : 200)
       },
     )
@@ -299,7 +342,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const { wrapper } = await mountDocuments()
     await flushPromises()
 
-    const importButton = wrapper.findAll('button').find((button) => button.text() === '下载规则书')!
+    const importButton = wrapper.findAll('button').find((button) => button.text() === '下载规则书并生成讲解')!
     expect(importButton.attributes('disabled')).toBeDefined()
     await wrapper.get('input[type="url"]').setValue('https://publisher.example/wingspan_rules.pdf')
     expect(importButton.attributes('disabled')).toBeDefined()
@@ -315,16 +358,52 @@ describe('DocumentsView recoverable lesson handoff', () => {
       sourceType: 'BASE_RULEBOOK',
       officialSourceUrl: 'https://publisher.example/wingspan_rules.pdf',
       rightsConfirmed: true,
+      startTeaching: true,
+      learningGoal: null,
     })
     expect(importOptions?.headers).toEqual({
       'Content-Type': 'application/json',
       'X-CSRF-TOKEN': 'csrf',
     })
-    expect(wrapper.text()).toContain('上传完成，正在读取页面和图片')
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([
-      { versionId: 'imported-version' },
-    ])
-    expect(FakeEventSource.instances.some((source) => source.url.includes('imported-version'))).toBe(true)
+    expect(wrapper.text()).toContain('已进入“我的讲解”')
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('keeps a recovered import visible until its persisted teaching handoff really launches', async () => {
+    let importReads = 0
+    let releaseLaunch!: (value: Response) => void
+    const launched = new Promise<Response>((resolve) => { releaseLaunch = resolve })
+    const job = (handoff: 'LAUNCHING' | 'LAUNCHED') => ({
+      id: 'job-recovered', title: 'Catalog Game', rulebookTitle: 'catalog_rules_final.pdf',
+      sourceDomain: 'publisher.example', stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+      documentVersionId: 'version-1', duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: handoff,
+      teachingPreparationRunId: handoff === 'LAUNCHED' ? 'prep-run-1' : null,
+      teachingErrorCode: null,
+    })
+    const fetchMock = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined,
+      () => {
+        importReads += 1
+        return importReads === 1 ? response(job('LAUNCHING')) : launched
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach?importJob=job-recovered')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.importJob).toBe('job-recovered')
+    expect(wrapper.text()).toContain('规则书已可阅读，正在启动讲解')
+    expect(wrapper.text()).not.toContain('已进入“我的讲解”')
+
+    releaseLaunch(response(job('LAUNCHED')))
+    await flushPromises()
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(wrapper.text()).toContain('已进入“我的讲解”')
     wrapper.unmount()
   })
 
@@ -344,7 +423,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
     await wrapper.get('input[type="url"]').setValue('https://publisher.example/not-a-pdf')
     await wrapper.get('input[type="checkbox"]').setValue(true)
-    await wrapper.findAll('button').find((button) => button.text() === '下载规则书')!.trigger('click')
+    await wrapper.findAll('button').find((button) => button.text() === '下载规则书并生成讲解')!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('无法安全导入该链接')

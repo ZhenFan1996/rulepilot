@@ -452,21 +452,23 @@ onBeforeUnmount(() => {
       <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t('journeyOpen') }}</span>
     </button>
 
-    <div v-if="selectedGame" v-show="openSurface === 'journey'" class="fixed inset-0 z-50 overflow-y-auto bg-ink/40 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
-      <div class="mx-auto w-full max-w-3xl" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
-        <RecommendationRulebookHandoff
-          :key="selectedGame.bggId"
-          :game="selectedGame"
-          :profile="profile"
-          @close="openSurface = 'none'"
-          @change="changeJourneyGame"
-          @status="updateJourneyStatus"
-          @open-rulebook="openRulebook"
-          @open-lesson="openLesson"
-          @ask-questions="switchToQuestions"
-        />
+    <Teleport to="body">
+      <div v-if="selectedGame" v-show="openSurface === 'journey'" data-testid="player-journey-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
+        <div class="mx-auto w-full max-w-3xl" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
+          <RecommendationRulebookHandoff
+            :key="selectedGame.bggId"
+            :game="selectedGame"
+            :profile="profile"
+            @close="openSurface = 'none'"
+            @change="changeJourneyGame"
+            @status="updateJourneyStatus"
+            @open-rulebook="openRulebook"
+            @open-lesson="openLesson"
+            @ask-questions="switchToQuestions"
+          />
+        </div>
       </div>
-    </div>
+    </Teleport>
 
     <RecommendationGameDetailsDialog v-if="detailsGame" :game="detailsGame" :open="openSurface === 'game-details'" @close="openSurface = 'none'" @select="selectFromDetails" />
     <RecommendationRulebookDialog

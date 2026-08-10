@@ -10,6 +10,137 @@ describe('LessonsView', () => {
     vi.useRealTimers()
   })
 
+  it('shows a persisted selected game before plan creation and replaces it with the real guide', async () => {
+    vi.useFakeTimers()
+    let planReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') {
+        planReads += 1
+        return Response.json(planReads === 1 ? [] : [{
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: '花砖物语', premise: '先认识目标。',
+          createdAt: '2026-08-10T10:01:00Z', sections: [{
+            position: 1, required: true, topicKey: 'goal', title: '游戏目标', visualEvidenceRecommended: false,
+          }],
+        }])
+      }
+      if (path === '/api/v1/documents/official-imports') return Response.json([{
+        id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1', teachingErrorCode: null,
+        updatedAt: '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'azul_rules_cn_final.pdf' }, latestVersion: { id: 'version-1' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) {
+        return new Response(null, { status: 404 })
+      }
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router] } })
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-guide-journey"]')
+    expect(pending.text()).toContain('花砖物语')
+    expect(pending.text()).toContain('azul_rules_cn_final.pdf')
+    expect(pending.text()).toContain('正在建立讲解计划')
+    expect(wrapper.text()).not.toContain('还没有讲解计划')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
+    expect(wrapper.findAll('h2').some(heading => heading.text() === '花砖物语')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('shows a persisted local-upload handoff before the browser page can start teaching', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([])
+      if (path === '/api/v1/documents/upload-teaching-handoffs') return Response.json([{
+        id: 'handoff-1', documentVersionId: 'version-1', editionId: 'edition-1',
+        title: '星际探险', rulebookTitle: 'rules_v4_final.pdf', state: 'WAITING_FOR_DOCUMENT',
+        preparationRunId: null, errorCode: null, updatedAt: '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'rules_v4_final.pdf' },
+        latestVersion: { id: 'version-1', status: 'EXTRACTING' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '星际探险' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, {
+      global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
+    })
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-guide-journey"]')
+    expect(pending.text()).toContain('星际探险')
+    expect(pending.text()).toContain('rules_v4_final.pdf')
+    expect(pending.text()).toContain('规则书已保存，正在读取页面与建立检索')
+    expect(pending.text()).not.toContain('先读规则书')
+    expect(wrapper.text()).toContain('已进入我的讲解')
+    wrapper.unmount()
+  })
+
+  it('shows a persisted preparation failure instead of an endlessly active guide', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([])
+      if (path === '/api/v1/documents/official-imports') return Response.json([{
+        id: 'import-1', title: '花砖物语', rulebookTitle: 'azul_rules_cn_final.pdf', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1', teachingErrorCode: null,
+        updatedAt: '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/assistant-runs/prep-1') return Response.json({
+        run: {
+          id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
+          lastErrorCode: 'TEACHING_PREPARATION_FAILED', updatedAt: '2026-08-10T10:01:00Z',
+        },
+      })
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'azul_rules_cn_final.pdf' }, latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
+    await flushPromises()
+
+    const pending = wrapper.get('[data-testid="pending-guide-journey"]')
+    expect(pending.text()).toContain('花砖物语')
+    expect(pending.text()).toContain('任务需要处理')
+    expect(pending.find('.animate-pulse').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('opens a complete cited draft immediately while detail review continues', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-20T10:02:05Z'))
@@ -266,6 +397,7 @@ function createMemoryRouter() {
       { path: '/lessons', name: 'lessons', component: LessonsView },
       { path: '/teach', name: 'teach', component: { template: '<div />' } },
       { path: '/lesson/:planId', name: 'lesson', component: { template: '<div />' } },
+      { path: '/rulebooks/:versionId', name: 'rulebook-reader', component: { template: '<div />' } },
       { path: '/login', name: 'login', component: { template: '<div />' } },
       { path: '/account', name: 'account', component: { template: '<div />' } },
       { path: '/settings/models', name: 'model-settings', component: { template: '<div />' } },

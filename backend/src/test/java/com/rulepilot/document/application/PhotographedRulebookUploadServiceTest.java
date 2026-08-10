@@ -3,6 +3,7 @@ package com.rulepilot.document.application;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,7 +38,41 @@ class PhotographedRulebookUploadServiceTest {
                 eq(RuleDocumentStorageService.PDF_CONTENT_TYPE),
                 eq(3L),
                 any(InputStream.class),
-                eq("alice"));
+                eq("alice"),
+                eq(false),
+                isNull());
+    }
+
+    @Test
+    void carriesAutomaticTeachingIntentThroughThePhotographedRulebookPipeline() {
+        PhotoPage page = new PhotoPage("page.jpg", "image/jpeg", new byte[] {1, 2, 3});
+        when(assembler.assemble(List.of(page))).thenReturn(new PhotographedRulebookAssembler.AssembledRulebook(
+                "photographed-rulebook.pdf", new byte[] {4, 5, 6}));
+
+        service.upload(
+                null,
+                null,
+                DocumentSourceType.BASE_RULEBOOK,
+                null,
+                null,
+                List.of(page),
+                "alice",
+                true,
+                "重点讲组件摆放。");
+
+        verify(documents).upload(
+                eq(null),
+                eq("Photographed rulebook"),
+                eq(DocumentSourceType.BASE_RULEBOOK),
+                eq(null),
+                eq(null),
+                eq("photographed-rulebook.pdf"),
+                eq(RuleDocumentStorageService.PDF_CONTENT_TYPE),
+                eq(3L),
+                any(InputStream.class),
+                eq("alice"),
+                eq(true),
+                eq("重点讲组件摆放。"));
     }
 
     @Test

@@ -34,6 +34,16 @@ interface RulebookImportJob {
   teachingErrorCode?: string | null
   updatedAt: string
 }
+interface UploadedTeachingHandoff {
+  id: string
+  documentVersionId: string
+  title: string
+  rulebookTitle: string
+  state: 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
+  preparationRunId: string | null
+  errorCode: string | null
+  updatedAt: string
+}
 interface DocumentSummary {
   document: { id: string; title: string }
   latestVersion: { id: string; status: string }
@@ -67,14 +77,17 @@ const activeTeaching = ref<BackgroundTeachingItem[]>([])
 const completedTeaching = ref<BackgroundTeachingItem[]>([])
 const teachingStates = ref<Record<string, string>>({})
 const imports = ref<RulebookImportJob[]>([])
+const uploadedTeachingHandoffs = ref<UploadedTeachingHandoff[]>([])
 const documents = ref<DocumentSummary[]>([])
 const documentProgress = ref<Record<string, DocumentProgress>>({})
 const preparationStates = ref<Record<string, string>>({})
 const dismissedImportIds = ref<Set<string>>(new Set())
+const dismissedUploadedHandoffIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
 const ACTIVE_TEACHING_KEY = 'rulepilot:active-teaching-runs'
 const COMPLETED_TEACHING_KEY = 'rulepilot:completed-teaching-runs'
 const DISMISSED_IMPORTS_KEY = 'rulepilot:dismissed-official-imports'
+const DISMISSED_UPLOAD_HANDOFFS_KEY = 'rulepilot:dismissed-upload-teaching-handoffs'
 const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
@@ -86,6 +99,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: '等待下载', connecting: '正在连接规则书来源', downloading: '正在下载规则书内容', compressing: '文件较大，正在压缩 PDF', verifying: '正在核验 PDF',
   saving: '正在保存并交给规则书读取', uploaded: '等待开始读取', extracting: '正在提取规则文字',
   rendering: '正在生成规则书页面', structuring: '正在整理章节与图例', teaching: '正在组织讲解',
+  rulebookFailed: '规则书读取失败，讲解无法开始',
   waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
   teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
   preparationReceived: '讲解任务已接收', preparationReading: '正在确认规则书可以用于讲解',
@@ -100,6 +114,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: 'Waiting to download', connecting: 'Connecting to rulebook source', downloading: 'Downloading rulebook content', compressing: 'Compressing the oversized PDF', verifying: 'Verifying PDF',
   saving: 'Saving and handing off for reading', uploaded: 'Waiting to read', extracting: 'Extracting searchable rules',
   rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references', teaching: 'Organizing the lesson',
+  rulebookFailed: 'Rulebook reading failed, so the guide could not start',
   waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
   teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
   preparationReceived: 'Guide task received', preparationReading: 'Confirming that the rulebook is ready for a guide',
@@ -116,6 +131,7 @@ function formatBytes(value: number) {
 
 function importStage(job: RulebookImportJob) {
   if (job.stage === 'COMPLETED') {
+    if (job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED') return copy.value.rulebookFailed
     if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return copy.value.waitingForTeaching
     if (job.teachingHandoffState === 'LAUNCHING') return copy.value.launchingTeaching
     if (job.teachingHandoffState === 'LAUNCHED') return copy.value.teachingLaunched
@@ -177,7 +193,15 @@ const workItems = computed<WorkItem[]>(() => {
       || job.teachingHandoffState === 'LAUNCHING'
       || job.stage !== 'COMPLETED'
       || Date.now() - Date.parse(job.updatedAt) < 15 * 60_000)
+    .filter((job) => {
+      const runId = job.teachingPreparationRunId
+      return !runId || !preparationStates.value[runId]
+    })
     .map((job): WorkItem => {
+      const document = job.documentVersionId
+        ? documents.value.find(entry => entry.latestVersion.id === job.documentVersionId)
+        : undefined
+      const documentFailed = document?.latestVersion.status === 'FAILED'
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
         : job.stage === 'COMPLETED' ? 100 : null
@@ -189,8 +213,9 @@ const workItems = computed<WorkItem[]>(() => {
           : formatBytes(job.downloadedBytes)
         : job.sourceDomain
       return {
-        id: `import:${job.id}`, kind: 'download', title: job.title, stage: importStage(job), detail,
-        state: importState(job),
+        id: `import:${job.id}`, kind: 'download', title: job.title,
+        stage: documentFailed ? copy.value.rulebookFailed : importStage(job), detail,
+        state: documentFailed ? 'failed' : importState(job),
         progress, target: { name: 'teach', query: { importJob: job.id } }, updatedAt: job.updatedAt,
       }
     })
@@ -198,9 +223,12 @@ const workItems = computed<WorkItem[]>(() => {
     .filter(job => !['COMPLETED', 'FAILED'].includes(job.stage))
     .map(job => job.documentVersionId)
     .filter(Boolean))
+  const uploadedTeachingVersionIds = new Set(uploadedTeachingHandoffs.value
+    .map(handoff => handoff.documentVersionId))
   const documentItems = documents.value
     .filter(entry => !['READY', 'FAILED'].includes(entry.latestVersion.status))
     .filter(entry => !importVersionIds.has(entry.latestVersion.id))
+    .filter(entry => !uploadedTeachingVersionIds.has(entry.latestVersion.id))
     .map((entry): WorkItem => {
       const progress = documentProgress.value[entry.latestVersion.id]
       return {
@@ -236,7 +264,43 @@ const workItems = computed<WorkItem[]>(() => {
       updatedAt: job.updatedAt,
     }]
   })
-  return [...importItems, ...documentItems, ...preparationItems, ...teachingItems, ...finishedTeachingItems]
+  const uploadedTeachingItems = uploadedTeachingHandoffs.value
+    .filter(handoff => !dismissedUploadedHandoffIds.value.has(handoff.id))
+    .filter(handoff => !handoff.preparationRunId
+      || preparationStates.value[handoff.preparationRunId] !== 'COMPLETED')
+    .map((handoff): WorkItem => {
+      const runState = handoff.preparationRunId
+        ? preparationStates.value[handoff.preparationRunId]
+        : undefined
+      const document = documents.value.find(entry => entry.latestVersion.id === handoff.documentVersionId)
+      const documentStatus = document?.latestVersion.status ?? 'UPLOADED'
+      const documentSnapshot = documentProgress.value[handoff.documentVersionId]
+      const documentFailed = documentStatus === 'FAILED'
+      const failed = handoff.state === 'FAILED'
+        || documentFailed
+        || Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
+      const stage = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
+        ? copy.value.rulebookFailed
+        : failed
+          ? copy.value.preparationFailed
+          : handoff.state === 'WAITING_FOR_DOCUMENT'
+            ? documentStage(documentSnapshot, documentStatus)
+            : handoff.state === 'LAUNCHING'
+              ? copy.value.launchingTeaching
+              : preparationStage(runState ?? 'RECEIVED')
+      return {
+        id: `uploaded-teaching:${handoff.id}`,
+        kind: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'rulebook' : 'lesson',
+        title: handoff.title,
+        stage,
+        detail: handoff.rulebookTitle !== handoff.title ? handoff.rulebookTitle : '',
+        state: failed ? 'failed' : 'active',
+        progress: handoff.state === 'WAITING_FOR_DOCUMENT' ? documentSnapshot?.percentage ?? null : null,
+        target: { name: handoff.state === 'WAITING_FOR_DOCUMENT' || documentFailed ? 'teach' : 'lessons' },
+        updatedAt: handoff.updatedAt,
+      }
+    })
+  return [...importItems, ...documentItems, ...preparationItems, ...uploadedTeachingItems, ...teachingItems, ...finishedTeachingItems]
     .sort((left, right) => (left.state === 'active' ? 0 : 1) - (right.state === 'active' ? 0 : 1))
 })
 const activeCount = computed(() => workItems.value.filter(item => item.state === 'active').length)
@@ -298,20 +362,26 @@ async function refreshTeaching() {
 }
 
 async function refreshDocuments() {
-  const [importPayload, documentPayload] = await Promise.all([
+  const [importPayload, uploadedHandoffPayload, documentPayload] = await Promise.all([
     responseJson<unknown>('/api/v1/documents/official-imports'),
+    responseJson<unknown>('/api/v1/documents/upload-teaching-handoffs'),
     responseJson<unknown>('/api/v1/documents'),
   ])
-  if (!Array.isArray(importPayload) || !Array.isArray(documentPayload)) {
+  if (!Array.isArray(importPayload) || !Array.isArray(uploadedHandoffPayload) || !Array.isArray(documentPayload)) {
     throw new Error('background rulebook status is invalid')
   }
   const recentImports = importPayload as RulebookImportJob[]
+  const recentUploadedHandoffs = uploadedHandoffPayload as UploadedTeachingHandoff[]
   const documentList = documentPayload as DocumentSummary[]
   imports.value = recentImports
+  uploadedTeachingHandoffs.value = recentUploadedHandoffs
   documents.value = documentList
-  const preparationSnapshots = await Promise.all(recentImports.flatMap(job => {
-    const runId = job.teachingPreparationRunId
-    if (!runId) return []
+  const recentPreparationRunIds = new Set([
+    ...recentImports.map(job => job.teachingPreparationRunId),
+    ...recentUploadedHandoffs.map(handoff => handoff.preparationRunId),
+  ]
+    .filter((runId): runId is string => Boolean(runId)))
+  const preparationSnapshots = await Promise.all([...recentPreparationRunIds].flatMap(runId => {
     return [responseJson<TeachingRunDetails>(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
       .then(details => [runId, details.run.state] as const)
       .catch(() => preparationStates.value[runId]
@@ -358,6 +428,19 @@ function dismissFinished() {
     .map(job => job.id)
   dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
   sessionStorage.setItem(DISMISSED_IMPORTS_KEY, JSON.stringify([...dismissedImportIds.value]))
+  const finishedUploadHandoffs = uploadedTeachingHandoffs.value
+    .filter(handoff => handoff.state === 'FAILED'
+      || handoff.preparationRunId != null
+        && terminalTeachingStates.has(preparationStates.value[handoff.preparationRunId] ?? ''))
+    .map(handoff => handoff.id)
+  dismissedUploadedHandoffIds.value = new Set([
+    ...dismissedUploadedHandoffIds.value,
+    ...finishedUploadHandoffs,
+  ])
+  sessionStorage.setItem(
+    DISMISSED_UPLOAD_HANDOFFS_KEY,
+    JSON.stringify([...dismissedUploadedHandoffIds.value]),
+  )
 }
 
 function handleVisibility() {
@@ -392,6 +475,14 @@ onMounted(() => {
     dismissedImportIds.value = new Set(Array.isArray(stored) ? stored.filter(value => typeof value === 'string') : [])
   } catch {
     dismissedImportIds.value = new Set()
+  }
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(DISMISSED_UPLOAD_HANDOFFS_KEY) ?? '[]')
+    dismissedUploadedHandoffIds.value = new Set(Array.isArray(stored)
+      ? stored.filter(value => typeof value === 'string')
+      : [])
+  } catch {
+    dismissedUploadedHandoffIds.value = new Set()
   }
   document.addEventListener('visibilitychange', handleVisibility)
   window.addEventListener(TEACHING_LAUNCHED_EVENT, handleTeachingLaunched)

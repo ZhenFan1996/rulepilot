@@ -2,6 +2,7 @@ package com.rulepilot.document.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -87,10 +88,15 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         var processingQueue = new RecordingProcessingQueue();
         CatalogEditionLookup editions = editionId -> Optional.ofNullable(byEdition.get(editionId))
                 .map(case_ -> new CatalogEditionLookup.EditionReference(
-                        case_.editionId(), case_.gameId(), "Base", case_.language(), Set.of()));
+                        case_.editionId(), case_.gameId(), case_.gameName(), "Base", case_.language(), Set.of()));
         var storageService = new RuleDocumentStorageService(storage, storageProperties());
         var uploadService = new UploadRuleDocumentService(
-                editions, storageService, storage, documents, processingQueue);
+                editions,
+                storageService,
+                storage,
+                documents,
+                processingQueue,
+                mock(UploadedRulebookTeachingHandoffService.class));
         var fetcher = new HttpOfficialRulebookSourceFetcher(
                 storageProperties(),
                 new PdfBoxPhotographedRulebookAssembler(),
@@ -634,6 +640,11 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                     now,
                     job.completedAt())));
             return ready.stream().map(job -> jobs.get(job.id())).toList();
+        }
+
+        @Override
+        public int failTeachingForUnusableDocuments(Instant now) {
+            return 0;
         }
 
         @Override

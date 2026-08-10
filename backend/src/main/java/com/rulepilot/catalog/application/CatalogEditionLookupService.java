@@ -16,12 +16,12 @@ class CatalogEditionLookupService implements CatalogEditionLookup {
 
     @Override
     public java.util.Optional<EditionReference> findEdition(java.util.UUID editionId) {
-        return repository.findEdition(editionId)
-                .map(edition -> new EditionReference(
-                        edition.id(), edition.gameId(), edition.name(), edition.language(),
+        return repository.findEdition(editionId).flatMap(edition -> repository.findGame(edition.gameId())
+                .map(game -> new EditionReference(
+                        edition.id(), edition.gameId(), game.name(), edition.name(), edition.language(),
                         repository.findExpansions(edition.gameId()).stream()
                                 .filter(expansion -> expansion.compatibleEditionIds().contains(edition.id()))
                                 .map(com.rulepilot.catalog.domain.Expansion::id)
-                                .collect(java.util.stream.Collectors.toUnmodifiableSet())));
+                                .collect(java.util.stream.Collectors.toUnmodifiableSet()))));
     }
 }

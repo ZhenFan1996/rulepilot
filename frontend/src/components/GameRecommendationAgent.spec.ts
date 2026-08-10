@@ -16,11 +16,14 @@ const game = {
 }
 
 describe('GameRecommendationAgent', () => {
+  const mountedAgents: Array<ReturnType<typeof mount>> = []
+
   beforeEach(() => {
     localStorage.setItem('rulepilot:locale', 'zh-CN')
     sessionStorage.clear()
   })
   afterEach(() => {
+    for (const wrapper of mountedAgents.splice(0)) wrapper.unmount()
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -37,7 +40,9 @@ describe('GameRecommendationAgent', () => {
     })
     await router.push('/')
     await router.isReady()
-    return mount(GameRecommendationAgent, { global: { plugins: [router], stubs } })
+    const wrapper = mount(GameRecommendationAgent, { global: { plugins: [router], stubs } })
+    mountedAgents.push(wrapper)
+    return wrapper
   }
 
   it('asks one natural material question and then renders attributed recommendation cards', async () => {
@@ -317,16 +322,19 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
-    expect(wrapper.text()).toContain('已选《展翅翱翔》')
-    expect(wrapper.text()).toContain('仍可粘贴公开 PDF 链接或上传自己的规则书')
+    expect(document.body.textContent).toContain('已选《展翅翱翔》')
+    expect(document.body.textContent).toContain('仍可粘贴公开 PDF 链接或上传自己的规则书')
+    expect(document.body.querySelector('[data-testid="player-journey-surface"]')?.getAttribute('style'))
+      .toContain('opacity: 1')
 
-    await wrapper.get('button[aria-label="关闭小窗"]').trigger('click')
+    document.body.querySelector<HTMLButtonElement>('button[aria-label="关闭小窗"]')!.click()
+    await flushPromises()
     expect(wrapper.get('[data-testid="player-journey-dock"]').text()).toContain('展翅翱翔')
     const bindingCallsBeforeReopen = fetchMock.mock.calls
       .filter(([input]) => String(input) === '/api/v1/bgg/games/266192/import').length
     await wrapper.get('[data-testid="player-journey-dock"]').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('已选《展翅翱翔》')
+    expect(document.body.textContent).toContain('已选《展翅翱翔》')
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === '/api/v1/bgg/games/266192/import'))
       .toHaveLength(bindingCallsBeforeReopen)
   })
@@ -384,7 +392,7 @@ describe('GameRecommendationAgent', () => {
     await flushPromises()
     await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
     await wrapper.get('textarea').setValue('这个尚未发送的推荐条件要保留')
-    await wrapper.get('[data-testid="ready-for-questions"]').trigger('click')
+    document.body.querySelector<HTMLButtonElement>('[data-testid="ready-for-questions"]')!.click()
     await flushPromises()
 
     expect(wrapper.get('[data-testid="answer-workspace-stub"]').text()).toContain('展翅翱翔 · document-1 · plan-1')

@@ -33,7 +33,9 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-1', gameTitle: '星际探索' }])
       }
-      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')
+        || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -143,7 +145,9 @@ describe('AppShell', () => {
           ? new Response(null, { status: 503 })
           : response({ run: { id: 'run-1', state: 'COMPLETED' } })
       }
-      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')
+        || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
@@ -171,7 +175,9 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/assistant-runs/run-2')) {
         return response({ run: { id: 'run-2', state: 'RECEIVED' } })
       }
-      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')
+        || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
@@ -212,6 +218,7 @@ describe('AppShell', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
         teachingErrorCode: null, updatedAt,
       }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
       if (path.endsWith('/api/v1/documents')) return response([{
         document: { id: 'document-waiting', title: '卡坦岛规则书' },
         latestVersion: { id: 'version-waiting', status: 'READY' },
@@ -235,6 +242,45 @@ describe('AppShell', () => {
     expect(wrapper.text()).toContain('正在读取规则并建立讲解结构')
     expect(wrapper.text()).toContain('卡坦岛规则书')
     expect(wrapper.text()).toContain('展翅翱翔规则书')
+    expect(wrapper.findAll('ol li')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it('tracks a local upload from the persisted server handoff without duplicating its document task', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([{
+        id: 'handoff-1', documentVersionId: 'version-1', title: '星际探险',
+        rulebookTitle: 'rules_v4_final.pdf', state: 'WAITING_FOR_DOCUMENT',
+        preparationRunId: null, errorCode: null, updatedAt: new Date().toISOString(),
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-1', title: 'rules_v4_final.pdf' },
+        latestVersion: { id: 'version-1', status: 'EXTRACTING' },
+      }])
+      if (path.includes('/document-versions/version-1/progress/snapshot')) return response({
+        stage: 'EXTRACTING', percentage: 35, processedPages: 3, totalPages: 12, complete: false,
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    const trigger = wrapper.get('[data-testid="background-work-trigger-desktop"]')
+    expect(trigger.text()).toContain('1')
+    await trigger.trigger('click')
+    expect(wrapper.text()).toContain('星际探险')
+    expect(wrapper.text()).toContain('rules_v4_final.pdf')
+    expect(wrapper.text()).toContain('正在提取规则文字')
+    expect(wrapper.findAll('ol li')).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -251,7 +297,9 @@ describe('AppShell', () => {
       if (path.includes('/api/v1/teaching-plans')) {
         return response([{ id: 'plan-other-tab', gameTitle: '跨标签页规则书' }])
       }
-      if (path.endsWith('/api/v1/documents/official-imports') || path.endsWith('/api/v1/documents')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')
+        || path.endsWith('/api/v1/documents/upload-teaching-handoffs')
+        || path.endsWith('/api/v1/documents')) return response([])
       return new Response(null, { status: 404 })
     }))
     const router = createAppShellRouter()
