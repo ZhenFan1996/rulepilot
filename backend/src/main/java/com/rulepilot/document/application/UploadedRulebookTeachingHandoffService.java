@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ public class UploadedRulebookTeachingHandoffService implements UploadedRulebookT
     private final RuleDocumentRepository documents;
     private final Clock clock;
 
+    @Autowired
     public UploadedRulebookTeachingHandoffService(
             UploadedRulebookTeachingHandoffStore handoffs,
             RuleDocumentRepository documents) {

@@ -15,10 +15,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class UploadedRulebookTeachingHandoffServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-08-10T10:00:00Z");
+
+    @Test
+    void productionSpringContextSelectsTheInjectableConstructorWhenATestClockConstructorAlsoExists() {
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(
+                    UploadedRulebookTeachingHandoffStore.class,
+                    () -> mock(UploadedRulebookTeachingHandoffStore.class));
+            context.registerBean(RuleDocumentRepository.class, () -> mock(RuleDocumentRepository.class));
+            context.register(UploadedRulebookTeachingHandoffService.class);
+
+            context.refresh();
+
+            assertThat(context.getBean(UploadedRulebookTeachingHandoffService.class)).isNotNull();
+        }
+    }
 
     @Test
     void normalizesAndPersistsThePlayerIntentBeforeDocumentProcessingCompletes() {
