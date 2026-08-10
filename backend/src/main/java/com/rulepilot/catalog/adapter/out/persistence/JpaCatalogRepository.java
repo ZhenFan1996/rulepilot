@@ -146,11 +146,12 @@ public class JpaCatalogRepository implements CatalogRepository {
 
     @Override
     public List<Expansion> findExpansions(UUID gameId) {
-        return entityManager.createQuery(
+        List<ExpansionEntity> expansions = entityManager.createQuery(
                         "select expansion from CatalogExpansionEntity expansion where expansion.gameId = :gameId order by expansion.name",
                         ExpansionEntity.class)
                 .setParameter("gameId", gameId)
-                .getResultStream()
+                .getResultList();
+        return expansions.stream()
                 .map(entity -> entity.toDomain(findCompatibleEditionIds(entity.id)))
                 .toList();
     }

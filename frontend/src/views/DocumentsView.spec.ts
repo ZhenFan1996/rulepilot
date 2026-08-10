@@ -103,9 +103,12 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(false)
     await wrapper.get('input[type="checkbox"]').setValue(true)
     await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
-    await flushPromises()
-    const importRequest = fetchMock.mock.calls.find(([input, options]) =>
-      String(input).endsWith('/api/v1/documents/official-imports') && options?.method === 'POST')
+    const importRequest = await vi.waitFor(() => {
+      const request = fetchMock.mock.calls.find(([input, options]) =>
+        String(input).endsWith('/api/v1/documents/official-imports') && options?.method === 'POST')
+      expect(request).toBeDefined()
+      return request
+    })
     expect(JSON.parse(String(importRequest?.[1]?.body))).toMatchObject({
       editionId: 'edition-1', startTeaching: true,
     })

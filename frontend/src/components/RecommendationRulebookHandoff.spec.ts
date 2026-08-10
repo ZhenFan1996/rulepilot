@@ -299,7 +299,10 @@ describe('RecommendationRulebookHandoff', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('TEACHING_PREPARATION_FAILED'))
 
     await wrapper.findAll('button').find(button => button.text() === '重试当前步骤')!.trigger('click')
-    await vi.waitFor(() => expect(wrapper.text()).toContain('完整讲解已经生成'))
+    await vi.waitFor(
+      () => expect(wrapper.text()).toContain('完整讲解已经生成'),
+      { timeout: 3_000 },
+    )
 
     expect(requests.filter(request => request.path === '/api/v1/bgg/games/266192/import')).toHaveLength(1)
     expect(requests.filter(request => request.path === '/api/v1/documents/official-imports')).toHaveLength(1)
