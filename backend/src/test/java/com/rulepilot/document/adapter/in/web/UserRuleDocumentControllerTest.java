@@ -6,6 +6,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
+import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
 import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
@@ -13,6 +14,7 @@ import com.rulepilot.document.application.RuleDocumentMetadataConfirmationServic
 import com.rulepilot.document.application.RuleDocumentRemovalService;
 import com.rulepilot.document.application.OfficialRulebookImportJobService;
 import com.rulepilot.document.application.UploadRuleDocumentService;
+import com.rulepilot.document.application.UploadedRulebookTeachingHandoffService;
 import com.rulepilot.catalog.BoardGameMetadataLinking.Link;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
@@ -26,21 +28,69 @@ import org.junit.jupiter.api.Test;
 class UserRuleDocumentControllerTest {
 
     @Test
-    void passesOfficialImportConsentAndOwnerToTheRightsAwarePipeline() {
-        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+    void exposesTheCatalogGameNameForAPersistedPlayerUploadHandoff() {
+        UploadedRulebookTeachingHandoffService handoffs = mock(UploadedRulebookTeachingHandoffService.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
         UserRuleDocumentController controller = new UserRuleDocumentController(
                 mock(UploadRuleDocumentService.class),
                 mock(PhotographedRulebookUploadService.class),
                 mock(RuleDocumentRemovalService.class),
                 mock(RuleDocumentMetadataSuggestionService.class),
                 mock(RuleDocumentMetadataConfirmationService.class),
-                imports);
+                mock(OfficialRulebookImportJobService.class),
+                handoffs,
+                catalog);
+        UUID handoffId = UUID.randomUUID();
+        UUID versionId = UUID.randomUUID();
+        UUID editionId = UUID.randomUUID();
+        UUID gameId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        when(handoffs.recentOwned("alice")).thenReturn(List.of(
+                new UploadedRulebookTeachingHandoffService.HandoffView(
+                        handoffId,
+                        versionId,
+                        editionId,
+                        "rules_v4_final.pdf",
+                        com.rulepilot.document.application.UploadedRulebookTeachingHandoffStore.State.WAITING_FOR_DOCUMENT,
+                        null,
+                        null,
+                        now,
+                        now)));
+        when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
+                new CatalogEditionLookup.EditionReference(
+                        editionId, gameId, "星际探险", "中文版", "zh-CN", java.util.Set.of())));
+
+        var response = controller.uploadedRulebookTeachingHandoffs(() -> "alice");
+
+        assertThat(response).singleElement().satisfies(item -> {
+            assertThat(item.title()).isEqualTo("星际探险");
+            assertThat(item.rulebookTitle()).isEqualTo("rules_v4_final.pdf");
+            assertThat(item.documentVersionId()).isEqualTo(versionId);
+            assertThat(item.state()).isEqualTo("WAITING_FOR_DOCUMENT");
+        });
+    }
+
+    @Test
+    void passesOfficialImportConsentAndOwnerToTheRightsAwarePipeline() {
+        OfficialRulebookImportJobService imports = mock(OfficialRulebookImportJobService.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
+        UserRuleDocumentController controller = new UserRuleDocumentController(
+                mock(UploadRuleDocumentService.class),
+                mock(PhotographedRulebookUploadService.class),
+                mock(RuleDocumentRemovalService.class),
+                mock(RuleDocumentMetadataSuggestionService.class),
+                mock(RuleDocumentMetadataConfirmationService.class),
+                imports,
+                mock(UploadedRulebookTeachingHandoffService.class),
+                catalog);
         UUID jobId = UUID.randomUUID();
+        UUID editionId = UUID.randomUUID();
+        UUID gameId = UUID.randomUUID();
         Instant now = Instant.parse("2026-08-06T00:00:00Z");
         var job = OfficialRulebookImportJob.queued(
                 jobId,
                 "alice",
-                null,
+                editionId,
                 "Example Rules",
                 DocumentSourceType.BASE_RULEBOOK,
                 "https://publisher.example/rules.pdf",
@@ -48,14 +98,17 @@ class UserRuleDocumentControllerTest {
                 "重点讲清开局和第一轮。",
                 now);
         var command = new OfficialRulebookImportJobService.Command(
-                null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
+                editionId, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
                 "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。");
         when(imports.enqueue(command, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
+        when(catalog.findEdition(editionId)).thenReturn(java.util.Optional.of(
+                new CatalogEditionLookup.EditionReference(
+                        editionId, gameId, "Example Game", "中文版", "zh-CN", java.util.Set.of())));
 
         var response = controller.importOfficialRulebook(
                 new UserRuleDocumentController.OfficialRulebookImportRequest(
-                        null,
+                        editionId,
                         "Example Rules",
                         DocumentSourceType.BASE_RULEBOOK,
                         "https://publisher.example/rules.pdf",
@@ -65,6 +118,9 @@ class UserRuleDocumentControllerTest {
                 () -> "alice");
 
         assertThat(response.id()).isEqualTo(jobId);
+        assertThat(response.title()).isEqualTo("Example Game");
+        assertThat(response.rulebookTitle()).isEqualTo("Example Rules");
+        assertThat(response.editionId()).isEqualTo(editionId);
         assertThat(response.sourceDomain()).isEqualTo("publisher.example");
         assertThat(response.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
         assertThat(response.teachingHandoffState())
@@ -81,7 +137,9 @@ class UserRuleDocumentControllerTest {
                 mock(RuleDocumentRemovalService.class),
                 suggestions,
                 mock(RuleDocumentMetadataConfirmationService.class),
-                mock(OfficialRulebookImportJobService.class));
+                mock(OfficialRulebookImportJobService.class),
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
         UUID documentId = UUID.randomUUID();
         Principal principal = () -> "alice";
         when(suggestions.suggest(documentId, "alice"))
@@ -113,7 +171,9 @@ class UserRuleDocumentControllerTest {
                 mock(RuleDocumentRemovalService.class),
                 mock(RuleDocumentMetadataSuggestionService.class),
                 confirmations,
-                mock(OfficialRulebookImportJobService.class));
+                mock(OfficialRulebookImportJobService.class),
+                mock(UploadedRulebookTeachingHandoffService.class),
+                mock(CatalogEditionLookup.class));
         UUID documentId = UUID.randomUUID();
         UUID gameId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();

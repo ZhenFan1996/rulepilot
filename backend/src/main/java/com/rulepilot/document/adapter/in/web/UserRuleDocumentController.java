@@ -1,12 +1,15 @@
 package com.rulepilot.document.adapter.in.web;
 
 import com.rulepilot.catalog.BoardGameMetadataMatching.Candidate;
+import com.rulepilot.catalog.CatalogEditionLookup;
+import com.rulepilot.catalog.CatalogEditionLookup.EditionReference;
 import com.rulepilot.document.application.RuleDocumentMetadataSuggestionService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService;
 import com.rulepilot.document.application.RuleDocumentMetadataConfirmationService.Confirmation;
 import com.rulepilot.document.application.OfficialRulebookImportJobService;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
 import com.rulepilot.document.application.UploadRuleDocumentService;
+import com.rulepilot.document.application.UploadedRulebookTeachingHandoffService;
 import com.rulepilot.document.application.RuleDocumentRemovalService;
 import com.rulepilot.document.application.PhotographedRulebookUploadService;
 import com.rulepilot.document.domain.DocumentSourceType;
@@ -40,6 +43,8 @@ public class UserRuleDocumentController {
     private final RuleDocumentMetadataSuggestionService metadataSuggestions;
     private final RuleDocumentMetadataConfirmationService metadataConfirmations;
     private final OfficialRulebookImportJobService officialImports;
+    private final UploadedRulebookTeachingHandoffService uploadedTeachingHandoffs;
+    private final CatalogEditionLookup catalog;
 
     public UserRuleDocumentController(
             UploadRuleDocumentService documents,
@@ -47,13 +52,17 @@ public class UserRuleDocumentController {
             RuleDocumentRemovalService removals,
             RuleDocumentMetadataSuggestionService metadataSuggestions,
             RuleDocumentMetadataConfirmationService metadataConfirmations,
-            OfficialRulebookImportJobService officialImports) {
+            OfficialRulebookImportJobService officialImports,
+            UploadedRulebookTeachingHandoffService uploadedTeachingHandoffs,
+            CatalogEditionLookup catalog) {
         this.documents = documents;
         this.photographedDocuments = photographedDocuments;
         this.removals = removals;
         this.metadataSuggestions = metadataSuggestions;
         this.metadataConfirmations = metadataConfirmations;
         this.officialImports = officialImports;
+        this.uploadedTeachingHandoffs = uploadedTeachingHandoffs;
+        this.catalog = catalog;
     }
 
     @GetMapping
@@ -70,6 +79,8 @@ public class UserRuleDocumentController {
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
             @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam(defaultValue = "false") boolean startTeaching,
+            @RequestParam(required = false) String learningGoal,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -83,7 +94,9 @@ public class UserRuleDocumentController {
                     file.getContentType(),
                     file.getSize(),
                     file.getInputStream(),
-                    principal.getName());
+                    principal.getName(),
+                    startTeaching,
+                    learningGoal);
             return RuleDocumentController.UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read uploaded file", exception);
@@ -97,6 +110,8 @@ public class UserRuleDocumentController {
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
             @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam(defaultValue = "false") boolean startTeaching,
+            @RequestParam(required = false) String learningGoal,
             @RequestParam("photos") List<MultipartFile> photos,
             Principal principal) {
         try {
@@ -107,7 +122,9 @@ public class UserRuleDocumentController {
                     officialSourceUrl,
                     officialCoverUrl,
                     photoPages(photos),
-                    principal.getName());
+                    principal.getName(),
+                    startTeaching,
+                    learningGoal);
             return RuleDocumentController.UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read photographed rulebook pages", exception);
@@ -152,21 +169,37 @@ public class UserRuleDocumentController {
                 request.rightsConfirmed(),
                 request.startTeaching(),
                 request.learningGoal()), principal.getName());
-        return OfficialRulebookImportJobResponse.from(launch.job(), launch.reused());
+        return officialImportResponse(launch.job(), launch.reused());
     }
 
     @GetMapping("/official-imports")
     List<OfficialRulebookImportJobResponse> officialRulebookImports(Principal principal) {
         return officialImports.recentOwned(principal.getName()).stream()
-                .map(job -> OfficialRulebookImportJobResponse.from(job, false))
+                .map(job -> officialImportResponse(job, false))
                 .toList();
     }
 
     @GetMapping("/official-imports/{jobId}")
     OfficialRulebookImportJobResponse officialRulebookImport(
             @PathVariable UUID jobId, Principal principal) {
-        return OfficialRulebookImportJobResponse.from(
-                officialImports.requireOwned(jobId, principal.getName()), false);
+        return officialImportResponse(officialImports.requireOwned(jobId, principal.getName()), false);
+    }
+
+    @GetMapping("/upload-teaching-handoffs")
+    List<UploadedRulebookTeachingHandoffResponse> uploadedRulebookTeachingHandoffs(
+            Principal principal) {
+        return uploadedTeachingHandoffs.recentOwned(principal.getName()).stream()
+                .map(view -> UploadedRulebookTeachingHandoffResponse.from(view, catalog))
+                .toList();
+    }
+
+    private OfficialRulebookImportJobResponse officialImportResponse(
+            OfficialRulebookImportJob job,
+            boolean reused) {
+        EditionReference edition = job.editionId() == null
+                ? null
+                : catalog.findEdition(job.editionId()).orElse(null);
+        return OfficialRulebookImportJobResponse.from(job, edition, reused);
     }
 
     private List<PhotographedRulebookUploadService.PhotoPage> photoPages(List<MultipartFile> photos) throws IOException {
@@ -265,6 +298,9 @@ public class UserRuleDocumentController {
     record OfficialRulebookImportJobResponse(
             UUID id,
             String title,
+            String rulebookTitle,
+            UUID editionId,
+            String editionName,
             String sourceDomain,
             OfficialRulebookImportJob.Stage stage,
             long downloadedBytes,
@@ -279,10 +315,16 @@ public class UserRuleDocumentController {
             java.time.Instant updatedAt,
             boolean reused) {
 
-        static OfficialRulebookImportJobResponse from(OfficialRulebookImportJob job, boolean reused) {
+        static OfficialRulebookImportJobResponse from(
+                OfficialRulebookImportJob job,
+                EditionReference edition,
+                boolean reused) {
             return new OfficialRulebookImportJobResponse(
                     job.id(),
+                    edition == null ? job.title() : edition.gameName(),
                     job.title(),
+                    job.editionId(),
+                    edition == null ? null : edition.name(),
                     java.net.URI.create(job.sourceUrl()).getHost(),
                     job.stage(),
                     job.downloadedBytes(),
@@ -296,6 +338,40 @@ public class UserRuleDocumentController {
                     job.createdAt(),
                     job.updatedAt(),
                     reused);
+        }
+    }
+
+    record UploadedRulebookTeachingHandoffResponse(
+            UUID id,
+            UUID documentVersionId,
+            UUID editionId,
+            String title,
+            String rulebookTitle,
+            String state,
+            UUID preparationRunId,
+            String errorCode,
+            java.time.Instant createdAt,
+            java.time.Instant updatedAt) {
+
+        static UploadedRulebookTeachingHandoffResponse from(
+                UploadedRulebookTeachingHandoffService.HandoffView view,
+                CatalogEditionLookup catalog) {
+            String title = view.editionId() == null
+                    ? view.rulebookTitle()
+                    : catalog.findEdition(view.editionId())
+                            .map(EditionReference::gameName)
+                            .orElse(view.rulebookTitle());
+            return new UploadedRulebookTeachingHandoffResponse(
+                    view.id(),
+                    view.documentVersionId(),
+                    view.editionId(),
+                    title,
+                    view.rulebookTitle(),
+                    view.state().name(),
+                    view.preparationRunId(),
+                    view.errorCode(),
+                    view.createdAt(),
+                    view.updatedAt());
         }
     }
 }

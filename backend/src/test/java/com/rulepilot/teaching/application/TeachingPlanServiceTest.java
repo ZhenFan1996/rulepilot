@@ -2,7 +2,9 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.rulepilot.catalog.CatalogEditionLookup;
 import com.rulepilot.document.DocumentProcessing.PageView;
+import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
@@ -12,10 +14,41 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingOutlineModel;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.FutureTask;
 import org.junit.jupiter.api.Test;
 
 class TeachingPlanServiceTest {
+
+    @Test
+    void usesTheBoundCatalogGameIdentityInsteadOfTheRulebookFilenameForAPlan() {
+        UUID editionId = UUID.randomUUID();
+        UUID gameId = UUID.randomUUID();
+        CatalogEditionLookup catalog = requested -> Optional.of(new CatalogEditionLookup.EditionReference(
+                editionId, gameId, "花砖物语", "中文版", "zh-CN", Set.of()));
+        var scope = new VersionScope(
+                UUID.randomUUID(), editionId, "READY", "alice", "azul_rules_cn_final.pdf");
+
+        assertThat(TeachingPlanService.playerGameTitle(scope, catalog)).isEqualTo("花砖物语");
+        assertThat(TeachingPlanService.withGameTitle(
+                        TeachingPlanService.boundCatalogGameTitle(scope, catalog).orElseThrow(),
+                        new OutlineDraft(
+                                "azul_rules_cn_final.pdf",
+                                "Premise",
+                                List.of(topic("setup", false, List.of(1))))).gameTitle())
+                .isEqualTo("花砖物语");
+    }
+
+    @Test
+    void keepsTheRulebookTitleWhenTheDocumentHasNoCatalogBinding() {
+        CatalogEditionLookup catalog = requested -> Optional.empty();
+        var scope = new VersionScope(
+                UUID.randomUUID(), null, "READY", "alice", "A home-made prototype");
+
+        assertThat(TeachingPlanService.playerGameTitle(scope, catalog)).isEqualTo("A home-made prototype");
+    }
 
     @Test
     void usesDeterministicCoverageInsteadOfAModelRevisionForVisualOnlyRulebooks() {

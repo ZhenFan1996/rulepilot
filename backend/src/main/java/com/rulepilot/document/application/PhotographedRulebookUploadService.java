@@ -34,6 +34,28 @@ public class PhotographedRulebookUploadService {
             String officialCoverUrl,
             List<PhotoPage> pages,
             String username) {
+        return upload(
+                editionId,
+                title,
+                sourceType,
+                officialSourceUrl,
+                officialCoverUrl,
+                pages,
+                username,
+                false,
+                null);
+    }
+
+    public UploadRuleDocumentService.UploadResult upload(
+            UUID editionId,
+            String title,
+            DocumentSourceType sourceType,
+            String officialSourceUrl,
+            String officialCoverUrl,
+            List<PhotoPage> pages,
+            String username,
+            boolean startTeaching,
+            String learningGoal) {
         validate(pages);
         PhotographedRulebookAssembler.AssembledRulebook assembled = assembler.assemble(pages);
         return documents.upload(
@@ -46,7 +68,9 @@ public class PhotographedRulebookUploadService {
                 RuleDocumentStorageService.PDF_CONTENT_TYPE,
                 assembled.pdf().length,
                 new ByteArrayInputStream(assembled.pdf()),
-                username);
+                username,
+                startTeaching,
+                learningGoal);
     }
 
     private void validate(List<PhotoPage> pages) {

@@ -296,6 +296,8 @@ class OfficialRulebookImportJobServiceTest {
             return claimed.stream().map(job -> values.get(job.id())).toList();
         }
 
+        @Override public int failTeachingForUnusableDocuments(Instant now) { return 0; }
+
         @Override
         public void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now) {
             var job = values.get(jobId);

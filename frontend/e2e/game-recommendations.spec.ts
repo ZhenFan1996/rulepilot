@@ -115,6 +115,7 @@ const ruleAnswer = {
 async function mockPublicDiscovery(page: import('@playwright/test').Page, authenticated = false) {
   let teachingPoll = 0
   let lessonPoll = 0
+  let journeyImported = false
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -239,20 +240,27 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
     }],
   } }))
-  await page.route('**/api/v1/documents/official-imports', route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 202, json: {
-        id: 'import-job-1', title: 'Wingspan Rulebook', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+  await page.route('**/api/v1/documents/official-imports', route => {
+    if (route.request().method() === 'POST') {
+      journeyImported = true
+      return route.fulfill({ status: 202, json: {
+        id: 'import-job-1', title: '展翅翱翔', rulebookTitle: 'Wingspan Rulebook', sourceDomain: 'publisher.example', stage: 'COMPLETED',
         downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
         duplicate: false, errorCode: null, reused: false,
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1', teachingErrorCode: null,
       } })
-    : route.fulfill({ json: [] }))
+    }
+    return route.fulfill({ json: [] })
+  })
+  await page.route('**/api/v1/documents/upload-teaching-handoffs', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
     game: { id: 'game-1', name: '展翅翱翔' },
     editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
     expansions: [],
   }] }))
-  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: [] }))
+  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: journeyImported ? [{
+    ...teachingPlan, createdAt: '2026-08-10T08:00:01Z',
+  }] : [] }))
   await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
     providers: [{ id: 'qwen', configured: true, visionCapable: true }],
     assignments: { teaching: 'qwen', visual: 'qwen' },
@@ -434,6 +442,10 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await details.getByRole('button', { name: '选这款，继续找规则书' }).click()
 
   await expect(page.getByRole('heading', { name: '已选《展翅翱翔》' })).toBeVisible()
+  const journeySurface = page.getByTestId('player-journey-surface')
+  await expectOpaqueSurface(journeySurface)
+  await expect(page.getByTestId('player-journey-backdrop')).toBeVisible()
+  await expect(journeySurface.locator('[data-fact-confirmed="true"]')).toHaveCount(1)
   await expect(page.getByText('Wingspan Rulebook')).toBeVisible()
   await expect(page.getByText('出版社 / 权利方来源')).toBeVisible()
   await page.getByRole('button', { name: '选择这份' }).click()
@@ -456,6 +468,7 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await expect(page).toHaveURL(/\/discover$/)
 
   await expect(page.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible({ timeout: 8_000 })
+  await expect.poll(() => journeySurface.locator('[data-fact-confirmed="true"]').count()).toBeGreaterThanOrEqual(3)
   await page.getByRole('button', { name: '先阅读原规则书' }).click()
   const rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
   await expect(rulebook.getByText('你可以先阅读原规则书；讲解仍在后台生成')).toBeVisible()
@@ -470,8 +483,11 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await journeyDock.click()
   await page.getByRole('button', { name: '打开已生成的讲解' }).click()
   const lesson = page.getByRole('dialog', { name: '生成讲解阅读器' })
+  await expectOpaqueSurface(page.getByTestId('recommendation-lesson-surface'))
+  await expect(page.getByTestId('recommendation-lesson-backdrop')).toBeVisible()
   await expect(lesson.getByText('通过鸟类、奖励牌和蛋获得分数。')).toBeVisible()
   await expect(lesson.getByText('选择一个栖息地行动并依次结算。')).toBeVisible()
+  await expect(page.getByTestId('player-journey-surface').locator('[data-fact-confirmed="true"]')).toHaveCount(5)
   await expect(page).toHaveURL(/\/discover$/)
 
   const sessionRequestPromise = page.waitForRequest(request =>
@@ -501,4 +517,29 @@ test('keeps recommendation, rulebook reading, progressive teaching, and grounded
   await expect(recommendationComposer).toHaveValue('稍后还想继续找一款合作游戏')
   await expect(page.getByText('支持 4 人游玩')).toBeVisible()
   await expect(page).toHaveURL(/\/discover$/)
+
+  await page.goto('/lessons')
+  await expect(page.getByRole('heading', { name: '展翅翱翔', exact: true })).toBeVisible()
+  await expect(page.getByText('Wingspan Rulebook')).toHaveCount(0)
 })
+
+async function expectOpaqueSurface(locator: import('@playwright/test').Locator) {
+  await expect(locator).toBeVisible()
+  const appearance = await locator.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const match = style.backgroundColor.match(/^rgba?\(([^)]+)\)$/)
+    const channels = match?.[1]?.split(',').map(value => Number(value.trim())) ?? []
+    const alpha = channels.length >= 4 ? channels[3]! : 1
+    const bounds = element.getBoundingClientRect()
+    return {
+      alpha,
+      opacity: Number(style.opacity),
+      width: bounds.width,
+      height: bounds.height,
+    }
+  })
+  expect(appearance.alpha).toBe(1)
+  expect(appearance.opacity).toBe(1)
+  expect(appearance.width).toBeGreaterThan(0)
+  expect(appearance.height).toBeGreaterThan(0)
+}

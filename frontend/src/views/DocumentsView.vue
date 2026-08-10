@@ -8,7 +8,6 @@ import { mergeDocumentProgress, type DocumentProcessingSnapshot } from '@/lib/do
 import {
   forgetPendingRulebookLesson,
   readPendingRulebookLessons,
-  rememberPendingRulebookLesson,
   type PendingRulebookLesson,
 } from '@/lib/pendingRulebookLesson'
 import { useLocale } from '@/lib/locale'
@@ -59,6 +58,9 @@ interface RulebookCandidateResponse { configured: boolean; candidates: RulebookC
 interface OfficialRulebookImportJob {
   id: string
   title: string
+  rulebookTitle?: string
+  editionId?: string | null
+  editionName?: string | null
   sourceDomain: string
   stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
@@ -66,6 +68,9 @@ interface OfficialRulebookImportJob {
   documentVersionId: string | null
   duplicate: boolean
   errorCode: string | null
+  teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
+  teachingPreparationRunId: string | null
+  teachingErrorCode: string | null
   reused: boolean
 }
 interface TeachingPlanResponse { id: string }
@@ -126,6 +131,7 @@ const progressConnections = new Map<string, EventSource>()
 const progressRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const progressRetryAttempts = new Map<string, number>()
 const terminalHandoffs = new Set<string>()
+const serverTeachingVersions = new Set<string>()
 let disposed = false
 let preparationClock: ReturnType<typeof setInterval> | null = null
 let photographedPageSequence = 0
@@ -163,18 +169,22 @@ const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
 const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
-  title: '规则书正在后台获取', safe: '可以离开这一页；下载、核验和后续读取会继续。',
+  title: '规则书与讲解正在后台准备', safe: '可以离开这一页；下载、核验、规则书读取和讲解生成都会继续。',
   QUEUED: '等待下载', CONNECTING: '正在连接来源', DOWNLOADING: '正在下载规则书内容',
   COMPRESSING: '文件超过普通导入上限，正在安全压缩 PDF',
   VERIFYING_FILE: '正在核验文件格式与大小', SAVING: '正在保存并交给规则书读取',
   COMPLETED: '下载完成，正在衔接规则书读取', FAILED: '下载失败，需要重新选择来源',
+  WAITING_FOR_DOCUMENT: '规则书已下载，正在读取页面与建立检索', LAUNCHING: '规则书已可阅读，正在启动讲解',
+  LAUNCHED: '讲解任务已经进入后台', TEACHING_FAILED: '规则书已可阅读，但讲解任务需要重试', DOCUMENT_FAILED: '规则书读取失败，讲解无法开始',
   background: '在任意页面打开“后台任务”都能找回这次进度。',
 } : {
-  title: 'Getting the rulebook in the background', safe: 'You can leave this page; download, verification, and reading will continue.',
+  title: 'Preparing the rulebook and guide in the background', safe: 'You can leave this page; download, verification, reading, and guide generation will continue.',
   QUEUED: 'Waiting to download', CONNECTING: 'Connecting to source', DOWNLOADING: 'Downloading rulebook content',
   COMPRESSING: 'Compressing the PDF to the safe import limit',
   VERIFYING_FILE: 'Verifying file format and size', SAVING: 'Saving and handing off for reading',
   COMPLETED: 'Download complete; handing off to rulebook reading', FAILED: 'Download failed; choose another source',
+  WAITING_FOR_DOCUMENT: 'Rulebook downloaded; reading pages and building retrieval data', LAUNCHING: 'Rulebook readable; starting the guide',
+  LAUNCHED: 'The guide task is now running in the background', TEACHING_FAILED: 'Rulebook readable, but the guide task needs a retry', DOCUMENT_FAILED: 'Rulebook reading failed, so the guide could not start',
   background: 'Open Background work from any page to return to this progress.',
 })
 const canUpload = computed(() => Boolean(
@@ -656,9 +666,18 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
+    if (serverTeachingVersions.delete(pending.versionId)) {
+      if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
+      message.value = t('documents.background')
+      return
+    }
     if (pending.learningGoal) learningGoal.value = pending.learningGoal
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
-    message.value = t('documents.readyToRead')
+    try {
+      await startLesson(pending.versionId, pending)
+    } catch (error) {
+      terminalHandoffs.delete(pending.versionId)
+      errorMessage.value = error instanceof Error ? error.message : t('documents.error')
+    }
     return
   }
   if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
@@ -751,6 +770,8 @@ async function uploadRulebook() {
     if (title.value.trim()) form.append('title', title.value.trim())
     else if (selectedFile) form.append('title', titleFromFile(selectedFile))
     form.append('sourceType', sourceType.value)
+    form.append('startTeaching', 'true')
+    if (learningGoal.value.trim()) form.append('learningGoal', learningGoal.value.trim())
     if (officialSourceUrl.value.trim()) form.append('officialSourceUrl', officialSourceUrl.value.trim())
     if (selectedFile) form.append('file', selectedFile)
     else selectedPhotos.forEach((page) => form.append('photos', page.file))
@@ -773,21 +794,26 @@ async function uploadRulebook() {
   }
 }
 
-async function continueUploadedRulebook(result: { duplicate: boolean; version: { id: string; status: string } }) {
+async function continueUploadedRulebook(
+  result: { duplicate: boolean; version: { id: string; status: string } },
+  serverTeaching = true,
+) {
   const pending = currentPreferences(result.version.id)
-  if (username.value) rememberPendingRulebookLesson(localStorage, username.value, pending)
   title.value = ''
   officialSourceUrl.value = ''
   officialImportRightsConfirmed.value = false
   await loadDocuments()
   if (result.version.status === 'READY') {
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
-    message.value = t('documents.readyToRead')
+    message.value = serverTeaching ? t('documents.background') : t('documents.readyToRead')
   } else if (result.version.status === 'FAILED') {
     await handleTerminalProgress(pending, 'FAILED')
   } else {
     message.value = result.duplicate ? t('documents.uploadedExisting') : t('documents.uploadedReading')
-    watchProgress(pending)
+    if (serverTeaching) {
+      serverTeachingVersions.add(result.version.id)
+      watchProgress(pending)
+    }
   }
 }
 
@@ -817,6 +843,8 @@ async function importOfficialRulebook() {
         sourceType: sourceType.value,
         officialSourceUrl: officialSourceUrl.value.trim(),
         rightsConfirmed: officialImportRightsConfirmed.value,
+        startTeaching: true,
+        learningGoal: learningGoal.value.trim() || null,
       }),
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
@@ -835,7 +863,7 @@ async function recoverOfficialImportFromRoute() {
   if (!jobId) return
   try {
     officialImportJob.value = await fetchOfficialImport(jobId)
-    if (officialImportJob.value.stage === 'COMPLETED') await finishOfficialImport(officialImportJob.value)
+    if (officialImportSettled(officialImportJob.value)) await finishOfficialImport(officialImportJob.value)
     else if (officialImportJob.value.stage !== 'FAILED') void waitForOfficialImport(jobId)
   } catch {
     officialImportJob.value = null
@@ -853,7 +881,7 @@ async function waitForOfficialImport(jobId: string) {
     try {
       const job = await fetchOfficialImport(jobId)
       officialImportJob.value = job
-      if (job.stage === 'COMPLETED') {
+      if (officialImportSettled(job)) {
         await finishOfficialImport(job)
         return
       }
@@ -868,6 +896,11 @@ async function waitForOfficialImport(jobId: string) {
   }
 }
 
+function officialImportSettled(job: OfficialRulebookImportJob) {
+  return job.stage === 'COMPLETED'
+    && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
+}
+
 async function finishOfficialImport(job: OfficialRulebookImportJob) {
   if (!job.documentVersionId) throw new Error(t('documents.officialImport.error'))
   await loadDocuments()
@@ -875,7 +908,16 @@ async function finishOfficialImport(job: OfficialRulebookImportJob) {
   await continueUploadedRulebook({
     duplicate: job.duplicate,
     version: { id: job.documentVersionId, status: entry?.latestVersion.status ?? 'UPLOADED' },
-  })
+  }, false)
+  message.value = job.teachingHandoffState === 'LAUNCHED'
+    ? (locale.value === 'zh-CN'
+        ? `《${job.title}》已进入“我的讲解”，规则书现在可以先读。`
+        : `${job.title} is now in My Guides, and the rulebook is ready to read.`)
+    : job.teachingHandoffState === 'FAILED'
+      ? job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED'
+        ? officialImportCopy.value.DOCUMENT_FAILED
+        : officialImportCopy.value.TEACHING_FAILED
+      : message.value
   officialImportJob.value = null
   const query = { ...route.query }
   delete query.importJob
@@ -895,6 +937,20 @@ function officialImportBytes() {
     ? `${Math.max(1, Math.round(bytes / 1024))} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`
   return job.totalBytes ? `${format(job.downloadedBytes)} / ${format(job.totalBytes)}` : format(job.downloadedBytes)
+}
+
+function officialImportStage() {
+  const job = officialImportJob.value
+  if (!job) return ''
+  if (job.stage === 'COMPLETED' && job.teachingHandoffState === 'FAILED') {
+    return job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED'
+      ? officialImportCopy.value.DOCUMENT_FAILED
+      : officialImportCopy.value.TEACHING_FAILED
+  }
+  if (job.stage === 'COMPLETED' && job.teachingHandoffState !== 'NOT_REQUESTED') {
+    return officialImportCopy.value[job.teachingHandoffState]
+  }
+  return officialImportCopy.value[job.stage]
 }
 
 async function deleteRulebook(entry: DocumentResponse) {
@@ -1101,7 +1157,7 @@ onBeforeUnmount(() => {
             <div class="min-w-0">
               <p class="tabletop-kicker">{{ officialImportCopy.title }}</p>
               <h2 class="mt-1 truncate font-display text-xl font-semibold">{{ officialImportJob.title }}</h2>
-              <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportCopy[officialImportJob.stage] }}</p>
+              <p class="mt-2 text-sm font-semibold text-copper">{{ officialImportStage() }}</p>
               <p class="mt-1 text-xs leading-5 text-ink/50">{{ officialImportCopy.safe }}</p>
             </div>
             <span v-if="officialImportBytes()" class="shrink-0 text-xs font-semibold text-indigo">{{ officialImportBytes() }}</span>

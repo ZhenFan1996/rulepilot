@@ -13,6 +13,8 @@ public interface RulebookTeachingHandoffs {
 
     List<ReadyHandoff> claimReady(int limit);
 
+    int failUnusableDocuments();
+
     void markLaunched(UUID importJobId, UUID preparationRunId);
 
     void markFailed(UUID importJobId, String errorCode);

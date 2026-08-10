@@ -78,7 +78,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await page.getByRole('button', { name: '帮我找规则书' }).click()
   await expect(page.getByText('publisher.example')).toBeVisible()
   await page.getByRole('button', { name: '选择并继续核对' }).click()
-  const officialButton = page.getByRole('button', { name: '下载规则书' })
+  const officialButton = page.getByRole('button', { name: '下载规则书并生成讲解' })
   await expect(officialButton).toBeDisabled()
   await expect(page.getByRole('textbox', { name: /规则书来源链接/ })).toHaveValue('https://publisher.example/rules.pdf')
   await page.getByRole('checkbox', { name: /我确认该来源有权提供这份规则书/ }).check()
@@ -90,8 +90,10 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     sourceType: 'BASE_RULEBOOK',
     officialSourceUrl: 'https://publisher.example/rules.pdf',
     rightsConfirmed: true,
+    startTeaching: true,
+    learningGoal: null,
   })
-  await expect(page.getByText('规则书正在后台获取')).toBeVisible()
+  await expect(page.getByText('规则书与讲解正在后台准备')).toBeVisible()
   await expect(page.getByText('正在下载规则书内容')).toBeVisible()
   await expect(page.getByText(/可以离开这一页/)).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
@@ -245,6 +247,9 @@ async function mockOnboardingApis(page: Page, options: {
     if (path === '/api/v1/documents' && request.method() === 'GET') {
       return route.fulfill({ json: [readyDocument] })
     }
+    if (path === '/api/v1/documents/upload-teaching-handoffs' && request.method() === 'GET') {
+      return route.fulfill({ json: [] })
+    }
     if (path === '/api/v1/document-versions/version-1/pages' && request.method() === 'GET') {
       return route.fulfill({ json: [
         { pageNumber: 1, text: 'Set up the game.', characterCount: 16 },
@@ -263,12 +268,14 @@ async function mockOnboardingApis(page: Page, options: {
       return route.fulfill({ status: 202, json: {
         id: 'import-job-1', title: 'Catalog Game Rules', sourceDomain: 'publisher.example', stage: 'QUEUED',
         downloadedBytes: 0, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
       } })
     }
     if (path === '/api/v1/documents/official-imports/import-job-1' && request.method() === 'GET') {
       return route.fulfill({ json: {
         id: 'import-job-1', title: 'Catalog Game Rules', sourceDomain: 'publisher.example', stage: 'DOWNLOADING',
         downloadedBytes: 2048, totalBytes: 4096, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
       } })
     }
     if (path === '/api/v1/documents/document-1/bgg-suggestions') {

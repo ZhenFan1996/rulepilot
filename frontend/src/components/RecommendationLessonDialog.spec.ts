@@ -63,10 +63,13 @@ describe('RecommendationLessonDialog', () => {
     }))
     const wrapper = mount(RecommendationLessonDialog, {
       props: { open: true, planId: 'plan-1' },
-      global: { stubs: { LessonChapterList: ChapterListStub } },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
     })
     await flushPromises()
 
+    expect(wrapper.get('[data-testid="recommendation-lesson-backdrop"]').classes()).toContain('z-[100]')
+    expect(wrapper.get('[data-testid="recommendation-lesson-surface"]').attributes('style'))
+      .toContain('background-color: var(--color-canvas); opacity: 1')
     expect(wrapper.text()).toContain('已有 1 / 3 章可以阅读')
     expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
 
@@ -85,6 +88,35 @@ describe('RecommendationLessonDialog', () => {
 
     await wrapper.findAll('button').find(button => button.text() === '切换到规则答疑')!.trigger('click')
     expect(wrapper.emitted('ask-questions')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('keeps polling when readable content arrives before the persisted run snapshot', async () => {
+    let runReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(plan)
+      if (path.includes('/illustrated-lessons/latest')) {
+        return Response.json({ id: 'lesson-1', status: 'DRAFT_READY', sections: [section(1, '目标')] })
+      }
+      if (path.includes('/assistant-runs/latest')) {
+        runReads += 1
+        return new Response(null, { status: 404 })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const wrapper = mount(RecommendationLessonDialog, {
+      props: { open: true, planId: 'plan-1' },
+      global: { stubs: { LessonChapterList: ChapterListStub, teleport: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在核对持久化后台任务状态')
+    expect(runReads).toBe(1)
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+    expect(runReads).toBe(2)
+    expect(wrapper.get('[data-testid="chapter-list-stub"]').text()).toBe('目标')
     wrapper.unmount()
   })
 })

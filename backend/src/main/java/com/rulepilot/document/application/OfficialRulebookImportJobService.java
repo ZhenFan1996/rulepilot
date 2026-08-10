@@ -98,6 +98,11 @@ public class OfficialRulebookImportJobService implements RulebookTeachingHandoff
     }
 
     @Override
+    public int failUnusableDocuments() {
+        return jobs.failTeachingForUnusableDocuments(Instant.now(clock));
+    }
+
+    @Override
     public void markLaunched(UUID importJobId, UUID preparationRunId) {
         if (importJobId == null || preparationRunId == null) {
             throw new IllegalArgumentException("teaching handoff launch identity is required");

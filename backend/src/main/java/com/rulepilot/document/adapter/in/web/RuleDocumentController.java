@@ -50,6 +50,8 @@ public class RuleDocumentController {
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
             @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam(defaultValue = "false") boolean startTeaching,
+            @RequestParam(required = false) String learningGoal,
             @RequestParam("file") MultipartFile file,
             Principal principal) {
         try {
@@ -63,7 +65,9 @@ public class RuleDocumentController {
                     file.getContentType(),
                     file.getSize(),
                     file.getInputStream(),
-                    principal.getName());
+                    principal.getName(),
+                    startTeaching,
+                    learningGoal);
             return UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read uploaded file", exception);
@@ -78,6 +82,8 @@ public class RuleDocumentController {
             @RequestParam DocumentSourceType sourceType,
             @RequestParam(required = false) String officialSourceUrl,
             @RequestParam(required = false) String officialCoverUrl,
+            @RequestParam(defaultValue = "false") boolean startTeaching,
+            @RequestParam(required = false) String learningGoal,
             @RequestParam("photos") List<MultipartFile> photos,
             Principal principal) {
         try {
@@ -88,7 +94,9 @@ public class RuleDocumentController {
                     officialSourceUrl,
                     officialCoverUrl,
                     photoPages(photos),
-                    principal.getName());
+                    principal.getName(),
+                    startTeaching,
+                    learningGoal);
             return UploadResponse.from(result);
         } catch (IOException exception) {
             throw new IllegalArgumentException("could not read photographed rulebook pages", exception);

@@ -115,7 +115,7 @@ class ConfirmedRulingServiceTest {
             Set<UUID> compatibleExpansions,
             List<RuleEvidenceHit> evidenceHits) {
         CatalogEditionLookup catalog = id -> Optional.of(new CatalogEditionLookup.EditionReference(
-                editionId, gameId, "Base", "en", compatibleExpansions));
+                editionId, gameId, "Example Game", "Base", "en", compatibleExpansions));
         DocumentVersionScopeLookup documents = id -> Optional.of(
                 new DocumentVersionScopeLookup.VersionScope(versionId, editionId, "READY", "owner"));
         RuleEvidenceLookup evidence = (documentVersionId, chunkIds) -> evidenceHits.stream()

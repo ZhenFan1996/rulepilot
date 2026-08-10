@@ -124,11 +124,10 @@ const FAILED_RUN_STATES = new Set(['FAILED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED'
 export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyProjection {
   const availableSections = input.lesson?.sections.length ?? 0
   const totalSections = input.plan?.sections.length ?? null
-  const canReadLesson = availableSections > 0
+  const canReadLesson = Boolean(input.plan && availableSections > 0)
   const canReadRulebook = Boolean(input.importJob?.documentVersionId && (
     input.documentProgress?.complete
     || input.documentProgress?.stage === 'READY'
-    || ['LAUNCHING', 'LAUNCHED', 'FAILED'].includes(input.importJob.teachingHandoffState)
   ))
   const teachingState = input.teachingRun?.run.state ?? null
   const latestActivity = input.teachingRun?.activities?.at(-1)?.summary
@@ -272,7 +271,7 @@ export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyPro
 }
 
 function projection(input: Omit<PlayerJourneyProjection, 'canAskQuestions'>): PlayerJourneyProjection {
-  return { ...input, canAskQuestions: input.canReadLesson }
+  return { ...input, canAskQuestions: input.canReadLesson && input.canReadRulebook }
 }
 
 function failed(

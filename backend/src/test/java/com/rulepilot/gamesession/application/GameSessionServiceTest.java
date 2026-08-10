@@ -106,7 +106,7 @@ class GameSessionServiceTest {
             String processingStatus) {
         CatalogEditionLookup catalog = id -> Optional.of(
                 new CatalogEditionLookup.EditionReference(
-                        editionId, gameId, "Base", "en", compatibleExpansions));
+                        editionId, gameId, "Example Game", "Base", "en", compatibleExpansions));
         DocumentVersionScopeLookup documents = id -> Optional.of(
                 new DocumentVersionScopeLookup.VersionScope(versionId, documentEditionId, processingStatus, "owner"));
         return new GameSessionService(catalog, documents, repository, contexts);

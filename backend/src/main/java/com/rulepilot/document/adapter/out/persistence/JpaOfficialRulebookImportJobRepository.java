@@ -156,6 +156,28 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public int failTeachingForUnusableDocuments(Instant now) {
+        return entityManager
+                .createNativeQuery(
+                        """
+                        UPDATE official_rulebook_import_job AS job
+                        SET teaching_handoff_state = 'FAILED',
+                            teaching_preparation_run_id = NULL,
+                            teaching_error_code = 'DOCUMENT_PROCESSING_FAILED',
+                            teaching_handoff_updated_at = :now,
+                            updated_at = :now
+                        FROM document_version AS version
+                        WHERE job.document_version_id = version.id
+                          AND job.stage = 'COMPLETED'
+                          AND job.teaching_handoff_state = 'WAITING_FOR_DOCUMENT'
+                          AND version.processing_status = 'FAILED'
+                        """)
+                .setParameter("now", now)
+                .executeUpdate();
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now) {
         int updated = entityManager
                 .createQuery(

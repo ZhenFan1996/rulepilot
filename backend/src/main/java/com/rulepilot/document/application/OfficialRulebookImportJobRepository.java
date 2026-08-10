@@ -23,6 +23,8 @@ public interface OfficialRulebookImportJobRepository {
 
     List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
 
+    int failTeachingForUnusableDocuments(Instant now);
+
     void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now);
 
     void failTeachingLaunch(UUID jobId, String errorCode, Instant now);
