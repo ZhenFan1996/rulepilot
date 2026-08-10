@@ -64,9 +64,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'POST'
       && /^\/api\/v1\/document-versions\/[^/]+\/teaching-plans$/.test(request.url ?? '')) {
       planStarted = true
-      assert.deepEqual(JSON.parse(body.toString()), {
-        playerCount: 2, beginnerCount: 1, durationMinutes: 20,
-      })
+      assert.deepEqual(JSON.parse(body.toString()), {})
       return json(response, 202, {
         assistantRunId: '33333333-3333-3333-3333-333333333333', state: 'RECEIVED', reused: false,
       })

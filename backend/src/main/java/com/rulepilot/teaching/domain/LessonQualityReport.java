@@ -22,7 +22,6 @@ public record LessonQualityReport(OverallStatus status, int score, List<QualityC
         CITATION_SUPPORT,
         SETUP_EXECUTABILITY,
         END_AND_SCORING_COMPLETENESS,
-        PLAYER_COUNT_SCOPE,
         EXPANSION_SCOPE
     }
 

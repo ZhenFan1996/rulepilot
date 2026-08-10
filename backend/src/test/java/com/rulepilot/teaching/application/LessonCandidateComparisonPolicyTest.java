@@ -62,9 +62,6 @@ class LessonCandidateComparisonPolicyTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                2,
-                1,
-                20,
                 "Example",
                 "Learn the rules.",
                 List.of(new TeachingPlan.PlannedSection(

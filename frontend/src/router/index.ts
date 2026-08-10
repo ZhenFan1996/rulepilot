@@ -96,6 +96,11 @@ const router = createRouter({
       component: () => import('@/views/PublicLessonView.vue'),
     },
     {
+      path: '/read/:planId/questions',
+      name: 'public-lesson-questions',
+      component: () => import('@/views/PublicLessonView.vue'),
+    },
+    {
       path: '/library',
       name: 'public-library',
       component: () => import('@/views/PublicLibraryView.vue'),

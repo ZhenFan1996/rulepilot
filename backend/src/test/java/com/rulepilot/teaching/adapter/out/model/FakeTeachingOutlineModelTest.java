@@ -12,9 +12,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void retainsEverySubstantiveVisualCatalogPageWhenTheLivePlannerFallsBack() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "TEST GAME", "cover; no game mechanism"),
                         visualPage(2, "COMPONENTS", "component list"),
@@ -39,9 +37,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void keepsCoversOutAndRoutesFaqAndHistoricalPagesToReaderAppropriateFallbackSections() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                5,
-                5,
-                30,
+
                 List.of(
                         visualPage(1, "TEST GAME", "封面；页面无游戏规则文字，仅作为视觉封面存在"),
                         visualPage(2, "GAME OVERVIEW", "draw coins each round"),
@@ -61,9 +57,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void bindsTheEndingTopicToAnActualEndingPageAndSkipsAssemblyOrPromotionInserts() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "TEST GAME", "cover; no game mechanism"),
                         visualPage(2, "SET UP", "setup steps and starting resources"),
@@ -81,9 +75,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void excludesAnEnglishCoverWithoutDroppingAComponentsPageThatMentionsStorage() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "RULEBOOK COVER", "cover artwork. No gameplay rules, components, or operational instructions are present."),
                         visualPage(2, "COMPONENTS", "player boards, fan track, phase tokens, dice boxes, and a storage box; see page 19 for assembly"),
@@ -98,9 +90,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void excludesAnIdentityOnlyFirstPageEvenWhenTheVisualModelDoesNotCallItACover() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "HARBOR LIGHTS; NORTH STAR GAMES", "页面显示游戏标题、出版商标志与设计者姓名。"),
                         visualPage(2, "COMPONENTS", "component list"),
@@ -115,9 +105,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void retainsACompactRulesSheetOnTheFirstPage() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                2,
-                2,
-                10,
+
                 List.of(visualPage(
                         1,
                         "POCKET RELAY; SET UP; YOUR TURN; SCORING",
@@ -130,9 +118,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void excludesAnIdentityOnlyBackPageEvenWhenDecorativeArtIsMistakenForComponentTerms() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "SET UP", "Each player takes three cards."),
                         visualPage(2, "HOW TO PLAY", "On your turn, choose one action."),
@@ -149,9 +135,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void retainsALaterRulesPageThatAlsoHasAPublisherFooter() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "SET UP", "Each player takes three cards."),
                         visualPage(
@@ -167,9 +151,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void doesNotMistakeAFinishSpaceTargetForTheGameObjective() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "设置", "游戏设置与起始资源"),
                         visualPage(2, "游戏流程", "回合包括掷骰和移动阶段"),
@@ -183,9 +165,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void requiresAnEndingTriggerAndWinnerResolutionBeforeRoutingAPageToTheEndingTopic() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "游戏流程", "每轮重复进行，直到游戏结束。"),
                         visualPage(2, "终局", "当任何跑者到达终点空间时游戏结束；完成当前回合后，最远的玩家获胜，平局则继续比赛。")),
@@ -200,9 +180,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void recognizesGameEndAsAnEndgameHeadingWhenTheVisibleFactsResolveTheWinner() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "SET UP", "setup steps and starting resources"),
                         visualPage(2, "GAMEPLAY", "turn phases and actions"),
@@ -215,9 +193,7 @@ class FakeTeachingOutlineModelTest {
     @Test
     void recognizesATriggeredGameEndBeforeTheWinnerRuleIsStated() {
         var outline = new FakeTeachingOutlineModel().organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(
                         visualPage(1, "SET UP", "setup steps and starting resources"),
                         visualPage(2, "GAMEPLAY", "turn phases and actions"),

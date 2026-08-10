@@ -60,6 +60,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
   await page.route('**/api/auth/csrf', route => route.fulfill({ json: { headerName: 'X-CSRF-TOKEN', token: 'csrf' } }))
+  await page.route('**/api/v1/assistant-runs/active?*', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/bgg/recommendation-agent**', async route => {
     const body = route.request().postDataJSON() as {
       profile: { players: number | null; maxMinutes: number | null; maxWeight: number | null }
@@ -174,6 +175,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
         id: 'import-job-1', title: 'Wingspan Rulebook', sourceDomain: 'publisher.example', stage: 'COMPLETED',
         downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
         duplicate: false, errorCode: null, reused: false,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1', teachingErrorCode: null,
       } })
     : route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
@@ -181,6 +183,7 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
     expansions: [],
   }] }))
+  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: [] }))
   await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
     providers: [{ id: 'qwen', configured: true, visionCapable: true }],
     assignments: { teaching: 'qwen', visual: 'qwen' },
@@ -189,6 +192,9 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     document: { id: 'document-1', gameEditionId: 'edition-1', title: 'Wingspan Rulebook', officialSourceUrl: 'https://publisher.example/wingspan.pdf' },
     latestVersion: { id: 'version-1', originalFilename: 'wingspan.pdf', size: 4096, status: 'EXTRACTING' },
   }] }))
+  await page.route('**/api/v1/document-versions/version-1/progress/snapshot', route => route.fulfill({ json: {
+    stage: 'EXTRACTING', percentage: 45, processedPages: 0, totalPages: 0, complete: false,
+  } }))
 }
 
 test('keeps full-catalog browsing separate from the conversational recommendation journey', async ({ page }) => {
@@ -299,7 +305,7 @@ test('keeps a corrected reference title in conversational context on mobile', as
   expect(replyBox!.y + replyBox!.height).toBeLessThanOrEqual(composerBox!.y)
 })
 
-test('selects a recommendation, reviews an official rulebook, and hands recovery to teaching', async ({ page }) => {
+test('selects a recommendation, reviews an official rulebook, and starts teaching in the background', async ({ page }) => {
   await mockPublicDiscovery(page, true)
   await page.goto('/discover')
 
@@ -324,9 +330,17 @@ test('selects a recommendation, reviews an official rulebook, and hands recovery
     sourceType: 'BASE_RULEBOOK',
     officialSourceUrl: 'https://publisher.example/wingspan.pdf',
     rightsConfirmed: true,
+    startTeaching: true,
+    learningGoal: null,
   })
-  await expect(page).toHaveURL(/\/teach\?editionId=edition-1&onboarding=recommendation-agent/)
-  await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
-  await expect(page.getByText('Wingspan Rulebook', { exact: true })).toBeVisible()
-  await expect(page.getByText(/正在重新连接；后台处理不会停止/)).toBeVisible()
+  await expect(page).toHaveURL(/\/discover$/)
+  await expect(page.getByText('讲解已经在后台开始')).toBeVisible()
+  await expect(page.getByRole('link', { name: /打开我的桌游/ })).toHaveAttribute('href', '/catalog')
+  await expect(page.getByRole('link', { name: /查看讲解进度/ })).toHaveAttribute('href', '/lessons')
+
+  await page.getByRole('link', { name: /打开我的桌游/ }).click()
+  await expect(page).toHaveURL(/\/catalog$/)
+  await expect(page.getByRole('heading', { level: 1, name: '今晚想开哪一局？' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 2, name: '展翅翱翔' })).toBeVisible()
+  await expect(page.getByText('1 本规则书', { exact: true })).toBeVisible()
 })

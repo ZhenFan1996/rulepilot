@@ -117,6 +117,9 @@ rulepilot:
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
+    import-handoff:
+      batch-size: ${TEACHING_IMPORT_HANDOFF_BATCH_SIZE:4}
+      fixed-delay: ${TEACHING_IMPORT_HANDOFF_FIXED_DELAY:2s}
     agent:
       max-tool-calls: ${TEACHING_AGENT_MAX_TOOL_CALLS:72}
       max-model-calls: ${TEACHING_AGENT_MAX_MODEL_CALLS:36}

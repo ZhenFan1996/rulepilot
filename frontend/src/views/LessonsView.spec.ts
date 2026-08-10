@@ -18,8 +18,7 @@ describe('LessonsView', () => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') {
         return Response.json([{
-          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
-          durationMinutes: 25, gameTitle: 'SETI', premise: '寻找外星生命。',
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'SETI', premise: '寻找外星生命。',
           createdAt: '2026-07-20T10:00:00Z', sections: [{ position: 1, required: true, topicKey: 'setup', title: '完成开局设置', visualEvidenceRecommended: true }],
         }])
       }
@@ -116,8 +115,7 @@ describe('LessonsView', () => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') {
         return Response.json([{
-          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
-          durationMinutes: 25, gameTitle: 'SETI', premise: '寻找外星生命。', createdAt: '2026-07-20T10:00:00Z',
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'SETI', premise: '寻找外星生命。', createdAt: '2026-07-20T10:00:00Z',
           sections: [{ position: 1, required: true, topicKey: 'setup', title: '完成开局设置', visualEvidenceRecommended: true }],
         }])
       }
@@ -165,8 +163,7 @@ describe('LessonsView', () => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') {
         return Response.json([{
-          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
-          durationMinutes: 25, gameTitle: 'SETI', premise: '寻找外星生命。', createdAt: '2026-07-20T10:00:00Z',
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'SETI', premise: '寻找外星生命。', createdAt: '2026-07-20T10:00:00Z',
           sections: [{ position: 1, required: true, topicKey: 'setup', title: '完成开局设置', visualEvidenceRecommended: true }],
         }])
       }
@@ -206,18 +203,15 @@ describe('LessonsView', () => {
       if (path === '/api/v1/teaching-plans') {
         return Response.json([
           {
-            id: 'new-plan', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
-            durationMinutes: 30, gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-24T10:00:00Z',
+            id: 'new-plan', documentVersionId: 'version-1', gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-24T10:00:00Z',
             sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
           },
           {
-            id: 'readable-plan', documentVersionId: 'version-1', playerCount: 4, beginnerCount: 4,
-            durationMinutes: 30, gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-23T10:00:00Z',
+            id: 'readable-plan', documentVersionId: 'version-1', gameTitle: 'Ahoy Rules', premise: '', createdAt: '2026-07-23T10:00:00Z',
             sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
           },
           {
-            id: 'pending-plan', documentVersionId: 'version-2', playerCount: 4, beginnerCount: 4,
-            durationMinutes: 30, gameTitle: 'Root Rules', premise: '', createdAt: '2026-07-24T11:00:00Z',
+            id: 'pending-plan', documentVersionId: 'version-2', gameTitle: 'Root Rules', premise: '', createdAt: '2026-07-24T11:00:00Z',
             sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: true }],
           },
         ])

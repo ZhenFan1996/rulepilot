@@ -17,6 +17,8 @@ import com.rulepilot.document.adapter.out.source.HttpOfficialRulebookSourceInspe
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
+import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoff;
+import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
 import com.rulepilot.document.domain.RuleDocument;
 import java.io.IOException;
 import java.io.InputStream;
@@ -574,11 +576,111 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
         }
 
         @Override
+        public Optional<OfficialRulebookImportJob> findCompletedOwnedBySourceAndEdition(
+                String ownerUsername, String sourceUrl, UUID editionId) {
+            return jobs.values().stream()
+                    .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .filter(job -> job.sourceUrl().equals(sourceUrl))
+                    .filter(job -> java.util.Objects.equals(job.editionId(), editionId))
+                    .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED)
+                    .findFirst();
+        }
+
+        @Override
         public List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit) {
             return jobs.values().stream()
                     .filter(job -> job.ownerUsername().equals(ownerUsername))
                     .limit(limit)
                     .toList();
+        }
+
+        @Override
+        public void requestTeaching(UUID jobId, String learningGoal, Instant now) {
+            var job = jobs.get(jobId);
+            jobs.put(jobId, copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    TeachingHandoff.requested(learningGoal, now),
+                    now,
+                    job.completedAt()));
+        }
+
+        @Override
+        public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
+            List<OfficialRulebookImportJob> ready = jobs.values().stream()
+                    .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED)
+                    .filter(job -> job.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT)
+                    .limit(limit)
+                    .toList();
+            ready.forEach(job -> jobs.put(job.id(), copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.LAUNCHING,
+                            job.teachingHandoff().learningGoal(),
+                            null,
+                            null,
+                            now),
+                    now,
+                    job.completedAt())));
+            return ready.stream().map(job -> jobs.get(job.id())).toList();
+        }
+
+        @Override
+        public void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now) {
+            var job = jobs.get(jobId);
+            jobs.put(jobId, copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.LAUNCHED,
+                            job.teachingHandoff().learningGoal(),
+                            preparationRunId,
+                            null,
+                            now),
+                    now,
+                    job.completedAt()));
+        }
+
+        @Override
+        public void failTeachingLaunch(UUID jobId, String errorCode, Instant now) {
+            var job = jobs.get(jobId);
+            jobs.put(jobId, copy(
+                    job,
+                    job.stage(),
+                    job.downloadedBytes(),
+                    job.totalBytes(),
+                    job.documentVersionId(),
+                    job.duplicate(),
+                    job.errorCode(),
+                    new TeachingHandoff(
+                            TeachingHandoffState.FAILED,
+                            job.teachingHandoff().learningGoal(),
+                            null,
+                            errorCode,
+                            now),
+                    now,
+                    job.completedAt()));
+        }
+
+        @Override
+        public int failInterruptedTeachingLaunches(Instant now) {
+            return 0;
         }
 
         @Override
@@ -589,7 +691,17 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 Long totalBytes,
                 Instant now) {
             var job = jobs.get(jobId);
-            jobs.put(jobId, copy(job, stage, downloadedBytes, totalBytes, null, false, null, now, null));
+            jobs.put(jobId, copy(
+                    job,
+                    stage,
+                    downloadedBytes,
+                    totalBytes,
+                    null,
+                    false,
+                    null,
+                    job.teachingHandoff(),
+                    now,
+                    null));
             stages.get(jobId).add(stage);
         }
 
@@ -606,6 +718,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                             documentVersionId,
                             duplicate,
                             null,
+                            job.teachingHandoff(),
                             now,
                             now));
             stages.get(jobId).add(OfficialRulebookImportJob.Stage.COMPLETED);
@@ -624,6 +737,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                             null,
                             false,
                             errorCode,
+                            job.teachingHandoff(),
                             now,
                             now));
             stages.get(jobId).add(OfficialRulebookImportJob.Stage.FAILED);
@@ -642,6 +756,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                 UUID documentVersionId,
                 boolean duplicate,
                 String errorCode,
+                TeachingHandoff teachingHandoff,
                 Instant updatedAt,
                 Instant completedAt) {
             return new OfficialRulebookImportJob(
@@ -657,6 +772,7 @@ class OfficialRulebookTwentyGameRealChainEvaluationTest {
                     documentVersionId,
                     duplicate,
                     errorCode,
+                    teachingHandoff,
                     job.createdAt(),
                     updatedAt,
                     completedAt);

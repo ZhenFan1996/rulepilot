@@ -3,9 +3,9 @@ import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } fr
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import CatalogGameAttribution from '@/components/CatalogGameAttribution.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
+import LessonModeNav from '@/components/LessonModeNav.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
@@ -296,7 +296,13 @@ onUnmounted(() => {
     <div class="min-h-screen bg-canvas pb-20 text-ink">
       <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
-          <RouterLink :to="{ name: 'lesson', params: { planId } }" class="text-sm font-semibold text-indigo">← {{ t('questions.back') }}</RouterLink>
+          <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
+          <LessonModeNav
+            :plan-id="planId"
+            guide-route="lesson"
+            questions-route="lesson-questions"
+            active="questions"
+          />
         </div>
       </header>
 
@@ -326,10 +332,15 @@ onUnmounted(() => {
             :cover-alt="t('lesson.catalog.coverAlt', { game: catalogPresentation?.gameName ?? '' })"
             :cover-href="catalogPresentation?.bggUrl ?? ''"
             :cover-unavailable="catalogCoverUnavailable"
+            compact
             @cover-error="catalogCoverUnavailable = true"
-          />
-
-          <CatalogGameAttribution v-if="catalogPresentation" :presentation="catalogPresentation" />
+          >
+            <template v-if="catalogPresentation" #actions>
+              <a :href="catalogPresentation.bggUrl" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-10 items-center rounded-xl border border-[rgba(248,239,223,0.2)] bg-[rgba(248,239,223,0.08)] px-3 text-xs font-semibold text-[rgba(248,239,223,0.78)] underline decoration-[rgba(248,239,223,0.3)] underline-offset-2">
+                {{ t('lesson.catalog.attribution') }} ↗
+              </a>
+            </template>
+          </LessonGuideHero>
 
           <LessonAnswerPanel
             :question="question"
@@ -349,6 +360,7 @@ onUnmounted(() => {
             :editing-ruling="editingRuling"
             :edited-verdict="editedVerdict"
             :edited-explanation="editedExplanation"
+            :show-header="false"
             @update:question="question = $event"
             @update:editing-ruling="editingRuling = $event"
             @update:edited-verdict="editedVerdict = $event"

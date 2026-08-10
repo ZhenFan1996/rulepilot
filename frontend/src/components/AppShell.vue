@@ -30,6 +30,9 @@ const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
 const roles = ref<string[]>([])
 const loginReminderVisible = ref(false)
+const backgroundWorkCenter = ref<{ openCenter: () => void } | null>(null)
+const backgroundActiveCount = ref(0)
+const backgroundFinishedCount = ref(0)
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
@@ -44,7 +47,8 @@ const mobileNavigation = navigation.filter((item) => item.name !== 'account' && 
 
 const currentNavigationName = computed(() => {
   if (route.name === 'catalog-manage') return 'catalog'
-  if (route.name === 'public-lesson') return 'public-library'
+  if (route.name === 'public-lesson' || route.name === 'public-lesson-questions') return 'public-library'
+  if (route.name === 'lesson' || route.name === 'lesson-questions') return 'lessons'
   if (route.name === 'game-discovery' || route.name === 'game-catalog-browse') return 'game-recommendations'
   return route.name
 })
@@ -85,6 +89,15 @@ function showLoginReminder() {
   loginReminderVisible.value = true
 }
 
+function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) {
+  backgroundActiveCount.value = activeCount
+  backgroundFinishedCount.value = finishedCount
+}
+
+function openBackgroundWork() {
+  backgroundWorkCenter.value?.openCenter()
+}
+
 async function logout() {
   const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
   if (!csrfResponse.ok) return
@@ -107,20 +120,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-[17.5rem]">
-    <aside class="drawer-shelf fixed inset-y-0 left-0 z-30 hidden w-[17.5rem] flex-col overflow-hidden border-r border-white/8 bg-ink-panel px-5 py-6 text-[#f5f0e8]  lg:flex">
-      <div class="pointer-events-none absolute -right-12 -top-14 size-36 rotate-12 border border-white/7" aria-hidden="true" />
-      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-1 rounded-xl focus-visible:outline-offset-4">
+  <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-64">
+    <aside class="drawer-shelf fixed inset-y-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
+      <div class="drawer-shelf__ornament" aria-hidden="true">❦</div>
+      <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-2 rounded-xl focus-visible:outline-offset-4">
         <ProductMark />
       </RouterLink>
 
-      <nav class="relative mt-9 stack-y-sm" :aria-label="t('shell.primaryNav')">
+      <nav class="relative mt-7 stack-y-s" :aria-label="t('shell.primaryNav')">
         <RouterLink
           v-for="item in navigation"
           :key="item.name"
           :to="item.path"
-          class="drawer-link group flex min-h-12 items-center gap-3 px-3 text-sm font-semibold transition-[color,background-color,translate]"
-          :class="currentNavigationName === item.name ? 'border-[#f5f0e8]/40 bg-[#f5f0e8] text-[#1a232a] drawer-link-active -translate-x-0.5' : 'border-white/5 bg-white/[0.035] text-[#f5f0e8]/62 hover:translate-x-0.5 hover:bg-white/8 hover:text-[#f5f0e8]'"
+          class="drawer-link group flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-[color,background-color,translate]"
+          :class="currentNavigationName === item.name ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e] drawer-link-active' : 'border-transparent text-[#f5f0e8]/66 hover:translate-x-0.5 hover:bg-white/7 hover:text-[#f5f0e8]'"
         >
           <TabletopGlyph :name="item.icon" :size="19" class="shrink-0" :class="currentNavigationName === item.name ? 'text-copper' : 'text-[#f5f0e8]/48 group-hover:text-[#f5f0e8]'" />
           <span>{{ t(item.labelKey) }}</span>
@@ -128,15 +141,31 @@ onBeforeUnmount(() => {
         <RouterLink
           v-if="isAdmin"
           :to="{ name: 'agent-audit' }"
-          class="drawer-link flex min-h-12 items-center gap-3 px-3 text-sm font-semibold transition-colors"
-          :class="currentNavigationName === 'agent-audit' ? 'bg-[#f5f0e8] text-[#1a232a]' : 'text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
+          class="drawer-link flex min-h-11 items-center gap-3 px-3 text-sm font-semibold transition-colors"
+          :class="currentNavigationName === 'agent-audit' ? 'border-[#d5b46a]/55 bg-[#f8efdf] text-[#27312e]' : 'border-transparent text-[#f5f0e8]/58 hover:bg-white/7 hover:text-[#f5f0e8]'"
         >
           <TabletopGlyph name="rulebook" :size="19" class="shrink-0" />
           <span>{{ t('nav.agentAudit') }}</span>
         </RouterLink>
       </nav>
 
-      <div class="relative mt-auto border-t border-white/10 pt-5">
+      <div v-if="username && !immersive" id="background-work-desktop-trigger" class="relative mt-auto border-t border-white/10 pt-4">
+        <button
+          type="button"
+          data-testid="background-work-trigger-desktop"
+          class="flex min-h-11 w-full items-center gap-3 rounded-xl border border-white/12 bg-white/6 px-3 text-sm font-semibold text-[#f5f0e8]/78 transition hover:border-[#d5b46a]/45 hover:bg-white/10 hover:text-[#f5f0e8]"
+          :aria-label="t('shell.backgroundWork')"
+          aria-haspopup="dialog"
+          @click="openBackgroundWork"
+        >
+          <span class="grid size-8 shrink-0 place-items-center rounded-full bg-[#d5b46a]/14 text-[#e0be74]" aria-hidden="true"><TabletopGlyph name="cards" :size="17" /></span>
+          <span class="min-w-0 flex-1 text-left">{{ t('shell.backgroundWork') }}</span>
+          <span v-if="backgroundActiveCount" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-white">{{ backgroundActiveCount }}</span>
+          <span v-else-if="backgroundFinishedCount" class="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+        </button>
+      </div>
+
+      <div class="relative border-t border-white/10 pt-4" :class="username && !immersive ? 'mt-3' : 'mt-auto'">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="mb-2 flex min-h-11 items-center gap-3 rounded-xl bg-white/6 px-3 text-sm font-semibold hover:bg-white/10">
           <span class="grid h-7 w-7 place-items-center rounded-full bg-copper text-xs text-white">{{ username.slice(0, 1).toUpperCase() }}</span>
           <span class="truncate">{{ username }}</span>
@@ -151,11 +180,24 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <header class="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-4 elevation-sm backdrop-blur lg:hidden">
+    <header class="mobile-app-header sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
-        <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[360px]:hidden">{{ username }}</RouterLink>
+        <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[480px]:hidden">{{ username }}</RouterLink>
         <RouterLink v-else :to="loginTarget" class="inline-flex min-h-11 items-center rounded-lg px-2 text-sm font-semibold text-indigo">{{ t('shell.signIn') }}</RouterLink>
+        <button
+          v-if="username && !immersive"
+          type="button"
+          data-testid="background-work-trigger-mobile"
+          class="relative grid min-h-11 min-w-11 place-items-center rounded-xl border border-ink/10 bg-canvas/65 text-ink/62 transition hover:border-copper/35 hover:text-ink"
+          :aria-label="t('shell.backgroundWork')"
+          aria-haspopup="dialog"
+          @click="openBackgroundWork"
+        >
+          <TabletopGlyph name="cards" :size="18" />
+          <span v-if="backgroundActiveCount" class="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-copper px-1 text-[0.65rem] text-white">{{ backgroundActiveCount }}</span>
+          <span v-else-if="backgroundFinishedCount" class="absolute right-1 top-1 size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+        </button>
         <LanguageSwitcher />
         <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-lg text-ink/60 hover:bg-ink/5 hover:text-ink" :aria-label="isDark ? t('shell.theme.toLight') : t('shell.theme.toDark')" :aria-pressed="isDark" @click="toggleTheme">
           <span aria-hidden="true">{{ isDark ? '☀' : '◐' }}</span>
@@ -177,7 +219,12 @@ onBeforeUnmount(() => {
       <slot />
     </main>
 
-    <BackgroundWorkCenter v-if="username && !immersive" :username="username" />
+    <BackgroundWorkCenter
+      v-if="username && !immersive"
+      ref="backgroundWorkCenter"
+      :username="username"
+      @status="updateBackgroundWorkStatus"
+    />
 
     <nav v-if="!immersive" class="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-ink/10 bg-paper/97 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 mobile-navigation backdrop-blur lg:hidden" :aria-label="t('shell.primaryNav')">
       <RouterLink

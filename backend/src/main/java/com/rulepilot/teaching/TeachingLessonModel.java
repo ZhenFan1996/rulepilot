@@ -40,11 +40,6 @@ public interface TeachingLessonModel {
             String title,
             String objective,
             List<String> coverageTags,
-            int playerCount,
-            int beginnerCount,
-            int totalDurationMinutes,
-            int sectionDurationSeconds,
-            int maxSteps,
             List<PriorSectionContext> priorSections,
             List<EvidenceInput> evidence,
             List<PageImageInput> pageImages,
@@ -57,11 +52,6 @@ public interface TeachingLessonModel {
                 String title,
                 String objective,
                 List<String> coverageTags,
-                int playerCount,
-                int beginnerCount,
-                int totalDurationMinutes,
-                int sectionDurationSeconds,
-                int maxSteps,
                 List<PriorSectionContext> priorSections,
                 List<EvidenceInput> evidence) {
             this(
@@ -69,11 +59,6 @@ public interface TeachingLessonModel {
                     title,
                     objective,
                     coverageTags,
-                    playerCount,
-                    beginnerCount,
-                    totalDurationMinutes,
-                    sectionDurationSeconds,
-                    maxSteps,
                     priorSections,
                     evidence,
                     List.of(),
@@ -87,11 +72,6 @@ public interface TeachingLessonModel {
                 String title,
                 String objective,
                 List<String> coverageTags,
-                int playerCount,
-                int beginnerCount,
-                int totalDurationMinutes,
-                int sectionDurationSeconds,
-                int maxSteps,
                 List<PriorSectionContext> priorSections,
                 List<EvidenceInput> evidence,
                 List<PageImageInput> pageImages) {
@@ -100,11 +80,6 @@ public interface TeachingLessonModel {
                     title,
                     objective,
                     coverageTags,
-                    playerCount,
-                    beginnerCount,
-                    totalDurationMinutes,
-                    sectionDurationSeconds,
-                    maxSteps,
                     priorSections,
                     evidence,
                     pageImages,
@@ -118,9 +93,6 @@ public interface TeachingLessonModel {
                     || title == null || title.isBlank()
                     || objective == null || objective.isBlank()
                     || coverageTags == null
-                    || playerCount < 1 || beginnerCount < 0 || totalDurationMinutes < 1
-                    || sectionDurationSeconds < 10 || sectionDurationSeconds > totalDurationMinutes * 60
-                    || maxSteps < 1
                     || priorSections == null || priorSections.size() > 2
                     || evidence == null || evidence.isEmpty()
                     || pageImages == null || pageImages.size() > 2

@@ -10,7 +10,7 @@ class VersionedAgentPromptsTest {
     @Test
     void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
         VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v16-system.txt"),
+                resource("teaching-agent-v43-intrinsic-depth-system.txt"),
                 resource("teaching-agent-v17-fidelity-system.txt"),
                 resource("teaching-agent-v18-visual-fit-system.txt"),
                 resource("teaching-agent-v19-player-language-system.txt"),
@@ -37,16 +37,16 @@ class VersionedAgentPromptsTest {
                 resource("teaching-agent-v40-source-temporal-boundary-system.txt"),
                 resource("teaching-agent-v41-permission-ruling-system.txt"),
                 resource("teaching-agent-v42-focused-runtime-system.txt"),
-                resource("teaching-agent-v11-user.txt"),
-                resource("teaching-outline-v6-system.txt"),
+                resource("teaching-agent-v12-user.txt"),
+                resource("teaching-outline-v14-intrinsic-scope-system.txt"),
                 resource("teaching-outline-v7-fidelity-system.txt"),
                 resource("teaching-outline-v8-visual-density-system.txt"),
                 resource("teaching-outline-v9-core-evidence-system.txt"),
                 resource("teaching-outline-v10-chapter-ownership-system.txt"),
                 resource("teaching-outline-v11-visual-coverage-system.txt"),
-                resource("teaching-outline-v12-rulebook-scope-system.txt"),
+                resource("teaching-outline-v15-retired-audience-system.txt"),
                 resource("teaching-outline-v13-player-goal-system.txt"),
-                resource("teaching-outline-v5-user.txt"),
+                resource("teaching-outline-v6-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
                 resource("rule-answer-agent-v8-direct-rulings-system.txt"),
@@ -151,8 +151,8 @@ class VersionedAgentPromptsTest {
                         "distinct Chinese names",
                         "asymmetric game",
                         "first-game walkthrough",
-                        "maximum step count",
-                        "never append a seventh step",
+                        "supported rule complexity",
+                        "without deleting another material rule",
                         "strongest complete rule sentence",
                         "indispensable visual relationships for the objective",
                         "printed order exactly",
@@ -208,7 +208,8 @@ class VersionedAgentPromptsTest {
                         "Citation IDs are machine fields only",
                         "negative evidence statement is not a game rule",
                         "rest of the page hidden",
-                        "Do not output analysis");
+                        "Do not output analysis")
+                .doesNotContain("maxSteps", "maximum step count", "allotted step count");
         assertThat(prompts.teachingRuntimeSystem())
                 .contains(
                         "evidence-grounded Teaching Agent",
@@ -223,8 +224,6 @@ class VersionedAgentPromptsTest {
                         "{objective}",
                         "{coverage}",
                         "{requiredRules}",
-                        "{totalDuration}",
-                        "{sectionDuration}",
                         "{continuity}",
                         "{chapterScope}",
                         "{evidence}",
@@ -232,7 +231,7 @@ class VersionedAgentPromptsTest {
                         "{visualPages}",
                         "{repair}",
                         "actual complexity determine the number")
-                .doesNotContain("{maxSteps}", "max_steps")
+                .doesNotContain("{totalDuration}", "{sectionDuration}", "{maxSteps}", "max_steps")
                 .doesNotContain("{players}", "{beginners}", "player_count", "beginner_count");
         assertThat(prompts.teachingOutlineSystem())
                 .contains(
@@ -264,14 +263,20 @@ class VersionedAgentPromptsTest {
                         "untrusted navigation context",
                         "missing visual catalog",
                         "end trigger, winner, victory condition",
-                        "Rulebook-scope revision v12",
+                        "Rulebook-scope revision v15",
                         "not one selected table size",
+                        "receives no audience counts or target duration",
                         "Player-learning-goal revision v13",
                         "untrusted pedagogical preference",
-                        "cannot remove the game's objective");
+                        "cannot remove the game's objective")
+                .doesNotContain(
+                        "compatibility metadata",
+                        "requested player count",
+                        "Produce 6-14 unique topics",
+                        "fixed topic count");
         assertThat(prompts.teachingOutlineUser())
                 .contains("{learningGoal}", "untrusted_player_learning_goal")
-                .doesNotContain("{players}", "{beginners}", "players, including");
+                .doesNotContain("{duration}", "minute lesson", "{players}", "{beginners}", "players, including");
         assertThat(prompts.answerSystem())
                 .contains(
                         "set answerable to false",

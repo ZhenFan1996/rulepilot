@@ -24,17 +24,13 @@ public interface TeachingOutlineModel {
     }
 
     record OutlineRequest(
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             List<PageInput> pages,
             List<PageImageInput> pageImages,
             String learningGoal,
             String modelConfigurationOwner) {
         public OutlineRequest {
             learningGoal = normalizeOptional(learningGoal);
-            if (playerCount < 1 || beginnerCount < 0 || beginnerCount > playerCount
-                    || durationMinutes < 2 || pages == null || pages.isEmpty() || pageImages == null) {
+            if (pages == null || pages.isEmpty() || pageImages == null) {
                 throw new IllegalArgumentException("teaching outline request is invalid");
             }
             pages = List.copyOf(pages);
@@ -56,26 +52,20 @@ public interface TeachingOutlineModel {
         }
 
         public OutlineRequest(
-                int playerCount,
-                int beginnerCount,
-                int durationMinutes,
                 List<PageInput> pages,
                 List<PageImageInput> pageImages,
                 String modelConfigurationOwner) {
-            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null, modelConfigurationOwner);
+            this(pages, pageImages, null, modelConfigurationOwner);
         }
 
         public OutlineRequest(
-                int playerCount,
-                int beginnerCount,
-                int durationMinutes,
                 List<PageInput> pages,
                 List<PageImageInput> pageImages) {
-            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null, null);
+            this(pages, pageImages, null, null);
         }
 
-        public OutlineRequest(int playerCount, int beginnerCount, int durationMinutes, List<PageInput> pages) {
-            this(playerCount, beginnerCount, durationMinutes, pages, List.of(), null, null);
+        public OutlineRequest(List<PageInput> pages) {
+            this(pages, List.of(), null, null);
         }
     }
 

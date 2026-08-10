@@ -7,9 +7,6 @@ import java.util.UUID;
 public record TeachingPlan(
         UUID id,
         UUID documentVersionId,
-        int playerCount,
-        int beginnerCount,
-        int durationMinutes,
         String learningGoal,
         String gameTitle,
         String premise,
@@ -21,15 +18,6 @@ public record TeachingPlan(
         learningGoal = learningGoal == null || learningGoal.isBlank() ? null : learningGoal.strip();
         if (id == null || documentVersionId == null || createdAt == null) {
             throw new IllegalArgumentException("plan identity is required");
-        }
-        if (playerCount < 1 || playerCount > 20) {
-            throw new IllegalArgumentException("player count must be between 1 and 20");
-        }
-        if (beginnerCount < 0 || beginnerCount > playerCount) {
-            throw new IllegalArgumentException("beginner count must be between zero and player count");
-        }
-        if (durationMinutes < 2 || durationMinutes > 180) {
-            throw new IllegalArgumentException("duration must be between 2 and 180 minutes");
         }
         if (learningGoal != null && learningGoal.length() > 500) {
             throw new IllegalArgumentException("teaching learning goal is too long");
@@ -51,9 +39,6 @@ public record TeachingPlan(
     public TeachingPlan(
             UUID id,
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String gameTitle,
             String premise,
             List<PlannedSection> sections,
@@ -62,9 +47,6 @@ public record TeachingPlan(
         this(
                 id,
                 documentVersionId,
-                playerCount,
-                beginnerCount,
-                durationMinutes,
                 null,
                 gameTitle,
                 premise,

@@ -36,7 +36,7 @@ class TeachingPlanPublicationTest {
     void keepsTheTransactionOnTheShortPublicationBoundary() throws NoSuchMethodException {
         Method publication = TeachingPlanPublication.class.getMethod("publish", TeachingPlan.class, String.class);
         Method creation = TeachingPlanService.class.getMethod(
-                "create", UUID.class, int.class, int.class, int.class, String.class, UUID.class);
+                "create", UUID.class, String.class, String.class, UUID.class);
 
         assertThat(publication.isAnnotationPresent(Transactional.class)).isTrue();
         assertThat(creation.isAnnotationPresent(Transactional.class)).isFalse();
@@ -46,9 +46,6 @@ class TeachingPlanPublicationTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                4,
-                2,
-                45,
                 "Game",
                 "Learn the core loop.",
                 List.of(new TeachingPlan.PlannedSection(

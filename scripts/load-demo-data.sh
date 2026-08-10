@@ -102,7 +102,7 @@ if [ "$plan_status" = 200 ]; then
 	plan_id=$(jq -er .id "$latest_plan")
 else
 	plan=$(curl -fsS -b "$COOKIE_FILE" -H "$csrf_header: $csrf_token" -H 'Content-Type: application/json' \
-		--data '{"playerCount":3,"beginnerCount":2,"durationMinutes":35}' \
+		--data '{}' \
 		"$BASE_URL/api/v1/document-versions/$document_version_id/teaching-plans")
 	plan_id=$(printf '%s' "$plan" | jq -er .id)
 	printf '%s\n' "$plan" > "$latest_plan"

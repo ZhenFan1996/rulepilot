@@ -30,9 +30,11 @@ const props = withDefaults(defineProps<{
   editingRuling: boolean
   editedVerdict: string
   editedExplanation: string
+  showHeader?: boolean
 }>(), {
   agentTrace: () => [],
   answerRunId: '',
+  showHeader: true,
 })
 
 const emit = defineEmits<{
@@ -235,6 +237,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
   <section id="lesson-question-panel" class="mt-8 scroll-mt-6" aria-labelledby="lesson-question-title">
     <div class="tabletop-panel player-board p-4 sm:p-7">
       <AgentWorkspaceHeader
+        v-if="showHeader"
         :eyebrow="t('lesson.answer.eyebrow')"
         :title="t('lesson.answer.title')"
         :description="t('lesson.answer.description')"
@@ -410,7 +413,10 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
         </li>
       </ol>
 
-      <div class="mt-5 grid gap-5 lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6">
+      <div
+        class="mt-5 gap-5"
+        :class="answer ? 'grid lg:grid-cols-[minmax(17rem,0.68fr)_minmax(0,1.32fr)] lg:items-start lg:gap-6' : 'mx-auto max-w-3xl'"
+      >
         <div class="min-w-0 lg:sticky lg:top-24">
           <form class="rounded-2xl border border-ink/10 bg-canvas p-4" @submit.prevent="emit('ask')">
             <div class="mb-3 flex flex-wrap items-start gap-3">
@@ -466,7 +472,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
             <button type="button" class="min-h-11 justify-self-start rounded-xl border border-ink/15 bg-canvas px-4 text-sm font-semibold text-ink/65 hover:bg-paper" @click="emit('cancelAnswer')">{{ t('lesson.answer.cancel') }}</button>
           </div>
         </div>
-        <div class="min-w-0">
+        <div v-if="answer" class="min-w-0">
           <article v-if="answer" class="overflow-hidden rounded-3xl border border-ink/10 bg-canvas" aria-live="polite">
             <div class="p-5 sm:p-6">
               <p class="text-xs font-semibold text-ink/45">{{ currentAnswerTurn?.learningIntent ? learningIntentLabel(currentAnswerTurn.learningIntent) : t('lesson.answer.youAsked') }}：{{ answeredQuestion }}</p>
@@ -751,9 +757,6 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
               <button v-else class="min-h-11 w-full rounded-xl border border-indigo/30 px-5 text-sm font-semibold text-indigo transition hover:bg-indigo/5 disabled:opacity-40" :disabled="rulingSaving" @click="emit('confirmRuling')">{{ rulingSaving ? t('lesson.answer.ruling.saving') : t('lesson.answer.ruling.confirm') }}</button>
             </div>
           </article>
-          <div v-else-if="!answerLoading && !answerError" class="player-board relative grid min-h-64 place-items-center border border-dashed border-ink/15 bg-canvas p-8 text-center text-ink/45">
-            <div><span class="hex-token mx-auto size-12 text-copper"><span>?</span></span><p class="mt-4 text-sm leading-6">{{ t('lesson.answer.description') }}</p></div>
-          </div>
         </div>
       </div>
     </div>

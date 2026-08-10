@@ -1,7 +1,8 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import HomeView from './HomeView.vue'
 
 const hotGames = Array.from({ length: 10 }, (_, index) => ({
@@ -42,7 +43,9 @@ describe('HomeView', () => {
     document.documentElement.classList.remove('dark', 'light')
   })
 
-  it('leads with discovery, the generated social illustration, and a continuous feature guide', async () => {
+  beforeEach(() => setLocale('zh-CN'))
+
+  it('keeps the screen-print illustration supporting the two concrete first actions', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
       return new Response(null, { status: 401 })
@@ -50,18 +53,15 @@ describe('HomeView', () => {
     const wrapper = await mountHome()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('把想玩的，变成今晚真的能开桌')
-    expect(wrapper.text()).toContain('热门桌游')
-    expect(wrapper.text()).toContain('随机碰三款')
-    expect(wrapper.text()).toContain('所有入口，最后汇成同一条路')
-    expect(wrapper.text()).toContain('让讲解在后台完成')
-    expect(wrapper.find('img[src="/illustrations/tabletop-gathering-v2.webp"]').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('继续这一局')
+    expect(wrapper.text()).toContain('规则书递过来，咱们开桌')
+    expect(wrapper.find('img[src="/illustrations/home-screenprint-friends.webp"]').exists()).toBe(true)
+    expect(wrapper.find('.home-start').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('今晚不必先做完功课')
+    expect(wrapper.text()).not.toContain('所有入口，最后汇成同一条路')
     expect(wrapper.text()).not.toContain('Agent')
   })
 
-  it('renders attributed BGG hot and random game links and can shuffle the random set', async () => {
-    vi.spyOn(Math, 'random').mockReturnValueOnce(0).mockReturnValueOnce(0.8)
+  it('makes attributed BGG hot games and three random picks prominent without displacing the rulebook action', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
       return new Response(null, { status: 401 })
@@ -69,13 +69,35 @@ describe('HomeView', () => {
     const wrapper = await mountHome()
     await flushPromises()
 
-    expect(wrapper.findAll('img[alt="Powered by BoardGameGeek"]')).toHaveLength(2)
+    expect(wrapper.findAll('img[alt="Powered by BoardGameGeek"]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('BGG 热门桌游')
+    expect(wrapper.text()).toContain('随机抽三盒')
+    expect(wrapper.findAll('.home-game-grid > li')).toHaveLength(4)
+    expect(wrapper.findAll('.home-random__games > li')).toHaveLength(3)
+    expect(new Set(wrapper.findAll('.home-random__games a').map(link => link.attributes('href'))).size).toBe(3)
     expect(wrapper.get('a[href="/discover/100"]').text()).toContain('展翅翱翔')
     expect(wrapper.get('a[href="/discover/100"]').text()).toContain('Wingspan')
-    const before = wrapper.findAll('.random-board a').map(link => link.attributes('href'))
-    await wrapper.get('.random-board button').trigger('click')
-    const after = wrapper.findAll('.random-board a').map(link => link.attributes('href'))
-    expect(after).not.toEqual(before)
+    expect(wrapper.get('a[href="/teach"].home-primary-action').text()).toContain('我有规则书')
+
+    await wrapper.get('.home-random__shuffle').trigger('click')
+    expect(wrapper.findAll('.home-random__games > li')).toHaveLength(3)
+    expect(new Set(wrapper.findAll('.home-random__games a').map(link => link.attributes('href'))).size).toBe(3)
+  })
+
+  it('uses complete natural English copy after switching locale', async () => {
+    setLocale('en')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
+      return new Response(null, { status: 401 })
+    }))
+
+    const wrapper = await mountHome()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Hand me the rulebook. Let’s get this game to the table.')
+    expect(wrapper.text()).toContain('Trending on BGG')
+    expect(wrapper.text()).toContain('Three from the shelf')
+    expect(wrapper.text()).not.toContain('规则书递过来')
   })
 
   it('updates the accessible theme toggle label', async () => {

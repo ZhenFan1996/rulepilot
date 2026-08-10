@@ -253,7 +253,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         return composer.compose(
                 plan,
                 planned,
-                TeachingPacingPolicy.allocate(plan).get(planned.position()),
                 List.of(),
                 evidence,
                 runId,
@@ -362,7 +361,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 .create(
                         plan,
                         plan.sections().getFirst(),
-                        TeachingPacingPolicy.allocate(plan).get(1),
                         List.of(),
                         evidence,
                         false,
@@ -437,9 +435,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Opaque evaluation game",
                 "Evaluate one source-grounded chapter.",
                 List.of(new PlannedSection(

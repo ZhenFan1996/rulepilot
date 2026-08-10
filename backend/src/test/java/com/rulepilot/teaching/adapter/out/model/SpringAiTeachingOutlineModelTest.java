@@ -57,9 +57,7 @@ class SpringAiTeachingOutlineModelTest {
                 configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
 
         var outline = model.organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(new PageInput(1, "[Visual page catalog; verify against page image]")),
                 List.of(new PageImageInput(1, "image/jpeg", new byte[] {1})),
                 "player"));
@@ -78,9 +76,7 @@ class SpringAiTeachingOutlineModelTest {
                 configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
 
         var outline = model.organize(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(new PageInput(1, "SETTING UP A GAME: Give each player two power tokens.")),
                 List.of(new PageImageInput(1, "image/jpeg", new byte[] {1})),
                 "player"));
@@ -97,9 +93,7 @@ class SpringAiTeachingOutlineModelTest {
                 configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
 
         var outline = model.fallback(new OutlineRequest(
-                4,
-                4,
-                30,
+
                 List.of(new PageInput(1, "SETTING UP A GAME: Give each player two power tokens.")),
                 List.of(),
                 "player"));
@@ -171,9 +165,7 @@ class SpringAiTeachingOutlineModelTest {
 
         try {
             model.organize(new OutlineRequest(
-                    4,
-                    4,
-                    30,
+
                     List.of(new PageInput(1, "SETUP: Give each player a board.")),
                     List.of(),
                     "先让我能带大家开局，再重点讲行动怎么衔接。",

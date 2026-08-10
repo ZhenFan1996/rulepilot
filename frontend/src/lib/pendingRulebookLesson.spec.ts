@@ -9,20 +9,22 @@ import {
 describe('pending rulebook lesson handoff', () => {
   beforeEach(() => localStorage.clear())
 
-  it('keeps preferences isolated by owner and replaces the same version', () => {
-    rememberPendingRulebookLesson(localStorage, 'player', pending('version-1', 4))
-    rememberPendingRulebookLesson(localStorage, 'player', pending('version-1', 3))
+  it('keeps handoffs isolated by owner and replaces the same version', () => {
+    rememberPendingRulebookLesson(localStorage, 'player', pending('version-1'))
+    rememberPendingRulebookLesson(localStorage, 'player', { ...pending('version-1'), editionId: 'edition-2' })
 
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([pending('version-1', 3)])
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
+      ...pending('version-1'), editionId: 'edition-2',
+    }])
     expect(readPendingRulebookLessons(localStorage, 'other-player')).toEqual([])
   })
 
-  it('rejects invalid preferences and bounds retained work', () => {
+  it('rejects invalid handoffs and bounds retained work', () => {
     for (let index = 0; index < 7; index += 1) {
-      rememberPendingRulebookLesson(localStorage, 'player', pending(`version-${index}`, 4))
+      rememberPendingRulebookLesson(localStorage, 'player', pending(`version-${index}`))
     }
     localStorage.setItem('rulepilot:pending-rulebook-lessons:invalid', JSON.stringify([
-      { ...pending('version-bad', 4), beginnerCount: 5 },
+      { ...pending('version-bad'), editionId: '' },
     ]))
 
     expect(readPendingRulebookLessons(localStorage, 'player')).toHaveLength(5)
@@ -30,7 +32,7 @@ describe('pending rulebook lesson handoff', () => {
   })
 
   it('removes a handoff after success or terminal failure', () => {
-    rememberPendingRulebookLesson(localStorage, 'player', pending('version-1', 4))
+    rememberPendingRulebookLesson(localStorage, 'player', pending('version-1'))
 
     forgetPendingRulebookLesson(localStorage, 'player', 'version-1')
 
@@ -39,22 +41,36 @@ describe('pending rulebook lesson handoff', () => {
 
   it('normalizes a bounded natural learning goal and rejects oversized stored input', () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
-      ...pending('version-1', 4),
+      ...pending('version-1'),
       learningGoal: '  先让我能带大家开局，再重点讲行动衔接。  ',
     })
 
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
-      ...pending('version-1', 4),
+      ...pending('version-1'),
       learningGoal: '先让我能带大家开局，再重点讲行动衔接。',
     }])
 
     localStorage.setItem('rulepilot:pending-rulebook-lessons:oversized', JSON.stringify([{
-      ...pending('version-2', 4), learningGoal: 'x'.repeat(501),
+      ...pending('version-2'), learningGoal: 'x'.repeat(501),
     }]))
     expect(readPendingRulebookLessons(localStorage, 'oversized')).toEqual([])
   })
+
+  it('sanitizes retired audience fields from an older stored handoff', () => {
+    localStorage.setItem('rulepilot:pending-rulebook-lessons:player', JSON.stringify([{
+      versionId: 'version-1',
+      editionId: 'edition-1',
+      playerCount: 4,
+      beginnerCount: 4,
+      durationMinutes: 25,
+    }]))
+
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
+      versionId: 'version-1', editionId: 'edition-1',
+    }])
+  })
 })
 
-function pending(versionId: string, playerCount: number) {
-  return { versionId, playerCount, beginnerCount: playerCount, durationMinutes: 25 }
+function pending(versionId: string) {
+  return { versionId }
 }

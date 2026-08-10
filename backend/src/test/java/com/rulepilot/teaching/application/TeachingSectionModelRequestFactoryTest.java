@@ -33,7 +33,6 @@ class TeachingSectionModelRequestFactoryTest {
         var request = factory.create(
                 plan,
                 plan.sections().getFirst(),
-                new TeachingPacingPolicy.SectionPacing(60, 2),
                 List.of(),
                 List.of(evidence),
                 true,
@@ -54,9 +53,6 @@ class TeachingSectionModelRequestFactoryTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new TeachingPlan.PlannedSection(

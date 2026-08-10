@@ -13,6 +13,9 @@ import { useLocale } from '@/lib/locale'
 import { TEACHING_LAUNCHED_EVENT, teachingLaunchDetail } from '@/lib/teachingLaunch'
 
 const props = defineProps<{ username: string }>()
+const emit = defineEmits<{
+  status: [activeCount: number, finishedCount: number]
+}>()
 
 interface TeachingPlanSummary { id: string; gameTitle: string }
 interface ActiveTeachingRun { id: string; subjectId: string; state: string; updatedAt: string }
@@ -26,6 +29,9 @@ interface RulebookImportJob {
   totalBytes: number | null
   documentVersionId: string | null
   errorCode: string | null
+  teachingHandoffState?: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
+  teachingPreparationRunId?: string | null
+  teachingErrorCode?: string | null
   updatedAt: string
 }
 interface DocumentSummary {
@@ -63,6 +69,7 @@ const teachingStates = ref<Record<string, string>>({})
 const imports = ref<RulebookImportJob[]>([])
 const documents = ref<DocumentSummary[]>([])
 const documentProgress = ref<Record<string, DocumentProgress>>({})
+const preparationStates = ref<Record<string, string>>({})
 const dismissedImportIds = ref<Set<string>>(new Set())
 const titles = new Map<string, string>()
 const ACTIVE_TEACHING_KEY = 'rulepilot:active-teaching-runs'
@@ -79,6 +86,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: '等待下载', connecting: '正在连接规则书来源', downloading: '正在下载规则书内容', compressing: '文件较大，正在压缩 PDF', verifying: '正在核验 PDF',
   saving: '正在保存并交给规则书读取', uploaded: '等待开始读取', extracting: '正在提取规则文字',
   rendering: '正在生成规则书页面', structuring: '正在整理章节与图例', teaching: '正在组织讲解',
+  waitingForTeaching: '规则书已保存，读取完成后会自动开始讲解', launchingTeaching: '规则书已就绪，正在启动讲解任务',
+  teachingLaunched: '规则书已保存，讲解任务已交给后台', teachingLaunchFailed: '规则书已保存，但自动讲解没有启动',
+  preparationReceived: '讲解任务已接收', preparationReading: '正在确认规则书可以用于讲解',
+  preparationPlanning: '正在读取规则并建立讲解结构', preparationFailed: '讲解准备失败，可在讲解中心重试',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
   browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
@@ -89,6 +100,10 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   queued: 'Waiting to download', connecting: 'Connecting to rulebook source', downloading: 'Downloading rulebook content', compressing: 'Compressing the oversized PDF', verifying: 'Verifying PDF',
   saving: 'Saving and handing off for reading', uploaded: 'Waiting to read', extracting: 'Extracting searchable rules',
   rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references', teaching: 'Organizing the lesson',
+  waitingForTeaching: 'Rulebook saved; the guide will start automatically when reading completes', launchingTeaching: 'Rulebook ready; starting the guide task',
+  teachingLaunched: 'Rulebook saved; guide work was handed to the background', teachingLaunchFailed: 'Rulebook saved, but the automatic guide did not start',
+  preparationReceived: 'Guide task received', preparationReading: 'Confirming that the rulebook is ready for a guide',
+  preparationPlanning: 'Reading the rules and building the guide structure', preparationFailed: 'Guide preparation failed; retry from the lesson center',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
   browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
@@ -100,6 +115,12 @@ function formatBytes(value: number) {
 }
 
 function importStage(job: RulebookImportJob) {
+  if (job.stage === 'COMPLETED') {
+    if (job.teachingHandoffState === 'WAITING_FOR_DOCUMENT') return copy.value.waitingForTeaching
+    if (job.teachingHandoffState === 'LAUNCHING') return copy.value.launchingTeaching
+    if (job.teachingHandoffState === 'LAUNCHED') return copy.value.teachingLaunched
+    if (job.teachingHandoffState === 'FAILED') return copy.value.teachingLaunchFailed
+  }
   return {
     QUEUED: copy.value.queued,
     CONNECTING: copy.value.connecting,
@@ -110,6 +131,23 @@ function importStage(job: RulebookImportJob) {
     COMPLETED: copy.value.done,
     FAILED: copy.value.failed,
   }[job.stage]
+}
+
+function importState(job: RulebookImportJob): WorkState {
+  if (job.stage === 'FAILED' || job.teachingHandoffState === 'FAILED') return 'failed'
+  if (job.stage !== 'COMPLETED'
+    || job.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
+    || job.teachingHandoffState === 'LAUNCHING') return 'active'
+  return 'complete'
+}
+
+function preparationStage(state: string) {
+  return {
+    RECEIVED: copy.value.preparationReceived,
+    DOCUMENT_READINESS: copy.value.preparationReading,
+    LESSON_PLANNING: copy.value.preparationPlanning,
+    FAILED: copy.value.preparationFailed,
+  }[state] ?? copy.value.teaching
 }
 
 function documentStage(progress: DocumentProgress | undefined, status: string) {
@@ -130,8 +168,15 @@ const workItems = computed<WorkItem[]>(() => {
     .map(entry => entry.latestVersion.id))
   const importItems = imports.value
     .filter(job => !dismissedImportIds.value.has(job.id))
-    .filter(job => job.stage !== 'COMPLETED' || !job.documentVersionId || !processingVersionIds.has(job.documentVersionId))
-    .filter(job => job.stage !== 'COMPLETED' || Date.now() - Date.parse(job.updatedAt) < 15 * 60_000)
+    .filter(job => job.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
+      || job.teachingHandoffState === 'LAUNCHING'
+      || job.stage !== 'COMPLETED'
+      || !job.documentVersionId
+      || !processingVersionIds.has(job.documentVersionId))
+    .filter(job => job.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
+      || job.teachingHandoffState === 'LAUNCHING'
+      || job.stage !== 'COMPLETED'
+      || Date.now() - Date.parse(job.updatedAt) < 15 * 60_000)
     .map((job): WorkItem => {
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
@@ -145,7 +190,7 @@ const workItems = computed<WorkItem[]>(() => {
         : job.sourceDomain
       return {
         id: `import:${job.id}`, kind: 'download', title: job.title, stage: importStage(job), detail,
-        state: job.stage === 'FAILED' ? 'failed' : job.stage === 'COMPLETED' ? 'complete' : 'active',
+        state: importState(job),
         progress, target: { name: 'teach', query: { importJob: job.id } }, updatedAt: job.updatedAt,
       }
     })
@@ -175,7 +220,23 @@ const workItems = computed<WorkItem[]>(() => {
     id: `teaching-finished:${item.runId}`, kind: 'lesson', title: item.gameTitle,
     stage: copy.value.done, detail: '', state: 'complete', progress: 100, target: { name: 'lessons' },
   }))
-  return [...importItems, ...documentItems, ...teachingItems, ...finishedTeachingItems]
+  const preparationItems = imports.value.flatMap((job): WorkItem[] => {
+    const runId = job.teachingPreparationRunId
+    const runState = runId ? preparationStates.value[runId] : undefined
+    if (!runId || !runState || runState === 'COMPLETED') return []
+    return [{
+      id: `teaching-preparation:${runId}`,
+      kind: 'lesson',
+      title: job.title,
+      stage: preparationStage(runState),
+      detail: '',
+      state: terminalTeachingStates.has(runState) ? 'failed' : 'active',
+      progress: null,
+      target: { name: 'lessons' },
+      updatedAt: job.updatedAt,
+    }]
+  })
+  return [...importItems, ...documentItems, ...preparationItems, ...teachingItems, ...finishedTeachingItems]
     .sort((left, right) => (left.state === 'active' ? 0 : 1) - (right.state === 'active' ? 0 : 1))
 })
 const activeCount = computed(() => workItems.value.filter(item => item.state === 'active').length)
@@ -248,6 +309,18 @@ async function refreshDocuments() {
   const documentList = documentPayload as DocumentSummary[]
   imports.value = recentImports
   documents.value = documentList
+  const preparationSnapshots = await Promise.all(recentImports.flatMap(job => {
+    const runId = job.teachingPreparationRunId
+    if (!runId) return []
+    return [responseJson<TeachingRunDetails>(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
+      .then(details => [runId, details.run.state] as const)
+      .catch(() => preparationStates.value[runId]
+        ? [runId, preparationStates.value[runId]] as const
+        : null)]
+  }))
+  preparationStates.value = Object.fromEntries(preparationSnapshots.filter(
+    (entry): entry is readonly [string, string] => entry !== null,
+  ))
   const active = documentList.filter(entry => !['READY', 'FAILED'].includes(entry.latestVersion.status))
   const snapshots = await Promise.all(active.map(async (entry) => {
     try {
@@ -277,7 +350,12 @@ async function refresh() {
 function dismissFinished() {
   completedTeaching.value = []
   sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
-  const finishedImports = imports.value.filter(job => ['COMPLETED', 'FAILED'].includes(job.stage)).map(job => job.id)
+  const finishedImports = imports.value
+    .filter(job => job.stage === 'FAILED'
+      || job.teachingHandoffState === 'FAILED'
+      || job.stage === 'COMPLETED'
+        && !['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED'))
+    .map(job => job.id)
   dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
   sessionStorage.setItem(DISMISSED_IMPORTS_KEY, JSON.stringify([...dismissedImportIds.value]))
 }
@@ -298,6 +376,14 @@ function handleTeachingLaunched(event: Event) {
   sessionStorage.setItem(ACTIVE_TEACHING_KEY, JSON.stringify(activeTeaching.value))
   void refresh()
 }
+
+function openCenter() {
+  open.value = true
+}
+
+defineExpose({ openCenter })
+
+watch([activeCount, finishedCount], ([active, finished]) => emit('status', active, finished), { immediate: true })
 
 onMounted(() => {
   completedTeaching.value = parseBackgroundTeachingItems(sessionStorage.getItem(COMPLETED_TEACHING_KEY))
@@ -322,21 +408,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div>
-    <button
-      type="button"
-      class="fixed right-4 top-20 z-40 flex min-h-11 items-center gap-2 rounded-full border border-ink/12 bg-paper px-4 text-sm font-semibold elevation-md hover:border-copper/45 lg:right-6 lg:top-5"
-      :aria-label="copy.trigger"
-      :aria-expanded="open"
-      @click="open = true"
-    >
-      <TabletopGlyph name="cards" :size="18" class="text-copper" />
-      <span>{{ copy.trigger }}</span>
-      <span v-if="activeCount" class="grid min-w-5 place-items-center rounded-full bg-copper px-1.5 text-xs text-white">{{ activeCount }}</span>
-      <span v-else-if="finishedCount" class="size-2 rounded-full bg-emerald-600" aria-hidden="true" />
-    </button>
-
     <div v-if="open" class="fixed inset-0 z-50 bg-ink/35 backdrop-blur-[2px]" @click.self="open = false">
-      <aside class="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-ink/10 bg-canvas elevation-lg-ink" role="dialog" aria-modal="true" :aria-label="copy.title">
+      <aside class="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-gold/25 bg-canvas elevation-lg-ink" role="dialog" aria-modal="true" :aria-label="copy.title">
         <header class="flex items-start justify-between border-b border-ink/10 bg-paper px-5 py-5">
           <div>
             <p class="tabletop-kicker">RulePilot</p>

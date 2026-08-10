@@ -3,9 +3,9 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
-import AgentWorkspaceHeader from '@/components/AgentWorkspaceHeader.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
+import LessonModeNav from '@/components/LessonModeNav.vue'
 import type { LearningIntent } from '@/composables/useLessonAnswers'
 import { groundedLearningPrompt } from '@/lib/groundedLearningPrompt'
 import { useLocale } from '@/lib/locale'
@@ -108,6 +108,12 @@ let latestPublicAnswerRequest = 0
 let activePublicAnswerController: AbortController | null = null
 const planId = computed(() => typeof route.params.planId === 'string' ? route.params.planId : '')
 const displayTitle = computed(() => publicLesson.value ? publicLessonTitle(publicLesson.value) : '')
+const questionMode = computed(() => route.name === 'public-lesson-questions')
+const heroTitle = computed(() => questionMode.value
+  ? t('questions.title', { game: displayTitle.value })
+  : displayTitle.value)
+const heroEyebrow = computed(() => questionMode.value ? t('questions.eyebrow') : t('public.hero.eyebrow'))
+const heroDescription = computed(() => questionMode.value ? t('public.question.description') : t('public.hero.description'))
 const englishGuidePending = computed(() => locale.value === 'en' && publicLesson.value?.contentLanguage !== 'en')
 const englishGuideFailed = computed(() => englishGuidePending.value && publicLesson.value?.localizationStatus === 'FAILED')
 
@@ -516,7 +522,7 @@ function abandonPublicAnswer(showNotice = false) {
 
 onMounted(() => {
   void load()
-  void initializeReaderScope()
+  if (questionMode.value) void initializeReaderScope()
 })
 
 watch([locale, planId], () => {
@@ -529,15 +535,36 @@ watch([locale, planId], () => {
   void load()
 })
 
+watch(questionMode, (questionsVisible) => {
+  if (questionsVisible) {
+    if (readerScopeReady.value) restorePublicAnswerTurns()
+    else void initializeReaderScope()
+    return
+  }
+  abandonPublicAnswer()
+})
+
 onUnmounted(() => abandonPublicAnswer())
 </script>
 
 <template>
   <AppShell>
     <div class="min-h-screen bg-canvas text-ink">
+      <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
+        <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-5 py-3 sm:px-8">
+          <RouterLink :to="{ name: 'public-library' }" class="text-sm font-semibold text-indigo">← {{ t('nav.library') }}</RouterLink>
+          <LessonModeNav
+            :plan-id="planId"
+            guide-route="public-lesson"
+            questions-route="public-lesson-questions"
+            :active="questionMode ? 'questions' : 'guide'"
+          />
+        </div>
+      </header>
+
       <section v-if="loading" class="mx-auto max-w-3xl px-5 py-20 text-center sm:px-8" role="status">
         <p class="font-display text-2xl font-semibold">{{ t('public.loading') }}</p>
-        <p class="mt-3 text-ink/55">{{ t('public.hero.description') }}</p>
+        <p class="mt-3 text-ink/55">{{ heroDescription }}</p>
       </section>
 
       <section v-else-if="errorMessage" class="mx-auto max-w-2xl px-5 py-20 text-center sm:px-8">
@@ -546,28 +573,28 @@ onUnmounted(() => abandonPublicAnswer())
         <button type="button" class="mt-6 rounded-lg bg-ink px-4 py-2.5 font-semibold text-paper" @click="load">{{ t('public.error.retry') }}</button>
       </section>
 
-      <article v-else-if="publicLesson" class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:py-14">
-        <RouterLink :to="{ name: 'public-library' }" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo hover:text-indigo/75">← {{ t('nav.library') }}</RouterLink>
+      <article v-else-if="publicLesson" class="mx-auto max-w-6xl px-5 py-8 sm:px-8 lg:py-12" :data-testid="questionMode ? 'public-questions-reader' : 'public-lesson-reader'">
         <LessonGuideHero
-          :title="displayTitle"
-          :eyebrow="t('public.hero.eyebrow')"
-          :description="t('public.hero.description')"
+          :title="heroTitle"
+          :eyebrow="heroEyebrow"
+          :description="heroDescription"
           :rulebook-title="publicLesson.rulebookTitle !== displayTitle ? t('public.hero.rulebook', { title: publicLesson.rulebookTitle }) : ''"
           :cover-url="publicCoverUrl(planId)"
           :cover-alt="t('public.cover.alt', { title: displayTitle })"
           :cover-href="publicLesson.gameCover?.attributionUrl ?? ''"
           :cover-unavailable="coverUnavailable"
+          :compact="questionMode"
           @cover-error="coverUnavailable = true"
         >
           <template v-if="publicLesson.officialSourceUrl" #actions>
             <a :href="`/api/public/lessons/${encodeURIComponent(planId)}/rulebook`" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-11 items-center rounded-xl bg-[#e2b85e] px-4 text-sm font-bold text-[#20302d] elevation-sm">{{ t('public.hero.openRulebook') }}</a>
           </template>
           <template v-if="englishGuidePending" #status>
-            <p class="rounded-xl border border-paper/15 bg-paper/10 px-4 py-3 text-sm leading-6 text-paper/80" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
+            <p class="rounded-xl border border-[rgba(248,239,223,0.15)] bg-[rgba(248,239,223,0.1)] px-4 py-3 text-sm leading-6 text-[rgba(248,239,223,0.82)]" role="status">{{ englishGuideFailed ? t('public.locale.failed') : t('public.locale.preparing') }}</p>
           </template>
         </LessonGuideHero>
 
-        <aside v-if="publicLesson.publicGame" class="mx-auto mt-5 flex max-w-4xl flex-col gap-4 rounded-2xl border border-ink/10 bg-paper p-4 sm:flex-row sm:items-center sm:justify-between" aria-label="BoardGameGeek game identity">
+        <aside v-if="!questionMode && publicLesson.publicGame" class="mx-auto mt-4 flex max-w-4xl flex-col gap-3 border-y border-ink/10 px-1 py-4 sm:flex-row sm:items-center sm:justify-between" aria-label="BoardGameGeek game identity">
           <div class="min-w-0">
             <p class="text-xs font-semibold uppercase tracking-[0.12em] text-ink/40">{{ locale === 'zh-CN' ? '关联桌游' : 'Linked game' }}</p>
             <p class="mt-1 truncate font-display text-xl font-semibold">{{ publicLesson.publicGame.name }}</p>
@@ -579,15 +606,11 @@ onUnmounted(() => abandonPublicAnswer())
           </div>
         </aside>
 
-        <section class="tabletop-panel player-board mx-auto mt-8 max-w-4xl p-5 sm:p-7" aria-labelledby="public-question-title">
-          <AgentWorkspaceHeader
-            :eyebrow="t('public.question.eyebrow')"
-            :title="t('public.question.title')"
-            :description="t('public.question.description')"
-            :status="t('public.question.noLogin')"
-          >
+        <section v-if="questionMode" class="tabletop-panel player-board mx-auto mt-6 max-w-4xl p-5 sm:p-7" :aria-label="t('public.question.title')">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <p class="rounded-full border border-ink/10 bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ t('public.question.noLogin') }}</p>
             <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="clearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
-          </AgentWorkspaceHeader>
+          </div>
           <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
 
           <p v-if="publicAnswerError" class="mt-4 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ publicAnswerError }}</p>
@@ -680,6 +703,7 @@ onUnmounted(() => abandonPublicAnswer())
         </section>
 
         <LessonChapterList
+          v-else
           :sections="publicLesson.lesson.sections"
           id-prefix="public-chapter"
           :page-image-url="sourcePageUrl"

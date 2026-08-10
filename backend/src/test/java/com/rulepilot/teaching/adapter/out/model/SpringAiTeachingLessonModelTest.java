@@ -81,11 +81,6 @@ class SpringAiTeachingLessonModelTest {
                 "摆放游戏",
                 "让玩家完成开局摆放",
                 List.of("setup"),
-                4,
-                4,
-                25,
-                120,
-                4,
                 List.of(),
                 List.of(new EvidenceInput(UUID.randomUUID(), "SETUP", "Setup", "Place the board.", 4, 4)),
                 pageImages);

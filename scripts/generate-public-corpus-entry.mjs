@@ -532,7 +532,7 @@ export async function generatePublicCorpusEntry(options, dependencies = {}) {
     const launch = await client.request(`/api/v1/document-versions/${state.document.versionId}/teaching-plans`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ playerCount: 4, beginnerCount: 4, durationMinutes: 30 }),
+      body: JSON.stringify({}),
     })
     await checkpoint(outputPath, state, {
       preparation: { runId: launch.assistantRunId, state: launch.state, reused: launch.reused },

@@ -149,7 +149,9 @@ public class UserRuleDocumentController {
                 request.title(),
                 request.sourceType(),
                 request.officialSourceUrl(),
-                request.rightsConfirmed()), principal.getName());
+                request.rightsConfirmed(),
+                request.startTeaching(),
+                request.learningGoal()), principal.getName());
         return OfficialRulebookImportJobResponse.from(launch.job(), launch.reused());
     }
 
@@ -256,7 +258,9 @@ public class UserRuleDocumentController {
             String title,
             DocumentSourceType sourceType,
             String officialSourceUrl,
-            boolean rightsConfirmed) {}
+            boolean rightsConfirmed,
+            boolean startTeaching,
+            String learningGoal) {}
 
     record OfficialRulebookImportJobResponse(
             UUID id,
@@ -268,6 +272,9 @@ public class UserRuleDocumentController {
             UUID documentVersionId,
             boolean duplicate,
             String errorCode,
+            OfficialRulebookImportJob.TeachingHandoffState teachingHandoffState,
+            UUID teachingPreparationRunId,
+            String teachingErrorCode,
             java.time.Instant createdAt,
             java.time.Instant updatedAt,
             boolean reused) {
@@ -283,6 +290,9 @@ public class UserRuleDocumentController {
                     job.documentVersionId(),
                     job.duplicate(),
                     job.errorCode(),
+                    job.teachingHandoff().state(),
+                    job.teachingHandoff().preparationRunId(),
+                    job.teachingHandoff().errorCode(),
                     job.createdAt(),
                     job.updatedAt(),
                     reused);

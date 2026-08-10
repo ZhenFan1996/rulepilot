@@ -136,15 +136,6 @@ class TeachingPlanEntity {
     @Column(name = "document_version_id", nullable = false)
     UUID documentVersionId;
 
-    @Column(name = "player_count", nullable = false)
-    int playerCount;
-
-    @Column(name = "beginner_count", nullable = false)
-    int beginnerCount;
-
-    @Column(name = "duration_minutes", nullable = false)
-    int durationMinutes;
-
     @Column(name = "learning_goal", length = 500)
     String learningGoal;
 
@@ -165,9 +156,6 @@ class TeachingPlanEntity {
     TeachingPlanEntity(TeachingPlan plan) {
         this.id = plan.id();
         this.documentVersionId = plan.documentVersionId();
-        this.playerCount = plan.playerCount();
-        this.beginnerCount = plan.beginnerCount();
-        this.durationMinutes = plan.durationMinutes();
         this.learningGoal = plan.learningGoal();
         this.gameTitle = plan.gameTitle();
         this.premise = plan.premise();
@@ -179,9 +167,6 @@ class TeachingPlanEntity {
         return new TeachingPlan(
                 id,
                 documentVersionId,
-                playerCount,
-                beginnerCount,
-                durationMinutes,
                 learningGoal,
                 gameTitle,
                 premise,

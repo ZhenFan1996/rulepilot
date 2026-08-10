@@ -14,7 +14,20 @@ public interface OfficialRulebookImportJobRepository {
 
     Optional<OfficialRulebookImportJob> findActiveOwnedBySource(String ownerUsername, String sourceUrl);
 
+    Optional<OfficialRulebookImportJob> findCompletedOwnedBySourceAndEdition(
+            String ownerUsername, String sourceUrl, UUID editionId);
+
     List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit);
+
+    void requestTeaching(UUID jobId, String learningGoal, Instant now);
+
+    List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now);
+
+    void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now);
+
+    void failTeachingLaunch(UUID jobId, String errorCode, Instant now);
+
+    int failInterruptedTeachingLaunches(Instant now);
 
     void updateProgress(UUID jobId, OfficialRulebookImportJob.Stage stage, long downloadedBytes, Long totalBytes, Instant now);
 

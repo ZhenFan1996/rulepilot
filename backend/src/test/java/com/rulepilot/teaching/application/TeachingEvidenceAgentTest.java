@@ -184,9 +184,6 @@ class TeachingEvidenceAgentTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Test game",
                 "Teach one grounded section.",
                 List.of(new PlannedSection(

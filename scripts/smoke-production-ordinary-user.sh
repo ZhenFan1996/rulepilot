@@ -544,7 +544,7 @@ preparation_launch=$(curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/json" \
 	--header "$csrf_header: $csrf_token" \
-	--data '{"playerCount":2,"beginnerCount":1,"durationMinutes":20}' \
+	--data '{}' \
 	"$base_url/api/v1/document-versions/$version_id/teaching-plans")
 preparation_run_id=$(jq -er '.assistantRunId' <<<"$preparation_launch")
 preparation_result=$(wait_for_run "$preparation_run_id" "Teaching preparation")

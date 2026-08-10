@@ -1,7 +1,9 @@
 package com.rulepilot.document.application;
 
+import com.rulepilot.document.RulebookTeachingHandoffs;
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
+import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
@@ -16,7 +18,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 @Profile("!test")
-public class OfficialRulebookImportJobService {
+public class OfficialRulebookImportJobService implements RulebookTeachingHandoffs {
 
     private final OfficialRulebookImportJobRepository jobs;
     private final OfficialRulebookImportService imports;
@@ -46,11 +48,20 @@ public class OfficialRulebookImportJobService {
         Command checked = command.checked();
         String owner = checkedOwner(ownerUsername);
         var active = jobs.findActiveOwnedBySource(owner, checked.officialSourceUrl());
-        if (active.isPresent()) return new Launch(active.orElseThrow(), true);
+        if (active.isPresent()) {
+            return new Launch(ensureTeachingRequested(active.orElseThrow(), checked), true);
+        }
+        if (checked.startTeaching()) {
+            var completed = jobs.findCompletedOwnedBySourceAndEdition(
+                    owner, checked.officialSourceUrl(), checked.editionId());
+            if (completed.isPresent()) {
+                return new Launch(ensureTeachingRequested(completed.orElseThrow(), checked), true);
+            }
+        }
         Instant now = Instant.now(clock);
         var job = OfficialRulebookImportJob.queued(
                 UUID.randomUUID(), owner, checked.editionId(), checked.title(), checked.sourceType(),
-                checked.officialSourceUrl(), now);
+                checked.officialSourceUrl(), checked.startTeaching(), checked.learningGoal(), now);
         jobs.insert(job);
         try {
             executor.execute(() -> execute(job));
@@ -72,6 +83,50 @@ public class OfficialRulebookImportJobService {
 
     public int failInterrupted() {
         return jobs.failInterrupted(Instant.now(clock));
+    }
+
+    @Override
+    public List<ReadyHandoff> claimReady(int limit) {
+        if (limit < 1 || limit > 20) throw new IllegalArgumentException("teaching handoff claim limit is invalid");
+        return jobs.claimReadyTeaching(limit, Instant.now(clock)).stream()
+                .map(job -> new ReadyHandoff(
+                        job.id(),
+                        job.documentVersionId(),
+                        job.ownerUsername(),
+                        job.teachingHandoff().learningGoal()))
+                .toList();
+    }
+
+    @Override
+    public void markLaunched(UUID importJobId, UUID preparationRunId) {
+        if (importJobId == null || preparationRunId == null) {
+            throw new IllegalArgumentException("teaching handoff launch identity is required");
+        }
+        jobs.completeTeachingLaunch(importJobId, preparationRunId, Instant.now(clock));
+    }
+
+    @Override
+    public void markFailed(UUID importJobId, String errorCode) {
+        if (importJobId == null || errorCode == null || errorCode.isBlank() || errorCode.length() > 64) {
+            throw new IllegalArgumentException("teaching handoff failure is invalid");
+        }
+        jobs.failTeachingLaunch(importJobId, errorCode, Instant.now(clock));
+    }
+
+    @Override
+    public int failInterruptedLaunches() {
+        return jobs.failInterruptedTeachingLaunches(Instant.now(clock));
+    }
+
+    private OfficialRulebookImportJob ensureTeachingRequested(
+            OfficialRulebookImportJob job, Command command) {
+        if (!command.startTeaching()
+                || job.teachingHandoff().state() != TeachingHandoffState.NOT_REQUESTED
+                        && job.teachingHandoff().state() != TeachingHandoffState.FAILED) {
+            return job;
+        }
+        jobs.requestTeaching(job.id(), command.learningGoal(), Instant.now(clock));
+        return requireOwned(job.id(), job.ownerUsername());
     }
 
     private void execute(OfficialRulebookImportJob job) {
@@ -149,7 +204,18 @@ public class OfficialRulebookImportJobService {
             String title,
             DocumentSourceType sourceType,
             String officialSourceUrl,
-            boolean rightsConfirmed) {
+            boolean rightsConfirmed,
+            boolean startTeaching,
+            String learningGoal) {
+
+        public Command(
+                UUID editionId,
+                String title,
+                DocumentSourceType sourceType,
+                String officialSourceUrl,
+                boolean rightsConfirmed) {
+            this(editionId, title, sourceType, officialSourceUrl, rightsConfirmed, false, null);
+        }
 
         Command checked() {
             if (!rightsConfirmed) throw new IllegalArgumentException("official source rights confirmation is required");
@@ -163,7 +229,15 @@ public class OfficialRulebookImportJobService {
                     || source.toASCIIString().length() > 2000) {
                 throw new IllegalArgumentException("official rulebook source must use standard public HTTPS");
             }
-            return new Command(editionId, title.strip(), sourceType, source.toASCIIString(), true);
+            String normalizedGoal = learningGoal == null || learningGoal.isBlank() ? null : learningGoal.strip();
+            if (normalizedGoal != null && normalizedGoal.length() > 500) {
+                throw new IllegalArgumentException("teaching learning goal is too long");
+            }
+            if (!startTeaching && normalizedGoal != null) {
+                throw new IllegalArgumentException("teaching goal requires an automatic teaching handoff");
+            }
+            return new Command(
+                    editionId, title.strip(), sourceType, source.toASCIIString(), true, startTeaching, normalizedGoal);
         }
     }
 

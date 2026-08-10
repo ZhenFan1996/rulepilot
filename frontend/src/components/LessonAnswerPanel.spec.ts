@@ -58,6 +58,8 @@ describe('LessonAnswerPanel', () => {
     await wrapper.findAll('button').find((button) => button.text() === '语音输入')!.trigger('click')
 
     expect(wrapper.emitted('ask')).toHaveLength(1)
+    expect(wrapper.get('form').element.parentElement?.parentElement?.className).toContain('max-w-3xl')
+    expect(wrapper.find('.border-dashed').exists()).toBe(false)
     expect(wrapper.findAll('button').some((button) => button.text() === '走个例子')).toBe(false)
     expect(wrapper.emitted('openCardOcr')).toHaveLength(1)
     expect(wrapper.emitted('voiceTranscript')).toEqual([['语音问题']])

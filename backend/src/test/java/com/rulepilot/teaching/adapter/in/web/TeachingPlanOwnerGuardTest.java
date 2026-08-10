@@ -39,6 +39,6 @@ class TeachingPlanOwnerGuardTest {
 
     private TeachingPlan plan(String owner) {
         return new TeachingPlan(
-                UUID.randomUUID(), UUID.randomUUID(), 4, 2, 30, "Game", "Premise", List.of(), owner, Instant.parse("2026-07-18T12:00:00Z"));
+                UUID.randomUUID(), UUID.randomUUID(), "Game", "Premise", List.of(), owner, Instant.parse("2026-07-18T12:00:00Z"));
     }
 }

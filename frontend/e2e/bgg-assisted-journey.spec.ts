@@ -71,6 +71,9 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page.getByText('正在为这款桌游找规则书')).toBeVisible()
   await expect(page.getByText('已选择版本：BGG 基础版')).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
+  await expect(page.getByRole('spinbutton')).toHaveCount(0)
+  await page.getByText('可选：关联游戏、规则书来源和讲解偏好').click()
+  await expect(page.getByLabel('这是什么资料？')).toBeVisible()
 
   await page.getByRole('button', { name: '帮我找规则书' }).click()
   await expect(page.getByText('publisher.example')).toBeVisible()
@@ -120,11 +123,11 @@ test('keeps manual onboarding and the ready guide usable when BGG fails on mobil
   await page.setViewportSize({ width: 390, height: 844 })
 
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '把想玩的，变成今晚真的能开桌。' })).toBeVisible()
-  await expect(page.getByRole('link', { name: '添加规则书' }).first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: '规则书递过来，咱们开桌。' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '我有规则书' }).first()).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)
 
-  await page.getByRole('link', { name: '浏览全部桌游' }).click()
+  await page.getByRole('link', { name: '慢慢逛完整目录' }).click()
   await expect(page.getByText('桌游目录暂时打不开')).toBeVisible()
   await expect(page.getByText('筛选条件已经保留，可以稍后重试。')).toBeVisible()
   expect(await hasHorizontalOverflow(page)).toBe(false)

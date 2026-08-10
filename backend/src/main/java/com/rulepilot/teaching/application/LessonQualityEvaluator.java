@@ -23,12 +23,6 @@ public class LessonQualityEvaluator {
         checks.add(setupExecutability(lesson));
         checks.add(endAndScoring(lesson));
         checks.add(new QualityCheck(
-                CheckType.PLAYER_COUNT_SCOPE,
-                CheckStatus.NOT_EVALUATED,
-                "人数适配尚未验证",
-                "计划面向 " + plan.playerCount() + " 人，其中 " + plan.beginnerCount()
-                        + " 位新手；当前规则证据尚未标注人数适用范围。"));
-        checks.add(new QualityCheck(
                 CheckType.EXPANSION_SCOPE,
                 CheckStatus.NOT_EVALUATED,
                 "扩展范围尚未验证",

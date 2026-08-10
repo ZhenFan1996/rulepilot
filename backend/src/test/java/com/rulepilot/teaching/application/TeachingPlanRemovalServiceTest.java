@@ -23,7 +23,7 @@ class TeachingPlanRemovalServiceTest {
 
     @Test
     void removesOnlyAnOwnedPlan() {
-        TeachingPlan plan = plan("alice", 4, 2, 30, Instant.parse("2026-07-23T01:00:00Z"));
+        TeachingPlan plan = plan("alice", Instant.parse("2026-07-23T01:00:00Z"));
         when(plans.findByIdAndCreatedBy(plan.id(), "alice")).thenReturn(Optional.of(plan));
 
         service.removeOwned(plan.id(), "alice");
@@ -36,8 +36,8 @@ class TeachingPlanRemovalServiceTest {
     @Test
     void duplicateCleanupKeepsTheMostCompletePlanBeforeUsingRecency() {
         UUID versionId = UUID.randomUUID();
-        TeachingPlan olderComplete = plan(versionId, "alice", 4, 2, 30, Instant.parse("2026-07-20T01:00:00Z"));
-        TeachingPlan newerUnstarted = plan(versionId, "alice", 4, 2, 30, Instant.parse("2026-07-23T01:00:00Z"));
+        TeachingPlan olderComplete = plan(versionId, "alice", Instant.parse("2026-07-20T01:00:00Z"));
+        TeachingPlan newerUnstarted = plan(versionId, "alice", Instant.parse("2026-07-23T01:00:00Z"));
         when(plans.findAllByCreatedBy("alice")).thenReturn(List.of(olderComplete, newerUnstarted));
         when(lessons.findLatestByPlan(olderComplete.id())).thenReturn(Optional.of(lesson(olderComplete, IllustratedLesson.LessonStatus.COMPLETE)));
         when(lessons.findLatestByPlan(newerUnstarted.id())).thenReturn(Optional.empty());
@@ -48,13 +48,13 @@ class TeachingPlanRemovalServiceTest {
         verify(plans).delete(newerUnstarted.id());
     }
 
-    private TeachingPlan plan(String owner, int players, int beginners, int minutes, Instant createdAt) {
-        return plan(UUID.randomUUID(), owner, players, beginners, minutes, createdAt);
+    private TeachingPlan plan(String owner, Instant createdAt) {
+        return plan(UUID.randomUUID(), owner, createdAt);
     }
 
-    private TeachingPlan plan(UUID versionId, String owner, int players, int beginners, int minutes, Instant createdAt) {
+    private TeachingPlan plan(UUID versionId, String owner, Instant createdAt) {
         return new TeachingPlan(
-                UUID.randomUUID(), versionId, players, beginners, minutes, "Game", "Premise", List.of(), owner, createdAt);
+                UUID.randomUUID(), versionId, "Game", "Premise", List.of(), owner, createdAt);
     }
 
     private IllustratedLesson lesson(TeachingPlan plan, IllustratedLesson.LessonStatus status) {

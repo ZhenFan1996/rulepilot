@@ -276,7 +276,7 @@ class VisualLessonEnrichmentServiceTest {
     }
 
     private TeachingPlan plan(UUID planId, UUID documentVersionId) {
-        return new TeachingPlan(planId, documentVersionId, 2, 2, 30, "测试游戏", "测试前提", List.of(), "owner", Instant.now());
+        return new TeachingPlan(planId, documentVersionId, "测试游戏", "测试前提", List.of(), "owner", Instant.now());
     }
 
     private IllustratedLesson lesson(UUID planId) {
