@@ -64,9 +64,6 @@ class TeachingPlanCatalogPresentationServiceTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                4,
-                2,
-                30,
                 "Rulebook-derived title",
                 "Rulebook-derived premise",
                 List.of(),

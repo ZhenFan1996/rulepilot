@@ -27,7 +27,7 @@ class LessonQualityEvaluatorTest {
                 topic("table", "Build the solar system", List.of("setup"), "setup"),
                 topic("turn", "Launch and scan", List.of("core_loop"), "turn"),
                 topic("finish", "End round five and score", List.of("end", "scoring"), "scoring")));
-        var plan = new TeachingPlanFactory().create(versionId, 4, 3, 30, "player", outline);
+        var plan = new TeachingPlanFactory().create(versionId, "player", outline);
         var lesson = new GroundedTeachingAgent(
                         request -> List.of(new RuleEvidence(
                                 UUID.randomUUID(), versionId, "GENERAL", request.query(),
@@ -66,7 +66,7 @@ class LessonQualityEvaluatorTest {
                 topic("table", "Build the solar system", List.of("setup"), "setup"),
                 topic("turn", "Launch and scan", List.of("core_loop"), "turn"),
                 topic("finish", "End round five and score", List.of("end", "scoring"), "scoring")));
-        var plan = new TeachingPlanFactory().create(versionId, 4, 3, 30, "player", outline);
+        var plan = new TeachingPlanFactory().create(versionId, "player", outline);
         var lesson = new GroundedTeachingAgent(
                         request -> "turn".equals(request.query())
                                 ? List.of()
@@ -87,10 +87,6 @@ class LessonQualityEvaluatorTest {
                 .filteredOn(check -> check.type() == CheckType.CITATION_SUPPORT)
                 .extracting(check -> check.status())
                 .containsExactly(CheckStatus.PASS);
-        assertThat(report.checks())
-                .filteredOn(check -> check.type() == CheckType.PLAYER_COUNT_SCOPE)
-                .extracting(check -> check.status())
-                .containsExactly(CheckStatus.NOT_EVALUATED);
     }
 
     private TopicDraft topic(String key, String title, List<String> tags, String query) {

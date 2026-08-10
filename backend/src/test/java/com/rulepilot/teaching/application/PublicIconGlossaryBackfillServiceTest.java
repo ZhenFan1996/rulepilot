@@ -110,9 +110,6 @@ class PublicIconGlossaryBackfillServiceTest {
         return new TeachingPlan(
                 planId,
                 UUID.randomUUID(),
-                4,
-                4,
-                30,
                 "Orbit",
                 "Learn the rules",
                 List.of(),

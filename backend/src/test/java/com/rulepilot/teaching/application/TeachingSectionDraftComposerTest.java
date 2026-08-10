@@ -50,7 +50,6 @@ class TeachingSectionDraftComposerTest {
         TeachingSectionDraftCandidate candidate = composer.compose(
                 plan,
                 plan.sections().getFirst(),
-                new TeachingPacingPolicy.SectionPacing(60, 2),
                 List.of(),
                 List.of(evidence),
                 UUID.randomUUID(),
@@ -99,7 +98,6 @@ class TeachingSectionDraftComposerTest {
         TeachingSectionDraftCandidate candidate = composer.compose(
                 plan,
                 plan.sections().getFirst(),
-                new TeachingPacingPolicy.SectionPacing(60, 2),
                 List.of(),
                 List.of(evidence),
                 UUID.randomUUID(),
@@ -118,9 +116,6 @@ class TeachingSectionDraftComposerTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new TeachingPlan.PlannedSection(

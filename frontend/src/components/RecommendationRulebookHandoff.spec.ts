@@ -41,6 +41,8 @@ describe('RecommendationRulebookHandoff', () => {
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
         { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
       ],
     })
     await router.push('/')
@@ -95,9 +97,11 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       if (path === '/api/v1/documents/official-imports') return Response.json({
         id: 'import-1', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
       }, { status: 202 })
       if (path === '/api/v1/documents/official-imports/import-1') return Response.json({
         id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
       })
       return new Response(null, { status: 404 })
     }))
@@ -137,18 +141,15 @@ describe('RecommendationRulebookHandoff', () => {
       sourceType: 'BASE_RULEBOOK',
       officialSourceUrl: 'https://publisher.example/files/wingspan-rulebook.pdf',
       rightsConfirmed: true,
+      startTeaching: true,
+      learningGoal: null,
     })
-    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([{
-      versionId: 'version-1',
-      editionId: 'edition-1',
-      playerCount: 5,
-      beginnerCount: 5,
-      durationMinutes: 25,
-    }])
-    expect(router.currentRoute.value.name).toBe('teach')
-    expect(router.currentRoute.value.query).toEqual({
-      editionId: 'edition-1', onboarding: 'recommendation-agent', importJob: 'import-1',
-    })
+    expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    expect(router.currentRoute.value.name).toBe('home')
+    expect(wrapper.text()).toContain('已加入“我的桌游”')
+    expect(wrapper.text()).toContain('讲解已经在后台开始')
+    expect(wrapper.get('a[href="/catalog"]').text()).toContain('打开我的桌游')
+    expect(wrapper.get('a[href="/lessons"]').text()).toContain('查看讲解进度')
   })
 
   it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
@@ -179,13 +180,15 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       if (path === '/api/v1/documents/official-imports') return Response.json({
         id: 'gallery-import', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
       }, { status: 202 })
       if (path === '/api/v1/documents/official-imports/gallery-import') return Response.json({
         id: 'gallery-import', stage: 'COMPLETED', documentVersionId: 'version-gallery', duplicate: false, errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-gallery',
       })
       return new Response(null, { status: 404 })
     }))
-    const { wrapper, router } = await mountHandoff()
+    const { wrapper } = await mountHandoff()
     await flushPromises()
 
     expect(wrapper.text()).toContain('连续规则页图片，可合成为 PDF')
@@ -200,8 +203,9 @@ describe('RecommendationRulebookHandoff', () => {
       title: '官方规则书',
       officialSourceUrl: 'https://www.gstonegames.com/game/doc-1234.html',
       rightsConfirmed: true,
+      startTeaching: true,
     })
-    expect(router.currentRoute.value.name).toBe('teach')
+    expect(wrapper.text()).toContain('讲解已经在后台开始')
   })
 
   it('turns an account-gated exact BGG download into an actionable browser handoff', async () => {
@@ -230,10 +234,12 @@ describe('RecommendationRulebookHandoff', () => {
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       if (path === '/api/v1/documents/official-imports') return Response.json({
         id: 'bgg-import', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
       }, { status: 202 })
       if (path === '/api/v1/documents/official-imports/bgg-import') return Response.json({
         id: 'bgg-import', stage: 'FAILED', documentVersionId: null, duplicate: false,
         errorCode: 'SOURCE_BROWSER_REQUIRED',
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
       })
       return new Response(null, { status: 404 })
     }))

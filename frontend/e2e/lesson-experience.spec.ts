@@ -2,7 +2,6 @@ import { expect, test, type Page } from '@playwright/test'
 
 const plan = {
   id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'Lantern Relay', premise: '点亮整条航线。',
-  playerCount: 3, beginnerCount: 2, durationMinutes: 30,
   sections: [{ position: 1, title: '摆好灯塔', visualEvidenceRecommended: true }],
 }
 
@@ -59,6 +58,8 @@ test('uses one tabletop reading language for private and public guides without r
   await expect(page.getByText('Lantern Relay', { exact: true })).toBeVisible()
   await expect(page.getByText('桌游资料由 BoardGameGeek 提供')).toBeVisible()
   await expect(page.locator('[data-testid="private-rule-step"]')).toHaveCount(2)
+  await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/lesson/plan-1/questions')
+  await expect(page.locator('#lesson-question-panel')).toHaveCount(0)
   await expect(page.getByText('图标速查表')).toHaveCount(0)
   if (process.env.RULEPILOT_VISUAL_QA) {
     await page.screenshot({ path: testInfo.outputPath('private-guide.png'), fullPage: true })
@@ -66,11 +67,18 @@ test('uses one tabletop reading language for private and public guides without r
 
   await page.goto('/read/plan-1')
   await expect(page.locator('header.tabletop-hero')).toBeVisible()
-  await expect(page.locator('section[aria-labelledby="public-question-title"].player-board')).toBeVisible()
   await expect(page.getByRole('heading', { name: '摆好灯塔' })).toBeVisible()
+  await expect(page.locator('#public-question')).toHaveCount(0)
+  await expect(page.getByTestId('lesson-questions-entry')).toHaveAttribute('href', '/read/plan-1/questions')
   if (process.env.RULEPILOT_VISUAL_QA) {
     await page.screenshot({ path: testInfo.outputPath('public-guide.png'), fullPage: true })
   }
+
+  await page.getByTestId('lesson-questions-entry').click()
+  await expect(page).toHaveURL('/read/plan-1/questions')
+  await expect(page.getByTestId('public-questions-reader')).toBeVisible()
+  await expect(page.locator('#public-question')).toBeVisible()
+  await expect(page.locator('[data-testid="lesson-reading-column"]')).toHaveCount(0)
   expect(retiredRequests).toEqual([])
 })
 

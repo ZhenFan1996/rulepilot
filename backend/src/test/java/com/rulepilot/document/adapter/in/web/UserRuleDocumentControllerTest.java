@@ -44,10 +44,12 @@ class UserRuleDocumentControllerTest {
                 "Example Rules",
                 DocumentSourceType.BASE_RULEBOOK,
                 "https://publisher.example/rules.pdf",
+                true,
+                "重点讲清开局和第一轮。",
                 now);
         var command = new OfficialRulebookImportJobService.Command(
                 null, "Example Rules", DocumentSourceType.BASE_RULEBOOK,
-                "https://publisher.example/rules.pdf", true);
+                "https://publisher.example/rules.pdf", true, true, "重点讲清开局和第一轮。");
         when(imports.enqueue(command, "alice"))
                 .thenReturn(new OfficialRulebookImportJobService.Launch(job, false));
 
@@ -57,12 +59,16 @@ class UserRuleDocumentControllerTest {
                         "Example Rules",
                         DocumentSourceType.BASE_RULEBOOK,
                         "https://publisher.example/rules.pdf",
-                        true),
+                        true,
+                        true,
+                        "重点讲清开局和第一轮。"),
                 () -> "alice");
 
         assertThat(response.id()).isEqualTo(jobId);
         assertThat(response.sourceDomain()).isEqualTo("publisher.example");
         assertThat(response.stage()).isEqualTo(OfficialRulebookImportJob.Stage.QUEUED);
+        assertThat(response.teachingHandoffState())
+                .isEqualTo(OfficialRulebookImportJob.TeachingHandoffState.WAITING_FOR_DOCUMENT);
         verify(imports).enqueue(command, "alice");
     }
 

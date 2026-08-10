@@ -26,8 +26,7 @@ describe('LessonView progressive reading', () => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
-          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4,
-          beginnerCount: 3, durationMinutes: 25, gameTitle: 'SETI', premise: '寻找生命',
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'SETI', premise: '寻找生命',
           sections: [
             { position: 1, title: '先摆主板', visualEvidenceRecommended: true },
             { position: 2, title: '开始第一轮', visualEvidenceRecommended: false },
@@ -125,12 +124,13 @@ describe('LessonView progressive reading', () => {
       .toBe('https://example.test/catalog-cover.jpg')
     expect(wrapper.text()).toContain('图中看什么')
     expect(wrapper.text()).toContain('主棋盘中央有三条相连的行动轨道。')
-    expect(wrapper.text()).toContain('随时问规则')
-    expect(wrapper.text()).toContain('答疑独立打开，不打断当前讲解')
+    expect(wrapper.text()).toContain('规则答疑')
+    expect(wrapper.text()).not.toContain('答疑独立打开，不打断当前讲解')
     expect(wrapper.get('[data-testid="private-lesson-surface"]').classes()).not.toContain('overflow-x-hidden')
     expect(wrapper.text()).not.toContain('图标速查表')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
-    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('随时问规则')
+    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('规则答疑')
+    expect(wrapper.get('[data-testid="lesson-questions-entry"]').classes()).not.toContain('fixed')
     expect(wrapper.find('a[href^="/lesson/plan-1/questions?section="]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('问这一章')
     expect(wrapper.text()).not.toContain('开始对局')
@@ -181,8 +181,7 @@ describe('LessonView progressive reading', () => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans/plan-1') {
         return Response.json({
-          id: 'plan-1', documentVersionId: 'version-1', playerCount: 4,
-          beginnerCount: 3, durationMinutes: 25, gameTitle: 'SETI', premise: '寻找生命',
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: 'SETI', premise: '寻找生命',
           sections: [{ position: 1, title: '先摆主板', visualEvidenceRecommended: true }],
         })
       }
@@ -373,7 +372,7 @@ describe('LessonView progressive reading', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('My illustrated guide')
-    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('Ask a rule anytime')
+    expect(wrapper.get('a[href="/lesson/plan-1/questions"]').text()).toContain('Rule Q&A')
     expect(wrapper.find('#lesson-question-panel').exists()).toBe(false)
     expect(wrapper.text()).toContain('Source: page 1')
     wrapper.unmount()
@@ -451,9 +450,6 @@ function planFixture(id: string, gameTitle: string) {
   return {
     id,
     documentVersionId: `version-${id}`,
-    playerCount: 4,
-    beginnerCount: 2,
-    durationMinutes: 30,
     gameTitle,
     premise: '测试讲解切换',
     sections: [{ position: 1, title: '第一节', visualEvidenceRecommended: true }],

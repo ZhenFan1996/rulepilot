@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink } from 'vue-router'
 
 import type { RecommendationGame, RecommendationProfile } from '@/components/gameRecommendationTypes'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
-import { rememberPendingRulebookLesson } from '@/lib/pendingRulebookLesson'
 
 interface ImportedGame {
   game: { id: string; name: string }
@@ -36,13 +35,15 @@ interface OfficialImportJob {
   documentVersionId: string | null
   duplicate: boolean
   errorCode: string | null
+  teachingHandoffState: 'NOT_REQUESTED' | 'WAITING_FOR_DOCUMENT' | 'LAUNCHING' | 'LAUNCHED' | 'FAILED'
+  teachingPreparationRunId: string | null
+  teachingErrorCode?: string | null
 }
 
 interface CsrfResponse { headerName: string; token: string }
 
 const props = defineProps<{ game: RecommendationGame; profile: RecommendationProfile }>()
 const emit = defineEmits<{ close: [] }>()
-const router = useRouter()
 const { locale } = useLocale()
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
@@ -52,6 +53,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', publisher: '发布者', language: '语言', edition: '版本', unknown: '未标明', choose: '选择这份', selected: '已选择', open: '打开来源页',
   consent: '我确认该链接来自有权提供这份规则书的来源，并授权 RulePilot 下载用于我的个人讲解。',
   import: '下载规则书并生成讲解', importing: '正在安全下载并准备讲解…', manual: '改用公开链接或本地上传',
+  success: '已加入“我的桌游”，讲解已经在后台开始。你可以继续浏览，准备进度会持续保留。', catalog: '打开我的桌游', lessons: '查看讲解进度',
   browserRequired: '已经找到这份文件，但来源网站要求在浏览器里完成隐私选择、刷新临时链接或登录。打开原始下载页取得 PDF 后，回到 RulePilot 上传即可继续；桌游、版本和讲解偏好都已保留。',
   sourcePageHandoff: '这是经过核对的来源页面，但搜索结果没有提供可验证的 PDF 直链。请在来源网站核对语言和版本并下载 PDF，再回到 RulePilot 上传；桌游和讲解偏好都已保留。',
   browserAction: '在来源网站继续下载',
@@ -65,6 +67,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', publisher: 'Provider', language: 'Language', edition: 'Edition', unknown: 'Not stated', choose: 'Choose this one', selected: 'Selected', open: 'Open source page',
   consent: 'I confirm that this source may provide the rulebook and authorize RulePilot to download it for my personal guide.',
   import: 'Download and generate guide', importing: 'Downloading safely and preparing the guide…', manual: 'Use a public URL or local upload',
+  success: 'Added to My Games, and guide preparation has started in the background. You can keep browsing while RulePilot preserves its progress.', catalog: 'Open My Games', lessons: 'View guide progress',
   browserRequired: 'The file was found, but its source requires an in-browser privacy choice, refreshed temporary link, or sign-in. Download it there, then return to upload it; the game, edition, and guide preferences are preserved.',
   sourcePageHandoff: 'This source page was verified, but search did not expose a verifiable PDF URL. Review the language and edition there, download the PDF, then return to upload it; the game and guide preferences are preserved.',
   browserAction: 'Continue on the source site',
@@ -78,7 +81,7 @@ const candidates = ref<RulebookCandidate[]>([])
 const selected = ref<RulebookCandidate | null>(null)
 const openedSource = ref<RulebookCandidate | null>(null)
 const consent = ref(false)
-const state = ref<'preparing' | 'finding' | 'review' | 'unavailable' | 'login' | 'error' | 'importing' | 'browser-required'>('preparing')
+const state = ref<'preparing' | 'finding' | 'review' | 'unavailable' | 'login' | 'error' | 'importing' | 'browser-required' | 'success'>('preparing')
 const findingSeconds = ref(0)
 let csrf: CsrfResponse | null = null
 let sequence = 0
@@ -172,14 +175,7 @@ async function importAndTeach() {
   const request = sequence
   state.value = 'importing'
   try {
-    const [token, sessionResponse] = await Promise.all([
-      csrfToken(),
-      fetch('/api/auth/session', { credentials: 'include' }),
-    ])
-    if (sessionResponse.status === 401 || sessionResponse.status === 403) return requireLogin()
-    if (!sessionResponse.ok) throw new Error('session unavailable')
-    const session = await sessionResponse.json() as { username?: unknown }
-    if (typeof session.username !== 'string' || !session.username.trim()) return requireLogin()
+    const token = await csrfToken()
     const candidate = selected.value
     const response = await fetch('/api/v1/documents/official-imports', {
       method: 'POST', credentials: 'include',
@@ -190,18 +186,20 @@ async function importAndTeach() {
         sourceType: 'BASE_RULEBOOK',
         officialSourceUrl: candidate.url,
         rightsConfirmed: true,
+        startTeaching: true,
+        learningGoal: null,
       }),
     })
     if (response.status === 401 || response.status === 403) return requireLogin()
     if (!response.ok) throw new Error('import failed')
     const job = await response.json() as OfficialImportJob
-    await waitForOfficialImport(job, request, session.username.trim())
+    await waitForOfficialImport(job, request)
   } catch {
     if (request === sequence && state.value === 'importing') state.value = 'error'
   }
 }
 
-async function waitForOfficialImport(initial: OfficialImportJob, request: number, username: string) {
+async function waitForOfficialImport(initial: OfficialImportJob, request: number) {
   let job = initial
   let failures = 0
   while (request === sequence) {
@@ -211,23 +209,13 @@ async function waitForOfficialImport(initial: OfficialImportJob, request: number
     }
     if (job.stage === 'COMPLETED') {
       if (!job.documentVersionId || !imported.value) throw new Error('completed import has no document version')
-      const players = props.profile.players ?? 4
-      rememberPendingRulebookLesson(localStorage, username, {
-        versionId: job.documentVersionId,
-        editionId: imported.value.edition.id,
-        playerCount: players,
-        beginnerCount: players,
-        durationMinutes: 25,
-      })
-      await router.push({
-        name: 'teach',
-        query: {
-          editionId: imported.value.edition.id,
-          onboarding: 'recommendation-agent',
-          importJob: job.id,
-        },
-      })
-      return
+      if (job.teachingHandoffState === 'LAUNCHED' && job.teachingPreparationRunId) {
+        state.value = 'success'
+        return
+      }
+      if (job.teachingHandoffState === 'FAILED' || job.teachingHandoffState === 'NOT_REQUESTED') {
+        throw new Error('teaching handoff failed')
+      }
     }
     try {
       const response = await fetch(`/api/v1/documents/official-imports/${encodeURIComponent(job.id)}`, { credentials: 'include' })
@@ -240,7 +228,9 @@ async function waitForOfficialImport(initial: OfficialImportJob, request: number
       failures += 1
       if (failures >= 3) throw new Error('import status unavailable')
     }
-    if (!['COMPLETED', 'FAILED'].includes(job.stage)) {
+    const handoffSettled = job.stage === 'COMPLETED'
+      && ['LAUNCHED', 'FAILED', 'NOT_REQUESTED'].includes(job.teachingHandoffState)
+    if (job.stage !== 'FAILED' && !handoffSettled) {
       await new Promise(resolve => setTimeout(resolve, failures ? 1500 : 750))
     }
   }
@@ -317,6 +307,14 @@ onBeforeUnmount(() => {
         <p>{{ copy.browserRequired }}</p>
         <a v-if="selected" :href="selected.url" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.browserAction }} ↗</a>
         <RouterLink :to="manualRoute" class="ml-4 inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.manual }} →</RouterLink>
+      </div>
+
+      <div v-else-if="state === 'success'" class="text-sm leading-6 text-ink/65" role="status">
+        <p>{{ copy.success }}</p>
+        <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+          <RouterLink to="/catalog" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.catalog }} →</RouterLink>
+          <RouterLink to="/lessons" class="inline-flex min-h-11 items-center font-semibold text-indigo underline">{{ copy.lessons }} →</RouterLink>
+        </div>
       </div>
 
       <div v-else class="text-sm text-danger" role="alert">

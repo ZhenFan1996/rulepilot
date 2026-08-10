@@ -262,9 +262,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -338,9 +335,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -474,9 +468,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -570,9 +561,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -668,9 +656,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -925,9 +910,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(topic(1, TeachingSectionType.SETUP), topic(2, TeachingSectionType.ACTIONS)),
@@ -1068,9 +1050,6 @@ class GroundedTeachingAgentTest {
             return List.of(evidence);
         };
         TeachingLessonModel model = request -> {
-            assertThat(request.totalDurationMinutes()).isEqualTo(20);
-            assertThat(request.sectionDurationSeconds()).isEqualTo(1_200);
-            assertThat(request.maxSteps()).isEqualTo(6);
             assertThat(request.priorSections()).isEmpty();
             assertThat(request.requiredRuleIntents()).containsExactly("SETUP", "More SETUP");
             assertThat(request.chapterScope()).contains("完整章节分工", "【当前章节】第1章《SETUP》：Explain SETUP");
@@ -1136,9 +1115,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan multiIntentPlan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -1818,7 +1794,6 @@ class GroundedTeachingAgentTest {
             @Override
             public SectionDraft compose(SectionRequest request) {
                 assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4, 2);
-                assertThat(request.maxSteps()).isEqualTo(6);
                 return new SectionDraft(
                         "完成开局",
                         VisualKind.TABLE_LAYOUT,
@@ -2667,9 +2642,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Game",
                 "Premise",
                 List.of(
@@ -2781,9 +2753,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                25,
                 "Game",
                 "Premise",
                 List.of(
@@ -2845,9 +2814,6 @@ class GroundedTeachingAgentTest {
         TeachingPlan plan = new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                25,
                 "Game",
                 "Premise",
                 List.of(
@@ -2917,9 +2883,6 @@ class GroundedTeachingAgentTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(topic(1, TeachingSectionType.SETUP)),
@@ -2955,9 +2918,6 @@ class GroundedTeachingAgentTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                4,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(
@@ -2977,9 +2937,6 @@ class GroundedTeachingAgentTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                10,
                 "Game",
                 "Premise",
                 List.of(
@@ -2994,9 +2951,6 @@ class GroundedTeachingAgentTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new PlannedSection(

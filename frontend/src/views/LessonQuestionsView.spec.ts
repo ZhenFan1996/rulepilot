@@ -38,12 +38,14 @@ describe('LessonQuestionsView', () => {
 
     expect(wrapper.text()).toContain('向《目录桌游》规则书提问')
     expect(wrapper.text()).toContain('星际探索')
-    expect(wrapper.text()).toContain('1–5 人')
+    expect(wrapper.text()).not.toContain('1–5 人')
     expect(wrapper.text()).toContain('桌游资料由 BoardGameGeek 提供')
     expect(wrapper.text()).toContain('独立答疑')
+    expect(wrapper.findAll('h2').some((heading) => heading.text() === '问规则书')).toBe(false)
     expect(wrapper.text()).not.toContain('优先参考')
     expect(wrapper.text()).not.toContain('第 2 章 · 结算分数')
-    expect(wrapper.get('a[href="/lesson/plan-1"]').text()).toContain('返回讲解')
+    expect(wrapper.get('a[href="/lesson/plan-1"]').text()).toContain('讲解')
+    expect(wrapper.get('[data-testid="lesson-questions-entry"]').attributes('aria-current')).toBe('page')
 
     await wrapper.get('#lesson-question').setValue('这一步何时结算？')
     await wrapper.get('#lesson-question-panel form').trigger('submit')
@@ -119,7 +121,7 @@ describe('LessonQuestionsView', () => {
     }))
     const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
 
-    expect(wrapper.text()).toContain('还是没懂，换个例子')
+    expect(wrapper.get('#lesson-question').attributes('placeholder')).toContain('还是没懂，换个例子')
     await wrapper.get('#lesson-question').setValue('这个行动什么时候结算？')
     await wrapper.get('#lesson-question-panel form').trigger('submit')
     await flushPromises()

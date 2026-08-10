@@ -18,7 +18,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
   it('returns a ready upload to direct reading without forcing lesson generation', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 3, beginnerCount: 2, durationMinutes: 35,
+      versionId: 'version-1',
       learningGoal: '先让我能带大家开局，再讲容易混淆的行动。',
     })
     const fetchMock = mockApplicationFetch(() => 'READY')
@@ -82,6 +82,10 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('Catalog Game')
     expect(wrapper.text()).toContain('已选择版本：BGG 基础版')
     expect(wrapper.get('select').element.value).toBe('edition-1')
+    expect(wrapper.findAll('input[type="number"]')).toHaveLength(0)
+    expect(wrapper.findAll('label').map(label => label.text())).not.toEqual(
+      expect.arrayContaining(['玩家', '新手', '分钟']),
+    )
     await wrapper.findAll('button').find(button => button.text().includes('帮我找规则书'))!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Catalog Game Rules')
@@ -98,14 +102,14 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await wrapper.findAll('button').find(button => button.text() === '下载规则书')!.trigger('click')
     await flushPromises()
     expect(readPendingRulebookLessons(localStorage, 'player')).toContainEqual({
-      versionId: 'selected-version', editionId: 'edition-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'selected-version', editionId: 'edition-1',
     })
     wrapper.unmount()
   })
 
   it('treats a failed terminal progress event as failure and never starts teaching', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'version-1',
     })
     let documentReads = 0
     const fetchMock = mockApplicationFetch(() => (++documentReads === 1 ? 'EXTRACTING' : 'FAILED'))
@@ -128,7 +132,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
   it('shows rendered page position instead of a generic reading wait', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'version-1',
     })
     vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
     vi.stubGlobal('EventSource', FakeEventSource)
@@ -147,7 +151,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
 
   it('names the structural pass that follows visual page rendering', async () => {
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'version-1',
     })
     vi.stubGlobal('fetch', mockApplicationFetch(() => 'EXTRACTING'))
     vi.stubGlobal('EventSource', FakeEventSource)
@@ -173,7 +177,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   it('shows an honest resumable stage while visual pages are being organized', async () => {
     vi.useFakeTimers()
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'version-1',
     })
     const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING')
     vi.stubGlobal('fetch', fetchMock)
@@ -212,9 +216,6 @@ describe('DocumentsView recoverable lesson handoff', () => {
     const planningRequest = fetchMock.mock.calls.find(([input, options]) =>
       String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST')
     expect(JSON.parse(String(planningRequest?.[1]?.body))).toEqual({
-      playerCount: 4,
-      beginnerCount: 4,
-      durationMinutes: 25,
       learningGoal: '先让我能带大家开局，再重点讲行动之间怎么衔接；容易混淆的地方多举例。',
     })
     wrapper.unmount()
@@ -224,7 +225,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
   it('shows the real visual-reading batch instead of a silent planning wait', async () => {
     vi.useFakeTimers()
     rememberPendingRulebookLesson(localStorage, 'player', {
-      versionId: 'version-1', playerCount: 4, beginnerCount: 4, durationMinutes: 25,
+      versionId: 'version-1',
     })
     const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING', [{
       sequence: 1, operation: 'inspectRulebookVisualBatch|2', outcome: 'RUNNING',
@@ -321,7 +322,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     })
     expect(wrapper.text()).toContain('上传完成，正在读取页面和图片')
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([
-      { versionId: 'imported-version', playerCount: 4, beginnerCount: 4, durationMinutes: 25 },
+      { versionId: 'imported-version' },
     ])
     expect(FakeEventSource.instances.some((source) => source.url.includes('imported-version'))).toBe(true)
     wrapper.unmount()

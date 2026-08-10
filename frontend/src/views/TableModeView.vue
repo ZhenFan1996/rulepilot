@@ -9,7 +9,6 @@ import { playerFacingTitle } from '@/lib/lessonPresentation'
 interface TeachingPlan {
   id: string
   documentVersionId: string
-  playerCount: number
   gameTitle: string
 }
 
@@ -51,6 +50,8 @@ interface CsrfResponse {
 }
 
 type FeedbackRating = 'HELPFUL' | 'UNCLEAR' | 'INCORRECT'
+
+const NON_SEMANTIC_TABLE_SESSION_PLAYER_COUNT = 1
 
 const route = useRoute()
 const planId = computed(() => String(route.params.planId ?? ''))
@@ -97,9 +98,10 @@ async function createSession(targetPlan: TeachingPlan) {
     headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
     body: JSON.stringify({
       documentVersionId: targetPlan.documentVersionId,
-      // The legacy session schema requires storage-only fields; rule answering never reads them.
+      // Table sessions keep their own storage-only count; it is not teaching-plan audience context and rule answers
+      // never read it implicitly.
       expansionIds: [],
-      playerCount: targetPlan.playerCount,
+      playerCount: NON_SEMANTIC_TABLE_SESSION_PLAYER_COUNT,
       phase: '规则问答',
       activePlayer: null,
     }),

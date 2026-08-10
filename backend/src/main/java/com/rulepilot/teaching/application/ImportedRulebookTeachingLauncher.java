@@ -1,0 +1,72 @@
+package com.rulepilot.teaching.application;
+
+import com.rulepilot.document.RulebookTeachingHandoffs;
+import com.rulepilot.document.RulebookTeachingHandoffs.ReadyHandoff;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.annotation.Profile;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+/** Continues an explicitly requested rulebook-import journey after the bound document becomes ready. */
+@Service
+@Profile("!test")
+public class ImportedRulebookTeachingLauncher {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ImportedRulebookTeachingLauncher.class);
+
+    private final RulebookTeachingHandoffs handoffs;
+    private final TeachingPlanLauncher plans;
+    private final int batchSize;
+
+    public ImportedRulebookTeachingLauncher(
+            RulebookTeachingHandoffs handoffs,
+            TeachingPlanLauncher plans,
+            @Value("${rulepilot.teaching.import-handoff.batch-size}") int batchSize) {
+        if (batchSize < 1 || batchSize > 20) {
+            throw new IllegalArgumentException("imported rulebook teaching handoff batch size is invalid");
+        }
+        this.handoffs = handoffs;
+        this.plans = plans;
+        this.batchSize = batchSize;
+    }
+
+    @Scheduled(fixedDelayString = "${rulepilot.teaching.import-handoff.fixed-delay}")
+    synchronized void launchReadyHandoffs() {
+        for (ReadyHandoff handoff : handoffs.claimReady(batchSize)) {
+            launch(handoff);
+        }
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    synchronized void recoverAndLaunch() {
+        int interrupted = handoffs.failInterruptedLaunches();
+        if (interrupted > 0) {
+            LOGGER.warn("Marked {} interrupted imported-rulebook teaching launches for explicit retry", interrupted);
+        }
+        launchReadyHandoffs();
+    }
+
+    private void launch(ReadyHandoff handoff) {
+        try {
+            var launched = plans.launch(
+                    handoff.documentVersionId(), handoff.learningGoal(), handoff.ownerUsername());
+            handoffs.markLaunched(handoff.importJobId(), launched.assistantRunId());
+        } catch (RuntimeException failure) {
+            handoffs.markFailed(handoff.importJobId(), failureCode(failure));
+            LOGGER.warn(
+                    "Imported rulebook teaching launch failed for importJobId={} with {}",
+                    handoff.importJobId(),
+                    failure.getClass().getSimpleName());
+        }
+    }
+
+    private String failureCode(RuntimeException failure) {
+        return failure instanceof IllegalArgumentException
+                ? "TEACHING_HANDOFF_INVALID"
+                : "TEACHING_HANDOFF_LAUNCH_FAILED";
+    }
+}

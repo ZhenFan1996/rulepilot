@@ -109,9 +109,6 @@ const title = ref('')
 const officialSourceUrl = ref('')
 const officialImportRightsConfirmed = ref(false)
 const sourceType = ref('BASE_RULEBOOK')
-const playerCount = ref(4)
-const beginnerCount = ref(4)
-const durationMinutes = ref(25)
 const learningGoal = ref('')
 const loading = ref(true)
 const uploading = ref(false)
@@ -497,15 +494,11 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
   return {
     versionId,
     ...(editionId.value ? { editionId: editionId.value } : {}),
-    playerCount: playerCount.value,
-    beginnerCount: beginnerCount.value,
-    durationMinutes: durationMinutes.value,
     ...(learningGoal.value.trim() ? { learningGoal: learningGoal.value.trim() } : {}),
   }
 }
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
-  if (preferences.beginnerCount > preferences.playerCount) throw new Error(t('documents.error'))
   beginPreparation(versionId, 'RECEIVED')
   try {
     const csrf = await csrfToken()
@@ -513,9 +506,6 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
       method: 'POST',
       headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
       body: JSON.stringify({
-        playerCount: preferences.playerCount,
-        beginnerCount: preferences.beginnerCount,
-        durationMinutes: preferences.durationMinutes,
         learningGoal: preferences.learningGoal ?? null,
       }),
     })
@@ -1090,21 +1080,14 @@ onBeforeUnmount(() => {
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
               </label>
 
-              <div class="grid gap-4 sm:grid-cols-3">
-                <template v-if="editionId">
-                  <label class="text-sm font-semibold">{{ t('documents.players') }}<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                  <label class="text-sm font-semibold">{{ t('documents.beginners') }}<input v-model.number="beginnerCount" type="number" min="0" :max="playerCount" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                  <label class="text-sm font-semibold">{{ t('documents.minutes') }}<input v-model.number="durationMinutes" type="number" min="2" max="180" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
-                </template>
-                <label class="text-sm font-semibold" :class="editionId ? 'sm:col-span-3' : ''">{{ t('documents.sourceType') }}
-                  <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
-                    <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
-                    <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
-                    <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
-                    <option value="OFFICIAL_ERRATA">{{ t('documents.type.errata') }}</option>
-                  </select>
-                </label>
-              </div>
+              <label class="block text-sm font-semibold">{{ t('documents.sourceType') }}
+                <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                  <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
+                  <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
+                  <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
+                  <option value="OFFICIAL_ERRATA">{{ t('documents.type.errata') }}</option>
+                </select>
+              </label>
             </div>
           </details>
 

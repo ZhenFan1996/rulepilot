@@ -88,9 +88,6 @@ class TeachingLessonAssemblyPolicyTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                2,
-                1,
-                30,
                 "Test game",
                 "Learn the rules",
                 List.of(

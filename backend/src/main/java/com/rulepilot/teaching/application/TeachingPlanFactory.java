@@ -19,16 +19,10 @@ public class TeachingPlanFactory {
 
     public TeachingPlan create(
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String createdBy,
             OutlineDraft outline) {
         return create(
                 documentVersionId,
-                playerCount,
-                beginnerCount,
-                durationMinutes,
                 null,
                 createdBy,
                 outline);
@@ -36,9 +30,6 @@ public class TeachingPlanFactory {
 
     public TeachingPlan create(
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String learningGoal,
             String createdBy,
             OutlineDraft outline) {
@@ -66,9 +57,6 @@ public class TeachingPlanFactory {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 documentVersionId,
-                playerCount,
-                beginnerCount,
-                durationMinutes,
                 learningGoal,
                 outline.gameTitle(),
                 outline.premise(),

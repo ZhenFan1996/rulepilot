@@ -40,7 +40,7 @@ import org.springframework.stereotype.Component;
 public class GroundedTeachingAgent {
 
     private static final Logger log = LoggerFactory.getLogger(GroundedTeachingAgent.class);
-    static final String GENERATOR_VERSION = "adaptive-teaching-v51-permission-ruling";
+    static final String GENERATOR_VERSION = "adaptive-teaching-v52-intrinsic-rulebook-scope";
     private static final Set<String> REUSABLE_GENERATOR_VERSIONS =
             Set.of(GENERATOR_VERSION);
     private final AssistantReadTools tools;
@@ -237,7 +237,6 @@ public class GroundedTeachingAgent {
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
         Map<String, LessonSection> reusable = reusableSections(plan, previousLesson);
-        Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int queriesPerTopic = baseQueryBudget(plan);
         List<LessonSection> sections = new ArrayList<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
@@ -245,7 +244,6 @@ public class GroundedTeachingAgent {
         SectionOutcome firstOutcome = baseSection(
                 plan,
                 first,
-                pacing.get(first.position()),
                 List.of(),
                 reusable,
                 assistantRunId,
@@ -267,7 +265,6 @@ public class GroundedTeachingAgent {
                         .map(planned -> executor.submit(() -> baseSection(
                                 plan,
                                 planned,
-                                pacing.get(planned.position()),
                                 sharedContext,
                                 reusable,
                                 assistantRunId,
@@ -302,7 +299,6 @@ public class GroundedTeachingAgent {
     private SectionOutcome baseSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
-            TeachingPacingPolicy.SectionPacing pacing,
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
@@ -310,7 +306,6 @@ public class GroundedTeachingAgent {
         return generateSection(
                 plan,
                 planned,
-                pacing,
                 priorSections,
                 reusableSections,
                 assistantRunId,
@@ -327,7 +322,6 @@ public class GroundedTeachingAgent {
     private SectionOutcome generateSection(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
-            TeachingPacingPolicy.SectionPacing pacing,
             List<PriorSectionContext> priorSections,
             Map<String, LessonSection> reusableSections,
             UUID assistantRunId,
@@ -358,7 +352,6 @@ public class GroundedTeachingAgent {
             TeachingSectionDraftCandidate composed = sectionDraftComposer.compose(
                     plan,
                     planned,
-                    pacing,
                     priorSections,
                     resolution.evidence(),
                     assistantRunId,
@@ -398,7 +391,6 @@ public class GroundedTeachingAgent {
         List<LessonSection> sections = new ArrayList<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
         Map<String, LessonSection> reusableSections = reusableSections(plan, previousLesson);
-        Map<Integer, TeachingPacingPolicy.SectionPacing> pacing = TeachingPacingPolicy.allocate(plan);
         int toolCalls = 0;
         int queriesPerTopic = Math.max(1, Math.min(6, maxToolCalls / plan.sections().size()));
         for (TeachingPlan.PlannedSection planned : plan.sections()) {
@@ -413,7 +405,6 @@ public class GroundedTeachingAgent {
             SectionOutcome outcome = generateSection(
                     plan,
                     planned,
-                    pacing.get(planned.position()),
                     lessonAssembly.continuityContext(sections),
                     reusableSections,
                     assistantRunId,

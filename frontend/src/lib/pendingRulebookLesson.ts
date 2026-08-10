@@ -1,9 +1,6 @@
 export interface PendingRulebookLesson {
   versionId: string
   editionId?: string
-  playerCount: number
-  beginnerCount: number
-  durationMinutes: number
   learningGoal?: string
 }
 
@@ -11,16 +8,19 @@ export function readPendingRulebookLessons(storage: Storage, username: string) {
   try {
     const parsed = JSON.parse(storage.getItem(storageKey(username)) ?? '[]') as unknown
     if (!Array.isArray(parsed)) return []
-    return parsed.slice(0, 5).filter((item): item is PendingRulebookLesson => {
-      if (!item || typeof item !== 'object') return false
+    return parsed.slice(0, 5).flatMap((item): PendingRulebookLesson[] => {
+      if (!item || typeof item !== 'object') return []
       const candidate = item as Partial<PendingRulebookLesson>
-      if (!boundedId(candidate.versionId) || !integerBetween(candidate.playerCount, 1, 20)) return false
-      if (candidate.editionId !== undefined && !boundedId(candidate.editionId)) return false
+      if (!boundedId(candidate.versionId)) return []
+      if (candidate.editionId !== undefined && !boundedId(candidate.editionId)) return []
       if (candidate.learningGoal !== undefined
-        && (typeof candidate.learningGoal !== 'string' || candidate.learningGoal.trim().length > 500)) return false
-      return integerBetween(candidate.beginnerCount, 0, candidate.playerCount)
-        && integerBetween(candidate.durationMinutes, 2, 180)
-    }).map(normalizePendingLesson)
+        && (typeof candidate.learningGoal !== 'string' || candidate.learningGoal.trim().length > 500)) return []
+      return [normalizePendingLesson({
+        versionId: candidate.versionId,
+        ...(candidate.editionId ? { editionId: candidate.editionId } : {}),
+        ...(candidate.learningGoal ? { learningGoal: candidate.learningGoal } : {}),
+      })]
+    })
   } catch {
     return []
   }
@@ -50,10 +50,6 @@ function storageKey(username: string) {
 
 function boundedId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 64
-}
-
-function integerBetween(value: unknown, minimum: number, maximum: number): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum
 }
 
 function normalizePendingLesson(pending: PendingRulebookLesson): PendingRulebookLesson {

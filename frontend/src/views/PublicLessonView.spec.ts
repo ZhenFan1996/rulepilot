@@ -14,6 +14,13 @@ const shellRoutes = [
   { path: '/discover/:bggId', name: 'game-discovery', component: { template: '<div />' } },
 ]
 
+function publicLessonRoutes() {
+  return [
+    { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+    { path: '/read/:planId/questions', name: 'public-lesson-questions', component: PublicLessonView },
+  ]
+}
+
 describe('PublicLessonView', () => {
   afterEach(() => {
     setLocale('zh-CN')
@@ -58,7 +65,7 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
@@ -71,7 +78,7 @@ describe('PublicLessonView', () => {
     const sidebar = wrapper.get('aside.fixed')
     expect(sidebar.classes()).toContain('lg:flex')
     expect(wrapper.find('header.tabletop-hero').exists()).toBe(true)
-    expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('bg-[#f5f0e8]'))).toBe(true)
+    expect(wrapper.findAll('a[href="/library"]').some((link) => link.classes().includes('drawer-link-active'))).toBe(true)
     expect(wrapper.text()).toContain('Wingspan')
     expect(wrapper.get('img[alt="翼展 的游戏封面"]').attributes('src')).toBe('/api/public/lessons/plan-1/cover')
     expect(wrapper.text()).toContain('关联桌游')
@@ -85,6 +92,8 @@ describe('PublicLessonView', () => {
     expect(wrapper.get('img[alt*="玩家板设置"]').attributes('src'))
       .toContain('/api/public/lessons/plan-1/pages/2/image/crop?x=100&y=200&width=500&height=300')
     expect(wrapper.text()).not.toContain('图标速查表')
+    expect(wrapper.find('#public-question').exists()).toBe(false)
+    expect(wrapper.get('a[href="/read/plan-1/questions"]').text()).toContain('规则答疑')
   })
 
   it('lets an anonymous reader ask and receive cited examples plus evidence-matched imagery', async () => {
@@ -144,15 +153,17 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
-    await router.push('/read/plan-1')
+    await router.push('/read/plan-1/questions')
     await router.isReady()
     const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
 
+    expect(wrapper.find('[data-testid="lesson-reading-column"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('读到哪一步卡住了？')
     await wrapper.get('#public-question').setValue('玩家板先放哪里？')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -198,6 +209,7 @@ describe('PublicLessonView', () => {
     expect(String(JSON.parse(String(learningRequest?.[1]?.body)).question)).toContain('证据不足')
 
     wrapper.unmount()
+    await router.push('/read/plan-1/questions')
     const restored = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
 
@@ -230,11 +242,11 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
-    await router.push('/read/plan-1')
+    await router.push('/read/plan-1/questions')
     await router.isReady()
     const wrapper = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
@@ -287,11 +299,11 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
-    await router.push('/read/plan-1')
+    await router.push('/read/plan-1/questions')
     await router.isReady()
     const wrapper = mount(PublicLessonView, { attachTo: document.body, global: { plugins: [router] } })
     await flushPromises()
@@ -349,11 +361,11 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
-    await router.push('/read/plan-1')
+    await router.push('/read/plan-1/questions')
     await router.isReady()
 
     const alice = mount(PublicLessonView, { global: { plugins: [router] } })
@@ -369,6 +381,7 @@ describe('PublicLessonView', () => {
 
     alice.unmount()
     username = 'bob'
+    await router.push('/read/plan-1/questions')
     const bob = mount(PublicLessonView, { global: { plugins: [router] } })
     await flushPromises()
 
@@ -414,7 +427,7 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })
@@ -428,7 +441,12 @@ describe('PublicLessonView', () => {
 
     expect(wrapper.text()).toContain('Set up your habitat')
     expect(wrapper.text()).toContain('Place your player mat')
-    expect(wrapper.text()).toContain('Ask the rulebook')
+    expect(wrapper.find('#public-question').exists()).toBe(false)
+    await router.push('/read/plan-1/questions')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Rule Q&A')
+    expect(wrapper.text()).toContain('Ask the Wingspan rulebook')
     await wrapper.get('#public-question').setValue('Where does my mat go?')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -465,7 +483,7 @@ describe('PublicLessonView', () => {
       routes: [
         { path: '/', name: 'home', component: { template: '<div />' } },
         { path: '/library', name: 'public-library', component: { template: '<div />' } },
-        { path: '/read/:planId', name: 'public-lesson', component: PublicLessonView },
+        ...publicLessonRoutes(),
         ...shellRoutes,
       ],
     })

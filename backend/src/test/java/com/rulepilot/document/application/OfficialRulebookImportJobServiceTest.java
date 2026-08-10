@@ -9,11 +9,14 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.rulepilot.document.domain.DocumentSourceType;
 import com.rulepilot.document.domain.DocumentVersion;
 import com.rulepilot.document.domain.OfficialRulebookImportJob;
+import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoff;
+import com.rulepilot.document.domain.OfficialRulebookImportJob.TeachingHandoffState;
 import com.rulepilot.document.domain.ProcessingStatus;
 import com.rulepilot.document.domain.RuleDocument;
 import java.time.Clock;
@@ -85,6 +88,41 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(launch.job().id()).isEqualTo(active.id());
         verify(executor, never()).execute(any());
         verify(imports, never()).importRulebook(any(), anyString(), any(), anyString(), anyBoolean(), anyString(), any());
+    }
+
+    @Test
+    void persistsTheAutomaticTeachingIntentBeforeStartingTheDownloadWorker() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        OfficialRulebookImportJobService service = service(jobs, imports, executor);
+
+        var launch = service.enqueue(automaticTeachingCommand(), "alice");
+
+        assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        assertThat(launch.job().teachingHandoff().learningGoal()).isEqualTo("重点讲清开局和第一轮。");
+        verify(executor).execute(any());
+    }
+
+    @Test
+    void reusesACompletedBoundImportAndUpgradesItToAutomaticTeaching() {
+        FakeJobs jobs = new FakeJobs();
+        UUID editionId = automaticTeachingCommand().editionId();
+        var completed = OfficialRulebookImportJob.queued(
+                UUID.randomUUID(), "alice", editionId, "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK, SOURCE, NOW);
+        jobs.insert(completed);
+        jobs.complete(completed.id(), UUID.randomUUID(), false, NOW);
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        TaskExecutor executor = mock(TaskExecutor.class);
+        OfficialRulebookImportJobService service = service(jobs, imports, executor);
+
+        var launch = service.enqueue(automaticTeachingCommand(), "alice");
+
+        assertThat(launch.reused()).isTrue();
+        assertThat(launch.job().id()).isEqualTo(completed.id());
+        assertThat(launch.job().teachingHandoff().state()).isEqualTo(TeachingHandoffState.WAITING_FOR_DOCUMENT);
+        verifyNoInteractions(executor, imports);
     }
 
     @Test
@@ -173,6 +211,17 @@ class OfficialRulebookImportJobServiceTest {
                 null, "Example Rules", DocumentSourceType.BASE_RULEBOOK, SOURCE, true);
     }
 
+    private OfficialRulebookImportJobService.Command automaticTeachingCommand() {
+        return new OfficialRulebookImportJobService.Command(
+                UUID.fromString("11111111-1111-1111-1111-111111111111"),
+                "Example Rules",
+                DocumentSourceType.BASE_RULEBOOK,
+                SOURCE,
+                true,
+                true,
+                "重点讲清开局和第一轮。");
+    }
+
     private UploadRuleDocumentService.UploadResult uploadResult(UUID versionId) {
         UUID documentId = UUID.randomUUID();
         RuleDocument document = RuleDocument.create(
@@ -203,15 +252,84 @@ class OfficialRulebookImportJobServiceTest {
         }
 
         @Override
+        public Optional<OfficialRulebookImportJob> findCompletedOwnedBySourceAndEdition(
+                String ownerUsername, String sourceUrl, UUID editionId) {
+            return values.values().stream()
+                    .filter(job -> job.ownerUsername().equals(ownerUsername))
+                    .filter(job -> job.sourceUrl().equals(sourceUrl))
+                    .filter(job -> java.util.Objects.equals(job.editionId(), editionId))
+                    .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED
+                            && job.documentVersionId() != null)
+                    .findFirst();
+        }
+
+        @Override
         public List<OfficialRulebookImportJob> findRecentOwned(String ownerUsername, int limit) {
             return values.values().stream().filter(job -> job.ownerUsername().equals(ownerUsername)).limit(limit).toList();
         }
 
         @Override
+        public void requestTeaching(UUID jobId, String learningGoal, Instant now) {
+            var job = values.get(jobId);
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(),
+                    TeachingHandoff.requested(learningGoal, now), now, job.completedAt()));
+        }
+
+        @Override
+        public List<OfficialRulebookImportJob> claimReadyTeaching(int limit, Instant now) {
+            List<OfficialRulebookImportJob> claimed = values.values().stream()
+                    .filter(job -> job.stage() == OfficialRulebookImportJob.Stage.COMPLETED)
+                    .filter(job -> job.teachingHandoff().state() == TeachingHandoffState.WAITING_FOR_DOCUMENT)
+                    .limit(limit)
+                    .toList();
+            for (var job : claimed) {
+                var launching = new TeachingHandoff(
+                        TeachingHandoffState.LAUNCHING,
+                        job.teachingHandoff().learningGoal(),
+                        null,
+                        null,
+                        now);
+                values.put(job.id(), copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                        job.documentVersionId(), job.duplicate(), job.errorCode(), launching, now, job.completedAt()));
+            }
+            return claimed.stream().map(job -> values.get(job.id())).toList();
+        }
+
+        @Override
+        public void completeTeachingLaunch(UUID jobId, UUID preparationRunId, Instant now) {
+            var job = values.get(jobId);
+            var launched = new TeachingHandoff(
+                    TeachingHandoffState.LAUNCHED,
+                    job.teachingHandoff().learningGoal(),
+                    preparationRunId,
+                    null,
+                    now);
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(), launched, now, job.completedAt()));
+        }
+
+        @Override
+        public void failTeachingLaunch(UUID jobId, String errorCode, Instant now) {
+            var job = values.get(jobId);
+            var failed = new TeachingHandoff(
+                    TeachingHandoffState.FAILED,
+                    job.teachingHandoff().learningGoal(),
+                    null,
+                    errorCode,
+                    now);
+            values.put(jobId, copy(job, job.stage(), job.downloadedBytes(), job.totalBytes(),
+                    job.documentVersionId(), job.duplicate(), job.errorCode(), failed, now, job.completedAt()));
+        }
+
+        @Override public int failInterruptedTeachingLaunches(Instant now) { return 0; }
+
+        @Override
         public void updateProgress(
                 UUID jobId, OfficialRulebookImportJob.Stage stage, long downloadedBytes, Long totalBytes, Instant now) {
             var job = values.get(jobId);
-            values.put(jobId, copy(job, stage, downloadedBytes, totalBytes, null, false, null, now, null));
+            values.put(jobId, copy(job, stage, downloadedBytes, totalBytes, null, false, null,
+                    job.teachingHandoff(), now, null));
             stages.add(stage);
         }
 
@@ -219,15 +337,24 @@ class OfficialRulebookImportJobServiceTest {
         public void complete(UUID jobId, UUID documentVersionId, boolean duplicate, Instant now) {
             var job = values.get(jobId);
             values.put(jobId, copy(job, OfficialRulebookImportJob.Stage.COMPLETED,
-                    job.downloadedBytes(), job.totalBytes(), documentVersionId, duplicate, null, now, now));
+                    job.downloadedBytes(), job.totalBytes(), documentVersionId, duplicate, null,
+                    job.teachingHandoff(), now, now));
             stages.add(OfficialRulebookImportJob.Stage.COMPLETED);
         }
 
         @Override
         public void fail(UUID jobId, String errorCode, Instant now) {
             var job = values.get(jobId);
+            TeachingHandoff handoff = job.teachingHandoff().state() == TeachingHandoffState.NOT_REQUESTED
+                    ? job.teachingHandoff()
+                    : new TeachingHandoff(
+                            TeachingHandoffState.FAILED,
+                            job.teachingHandoff().learningGoal(),
+                            null,
+                            "IMPORT_FAILED",
+                            now);
             values.put(jobId, copy(job, OfficialRulebookImportJob.Stage.FAILED,
-                    job.downloadedBytes(), job.totalBytes(), null, false, errorCode, now, now));
+                    job.downloadedBytes(), job.totalBytes(), null, false, errorCode, handoff, now, now));
             stages.add(OfficialRulebookImportJob.Stage.FAILED);
         }
 
@@ -241,12 +368,13 @@ class OfficialRulebookImportJobServiceTest {
                 UUID documentVersionId,
                 boolean duplicate,
                 String errorCode,
+                TeachingHandoff teachingHandoff,
                 Instant updatedAt,
                 Instant completedAt) {
             return new OfficialRulebookImportJob(
                     job.id(), job.ownerUsername(), job.editionId(), job.title(), job.sourceType(), job.sourceUrl(),
                     stage, downloadedBytes, totalBytes, documentVersionId, duplicate, errorCode,
-                    job.createdAt(), updatedAt, completedAt);
+                    teachingHandoff, job.createdAt(), updatedAt, completedAt);
         }
     }
 }

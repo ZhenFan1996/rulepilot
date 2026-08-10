@@ -104,10 +104,9 @@ public class TeachingPlanRemovalService {
         });
     }
 
-    private record DuplicateKey(UUID documentVersionId, int playerCount, int beginnerCount, int durationMinutes) {
+    private record DuplicateKey(UUID documentVersionId) {
         static DuplicateKey from(TeachingPlan plan) {
-            return new DuplicateKey(
-                    plan.documentVersionId(), plan.playerCount(), plan.beginnerCount(), plan.durationMinutes());
+            return new DuplicateKey(plan.documentVersionId());
         }
     }
 

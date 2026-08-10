@@ -21,7 +21,7 @@ class TeachingPlanFactoryTest {
                         topic("launch-and-listen", "Launch probes and listen for signals", false, List.of("core_loop")),
                         topic("close-the-fifth-round", "Close round five and score", false, List.of("end", "scoring"))));
 
-        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 3, 30, "player", outline);
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
 
         assertThat(plan.gameTitle()).isEqualTo("SETI");
         assertThat(plan.sections()).extracting(section -> section.title()).containsExactly(
@@ -70,7 +70,7 @@ class TeachingPlanFactoryTest {
                                 "end", "结束并计分", "完成终局计分。", true, false,
                                 List.of("End of the Game"), List.of("end", "scoring"), List.of(15))));
 
-        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), 4, 4, 30, "player", outline);
+        var plan = new TeachingPlanFactory().create(UUID.randomUUID(), "player", outline);
 
         assertThat(plan.sections().getFirst().sourcePageNumbers()).containsExactly(5, 7);
         assertThat(plan.sections().get(1).sourcePageNumbers()).containsExactly(7);
@@ -88,9 +88,6 @@ class TeachingPlanFactoryTest {
 
         var plan = new TeachingPlanFactory().create(
                 UUID.randomUUID(),
-                4,
-                4,
-                30,
                 "  先学会开局，再用例子解释行动衔接。  ",
                 "player",
                 outline);

@@ -22,9 +22,6 @@ class TeachingSectionEvidenceRetrieverTest {
     private final TeachingPlan plan = new TeachingPlan(
             UUID.randomUUID(),
             documentVersionId,
-            4,
-            4,
-            20,
             "Test game",
             "A focused retrieval fixture.",
             List.of(new PlannedSection(

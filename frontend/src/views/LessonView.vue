@@ -9,6 +9,7 @@ import { notifyLoginRequired } from '@/lib/authSession'
 import LessonComprehensionPanel from '@/components/LessonComprehensionPanel.vue'
 import LessonGenerationStatus from '@/components/LessonGenerationStatus.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
+import LessonModeNav from '@/components/LessonModeNav.vue'
 import LessonOfflineKnowledgePanel from '@/components/LessonOfflineKnowledgePanel.vue'
 import LessonReaderStateSurface from '@/components/LessonReaderStateSurface.vue'
 import type { CsrfResponse } from '@/composables/useLessonAnswers'
@@ -480,13 +481,17 @@ onUnmounted(() => {
 
 <template>
   <AppShell>
-    <div data-testid="private-lesson-surface" class="min-h-screen bg-canvas pb-24 text-ink lg:pb-10">
+    <div data-testid="private-lesson-surface" class="min-h-screen bg-canvas pb-10 text-ink">
       <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-4xl items-center justify-between gap-4 px-5 py-4 sm:px-8">
           <RouterLink :to="{ name: 'lessons' }" class="text-sm font-semibold text-indigo">← {{ t('lesson.reader.back') }}</RouterLink>
-          <div class="flex items-center gap-3 sm:gap-4">
-            <RouterLink v-if="lesson" :to="{ name: 'public-lesson', params: { planId } }" class="text-sm font-semibold text-indigo">{{ t('lesson.reader.public') }}</RouterLink>
-          </div>
+          <LessonModeNav
+            v-if="lesson"
+            :plan-id="planId"
+            guide-route="lesson"
+            questions-route="lesson-questions"
+            active="guide"
+          />
         </div>
       </header>
 
@@ -543,7 +548,7 @@ onUnmounted(() => {
           @cover-error="catalogCoverUnavailable = true"
         >
           <template #actions>
-            <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-paper/25 bg-paper/10 px-4 text-sm font-semibold text-paper">{{ t('lesson.reader.public') }}</RouterLink>
+            <RouterLink :to="{ name: 'public-lesson', params: { planId } }" class="inline-flex min-h-11 items-center rounded-xl border border-[rgba(248,239,223,0.25)] bg-[rgba(248,239,223,0.1)] px-4 text-sm font-semibold text-[#f8efdf]">{{ t('lesson.reader.public') }}</RouterLink>
           </template>
         </LessonGuideHero>
 
@@ -572,18 +577,6 @@ onUnmounted(() => {
           @revisit-chapter="selectSection"
         />
       </article>
-
-      <RouterLink
-        v-if="lesson"
-        :to="{ name: 'lesson-questions', params: { planId } }"
-        class="group fixed bottom-5 right-4 z-30 flex min-h-14 max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-indigo/20 bg-indigo px-4 py-3 text-left text-white shadow-[0_14px_40px_rgba(32,37,44,0.24)] transition hover:-translate-y-1 hover:bg-[#304ea9] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-gold/50 sm:bottom-7 sm:right-7"
-      >
-        <span class="grid size-9 shrink-0 place-items-center rounded-xl bg-gold text-xl text-ink" aria-hidden="true">?</span>
-        <span class="min-w-0">
-          <span class="block text-sm font-bold">{{ t('questions.floatingTitle') }}</span>
-          <span class="hidden text-xs text-white/70 sm:block">{{ t('questions.floatingHint') }}</span>
-        </span>
-      </RouterLink>
     </div>
   </AppShell>
 </template>

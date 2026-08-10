@@ -235,11 +235,6 @@ class LessonDraftValidatorTest {
                 "完成开局",
                 "让玩家完成开局布置",
                 List.of("开局"),
-                2,
-                1,
-                15,
-                120,
-                3,
                 List.of(),
                 List.of(new EvidenceInput(chunkId, "SETUP", "Setup", "Place the board in the center.", 3, 3)),
                 List.of(new PageImageInput(3, "image/png", new byte[] {1}, 100, 100)));

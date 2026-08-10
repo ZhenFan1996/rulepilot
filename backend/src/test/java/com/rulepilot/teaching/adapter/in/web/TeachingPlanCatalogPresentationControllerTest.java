@@ -27,7 +27,7 @@ class TeachingPlanCatalogPresentationControllerTest {
         UUID planId = UUID.randomUUID();
         UUID editionId = UUID.randomUUID();
         TeachingPlan plan = new TeachingPlan(
-                planId, UUID.randomUUID(), 4, 2, 30, "Rules title", "Premise", List.of(), "alice",
+                planId, UUID.randomUUID(), "Rules title", "Premise", List.of(), "alice",
                 Instant.parse("2026-08-06T00:00:00Z"));
         var game = new CatalogGamePresentationLookup.Presentation(
                 editionId,

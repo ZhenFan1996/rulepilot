@@ -171,9 +171,6 @@ class PublicLessonReaderTest {
         TeachingPlan plan = new TeachingPlan(
                 planId,
                 versionId,
-                3,
-                2,
-                30,
                 "Orbit",
                 "Learn the orbit game.",
                 List.of(new TeachingPlan.PlannedSection(1, "setup", "Setup", "Set up the board.", true, true,

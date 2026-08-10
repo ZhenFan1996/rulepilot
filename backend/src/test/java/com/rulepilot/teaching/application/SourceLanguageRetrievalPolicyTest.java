@@ -53,7 +53,7 @@ class SourceLanguageRetrievalPolicyTest {
     private OutlineRequest englishRequest() {
         String source = "PLAYER SETUP Each player takes starting resources. END OF GAME Final scoring begins "
                 + "after five rounds. During each turn choose an action and follow its printed steps. ".repeat(8);
-        return new OutlineRequest(4, 4, 25, List.of(new PageInput(1, source)));
+        return new OutlineRequest( List.of(new PageInput(1, source)));
     }
 
     private OutlineDraft outline(List<String> queries) {

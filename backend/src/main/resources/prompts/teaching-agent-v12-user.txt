@@ -1,0 +1,35 @@
+<task>
+  <section>{section}</section>
+  <section_objective>{objective}</section_objective>
+  <coverage_checklist>{coverage}</coverage_checklist>
+  <required_rule_intents>{requiredRules}</required_rule_intents>
+  <visual_evidence available="{visualEvidenceAvailable}" attached_rulebook_pages="{visualPages}" />
+  <output_language>Simplified Chinese with readable official game terms</output_language>
+</task>
+
+<untrusted_prior_section_continuity_data>
+{continuity}
+</untrusted_prior_section_continuity_data>
+
+<untrusted_lesson_chapter_scope_data>
+{chapterScope}
+</untrusted_lesson_chapter_scope_data>
+
+<untrusted_current_section_evidence_data>
+{evidence}
+</untrusted_current_section_evidence_data>
+
+<revision_instruction>
+{repair}
+</revision_instruction>
+
+Teach every evidence-supported required_rule_intents item. Let the rule's actual complexity determine the number and
+organization of steps. Do not omit a supported branch to fit a target duration or a fixed teaching template.
+
+When visual_evidence.available is true, include a useful VISUAL step with a non-null visualFocus on an attached page.
+Otherwise teach directly from the supplied text evidence without discussing images or missing pages.
+
+Before returning the schema, silently check that a beginner can answer:
+1. What does this topic change or decide?
+2. What do I do or observe, including every supported branch and exception?
+3. In what order does it happen, and what ends the procedure?

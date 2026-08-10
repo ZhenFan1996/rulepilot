@@ -49,7 +49,6 @@ final class TeachingSectionDraftComposer {
     TeachingSectionDraftCandidate compose(
             TeachingPlan plan,
             TeachingPlan.PlannedSection planned,
-            TeachingPacingPolicy.SectionPacing pacing,
             List<PriorSectionContext> priorSections,
             List<RuleEvidence> evidence,
             UUID assistantRunId,
@@ -58,7 +57,6 @@ final class TeachingSectionDraftComposer {
         TeachingLessonModel.SectionRequest modelRequest = requestFactory.create(
                 plan,
                 planned,
-                pacing,
                 priorSections,
                 evidence,
                 includeVisualEvidence,

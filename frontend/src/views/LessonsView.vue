@@ -23,9 +23,6 @@ import {
 interface TeachingPlan {
   id: string
   documentVersionId: string
-  playerCount: number
-  beginnerCount: number
-  durationMinutes: number
   gameTitle: string
   premise: string
   createdAt: string
@@ -497,10 +494,6 @@ onBeforeUnmount(() => {
           <p v-else class="mt-4 min-h-12 text-sm leading-6 text-ink/60" aria-live="polite">{{ progressText(plan) }}</p>
           <p v-if="progressErrors[plan.id]" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800" role="status">{{ t('lessons.live.retrying') }}</p>
           <p v-if="!showingAllVersions && versionCount(plan.id) > 1" class="mt-3 text-xs leading-5 text-ink/45">{{ t('lessons.history.hidden', { count: versionCount(plan.id) - 1 }) }}</p>
-          <dl class="mt-5 grid grid-cols-2 gap-3 rounded-2xl bg-canvas p-4 text-sm">
-            <div><dt class="text-ink/45">{{ t('lessons.meta.beginners') }}</dt><dd class="mt-1 font-semibold">{{ t('lessons.meta.people', { count: plan.beginnerCount }) }}</dd></div>
-            <div><dt class="text-ink/45">{{ t('lessons.meta.duration') }}</dt><dd class="mt-1 font-semibold">{{ t('lessons.meta.minutes', { count: plan.durationMinutes }) }}</dd></div>
-          </dl>
           <div class="mt-6 flex items-center justify-between gap-3">
             <span v-if="plan.id === rememberedPlanId" class="text-xs font-semibold text-indigo">{{ t('lessons.lastOpened') }}</span>
             <span v-else class="text-xs text-ink/35">{{ t('lessons.chapterCount', { count: plan.sections.length }) }}</span>

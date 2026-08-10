@@ -38,21 +38,14 @@ public class TeachingPlanLauncher {
 
     public synchronized PlanLaunch launch(
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String ownerUsername) {
-        return launch(documentVersionId, playerCount, beginnerCount, durationMinutes, null, ownerUsername);
+        return launch(documentVersionId, null, ownerUsername);
     }
 
     public synchronized PlanLaunch launch(
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String learningGoal,
             String ownerUsername) {
-        validate(playerCount, beginnerCount, durationMinutes);
         String normalizedLearningGoal = normalizeLearningGoal(learningGoal);
         var existing = runs.findLatestOwned(
                         AssistantRunMode.TEACHING_PREPARATION, documentVersionId, ownerUsername)
@@ -68,9 +61,6 @@ public class TeachingPlanLauncher {
             executor.execute(() -> prepare(
                     run,
                     documentVersionId,
-                    playerCount,
-                    beginnerCount,
-                    durationMinutes,
                     normalizedLearningGoal,
                     ownerUsername));
         } catch (RuntimeException schedulingFailure) {
@@ -83,9 +73,6 @@ public class TeachingPlanLauncher {
     private void prepare(
             RunSnapshot initial,
             UUID documentVersionId,
-            int playerCount,
-            int beginnerCount,
-            int durationMinutes,
             String learningGoal,
             String ownerUsername) {
         RunSnapshot current = initial;
@@ -98,9 +85,6 @@ public class TeachingPlanLauncher {
                     "Reading rulebook pages and organizing the lesson");
             var plan = plans.create(
                     documentVersionId,
-                    playerCount,
-                    beginnerCount,
-                    durationMinutes,
                     learningGoal,
                     ownerUsername,
                     current.id());
@@ -139,13 +123,6 @@ public class TeachingPlanLauncher {
         return failure instanceof IllegalArgumentException
                 ? "TEACHING_PREPARATION_INVALID_PLAN"
                 : "TEACHING_PREPARATION_FAILED";
-    }
-
-    private void validate(int playerCount, int beginnerCount, int durationMinutes) {
-        if (playerCount < 1 || playerCount > 20 || beginnerCount < 0 || beginnerCount > playerCount
-                || durationMinutes < 2 || durationMinutes > 180) {
-            throw new IllegalArgumentException("teaching preferences are invalid");
-        }
     }
 
     private String normalizeLearningGoal(String learningGoal) {

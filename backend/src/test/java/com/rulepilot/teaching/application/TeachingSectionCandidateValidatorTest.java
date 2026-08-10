@@ -64,9 +64,6 @@ class TeachingSectionCandidateValidatorTest {
         return new TeachingPlan(
                 UUID.randomUUID(),
                 versionId,
-                4,
-                2,
-                20,
                 "Game",
                 "Premise",
                 List.of(new TeachingPlan.PlannedSection(
@@ -88,11 +85,6 @@ class TeachingSectionCandidateValidatorTest {
                 "开局准备",
                 "Explain how to place the central board before the first turn.",
                 List.of("setup"),
-                4,
-                2,
-                20,
-                60,
-                2,
                 List.of(),
                 List.of(new EvidenceInput(
                         chunkId,

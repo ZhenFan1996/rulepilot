@@ -1,0 +1,41 @@
+package com.rulepilot.document;
+
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Persistent handoffs whose imported document is ready for background teaching.
+ *
+ * <p>The document module owns the durable player intent and atomically claims ready work. The teaching module owns
+ * creation of Assistant Runs and reports only the resulting run identity or a bounded failure code.</p>
+ */
+public interface RulebookTeachingHandoffs {
+
+    List<ReadyHandoff> claimReady(int limit);
+
+    void markLaunched(UUID importJobId, UUID preparationRunId);
+
+    void markFailed(UUID importJobId, String errorCode);
+
+    int failInterruptedLaunches();
+
+    record ReadyHandoff(
+            UUID importJobId,
+            UUID documentVersionId,
+            String ownerUsername,
+            String learningGoal) {
+
+        public ReadyHandoff {
+            if (importJobId == null || documentVersionId == null || ownerUsername == null || ownerUsername.isBlank()) {
+                throw new IllegalArgumentException("ready rulebook teaching handoff is invalid");
+            }
+            ownerUsername = ownerUsername.strip();
+            if (learningGoal != null) {
+                learningGoal = learningGoal.strip();
+                if (learningGoal.isBlank() || learningGoal.length() > 500) {
+                    throw new IllegalArgumentException("ready rulebook teaching goal is invalid");
+                }
+            }
+        }
+    }
+}

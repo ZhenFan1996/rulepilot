@@ -57,12 +57,16 @@ describe('AppShell', () => {
     })
     await flushPromises()
 
-    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    const backgroundWorkTrigger = wrapper.get('[data-testid="background-work-trigger-desktop"]')
+    expect(backgroundWorkTrigger.element.parentElement?.id).toBe('background-work-desktop-trigger')
+    expect(backgroundWorkTrigger.classes()).not.toContain('fixed')
+    expect(wrapper.get('[data-testid="background-work-trigger-mobile"]').element.closest('header')).not.toBeNull()
+    await backgroundWorkTrigger.trigger('click')
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).toContain('可以继续浏览')
     expect(wrapper.text()).toContain('公开讲解')
     expect(wrapper.text()).toContain('我的讲解')
-    expect(wrapper.get('button[aria-label="后台任务"]').text()).toContain('1')
+    expect(backgroundWorkTrigger.text()).toContain('1')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('中文')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('EN')
 
@@ -148,7 +152,7 @@ describe('AppShell', () => {
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
 
-    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).not.toContain('后台处理已经结束')
 
@@ -175,14 +179,62 @@ describe('AppShell', () => {
     await router.isReady()
     const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
     await flushPromises()
-    expect(wrapper.get('button[aria-label="后台任务"]').text()).not.toContain('1')
+    expect(wrapper.get('[data-testid="background-work-trigger-desktop"]').text()).not.toContain('1')
 
     notifyTeachingLaunched({ planId: 'plan-2', runId: 'run-2', gameTitle: '卡坦岛' })
     await flushPromises()
 
-    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('卡坦岛')
     expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-2')
+    wrapper.unmount()
+  })
+
+  it('shows the persisted recommendation handoff until real guide preparation is running', async () => {
+    const updatedAt = new Date().toISOString()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/preparation-run-1')) {
+        return response({ run: { id: 'preparation-run-1', state: 'LESSON_PLANNING' } })
+      }
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-waiting', title: '卡坦岛规则书', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-waiting', errorCode: null,
+        teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null,
+        teachingErrorCode: null, updatedAt,
+      }, {
+        id: 'import-launched', title: '展翅翱翔规则书', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-launched', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        teachingErrorCode: null, updatedAt,
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-waiting', title: '卡坦岛规则书' },
+        latestVersion: { id: 'version-waiting', status: 'READY' },
+      }, {
+        document: { id: 'document-launched', title: '展翅翱翔规则书' },
+        latestVersion: { id: 'version-launched', status: 'READY' },
+      }])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, { slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] } })
+    await flushPromises()
+
+    const trigger = wrapper.get('[data-testid="background-work-trigger-desktop"]')
+    expect(trigger.text()).toContain('2')
+    await trigger.trigger('click')
+
+    expect(wrapper.text()).toContain('规则书已保存，读取完成后会自动开始讲解')
+    expect(wrapper.text()).toContain('正在读取规则并建立讲解结构')
+    expect(wrapper.text()).toContain('卡坦岛规则书')
+    expect(wrapper.text()).toContain('展翅翱翔规则书')
     wrapper.unmount()
   })
 
@@ -212,7 +264,7 @@ describe('AppShell', () => {
     await vi.advanceTimersByTimeAsync(15_000)
     await flushPromises()
     expect(activeReads).toBe(2)
-    await wrapper.get('button[aria-label="后台任务"]').trigger('click')
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
     expect(wrapper.text()).toContain('跨标签页规则书')
     expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toContain('run-other-tab')
     wrapper.unmount()

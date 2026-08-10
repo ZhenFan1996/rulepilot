@@ -14,7 +14,7 @@ const imageUnavailable = ref(false)
 const imageLoaded = ref(false)
 const initials = computed(() => props.title.trim().slice(0, 2).toUpperCase())
 const tone = computed(() => [
-  ['#324864', '#f5f0e8'],
+  ['#315264', '#f2ead9'],
   ['#754638', '#fff5e9'],
   ['#4d6e59', '#edf5eb'],
   ['#704b65', '#fff1fa'],

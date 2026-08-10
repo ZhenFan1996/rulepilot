@@ -761,7 +761,7 @@ class TeachingPlanServiceTest {
                         detailedTopic("ending", "Game end", "Resolve the winner", List.of(5))));
         OutlineDraft source = new FakeTeachingOutlineModel()
                 .organize(new com.rulepilot.teaching.TeachingOutlineModel.OutlineRequest(
-                        4, 4, 30, pages, List.of()));
+                        pages, List.of()));
 
         OutlineDraft augmented = VisualOutlineEvidencePolicy.augmentVisualCoverage(model, source);
 
