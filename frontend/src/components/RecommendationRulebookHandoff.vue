@@ -119,7 +119,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   progress: '完整链路进度', current: '现在正在做', pollingWarning: '暂时没有拿到最新进度，正在自动重试；已确认的进度不会倒退。',
   gameBound: '桌游已绑定', rulebook: '获取规则书', document: '读取规则书', lesson: '生成讲解', questions: '进入答疑',
   readLesson: '打开已生成的讲解', askQuestions: '切换为规则答疑', catalog: '我的桌游',
-  readRulebook: '先阅读原规则书', rulebookReady: '规则书已经可以阅读；讲解会继续在后台生成。',
+  readRulebook: '先阅读原规则书', rulebookReady: '规则书已经可以阅读；讲解会继续在后台生成。', rulebookAvailable: '原规则书已就绪，可随时与讲解对照阅读。',
   readable: '讲解已有可读内容；后台仍可能继续核对和补全。', complete: '讲解已经完整生成并通过后台收尾。',
   phase: {
     GAME_BINDING: '正在把推荐结果加入“我的桌游”', RULEBOOK_DISCOVERY: '正在寻找可审阅的规则书来源', SOURCE_REVIEW: '等待你核对规则书语言和版本',
@@ -144,7 +144,7 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   progress: 'End-to-end progress', current: 'Working on', pollingWarning: 'The latest update is temporarily unavailable. Retrying automatically without rolling back confirmed progress.',
   gameBound: 'Game linked', rulebook: 'Get rulebook', document: 'Read rules', lesson: 'Generate guide', questions: 'Start Q&A',
   readLesson: 'Open the generated guide', askQuestions: 'Switch to rules Q&A', catalog: 'My Games',
-  readRulebook: 'Read the original rulebook now', rulebookReady: 'The rulebook is readable now while the guide continues in the background.',
+  readRulebook: 'Read the original rulebook now', rulebookReady: 'The rulebook is readable now while the guide continues in the background.', rulebookAvailable: 'The original rulebook is ready to compare with the guide at any time.',
   readable: 'Readable guide content is available while background review may continue.', complete: 'The complete guide is generated and background finishing is done.',
   phase: {
     GAME_BINDING: 'Adding the recommendation to My Games', RULEBOOK_DISCOVERY: 'Finding reviewable rulebook sources', SOURCE_REVIEW: 'Waiting for your language and edition review',
@@ -744,8 +744,8 @@ onBeforeUnmount(() => {
         </ol>
         <p class="mt-4 rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/60">{{ copy.safe }}</p>
         <p v-if="pollingWarning" class="mt-3 rounded-lg bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900" role="status">{{ copy.pollingWarning }}</p>
-        <div v-if="projection.canReadRulebook && !projection.canReadLesson" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
-          <p>{{ copy.rulebookReady }}</p>
+        <div v-if="projection.canReadRulebook" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/5 p-4 text-sm leading-6 text-ink/65">
+          <p>{{ projection.canReadLesson ? copy.rulebookAvailable : copy.rulebookReady }}</p>
           <button type="button" class="mt-3 min-h-11 rounded-lg border border-indigo/25 px-4 font-semibold text-indigo" @click="emit('open-rulebook', journeyStatus)">{{ copy.readRulebook }}</button>
         </div>
         <div v-if="projection.state === 'failed' || projection.canReadLesson && projection.retryAction" class="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800" role="alert">
