@@ -118,6 +118,46 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
   await expect(page).toHaveURL('/lesson/plan-1/questions')
 })
 
+test('keeps the game identity and primary action in proportion on mobile', async ({ page }) => {
+  await mockOnboardingApis(page, { recommendations: [hotGame], suggestions: [candidate] })
+  await page.setViewportSize({ width: 390, height: 844 })
+
+  await page.goto('/discover/42')
+  const coverColumn = page.getByTestId('game-cover-column')
+  const heading = page.getByRole('heading', { name: 'Catalog Game' })
+  const primaryAction = page.getByRole('button', { name: '选择这款桌游并找规则书' })
+  await expect(coverColumn).toBeVisible()
+  await expect(heading).toBeVisible()
+  await expect(primaryAction).toBeVisible()
+
+  const proportions = await page.evaluate(() => {
+    const cover = document.querySelector<HTMLElement>('[data-testid="game-cover-column"]')!
+    const panel = cover.closest<HTMLElement>('section')!
+    const title = panel.querySelector<HTMLElement>('h1')!
+    const primary = panel.querySelector<HTMLElement>('button')!
+    const coverRect = cover.getBoundingClientRect()
+    const panelRect = panel.getBoundingClientRect()
+    const titleRect = title.getBoundingClientRect()
+    const primaryRect = primary.getBoundingClientRect()
+    return {
+      hasHorizontalOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+      coverShare: coverRect.width / panelRect.width,
+      coverHeight: coverRect.height,
+      coverEndsBeforeTitle: coverRect.right < titleRect.left,
+      titleTop: titleRect.top,
+      primaryBottom: primaryRect.bottom,
+      viewportHeight: window.innerHeight,
+    }
+  })
+
+  expect(proportions.hasHorizontalOverflow).toBe(false)
+  expect(proportions.coverShare).toBeLessThanOrEqual(0.42)
+  expect(proportions.coverHeight).toBeLessThanOrEqual(210)
+  expect(proportions.coverEndsBeforeTitle).toBe(true)
+  expect(proportions.titleTop).toBeLessThan(420)
+  expect(proportions.primaryBottom).toBeLessThan(proportions.viewportHeight)
+})
+
 test('keeps manual onboarding and the ready guide usable when BGG fails on mobile', async ({ page }) => {
   await mockOnboardingApis(page, { recommendations: null, suggestions: null })
   await page.setViewportSize({ width: 390, height: 844 })

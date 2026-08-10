@@ -198,30 +198,34 @@ watch(locale, load)
         <div class="h-72 rounded-xl bg-ink/8 sm:h-96" />
       </div>
 
-      <section v-else-if="game" class="tabletop-panel player-board mt-5 grid gap-8 p-4 sm:p-7 lg:grid-cols-[19rem_1fr]">
-        <div data-testid="game-cover-column" class="self-start rounded-xl border border-ink/8 bg-canvas p-4">
-          <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full object-contain" referrerpolicy="no-referrer">
-          <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="mt-4 flex justify-center border-t border-ink/8 pt-4"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-[137px]" width="342" height="76"></a>
-        </div>
-        <div class="min-w-0 self-center">
-          <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
-          <h1 class="mt-2 font-display text-4xl font-semibold tracking-tight sm:text-5xl">{{ game.name }}</h1>
-          <p v-if="game.officialNameLocalized" class="mt-2 text-sm font-medium text-copper">{{ game.originalName }} · {{ copy.officialName }}</p>
-          <p class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
-          <ul v-if="stats.length" class="mt-5 flex flex-wrap gap-2" :aria-label="copy.stats">
-            <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-9 px-3 text-sm">{{ stat }}</li>
-          </ul>
-          <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <button type="button" :disabled="selecting" class="min-h-12 rounded-xl bg-felt px-6 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" @click="selectGame">
-              {{ selecting ? copy.selecting : copy.select }}
-            </button>
-            <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="min-h-12 rounded-xl border border-ink/15 px-5 py-3 text-center text-sm font-semibold text-indigo">{{ copy.source }} ↗</a>
+      <section v-else-if="game" class="tabletop-panel player-board mt-5 grid min-w-0 gap-6 p-4 sm:gap-8 sm:p-7">
+        <div data-testid="game-detail-hero" class="game-detail-hero grid min-w-0">
+          <div data-testid="game-cover-column" class="game-detail-cover min-w-0 self-start rounded-xl border border-ink/8 bg-canvas p-2 sm:p-3 lg:p-4">
+            <img v-if="game.imageUrl || game.thumbnailUrl" :src="game.imageUrl || game.thumbnailUrl" :alt="copy.cover(game.name)" class="mx-auto aspect-[4/5] h-auto w-full max-w-full object-contain" referrerpolicy="no-referrer">
+            <a href="https://boardgamegeek.com" target="_blank" rel="noopener noreferrer" class="mt-3 flex justify-center border-t border-ink/8 pt-3 lg:mt-4 lg:pt-4"><img src="/powered-by-bgg-rgb.svg" alt="Powered by BoardGameGeek" class="h-auto w-24 lg:w-[137px]" width="342" height="76"></a>
+          </div>
+          <div class="game-detail-summary">
+            <div data-testid="game-detail-identity" class="game-detail-identity min-w-0 self-center">
+              <p class="tabletop-kicker">{{ copy.eyebrow }}</p>
+              <h1 class="mt-2 font-display text-[1.85rem] font-semibold leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{{ game.name }}</h1>
+              <p v-if="game.officialNameLocalized" class="mt-2 text-xs font-medium leading-5 text-copper sm:text-sm">{{ game.originalName }} · {{ copy.officialName }}</p>
+              <p class="mt-2 text-sm text-ink/45">{{ game.publicationYear ?? copy.unknownYear }}</p>
+            </div>
+            <ul v-if="stats.length" data-testid="game-detail-stats" class="game-detail-stats flex min-w-0 flex-wrap gap-2" :aria-label="copy.stats">
+              <li v-for="stat in stats" :key="stat" class="tabletop-chip min-h-8 px-3 text-xs sm:min-h-9 sm:text-sm">{{ stat }}</li>
+            </ul>
+            <div data-testid="game-detail-actions" class="game-detail-actions flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+              <button type="button" :disabled="selecting" class="min-h-12 w-full rounded-xl bg-felt px-5 py-3 font-semibold leading-5 text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto sm:px-6" @click="selectGame">
+                {{ selecting ? copy.selecting : copy.select }}
+              </button>
+              <a :href="game.bggUrl" target="_blank" rel="noopener noreferrer" class="min-h-12 w-full rounded-xl border border-ink/15 px-5 py-3 text-center text-sm font-semibold text-indigo sm:w-auto">{{ copy.source }} ↗</a>
+            </div>
           </div>
         </div>
-        <div data-testid="game-long-details" class="border-t border-ink/10 pt-6 lg:col-span-2">
+        <div data-testid="game-long-details" class="min-w-0 border-t border-ink/10 pt-6">
           <p v-if="translating" class="text-xs font-semibold text-copper" role="status">{{ copy.translating }}</p>
           <p v-else-if="game.descriptionTranslated" class="text-xs font-semibold text-copper">{{ copy.translation }}</p>
-          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68">{{ game.description }}</p>
+          <p v-if="game.description" :class="game.descriptionTranslated || translating ? 'mt-2' : ''" class="max-w-5xl whitespace-pre-line text-[0.95rem] leading-8 text-ink/68 [overflow-wrap:anywhere]">{{ game.description }}</p>
           <dl v-if="game.designers.length || game.publishers.length || game.mechanics.length || game.categories.length" class="mt-6 grid gap-4 border-t border-ink/10 pt-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <div v-if="game.designers.length"><dt class="font-semibold text-ink/45">{{ copy.designers }}</dt><dd class="mt-1 leading-6">{{ game.designers.join('、') }}</dd></div>
             <div v-if="game.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ game.publishers.join('、') }}</dd></div>
@@ -230,7 +234,7 @@ watch(locale, load)
           </dl>
           <p class="mt-5 text-xs leading-5 text-ink/45">{{ copy.evidenceBoundary }}</p>
         </div>
-        <div class="border-t border-ink/10 pt-6 lg:col-span-2">
+        <div class="min-w-0 border-t border-ink/10 pt-6">
           <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 class="font-display text-2xl font-semibold">{{ copy.editionImages }}</h2>
@@ -264,3 +268,71 @@ watch(locale, load)
     </main>
   </AppShell>
 </template>
+
+<style scoped>
+.game-detail-hero {
+  grid-template-areas:
+    'cover identity'
+    'stats stats'
+    'actions actions';
+  grid-template-columns: minmax(0, 7.25rem) minmax(0, 1fr);
+  column-gap: 1rem;
+  row-gap: 1rem;
+}
+
+.game-detail-summary {
+  display: contents;
+}
+
+.game-detail-cover {
+  grid-area: cover;
+}
+
+.game-detail-identity {
+  grid-area: identity;
+}
+
+.game-detail-stats {
+  grid-area: stats;
+}
+
+.game-detail-actions {
+  grid-area: actions;
+}
+
+@media (min-width: 640px) {
+  .game-detail-hero {
+    grid-template-columns: minmax(0, 10rem) minmax(0, 1fr);
+    column-gap: 1.5rem;
+    row-gap: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .game-detail-hero {
+    grid-template-areas: 'cover summary';
+    grid-template-columns: 19rem minmax(0, 1fr);
+    gap: 2rem;
+  }
+
+  .game-detail-summary {
+    display: flex;
+    grid-area: summary;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .game-detail-identity {
+    align-self: stretch;
+  }
+
+  .game-detail-stats {
+    margin-top: 1.25rem;
+  }
+
+  .game-detail-actions {
+    margin-top: 1.5rem;
+  }
+}
+</style>
