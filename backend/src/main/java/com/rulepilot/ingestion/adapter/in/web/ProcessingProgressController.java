@@ -34,28 +34,39 @@ public class ProcessingProgressController {
 
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     SseEmitter progress(@PathVariable UUID versionId, Principal principal) {
-        versions.findVersion(versionId)
-                .filter(version -> version.createdBy().equals(principal.getName()))
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.NOT_FOUND, "document version does not exist"));
+        var version = requireOwnedVersion(versionId, principal);
         SseEmitter emitter = new SseEmitter(0L);
         AtomicReference<Runnable> unsubscribe = new AtomicReference<>(() -> {});
         unsubscribe.set(progress.subscribe(versionId, snapshot -> send(emitter, snapshot, unsubscribe.get())));
         emitter.onCompletion(unsubscribe.get());
         emitter.onTimeout(unsubscribe.get());
         emitter.onError(ignored -> unsubscribe.get().run());
-        progress.current(versionId).ifPresent(snapshot -> send(emitter, snapshot, unsubscribe.get()));
+        send(emitter, authoritativeProgress(version), unsubscribe.get());
         return emitter;
     }
 
     @GetMapping(path = "/snapshot", produces = MediaType.APPLICATION_JSON_VALUE)
     ProgressSnapshot snapshot(@PathVariable UUID versionId, Principal principal) {
-        versions.findVersion(versionId)
+        return authoritativeProgress(requireOwnedVersion(versionId, principal));
+    }
+
+    private DocumentVersionScopeLookup.VersionScope requireOwnedVersion(UUID versionId, Principal principal) {
+        return versions.findVersion(versionId)
                 .filter(candidate -> candidate.createdBy().equals(principal.getName()))
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "document version does not exist"));
-        return progress.current(versionId)
-                .orElseGet(() -> new ProgressSnapshot("UPLOADED", 0, 0, 0, false));
+    }
+
+    private ProgressSnapshot authoritativeProgress(DocumentVersionScopeLookup.VersionScope version) {
+        var cached = progress.current(version.documentVersionId());
+        if ("READY".equals(version.processingStatus()) || "FAILED".equals(version.processingStatus())) {
+            int processedPages = cached.map(ProgressSnapshot::processedPages).orElse(0);
+            int totalPages = cached.map(ProgressSnapshot::totalPages).orElse(processedPages);
+            return new ProgressSnapshot(
+                    version.processingStatus(), 100, processedPages, Math.max(processedPages, totalPages), true);
+        }
+        return cached.orElseGet(() ->
+                new ProgressSnapshot(version.processingStatus(), 0, 0, 0, false));
     }
 
     private void send(SseEmitter emitter, ProgressSnapshot snapshot, Runnable unsubscribe) {

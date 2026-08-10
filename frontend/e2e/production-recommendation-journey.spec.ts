@@ -59,6 +59,18 @@ interface AnswerResponse {
   }
 }
 
+interface DocumentProgressResponse {
+  stage: string
+  complete: boolean
+}
+
+interface RunDetailsResponse {
+  run: {
+    state: string
+    lastErrorCode: string | null
+  }
+}
+
 interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
@@ -85,6 +97,11 @@ interface ProductionJourneyReport {
   importDuplicate: boolean | null
   downloadedBytes: number | null
   importMs: number | null
+  documentProgressStage: string | null
+  documentProgressComplete: boolean | null
+  teachingHandoffState: string | null
+  teachingPreparationState: string | null
+  teachingPreparationErrorCode: string | null
   rulebookReadableMs: number | null
   renderedRulebookPage: boolean
   lessonReadableMs: number | null
@@ -172,6 +189,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
   const pageErrors: Error[] = []
   let guidesPage: Page | null = null
   let importRequestCount = 0
+  let observedDocumentVersionId: string | null = null
+  let observedPreparationRunId: string | null = null
   page.on('pageerror', error => pageErrors.push(error))
   page.on('request', request => {
     const path = new URL(request.url()).pathname
@@ -187,6 +206,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceMode: null, importRequestCount: 0,
     importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
+    documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
+    teachingPreparationState: null, teachingPreparationErrorCode: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
     lessonSectionCount: 0, citedLessonStep: false, answerMs: null, answerStatus: null,
     answerCitationCount: 0, citedAnswer: false,
@@ -292,9 +313,20 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(completedJob.documentVersionId).not.toBeNull()
     expect(completedJob.teachingHandoffState).toBe('LAUNCHED')
     expect(completedJob.teachingPreparationRunId).not.toBeNull()
+    observedDocumentVersionId = completedJob.documentVersionId
+    observedPreparationRunId = completedJob.teachingPreparationRunId
     report.importDuplicate = completedJob.duplicate
     report.downloadedBytes = completedJob.downloadedBytes
     report.importMs = elapsed(importStartedAt)
+    report.teachingHandoffState = completedJob.teachingHandoffState
+    const progressResponse = await page.request.get(
+      `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId!)}/progress/snapshot`,
+    )
+    expect(progressResponse.ok(), `Document progress returned HTTP ${progressResponse.status()}`).toBe(true)
+    const progressPayload = await progressResponse.json() as DocumentProgressResponse
+    report.documentProgressStage = progressPayload.stage
+    report.documentProgressComplete = progressPayload.complete
+    expect(progressPayload).toMatchObject({ stage: 'READY', complete: true })
     expect(importRequestCount).toBe(1)
 
     guidesPage = await page.context().newPage()
@@ -404,6 +436,34 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.completed = true
     report.stage = 'completed'
   } finally {
+    if (observedDocumentVersionId) {
+      try {
+        const response = await page.request.get(
+          `/api/v1/document-versions/${encodeURIComponent(observedDocumentVersionId)}/progress/snapshot`,
+        )
+        if (response.ok()) {
+          const progress = await response.json() as DocumentProgressResponse
+          report.documentProgressStage = progress.stage
+          report.documentProgressComplete = progress.complete
+        }
+      } catch {
+        // The primary assertion remains authoritative when diagnostic refresh is unavailable.
+      }
+    }
+    if (observedPreparationRunId) {
+      try {
+        const response = await page.request.get(
+          `/api/v1/assistant-runs/${encodeURIComponent(observedPreparationRunId)}`,
+        )
+        if (response.ok()) {
+          const details = await response.json() as RunDetailsResponse
+          report.teachingPreparationState = details.run.state
+          report.teachingPreparationErrorCode = details.run.lastErrorCode
+        }
+      } catch {
+        // The browser report must still be retained if its final diagnostic read is unavailable.
+      }
+    }
     await guidesPage?.close().catch(() => undefined)
     report.importRequestCount = importRequestCount
     report.pageErrorCount = pageErrors.length
