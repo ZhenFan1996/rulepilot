@@ -16,7 +16,7 @@ async function mockHomeGames(page: Page) {
   await page.route('**/api/auth/session', route => route.fulfill({ status: 401, json: {} }))
 }
 
-test('keeps the screen-print illustration supporting while BGG hot and random games lead discovery', async ({ page }, testInfo) => {
+test('uses the full illustrated-hero rhythm while BGG hot and random games lead discovery', async ({ page }, testInfo) => {
   await mockHomeGames(page)
   await page.goto('/')
 
@@ -32,13 +32,20 @@ test('keeps the screen-print illustration supporting while BGG hot and random ga
   expect(new Set(await page.locator('.home-random__games a').evaluateAll(links => links.map(link => link.getAttribute('href')))).size).toBe(3)
   await expect(page.locator('img[alt="Powered by BoardGameGeek"]')).toHaveCount(1)
 
-  const [introBox, artBox] = await Promise.all([
-    page.locator('.home-intro').boundingBox(),
-    page.locator('.home-intro__art').boundingBox(),
-  ])
-  expect(introBox).not.toBeNull()
-  expect(artBox).not.toBeNull()
-  expect(artBox!.width / introBox!.width).toBeLessThan(0.4)
+  const heroLayout = await page.locator('.home-intro__art').evaluate((element) => {
+    const intro = element.closest('.home-intro')!
+    const introBox = intro.getBoundingClientRect()
+    const artBox = element.getBoundingClientRect()
+    return {
+      float: getComputedStyle(element).float,
+      widthRatio: artBox.width / introBox.width,
+      heightRatio: artBox.height / introBox.height,
+    }
+  })
+  expect(heroLayout.float).toBe('none')
+  expect(heroLayout.widthRatio).toBeGreaterThan(0.44)
+  expect(heroLayout.widthRatio).toBeLessThan(0.54)
+  expect(heroLayout.heightRatio).toBeGreaterThan(0.98)
   await page.screenshot({ path: testInfo.outputPath('home-desktop.png'), fullPage: true })
 })
 
@@ -54,18 +61,25 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
   expect(new Set(await page.locator('.home-random__games a').evaluateAll(links => links.map(link => link.getAttribute('href')))).size).toBe(3)
   await expect(page.getByRole('navigation', { name: '主要导航' })).toBeVisible()
 
-  const wrappedArt = await page.locator('.home-intro__art').evaluate((element) => {
+  const stackedArt = await page.locator('.home-intro__art').evaluate((element) => {
     const style = getComputedStyle(element)
-    const introWidth = element.closest('.home-intro')!.getBoundingClientRect().width
+    const intro = element.closest('.home-intro')!
+    const introBox = intro.getBoundingClientRect()
+    const artBox = element.getBoundingClientRect()
+    const actionsBox = intro.querySelector('.home-intro__actions')!.getBoundingClientRect()
     return {
       float: style.float,
       shapeOutside: style.shapeOutside,
-      widthRatio: element.getBoundingClientRect().width / introWidth,
+      widthRatio: artBox.width / introBox.width,
+      height: artBox.height,
+      followsActions: artBox.top >= actionsBox.bottom,
     }
   })
-  expect(wrappedArt.float).toBe('right')
-  expect(wrappedArt.shapeOutside).not.toBe('none')
-  expect(wrappedArt.widthRatio).toBeLessThan(0.5)
+  expect(stackedArt.float).toBe('none')
+  expect(stackedArt.shapeOutside).toBe('none')
+  expect(stackedArt.widthRatio).toBeGreaterThan(0.98)
+  expect(stackedArt.height).toBeGreaterThanOrEqual(240)
+  expect(stackedArt.followsActions).toBe(true)
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,

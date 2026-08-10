@@ -76,18 +76,8 @@ watch(locale, load)
 <template>
   <AppShell>
     <main class="tabletop-page home-page max-w-7xl">
-      <section class="home-intro" aria-labelledby="home-title">
+      <section class="home-intro tabletop-illustrated-hero player-board" aria-labelledby="home-title">
         <div class="home-intro__copy">
-          <figure class="home-intro__art" aria-hidden="true">
-            <img
-              src="/illustrations/home-screenprint-friends.webp"
-              alt=""
-              width="1536"
-              height="1024"
-              fetchpriority="high"
-            >
-          </figure>
-
           <p class="tabletop-kicker">{{ greeting }}</p>
           <h1 id="home-title" class="home-intro__title">{{ t('home.title') }}</h1>
           <p class="home-intro__lede">{{ t('home.description') }}</p>
@@ -114,6 +104,16 @@ watch(locale, load)
             {{ t('home.noSetup') }}
           </p>
         </div>
+
+        <figure class="home-intro__art" aria-hidden="true">
+          <img
+            src="/illustrations/home-screenprint-friends.webp"
+            alt=""
+            width="1536"
+            height="1024"
+            fetchpriority="high"
+          >
+        </figure>
       </section>
 
       <section class="home-hot" aria-labelledby="hot-games-title">
@@ -200,22 +200,16 @@ watch(locale, load)
 
 .home-intro {
   display: grid;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-gold) 36%, var(--color-border));
-  border-radius: 1.8rem 1.8rem 1rem 1rem;
-  background: var(--color-paper);
   box-shadow: 0 28px 74px -58px color-mix(in srgb, var(--color-ink-panel) 72%, transparent);
 }
 
 .home-intro__copy {
+  display: flex;
   min-width: 0;
+  flex-direction: column;
+  justify-content: center;
   padding: clamp(1.55rem, 4vw, 3.5rem);
-}
-
-.home-intro__copy::after {
-  display: block;
-  clear: both;
-  content: '';
+  background: var(--color-paper);
 }
 
 .home-intro__title {
@@ -239,7 +233,6 @@ watch(locale, load)
 
 .home-intro__actions {
   display: flex;
-  clear: both;
   flex-wrap: wrap;
   gap: 0.75rem;
   margin-top: 1.5rem;
@@ -258,21 +251,21 @@ watch(locale, load)
 .home-intro__aside span { color: var(--color-gold); }
 
 .home-intro__art {
-  float: right;
-  width: min(36%, 23rem);
-  aspect-ratio: 3 / 2;
-  margin: 0.15rem 0 1rem 2.5rem;
+  position: relative;
+  min-height: clamp(15rem, 68vw, 17rem);
+  margin: 0;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--color-ink) 10%, transparent);
-  border-radius: 1.35rem 1.35rem 0.7rem 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--color-ink) 12%, transparent);
   background: #efe2c9;
 }
 
 .home-intro__art img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: 68% center;
+  object-position: 70% center;
 }
 
 .home-section-title {
@@ -570,6 +563,15 @@ watch(locale, load)
 }
 
 @media (min-width: 1024px) {
+  .home-intro {
+    min-height: 24rem;
+    grid-template-columns: minmax(0, 1fr) minmax(22rem, 0.95fr);
+  }
+  .home-intro__art {
+    min-height: 100%;
+    border-top: 0;
+    border-left: 1px solid color-mix(in srgb, var(--color-ink) 12%, transparent);
+  }
   .home-hot__heading { flex-direction: row; align-items: end; justify-content: space-between; }
   .home-game-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .home-random { grid-template-columns: minmax(15rem, 0.7fr) minmax(0, 1.7fr); align-items: center; }
@@ -581,20 +583,11 @@ watch(locale, load)
 
 @media (max-width: 639px) {
   .home-page { gap: 3.75rem; }
-  .home-intro { border-radius: 1.35rem 1.35rem 0.75rem 0.75rem; }
   .home-intro__copy { padding: 1.35rem 1.25rem 1.1rem; }
   .home-intro__title { max-width: none; font-size: 2.32rem; line-height: 1.06; }
   .home-intro__lede { margin-top: 1rem; font-size: 0.91rem; line-height: 1.72; }
   .home-intro__actions { flex-direction: column; margin-top: 1.2rem; }
-  .home-intro__art {
-    width: 43%;
-    max-width: 9.5rem;
-    aspect-ratio: 1;
-    margin: 0.1rem -0.1rem 0.8rem 0.9rem;
-    border-radius: 5rem 5rem 0.8rem 0.8rem;
-    shape-outside: inset(0 round 5rem 5rem 0.8rem 0.8rem);
-  }
-  .home-intro__art img { object-position: 66% center; }
+  .home-intro__art { min-height: 16rem; }
   .home-game-card { grid-template-columns: 7.25rem minmax(0, 1fr); }
   .home-game-card__cover { aspect-ratio: auto; min-height: 9rem; border-right: 1px solid var(--color-border); border-bottom: 0; }
   .home-game-card__body { min-height: 9rem; }

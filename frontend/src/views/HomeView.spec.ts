@@ -45,7 +45,7 @@ describe('HomeView', () => {
 
   beforeEach(() => setLocale('zh-CN'))
 
-  it('keeps the screen-print illustration supporting the two concrete first actions', async () => {
+  it('uses the shared illustrated-hero composition for the two concrete first actions', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input).includes('/api/v1/bgg/recommendations')) return Response.json(hotGames)
       return new Response(null, { status: 401 })
@@ -55,6 +55,9 @@ describe('HomeView', () => {
 
     expect(wrapper.text()).toContain('规则书递过来，咱们开桌')
     expect(wrapper.find('img[src="/illustrations/home-screenprint-friends.webp"]').exists()).toBe(true)
+    expect(wrapper.get('.home-intro').classes()).toEqual(expect.arrayContaining(['tabletop-illustrated-hero', 'player-board']))
+    expect(wrapper.find('.home-intro > .home-intro__art').exists()).toBe(true)
+    expect(wrapper.find('.home-intro__copy .home-intro__art').exists()).toBe(false)
     expect(wrapper.find('.home-start').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('今晚不必先做完功课')
     expect(wrapper.text()).not.toContain('所有入口，最后汇成同一条路')
