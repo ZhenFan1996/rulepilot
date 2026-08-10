@@ -263,6 +263,8 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void fail(UUID jobId, String errorCode, Instant now) {
+        // The V73 constraint keeps this column null for NOT_REQUESTED. Referencing that typed column in both updates
+        // prevents PostgreSQL from resolving Hibernate's otherwise-untyped null/Instant CASE expression as text.
         entityManager
                 .createQuery(
                         """
@@ -278,7 +280,7 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                                 else 'IMPORT_FAILED'
                             end,
                             job.teachingHandoffUpdatedAt = case
-                                when job.teachingHandoffState = 'NOT_REQUESTED' then null
+                                when job.teachingHandoffState = 'NOT_REQUESTED' then job.teachingHandoffUpdatedAt
                                 else :now
                             end,
                             job.updatedAt = :now, job.completedAt = :now
@@ -308,7 +310,7 @@ class JpaOfficialRulebookImportJobRepository implements OfficialRulebookImportJo
                                 else 'APPLICATION_RESTARTED'
                             end,
                             job.teachingHandoffUpdatedAt = case
-                                when job.teachingHandoffState = 'NOT_REQUESTED' then null
+                                when job.teachingHandoffState = 'NOT_REQUESTED' then job.teachingHandoffUpdatedAt
                                 else :now
                             end,
                             job.updatedAt = :now, job.completedAt = :now
