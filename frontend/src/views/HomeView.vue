@@ -583,11 +583,21 @@ watch(locale, load)
 
 @media (max-width: 639px) {
   .home-page { gap: 3.75rem; }
-  .home-intro__copy { padding: 1.35rem 1.25rem 1.1rem; }
+  .home-intro { background: var(--color-paper); }
+  .home-intro__copy { padding: 1.35rem 1.25rem 0.8rem; }
   .home-intro__title { max-width: none; font-size: 2.32rem; line-height: 1.06; }
   .home-intro__lede { margin-top: 1rem; font-size: 0.91rem; line-height: 1.72; }
   .home-intro__actions { flex-direction: column; margin-top: 1.2rem; }
-  .home-intro__art { min-height: 16rem; }
+  .home-intro__art {
+    min-height: 14rem;
+    aspect-ratio: 4 / 3;
+    margin: 0.25rem 1rem 1rem;
+    border: 1px solid color-mix(in srgb, var(--color-ink) 18%, transparent);
+    border-radius: 1.15rem 1.15rem 0.8rem 0.8rem;
+    box-shadow:
+      inset 0 0 0 0.3rem color-mix(in srgb, var(--color-paper) 38%, transparent),
+      0 18px 36px -30px color-mix(in srgb, var(--color-ink-panel) 72%, transparent);
+  }
   .home-game-card { grid-template-columns: 7.25rem minmax(0, 1fr); }
   .home-game-card__cover { aspect-ratio: auto; min-height: 9rem; border-right: 1px solid var(--color-border); border-bottom: 0; }
   .home-game-card__body { min-height: 9rem; }

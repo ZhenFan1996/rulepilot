@@ -73,13 +73,24 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
       widthRatio: artBox.width / introBox.width,
       height: artBox.height,
       followsActions: artBox.top >= actionsBox.bottom,
+      sideInset: Math.min(artBox.left - introBox.left, introBox.right - artBox.right),
+      bottomInset: introBox.bottom - artBox.bottom,
+      borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+      borderLeftWidth: Number.parseFloat(style.borderLeftWidth),
+      borderBottomWidth: Number.parseFloat(style.borderBottomWidth),
     }
   })
   expect(stackedArt.float).toBe('none')
   expect(stackedArt.shapeOutside).toBe('none')
-  expect(stackedArt.widthRatio).toBeGreaterThan(0.98)
-  expect(stackedArt.height).toBeGreaterThanOrEqual(240)
+  expect(stackedArt.widthRatio).toBeGreaterThan(0.84)
+  expect(stackedArt.widthRatio).toBeLessThan(0.94)
+  expect(stackedArt.height).toBeGreaterThanOrEqual(224)
   expect(stackedArt.followsActions).toBe(true)
+  expect(stackedArt.sideInset).toBeGreaterThanOrEqual(16)
+  expect(stackedArt.bottomInset).toBeGreaterThanOrEqual(16)
+  expect(stackedArt.borderRadius).toBeGreaterThanOrEqual(16)
+  expect(stackedArt.borderLeftWidth).toBeGreaterThan(0)
+  expect(stackedArt.borderBottomWidth).toBeGreaterThan(0)
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
