@@ -169,9 +169,13 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
       sourceType: 'PUBLISHER', acquisitionMode: 'DIRECT_PDF',
     }],
   } }))
-  await page.route('**/api/v1/documents/official-imports', route => route.fulfill({ status: 201, json: {
-    duplicate: false, version: { id: 'version-1', status: 'EXTRACTING' },
-  } }))
+  await page.route('**/api/v1/documents/official-imports', route => route.request().method() === 'POST'
+    ? route.fulfill({ status: 202, json: {
+        id: 'import-job-1', title: 'Wingspan Rulebook', sourceDomain: 'publisher.example', stage: 'COMPLETED',
+        downloadedBytes: 4096, totalBytes: 4096, documentVersionId: 'version-1',
+        duplicate: false, errorCode: null, reused: false,
+      } })
+    : route.fulfill({ json: [] }))
   await page.route('**/api/v1/games', route => route.fulfill({ json: [{
     game: { id: 'game-1', name: '展翅翱翔' },
     editions: [{ id: 'edition-1', name: 'BGG 基础版', language: 'und' }],
