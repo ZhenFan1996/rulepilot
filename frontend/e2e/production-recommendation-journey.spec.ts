@@ -340,13 +340,14 @@ test('recommendation becomes one readable, taught, and answerable production jou
 
     report.stage = 'read-rulebook-while-teaching'
     const rulebookReadableStartedAt = performance.now()
-    await expect(page.getByText('规则书已经可以阅读；讲解会继续在后台生成。')).toBeVisible({ timeout: 8 * 60_000 })
+    const openRulebook = page.getByRole('button', { name: '先阅读原规则书' })
+    await expect(openRulebook).toBeVisible({ timeout: 8 * 60_000 })
     await expect.poll(() => journeySurface.locator('[data-fact-confirmed="true"]').count(), {
       timeout: 60_000,
       message: 'Persisted rulebook facts never confirmed the first three journey milestones',
     }).toBeGreaterThanOrEqual(3)
     report.rulebookReadableMs = elapsed(rulebookReadableStartedAt)
-    await page.getByRole('button', { name: '先阅读原规则书' }).click()
+    await openRulebook.click()
     const rulebook = page.getByRole('dialog', { name: '原规则书阅读器' })
     await expect(rulebook.getByText('你可以先阅读原规则书；讲解仍在后台生成')).toBeVisible()
     const firstPage = rulebook.getByRole('img', { name: '规则书第 1 页' })
