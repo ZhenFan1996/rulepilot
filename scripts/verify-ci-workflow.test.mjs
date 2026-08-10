@@ -62,8 +62,9 @@ test('production recommendation journey tests the deployed main release without 
 test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
   assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
   assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
-  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 250 --no-color api/)
   assert.match(productionRecommendationWorkflow, /api-diagnostics\.log/)
+  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 125 --no-color api/)
+  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 125 --no-color worker/)
   assert.match(productionRecommendationWorkflow, /Refusing to inspect an active release outside/)
   assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
 })

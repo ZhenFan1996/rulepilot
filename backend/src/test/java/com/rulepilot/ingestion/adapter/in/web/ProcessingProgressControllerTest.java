@@ -63,4 +63,56 @@ class ProcessingProgressControllerTest {
                         assertThat(exception.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
         verifyNoInteractions(progress);
     }
+
+    @Test
+    void reportsDurableReadyStateWhenCachedProgressIsStale() {
+        ProcessingProgressTracker progress = mock(ProcessingProgressTracker.class);
+        DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
+        ProcessingProgressController controller = new ProcessingProgressController(progress, versions);
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId))
+                .thenReturn(Optional.of(new VersionScope(versionId, null, "READY", "player")));
+        when(progress.current(versionId)).thenReturn(Optional.of(
+                new ProcessingProgressTracker.ProgressSnapshot("INDEXING", 95, 12, 12, false)));
+
+        var snapshot = controller.snapshot(versionId, () -> "player");
+
+        assertThat(snapshot)
+                .extracting("stage", "percentage", "processedPages", "totalPages", "complete")
+                .containsExactly("READY", 100, 12, 12, true);
+    }
+
+    @Test
+    void reportsDurableTerminalStateWhenCachedProgressHasExpired() {
+        ProcessingProgressTracker progress = mock(ProcessingProgressTracker.class);
+        DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
+        ProcessingProgressController controller = new ProcessingProgressController(progress, versions);
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId))
+                .thenReturn(Optional.of(new VersionScope(versionId, null, "FAILED", "player")));
+        when(progress.current(versionId)).thenReturn(Optional.empty());
+
+        var snapshot = controller.snapshot(versionId, () -> "player");
+
+        assertThat(snapshot)
+                .extracting("stage", "percentage", "processedPages", "totalPages", "complete")
+                .containsExactly("FAILED", 100, 0, 0, true);
+    }
+
+    @Test
+    void reportsDurableActiveStageWhenCachedProgressHasExpired() {
+        ProcessingProgressTracker progress = mock(ProcessingProgressTracker.class);
+        DocumentVersionScopeLookup versions = mock(DocumentVersionScopeLookup.class);
+        ProcessingProgressController controller = new ProcessingProgressController(progress, versions);
+        UUID versionId = UUID.randomUUID();
+        when(versions.findVersion(versionId))
+                .thenReturn(Optional.of(new VersionScope(versionId, null, "EXTRACTING", "player")));
+        when(progress.current(versionId)).thenReturn(Optional.empty());
+
+        var snapshot = controller.snapshot(versionId, () -> "player");
+
+        assertThat(snapshot)
+                .extracting("stage", "percentage", "processedPages", "totalPages", "complete")
+                .containsExactly("EXTRACTING", 0, 0, 0, false);
+    }
 }
