@@ -1,0 +1,126 @@
+name: Production recommendation journey
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-recommendation-journey
+  cancel-in-progress: false
+
+jobs:
+  journey:
+    name: Recommendation, Gstone import, teaching, and cited Q&A
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment:
+      name: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/rulepilot' }}
+      DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      RULEPILOT_PUBLIC_URL: https://rulepilot.cn
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install production browser probe
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Configure production SSH trust
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for required_secret in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_SSH_PRIVATE_KEY DEPLOY_USER; do
+            if [[ -z "${!required_secret}" ]]; then
+              echo "Missing required production deployment secret: ${required_secret}" >&2
+              exit 1
+            fi
+          done
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Exercise the complete public recommendation journey
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-recommendation-journey"
+          mkdir -p "$artifact_dir"
+          chmod 700 "$artifact_dir"
+          printf '{"completed":false,"stage":"preflight"}\n' > "$artifact_dir/journey.json"
+          ssh_options=(
+            -i "$HOME/.ssh/id_ed25519"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -p "$DEPLOY_SSH_PORT"
+          )
+
+          expected_sha=$(git rev-parse HEAD)
+          active_release=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
+          set -Eeuo pipefail
+          readlink -f "$1/current"
+          REMOTE
+          )
+          case "${active_release##*/}" in
+            "$expected_sha"-*) ;;
+            *) echo "Production is not running the checked-out main commit" >&2; exit 1 ;;
+          esac
+
+          credentials=$(ssh "${ssh_options[@]}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
+          set -Eeuo pipefail
+          env_file="$1/current/.env"
+          read_value() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$env_file" | head -n 1)
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          printf '%s\n%s' \
+            "$(read_value RULEPILOT_USER_USERNAME)" \
+            "$(read_value RULEPILOT_USER_PASSWORD)"
+          REMOTE
+          )
+          mapfile -t credential_lines <<< "$credentials"
+          player_username=${credential_lines[0]:-}
+          player_password=${credential_lines[1]:-}
+          test -n "$player_username"
+          test -n "$player_password"
+          echo "::add-mask::$player_username"
+          echo "::add-mask::$player_password"
+
+          RULEPILOT_PRODUCTION_RECOMMENDATION_JOURNEY=true \
+          RULEPILOT_PRODUCTION_BASE_URL="$RULEPILOT_PUBLIC_URL" \
+          RULEPILOT_RECOMMENDATION_USER="$player_username" \
+          RULEPILOT_RECOMMENDATION_PASSWORD="$player_password" \
+          RULEPILOT_RECOMMENDATION_REPORT="$artifact_dir/journey.json" \
+            npm --prefix frontend exec -- playwright test \
+              --config frontend/playwright.recommendation-production.config.ts
+          chmod -R go-rwx "$artifact_dir"
+
+      - name: Upload private journey measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-recommendation-journey-${{ github.run_id }}
+          path: .artifacts/production-recommendation-journey
+          if-no-files-found: error
+          retention-days: 14
