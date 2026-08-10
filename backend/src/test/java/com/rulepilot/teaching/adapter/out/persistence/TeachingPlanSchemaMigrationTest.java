@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
@@ -78,7 +78,7 @@ class TeachingPlanSchemaMigrationTest {
                 "teaching_handoff_updated_at");
 
         UUID jobId = UUID.randomUUID();
-        Instant now = Instant.parse("2026-08-10T00:00:00Z");
+        OffsetDateTime now = OffsetDateTime.parse("2026-08-10T00:00:00Z");
         jdbc.update(
                 """
                 INSERT INTO official_rulebook_import_job (
