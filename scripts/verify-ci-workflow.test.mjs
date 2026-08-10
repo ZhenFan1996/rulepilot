@@ -59,6 +59,15 @@ test('production recommendation journey tests the deployed main release without 
   assert.doesNotMatch(productionRecommendationWorkflow, /'bash -s' -- "\$DEPLOY_PATH" "\$player_password"/)
 })
 
+test('failed production recommendation journeys retain bounded API diagnostics without reading environment values', () => {
+  assert.match(productionRecommendationWorkflow, /name: Collect bounded API diagnostics after a failed journey/)
+  assert.match(productionRecommendationWorkflow, /if: failure\(\)/)
+  assert.match(productionRecommendationWorkflow, /logs --since 10m --tail 250 --no-color api/)
+  assert.match(productionRecommendationWorkflow, /api-diagnostics\.log/)
+  assert.match(productionRecommendationWorkflow, /Refusing to inspect an active release outside/)
+  assert.doesNotMatch(productionRecommendationWorkflow, /(?:cat|sed|grep|rg) [^\n]*\.env/)
+})
+
 test('production deployment synchronizes the protected BGG credential without packaging or logging it', () => {
   assert.match(deploymentWorkflow, /name: Synchronize protected BGG credential/)
   assert.match(deploymentWorkflow, /BGG_API_TOKEN: \$\{\{ secrets\.BGG_API_TOKEN \}\}/)
