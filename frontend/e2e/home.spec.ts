@@ -66,36 +66,49 @@ test('keeps hot games, random picks, and the primary journey usable on a mobile 
     const intro = element.closest('.home-intro')!
     const introBox = intro.getBoundingClientRect()
     const artBox = element.getBoundingClientRect()
-    const actionsBox = intro.querySelector('.home-intro__actions')!.getBoundingClientRect()
+    const copyBox = intro.querySelector('.home-intro__copy')!.getBoundingClientRect()
+    const primaryActionBox = intro.querySelector('.home-primary-action')!.getBoundingClientRect()
     return {
       float: style.float,
       shapeOutside: style.shapeOutside,
       widthRatio: artBox.width / introBox.width,
       height: artBox.height,
-      followsActions: artBox.top >= actionsBox.bottom,
+      precedesCopy: artBox.bottom <= copyBox.top + 1,
       sideInset: Math.min(artBox.left - introBox.left, introBox.right - artBox.right),
-      bottomInset: introBox.bottom - artBox.bottom,
-      borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+      topInset: artBox.top - introBox.top,
+      primaryActionTop: primaryActionBox.top,
+      viewportHeight: window.innerHeight,
       borderLeftWidth: Number.parseFloat(style.borderLeftWidth),
       borderBottomWidth: Number.parseFloat(style.borderBottomWidth),
     }
   })
   expect(stackedArt.float).toBe('none')
   expect(stackedArt.shapeOutside).toBe('none')
-  expect(stackedArt.widthRatio).toBeGreaterThan(0.84)
-  expect(stackedArt.widthRatio).toBeLessThan(0.94)
-  expect(stackedArt.height).toBeGreaterThanOrEqual(224)
-  expect(stackedArt.followsActions).toBe(true)
-  expect(stackedArt.sideInset).toBeGreaterThanOrEqual(16)
-  expect(stackedArt.bottomInset).toBeGreaterThanOrEqual(16)
-  expect(stackedArt.borderRadius).toBeGreaterThanOrEqual(16)
-  expect(stackedArt.borderLeftWidth).toBeGreaterThan(0)
+  expect(stackedArt.widthRatio).toBeGreaterThan(0.98)
+  expect(stackedArt.height).toBeGreaterThanOrEqual(184)
+  expect(stackedArt.height).toBeLessThanOrEqual(196)
+  expect(stackedArt.precedesCopy).toBe(true)
+  expect(stackedArt.sideInset).toBeLessThanOrEqual(2)
+  expect(stackedArt.topInset).toBeLessThanOrEqual(2)
+  expect(stackedArt.primaryActionTop).toBeLessThan(stackedArt.viewportHeight - 64)
+  expect(stackedArt.borderLeftWidth).toBe(0)
   expect(stackedArt.borderBottomWidth).toBeGreaterThan(0)
 
-  const hasHorizontalOverflow = await page.evaluate(
-    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
-  )
-  expect(hasHorizontalOverflow).toBe(false)
+  await page.getByRole('button', { name: 'EN', exact: true }).click()
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Hand me the rulebook')
+  const englishActionFit = await page.locator('.home-intro__actions').evaluate((element) => {
+    const actions = [...element.querySelectorAll('a')].map((action) => action.getBoundingClientRect())
+    const mobileNavigation = document.querySelector('.mobile-navigation')!.getBoundingClientRect()
+    return {
+      actionHeights: actions.map(action => action.height),
+      lastActionBottom: actions.at(-1)!.bottom,
+      safeNavigationTop: Math.min(mobileNavigation.top, window.innerHeight - 80),
+      hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    }
+  })
+  expect(englishActionFit.actionHeights.every(height => height >= 44)).toBe(true)
+  expect(englishActionFit.lastActionBottom).toBeLessThanOrEqual(englishActionFit.safeNavigationTop - 8)
+  expect(englishActionFit.hasHorizontalOverflow).toBe(false)
   await page.screenshot({ path: test.info().outputPath('home-mobile.png'), fullPage: true })
 })
 
