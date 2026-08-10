@@ -53,14 +53,14 @@ interface RulebookCandidate {
   sourceDomain: string
   officialDomainVerified: boolean
   sourceType: 'PUBLISHER' | 'TRUSTED_REPOSITORY' | 'COMMUNITY_PLATFORM' | 'PUBLIC_WEB'
-  acquisitionMode: 'DIRECT_PDF' | 'SOURCE_PAGE'
+  acquisitionMode: 'DIRECT_PDF' | 'IMAGE_GALLERY' | 'SOURCE_PAGE'
 }
 interface RulebookCandidateResponse { configured: boolean; candidates: RulebookCandidate[] }
 interface OfficialRulebookImportJob {
   id: string
   title: string
   sourceDomain: string
-  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
+  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
   totalBytes: number | null
   documentVersionId: string | null
@@ -112,6 +112,7 @@ const sourceType = ref('BASE_RULEBOOK')
 const playerCount = ref(4)
 const beginnerCount = ref(4)
 const durationMinutes = ref(25)
+const learningGoal = ref('')
 const loading = ref(true)
 const uploading = ref(false)
 const importingOfficial = ref(false)
@@ -145,34 +146,36 @@ const selectedEditionContext = computed(() => {
 })
 const rulebookDiscoveryCopy = computed(() => locale.value === 'zh-CN' ? {
   action: '帮我找规则书', loading: '正在检索多个可信来源…', title: '找到这些规则书来源',
-  detail: 'Agent 会优先找出版社，也会补查 BGG 与可信规则库。来源页会在新窗口打开；只有 PDF 直链可以在确认后交给 RulePilot 下载和核验。',
+  detail: '会优先找出版社，也会补查 BGG、集石与可信规则库。来源页会在新窗口打开；PDF 直链和已识别的连续规则页图片都可以在确认后导入。',
   unavailable: '当前模型未开启联网搜索。你仍可粘贴公开 PDF 链接或上传本地文件。',
   empty: '没有找到可信的规则书来源。请改用公开链接或本地上传。',
   error: '规则书搜索暂时不可用，手动入口仍可使用。',
-  sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: 'BGG 社区文件来源', PUBLIC_WEB: '公开 PDF（请重点核对）' },
-  direct: '可直接核验并下载', page: '来源页，需要继续查找文件', use: '选择并继续核对', open: '打开来源页',
+  sources: { PUBLISHER: '出版社 / 权利方来源', TRUSTED_REPOSITORY: '可信规则库', COMMUNITY_PLATFORM: '社区规则书来源（如 BGG / 集石）', PUBLIC_WEB: '公开来源（请重点核对）' },
+  direct: 'PDF 可直接核验并下载', gallery: '连续规则页图片，可合成为 PDF', page: '来源页，需要继续查找文件', use: '选择并继续核对', open: '打开来源页',
   publisher: '发布者', language: '语言', edition: '版本',
-  searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG 文件和可信规则库'],
+  searchSteps: ['核对 BGG 身份与版本', '搜索出版社、发行方与本地化方', '补查 BGG、集石和可信规则库'],
 } : {
   action: 'Find a rulebook', loading: 'Searching multiple trusted sources…', title: 'Rulebook sources found',
-  detail: 'The Agent searches publishers first, then BGG and trusted repositories. Source pages open in a new window; only direct PDFs can be downloaded and verified by RulePilot after confirmation.',
+  detail: 'Publisher sources come first, followed by BGG, Gstone, and trusted repositories. Source pages open separately; direct PDFs and recognized ordered page-image documents can be imported after confirmation.',
   unavailable: 'Web search is not enabled for the current model. You can still paste a public PDF URL or upload a local file.',
   empty: 'No credible rulebook source was found. Use a public URL or local upload instead.',
   error: 'Rulebook search is temporarily unavailable. Manual options still work.',
-  sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'BGG community file source', PUBLIC_WEB: 'Public PDF (review carefully)' },
-  direct: 'Direct PDF ready for verification', page: 'Source page; continue there', use: 'Choose and review', open: 'Open source page',
+  sources: { PUBLISHER: 'Publisher / rights-holder', TRUSTED_REPOSITORY: 'Trusted rules repository', COMMUNITY_PLATFORM: 'Community rulebook source (such as BGG / Gstone)', PUBLIC_WEB: 'Public source (review carefully)' },
+  direct: 'Direct PDF ready for verification', gallery: 'Ordered rulebook pages; RulePilot can build the PDF', page: 'Source page; continue there', use: 'Choose and review', open: 'Open source page',
   publisher: 'Provider', language: 'Language', edition: 'Edition',
-  searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG Files and trusted repositories'],
+  searchSteps: ['Verify BGG identity and edition', 'Search publishers, distributors, and localizers', 'Check BGG, Gstone, and trusted repositories'],
 })
 const officialImportCopy = computed(() => locale.value === 'zh-CN' ? {
   title: '规则书正在后台获取', safe: '可以离开这一页；下载、核验和后续读取会继续。',
-  QUEUED: '等待下载', CONNECTING: '正在连接来源', DOWNLOADING: '正在下载 PDF',
+  QUEUED: '等待下载', CONNECTING: '正在连接来源', DOWNLOADING: '正在下载规则书内容',
+  COMPRESSING: '文件超过普通导入上限，正在安全压缩 PDF',
   VERIFYING_FILE: '正在核验文件格式与大小', SAVING: '正在保存并交给规则书读取',
   COMPLETED: '下载完成，正在衔接规则书读取', FAILED: '下载失败，需要重新选择来源',
   background: '在任意页面打开“后台任务”都能找回这次进度。',
 } : {
   title: 'Getting the rulebook in the background', safe: 'You can leave this page; download, verification, and reading will continue.',
-  QUEUED: 'Waiting to download', CONNECTING: 'Connecting to source', DOWNLOADING: 'Downloading PDF',
+  QUEUED: 'Waiting to download', CONNECTING: 'Connecting to source', DOWNLOADING: 'Downloading rulebook content',
+  COMPRESSING: 'Compressing the PDF to the safe import limit',
   VERIFYING_FILE: 'Verifying file format and size', SAVING: 'Saving and handing off for reading',
   COMPLETED: 'Download complete; handing off to rulebook reading', FAILED: 'Download failed; choose another source',
   background: 'Open Background work from any page to return to this progress.',
@@ -497,6 +500,7 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
     playerCount: playerCount.value,
     beginnerCount: beginnerCount.value,
     durationMinutes: durationMinutes.value,
+    ...(learningGoal.value.trim() ? { learningGoal: learningGoal.value.trim() } : {}),
   }
 }
 
@@ -512,6 +516,7 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
         playerCount: preferences.playerCount,
         beginnerCount: preferences.beginnerCount,
         durationMinutes: preferences.durationMinutes,
+        learningGoal: preferences.learningGoal ?? null,
       }),
     })
     if (!planResponse.ok) throw new Error(t('documents.error'))
@@ -661,6 +666,7 @@ async function handleTerminalProgress(pending: PendingRulebookLesson, stage: str
   processingVersionId.value = ''
   await loadDocuments().catch(() => undefined)
   if (stage === 'READY') {
+    if (pending.learningGoal) learningGoal.value = pending.learningGoal
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, pending.versionId)
     message.value = t('documents.readyToRead')
     return
@@ -724,6 +730,7 @@ function parseProgressSnapshot(value: string): ProcessingSnapshot | null {
 async function recoverPendingHandoff() {
   if (!username.value || preparingVersionId.value) return
   for (const pending of readPendingRulebookLessons(localStorage, username.value)) {
+    if (pending.learningGoal) learningGoal.value = pending.learningGoal
     if (!editionId.value && pending.editionId && editionOptions.value.some(item => item.id === pending.editionId)) {
       editionId.value = pending.editionId
     }
@@ -987,9 +994,9 @@ onBeforeUnmount(() => {
                     <p class="mt-1 break-all text-xs text-ink/45">{{ candidate.sourceDomain }}</p>
                     <p class="mt-2 text-xs leading-5 text-ink/55">{{ rulebookDiscoveryCopy.publisher }}: {{ candidate.publisher || '—' }} · {{ rulebookDiscoveryCopy.language }}: {{ candidate.language || '—' }} · {{ rulebookDiscoveryCopy.edition }}: {{ candidate.edition || '—' }}</p>
                     <p class="mt-1 text-xs font-semibold" :class="candidate.sourceType === 'PUBLIC_WEB' ? 'text-amber-700' : 'text-emerald-700'">{{ rulebookDiscoveryCopy.sources[candidate.sourceType] }}</p>
-                    <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.direct : rulebookDiscoveryCopy.page }}</p>
+                    <p class="mt-1 text-xs text-ink/45">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.direct : candidate.acquisitionMode === 'IMAGE_GALLERY' ? rulebookDiscoveryCopy.gallery : rulebookDiscoveryCopy.page }}</p>
                   </div>
-                  <button type="button" class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo" @click="chooseRulebookCandidate(candidate)">{{ candidate.acquisitionMode === 'DIRECT_PDF' ? rulebookDiscoveryCopy.use : rulebookDiscoveryCopy.open }}</button>
+                  <button type="button" class="min-h-11 shrink-0 rounded-lg border border-indigo/30 px-4 text-sm font-semibold text-indigo" @click="chooseRulebookCandidate(candidate)">{{ candidate.acquisitionMode === 'SOURCE_PAGE' ? rulebookDiscoveryCopy.open : rulebookDiscoveryCopy.use }}</button>
                 </div>
               </li>
             </ul>
@@ -1078,6 +1085,11 @@ onBeforeUnmount(() => {
                 <RouterLink :to="{ name: 'model-settings' }" class="mt-1 inline-block font-semibold text-indigo underline underline-offset-2">{{ t('documents.visual.settings') }}</RouterLink>
               </div>
 
+              <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
+                <textarea v-model="learningGoal" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper" />
+                <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
+              </label>
+
               <div class="grid gap-4 sm:grid-cols-3">
                 <template v-if="editionId">
                   <label class="text-sm font-semibold">{{ t('documents.players') }}<input v-model.number="playerCount" type="number" min="1" max="20" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5"></label>
@@ -1115,7 +1127,7 @@ onBeforeUnmount(() => {
             <div class="h-full rounded-full bg-copper transition-[width]" :style="{ width: `${officialImportProgress()}%` }" />
           </div>
           <div v-else-if="officialImportJob.stage !== 'COMPLETED' && officialImportJob.stage !== 'FAILED'" class="mt-4 flex gap-1.5" aria-hidden="true">
-            <span v-for="index in 5" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
+            <span v-for="index in 6" :key="index" class="h-1.5 flex-1 rounded-full" :class="index <= ['QUEUED', 'CONNECTING', 'DOWNLOADING', 'COMPRESSING', 'VERIFYING_FILE', 'SAVING'].indexOf(officialImportJob.stage) + 1 ? 'bg-copper' : 'bg-ink/10'" />
           </div>
           <p class="mt-3 border-t border-ink/8 pt-3 text-xs text-ink/45">{{ officialImportCopy.background }}</p>
         </section>

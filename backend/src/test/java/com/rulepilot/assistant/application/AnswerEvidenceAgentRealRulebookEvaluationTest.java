@@ -27,11 +27,15 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiRuleAnswerModel;
 import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.MissingQuestionContext;
 import com.rulepilot.assistant.domain.StructuredRuleAnswer;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
@@ -276,6 +280,73 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
 
     private boolean usesExpectedPage(CaseConfiguration case_, StructuredRuleAnswer answer) {
         return answer.citations().stream().anyMatch(citation -> citation.pageFrom() == case_.expectedPage());
+    }
+
+    @Test
+    void interpretsNaturalAdaptiveTeachingMovesAcrossPaidProviders() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_CONTEXT_AGENT_EVAL")));
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        List<DialogueIntentCase> cases = List.of(
+                new DialogueIntentCase(
+                        "cx-adapt-deepseek",
+                        "deepseek",
+                        "When does this action end?",
+                        "I still don't understand. Walk me through one concrete example.",
+                        PlayerLocale.EN,
+                        LearningIntent.EXAMPLE),
+                new DialogueIntentCase(
+                        "cx-adapt-qwen",
+                        "qwen",
+                        "这个行动的费用什么时候支付？",
+                        "还是有点绕，能先用更简单的话重新讲一遍吗？",
+                        PlayerLocale.ZH_CN,
+                        LearningIntent.SIMPLIFY));
+        List<Map<String, Object>> results = new ArrayList<>();
+
+        for (DialogueIntentCase case_ : cases) {
+            ProviderConfiguration configured = provider(case_.provider());
+            assertThat(configured.model().toLowerCase(Locale.ROOT)).doesNotStartWith("qwen-plus");
+            long started = System.nanoTime();
+            var draft = answerModel(configured)
+                    .interpretQuestion(new QuestionInterpretationRequest(
+                            case_.followUp(),
+                            case_.previousQuestion(),
+                            "",
+                            "",
+                            QuestionType.SITUATION_QUERY,
+                            Set.of(MissingQuestionContext.REFERENCED_OBJECT),
+                            null,
+                            case_.locale()))
+                    .orElseThrow(() -> new AssertionError(
+                            case_.provider() + " did not return a valid semantic teaching plan"));
+            long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+            assertThat(draft.referenceBinding()).isEqualTo(ReferenceBinding.PREVIOUS_QUESTION);
+            assertThat(draft.learningIntent()).isEqualTo(case_.expectedIntent());
+            assertThat(draft.subquestions()).isNotEmpty();
+            assertThat(latencyMs).isLessThan(45_000);
+            results.add(Map.of(
+                    "caseId", case_.caseId(),
+                    "provider", case_.provider(),
+                    "model", configured.model(),
+                    "referenceBinding", draft.referenceBinding().name(),
+                    "learningIntent", draft.learningIntent().name(),
+                    "subquestionCount", draft.subquestions().size(),
+                    "modelCalls", 1,
+                    "toolCalls", 0,
+                    "latencyMs", latencyMs));
+        }
+
+        Path output = root.resolve(".local/agent-evaluation/teaching-dialogue-intent-real.json");
+        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                "schemaVersion", 1,
+                "generatedAt", Instant.now().toString(),
+                "results", results,
+                "controls", Map.of(
+                        "explicitEnumInjected", false,
+                        "rulebookTextUsedAsIntentEvidence", false,
+                        "rawModelOutputStored", false,
+                        "prohibitedQwenPlusUsed", false))) + "\n", StandardCharsets.UTF_8);
     }
 
     @Test
@@ -631,6 +702,14 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             ProviderConfiguration provider) {}
 
     private record ProviderConfiguration(String provider, String apiKey, String baseUrl, String model) {}
+
+    private record DialogueIntentCase(
+            String caseId,
+            String provider,
+            String previousQuestion,
+            String followUp,
+            PlayerLocale locale,
+            LearningIntent expectedIntent) {}
 
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
         private int modelCalls;

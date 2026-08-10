@@ -71,6 +71,25 @@ class NativeToolEvidenceHandlesTest {
         assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result, 4, 8)).isEmpty();
     }
 
+    @Test
+    void ignoresEvidenceHandlesCarriedByAnErrorPageObservation() {
+        UUID untrusted = UUID.randomUUID();
+        ToolObservation error = new ToolObservation(
+                NativeAgentTool.ObservationStatus.ERROR,
+                "PAGE_READ_REJECTED",
+                Map.of("evidence", List.of(Map.of("evidenceId", untrusted.toString()))),
+                1);
+        RunResult result = new RunResult(
+                RunStatus.FALLBACK,
+                "unavailable",
+                "EMPTY_MODEL_RESULT",
+                1,
+                1,
+                List.of(new ObservationRecord(1, "read_rule_pages", "schema", error)));
+
+        assertThat(NativeToolEvidenceHandles.exactPageObservationGroups(result, 4, 8)).isEmpty();
+    }
+
     private ObservationRecord observation(int iteration, String toolName, UUID evidenceId) {
         return new ObservationRecord(
                 iteration,

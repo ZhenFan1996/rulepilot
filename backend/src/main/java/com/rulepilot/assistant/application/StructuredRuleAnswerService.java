@@ -345,6 +345,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         UnderstoodQuestion deterministic = understanding.understand(question, context);
         UnderstoodQuestion understood = deterministic;
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
+        QuestionContext suppliedContext = context;
+        LearningIntent plannedLearningIntent = context.learningIntent();
         if (modelGateway.supportsQuestionInterpretation()) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
@@ -352,12 +354,13 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                                 assistantRunId,
                                 username,
                                 gameSessionId,
-                                interpretationRequest(deterministic, context))
-                        .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, context, draft));
+                                interpretationRequest(deterministic, suppliedContext))
+                        .flatMap(draft -> questionInterpretation.applyWithPlan(deterministic, suppliedContext, draft));
                 if (interpreted.isPresent()) {
                     AnswerQuestionInterpretationPolicy.Interpretation accepted = interpreted.orElseThrow();
                     understood = accepted.question();
                     if (accepted.plan() != null) questionPlan = accepted.plan();
+                    plannedLearningIntent = accepted.learningIntent();
                     acceptedQuestionInterpretations.increment();
                 } else {
                     fallbackQuestionInterpretations.increment();
@@ -370,6 +373,8 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 LOGGER.warn("Answer question interpretation failed validation; preserving deterministic understanding");
             }
         }
+        QuestionContext resolvedContext = suppliedContext.withLearningIntent(plannedLearningIntent);
+        context = resolvedContext;
         UnderstoodQuestion interpretedQuestion = understood;
         if (interpretedQuestion.needsClarification()) {
             return AnswerOutcomePolicy.clarification(interpretedQuestion, context.outputLanguage());
@@ -381,7 +386,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 estimateTokens(interpretedQuestion.normalizedQuestion()),
                 "Confirmed ruling lookup completed",
                 () -> confirmedRulings.find(
-                        context.documentVersionId(), Set.of(), interpretedQuestion.normalizedQuestion(), username),
+                        resolvedContext.documentVersionId(), Set.of(), interpretedQuestion.normalizedQuestion(), username),
                 result -> result.isPresent() ? 32 : 0);
         if (confirmed.isPresent()) {
             confirmedRulingHits.increment();
@@ -853,6 +858,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
                 priorVerdict,
                 deterministic.type(),
                 deterministic.missingContext(),
+                context.learningIntent(),
                 context.outputLanguage());
     }
 

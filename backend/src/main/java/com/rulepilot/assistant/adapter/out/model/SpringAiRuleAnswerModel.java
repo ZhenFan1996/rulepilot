@@ -29,9 +29,9 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String QUESTION_INTERPRETATION_SYSTEM = readPrompt(
-            "prompts/rule-answer-question-interpretation-v2-system.txt");
+            "prompts/rule-answer-question-interpretation-v3-system.txt");
     private static final String QUESTION_INTERPRETATION_USER = readPrompt(
-            "prompts/rule-answer-question-interpretation-v2-user.txt");
+            "prompts/rule-answer-question-interpretation-v3-user.txt");
 
     private final RuntimeModelConfiguration models;
     private final FakeRuleAnswerModel fakeModel;
@@ -186,6 +186,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                             .param("priorGroundedVerdict", optional(request.priorGroundedVerdict()))
                             .param("deterministicType", request.deterministicType().name())
                             .param("deterministicMissingContext", request.deterministicMissingContext())
+                            .param("explicitLearningIntent", request.explicitLearningIntentForPrompt())
                             .param("outputLanguage", request.outputLanguage().promptName()))
                     .call()
                     .content();

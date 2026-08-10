@@ -41,7 +41,8 @@ public final class NativeToolEvidenceHandles {
         List<NativeToolAgent.ObservationRecord> observations = result.observations();
         for (int index = observations.size() - 1; index >= 0 && groups.size() < maximumGroups; index--) {
             var record = observations.get(index);
-            if (!"read_rule_pages".equals(record.toolName())) continue;
+            if (!"read_rule_pages".equals(record.toolName())
+                    || record.observation().status() == NativeAgentTool.ObservationStatus.ERROR) continue;
             LinkedHashSet<UUID> ids = new LinkedHashSet<>();
             add(record, ids, maximumPerGroup);
             if (!ids.isEmpty()) groups.add(ordered(ids));

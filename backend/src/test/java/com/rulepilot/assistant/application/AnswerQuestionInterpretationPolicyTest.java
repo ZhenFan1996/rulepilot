@@ -11,6 +11,7 @@ import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.domain.MissingQuestionContext;
+import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.List;
@@ -126,6 +127,68 @@ class AnswerQuestionInterpretationPolicyTest {
                         new QuestionContext(versionId),
                         grounded))
                 .isEmpty();
+    }
+
+    @Test
+    void acceptsTheAgentsNaturalTeachingMoveForAContextBoundFollowUp() {
+        QuestionContext context = new QuestionContext(
+                versionId,
+                "这个行动什么时候结算？",
+                null,
+                PlayerLocale.ZH_CN);
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                ReferenceBinding.PREVIOUS_QUESTION,
+                List.of("行动", "结算"),
+                Set.of(),
+                LearningIntent.EXAMPLE,
+                List.of(
+                        new PlannedSubquestion("这个行动什么时候结算？", Set.of(EvidenceNeed.SEQUENCE)),
+                        new PlannedSubquestion("还是没懂，换个例子。", Set.of(EvidenceNeed.DIRECT_RULE))));
+
+        assertThat(policy.applyWithPlan(deterministic("还是没懂，换个例子。"), context, draft))
+                .hasValueSatisfying(interpretation -> {
+                    assertThat(interpretation.learningIntent()).isEqualTo(LearningIntent.EXAMPLE);
+                    assertThat(interpretation.question().normalizedQuestion())
+                            .contains("这个行动什么时候结算", "还是没懂", "换个例子");
+                });
+    }
+
+    @Test
+    void keepsAnExplicitPlayerChoiceAuthoritativeOverTheModelSuggestion() {
+        QuestionContext context = new QuestionContext(
+                versionId,
+                "这个行动什么时候结算？",
+                LearningIntent.SOURCE,
+                PlayerLocale.ZH_CN);
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.LESSON_STEP_FOLLOW_UP,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("原文"),
+                Set.of(),
+                LearningIntent.EXAMPLE,
+                List.of(new PlannedSubquestion("帮我看原文。", Set.of(EvidenceNeed.DIRECT_RULE))));
+
+        assertThat(policy.applyWithPlan(deterministic("帮我看原文。"), context, draft))
+                .hasValueSatisfying(interpretation ->
+                        assertThat(interpretation.learningIntent()).isEqualTo(LearningIntent.SOURCE));
+    }
+
+    @Test
+    void leavesAnOrdinaryRulesQuestionWithoutAPedagogicalOverride() {
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("行动"),
+                Set.of(),
+                null,
+                List.of(new PlannedSubquestion("这个行动什么时候结算？", Set.of(EvidenceNeed.SEQUENCE))));
+
+        assertThat(policy.applyWithPlan(
+                        deterministic("这个行动什么时候结算？"),
+                        new QuestionContext(versionId),
+                        draft))
+                .hasValueSatisfying(interpretation -> assertThat(interpretation.learningIntent()).isNull());
     }
 
     private UnderstoodQuestion deterministic(String question) {

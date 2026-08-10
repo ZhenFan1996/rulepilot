@@ -67,7 +67,8 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/teaching-outline-v10-chapter-ownership-system.txt") Resource teachingOutlineChapterOwnership,
             @Value("classpath:prompts/teaching-outline-v11-visual-coverage-system.txt") Resource teachingOutlineVisualCoverage,
             @Value("classpath:prompts/teaching-outline-v12-rulebook-scope-system.txt") Resource teachingOutlineRulebookScope,
-            @Value("classpath:prompts/teaching-outline-v4-user.txt") Resource teachingOutlineUser,
+            @Value("classpath:prompts/teaching-outline-v13-player-goal-system.txt") Resource teachingOutlinePlayerGoal,
+            @Value("classpath:prompts/teaching-outline-v5-user.txt") Resource teachingOutlineUser,
             @Value("classpath:prompts/rule-answer-agent-v6-system.txt") Resource answerSystem,
             @Value("classpath:prompts/rule-answer-agent-v7-fidelity-system.txt") Resource answerFidelity,
             @Value("classpath:prompts/rule-answer-agent-v8-direct-rulings-system.txt") Resource answerDirectRulings,
@@ -182,7 +183,8 @@ public class VersionedAgentPrompts {
                 teachingOutlineCoreEvidence,
                 teachingOutlineChapterOwnership,
                 teachingOutlineVisualCoverage,
-                teachingOutlineRulebookScope);
+                teachingOutlineRulebookScope,
+                teachingOutlinePlayerGoal);
         this.teachingOutlineUser = read(teachingOutlineUser);
         this.answerSystem = combined(
                 answerSystem,

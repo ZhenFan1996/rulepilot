@@ -88,12 +88,17 @@ class BoardGameRecommendationAgentTest {
                     return action(
                             "resolve",
                             BoardGameRecommendationAgent.RESOLVE_TOOL,
-                            "{\"title\":\"Mosaic Field\","
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\","
                                     + "\"preferenceUpdates\":[{\"field\":\"type\",\"value\":\"STRATEGY\",\"evidence\":\"U1\"}]}");
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
                             .contains("Mosaic Field", "Pattern Building", "Tile Placement");
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .contains(BoardGameRecommendationAgent.SEARCH_TOOL)
+                            .doesNotContain(
+                                    BoardGameRecommendationAgent.REPLY_TOOL,
+                                    BoardGameRecommendationAgent.ASK_TOOL);
                     return action(
                             "search",
                             BoardGameRecommendationAgent.SEARCH_TOOL,
@@ -102,12 +107,14 @@ class BoardGameRecommendationAgentTest {
                 },
                 request -> {
                     assertThat(request.messages().getLast().content())
-                            .contains("Pattern Building", "Open Drafting");
+                            .contains(
+                                    "Pattern Building",
+                                    "Open Drafting",
+                                    "\"resolvedReferenceBggIds\":[50]");
                     return action(
                             "recommend",
                             BoardGameRecommendationAgent.RECOMMEND_TOOL,
                             "{\"message\":\"明白，Mosaic Field 是你补充的原名，不是换了话题。按刚核对到的图案构筑与板块放置，我会先看这两款：一款更纯粹，一款互动更明显。\","
-                                    + "\"referenceBggIds\":[50],"
                                     + "\"selections\":[{\"bggId\":60},{\"bggId\":61}]} ");
                 }));
         List<DialogueMessage> transcript = List.of(
@@ -144,13 +151,132 @@ class BoardGameRecommendationAgentTest {
     }
 
     @Test
+    void rejectsATruncatedPlayerTitleBeforeBggAndLetsTheAgentRetryTheIntactSpan() {
+        TrackingCatalog catalog = catalog();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "truncated-reference",
+                        BoardGameRecommendationAgent.RESOLVE_TOOL,
+                        "{\"title\":\"osaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}"),
+                request -> {
+                    assertThat(catalog.calls).isZero();
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "REFERENCE_TITLE_NOT_GROUNDED",
+                                    "complete, intact title span",
+                                    "\"referenceResolutionAttempts\":0");
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .contains(BoardGameRecommendationAgent.RESOLVE_TOOL);
+                    return action(
+                            "intact-reference",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}");
+                },
+                ignored -> action(
+                        "candidate-titles",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\",\"Loom City\"]}"),
+                ignored -> action(
+                        "recommend",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"message\":\"已按你补充的完整原名核对，下面两款分别保留了不同的共同机制。\","
+                                + "\"selections\":[{\"bggId\":60},{\"bggId\":61}]}")));
+        List<DialogueMessage> transcript = List.of(
+                new DialogueMessage("user", "想找和《马赛克花园》机制接近的游戏"),
+                new DialogueMessage("assistant", "你还记得它的原名吗？"),
+                new DialogueMessage("user", "Mosaic Field"));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Mosaic Field",
+                        List.of(),
+                        transcript,
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_ACTION:REFERENCE_TITLE_NOT_GROUNDED",
+                "RESOLVE_BGG_REFERENCE",
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "RECOMMEND_GAMES");
+        assertThat(response.games()).extracting(game -> game.game().ranking().bggId())
+                .containsExactly(60, 61);
+        assertThat(response.games()).allSatisfy(game -> assertThat(game.matches())
+                .anyMatch(match -> match.startsWith("与参考游戏共有的 BGG 机制/类型：")));
+        assertThat(catalog.calls).isEqualTo(3);
+    }
+
+    @Test
+    void keepsPlayerNamedReferencesOutOfTheAgentCandidateInspectionTool() {
+        TrackingCatalog catalog = catalog();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "mixed-reference-and-candidates",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Mosaic Field\",\"Glass Orchard\"]}"),
+                request -> {
+                    assertThat(catalog.calls).isZero();
+                    assertThat(request.messages().getLast().content())
+                            .contains(
+                                    "PLAYER_NAMED_TITLE_REQUIRES_RESOLUTION",
+                                    "only for your own new recommendation hypotheses");
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .contains(
+                                    BoardGameRecommendationAgent.RESOLVE_TOOL,
+                                    BoardGameRecommendationAgent.SEARCH_TOOL);
+                    return action(
+                            "resolve-reference",
+                            BoardGameRecommendationAgent.RESOLVE_TOOL,
+                            "{\"title\":\"Mosaic Field\",\"purpose\":\"COMPARE_AND_RECOMMEND\"}");
+                },
+                ignored -> action(
+                        "candidate-titles",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Glass Orchard\",\"Loom City\"]}"),
+                ignored -> action(
+                        "recommend",
+                        BoardGameRecommendationAgent.RECOMMEND_TOOL,
+                        "{\"message\":\"我先把参考对象和新候选分开核对，再按共同机制给你两种方向。\","
+                                + "\"selections\":[{\"bggId\":60},{\"bggId\":61}]}")));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "Mosaic Field",
+                        List.of(),
+                        List.of(
+                                new DialogueMessage("user", "想找和一款拼花游戏机制接近的桌游"),
+                                new DialogueMessage("assistant", "原名是什么？"),
+                                new DialogueMessage("user", "Mosaic Field")),
+                        null,
+                        List.of(),
+                        List.of()),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.RECOMMENDATIONS);
+        assertThat(response.harness().actions()).containsExactly(
+                "REJECTED_ACTION:PLAYER_NAMED_TITLE_REQUIRES_RESOLUTION",
+                "RESOLVE_BGG_REFERENCE",
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "RECOMMEND_GAMES");
+        assertThat(response.games()).allSatisfy(game -> assertThat(game.matches())
+                .anyMatch(match -> match.startsWith("与参考游戏共有的 BGG 机制/类型：")));
+    }
+
+    @Test
     void persistsIndependentHardPreferencesBeforeReferenceFactsBecomeVisible() {
         TrackingCatalog catalog = catalog();
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(
                         "resolve-with-player-count",
                         BoardGameRecommendationAgent.RESOLVE_TOOL,
-                        "{\"title\":\"Mosaic Field\",\"preferenceUpdates\":[{\"field\":\"players\",\"value\":2,\"evidence\":\"2 人\"}]}"),
+                        "{\"title\":\"Mosaic Field\",\"purpose\":\"DISCUSS_NAMED_GAME\",\"preferenceUpdates\":[{\"field\":\"players\",\"value\":2,\"evidence\":\"2 人\"}]}"),
                 ignored -> action(
                         "reply",
                         BoardGameRecommendationAgent.REPLY_TOOL,
@@ -376,9 +502,9 @@ class BoardGameRecommendationAgentTest {
                                     "\"semanticPublicDiscovery\":false",
                                     "do not retry web research");
                     return action(
-                            "search",
-                            BoardGameRecommendationAgent.SEARCH_TOOL,
-                            "{\"titles\":[\"Glass Orchard\",\"Loom City\"]}");
+                            "browse",
+                            BoardGameRecommendationAgent.BROWSE_TOOL,
+                            "{\"limit\":8}");
                 },
                 ignored -> action(
                         "recommend",
@@ -969,13 +1095,13 @@ class BoardGameRecommendationAgentTest {
         TrackingCatalog catalog = catalog();
         ScriptedModel model = new ScriptedModel(List.of(
                 ignored -> action(
-                        "search-1",
-                        BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"titles\":[\"Unknown Design\"]}"),
+                        "lookup-1",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[999]}"),
                 ignored -> action(
-                        "search-2",
-                        BoardGameRecommendationAgent.SEARCH_TOOL,
-                        "{\"titles\":[\"Unknown Design\"]}"),
+                        "lookup-2",
+                        BoardGameRecommendationAgent.LOOKUP_TOOL,
+                        "{\"bggIds\":[999]}"),
                 request -> {
                     assertThat(request.messages().getLast().content()).contains("REPEATED_ACTION");
                     return action(
@@ -985,12 +1111,64 @@ class BoardGameRecommendationAgentTest {
                 }));
 
         var response = agent(model, catalog, noResearch()).converse(
-                new ConversationRequest(RecommendationProfile.empty(), "找 Unknown Design"),
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "继续看看刚才那款",
+                        List.of(),
+                        List.of(),
+                        null,
+                        List.of(),
+                        List.of(999)),
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
-        assertThat(response.harness().catalogCalls()).isEqualTo(2);
+        assertThat(response.harness().catalogCalls()).isEqualTo(1);
         assertThat(response.harness().actions()).contains("REJECTED_REPEATED_ACTION");
+    }
+
+    @Test
+    void retiresEachBatchedCatalogReadAfterOneAttemptSoTheAgentMustAdvance() {
+        TrackingCatalog catalog = new TrackingCatalog();
+        ScriptedModel model = new ScriptedModel(List.of(
+                ignored -> action(
+                        "inspect-empty",
+                        BoardGameRecommendationAgent.SEARCH_TOOL,
+                        "{\"titles\":[\"Unknown Design\"]}"),
+                request -> {
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .contains(BoardGameRecommendationAgent.BROWSE_TOOL)
+                            .doesNotContain(BoardGameRecommendationAgent.SEARCH_TOOL);
+                    assertThat(request.messages().getLast().content())
+                            .contains("one bounded title-inspection attempt", "do not inspect titles again");
+                    return action(
+                            "browse-empty",
+                            BoardGameRecommendationAgent.BROWSE_TOOL,
+                            "{\"limit\":8}");
+                },
+                request -> {
+                    assertThat(request.tools()).extracting(tool -> tool.name())
+                            .doesNotContain(
+                                    BoardGameRecommendationAgent.SEARCH_TOOL,
+                                    BoardGameRecommendationAgent.BROWSE_TOOL);
+                    assertThat(request.messages().getLast().content())
+                            .contains("one bounded catalog browse", "do not browse again");
+                    return action(
+                            "reply",
+                            BoardGameRecommendationAgent.REPLY_TOOL,
+                            "{\"message\":\"这些线索暂时没有核对出可靠候选，我先不乱猜。你愿意补充一种最在意的机制吗？\",\"referencedBggIds\":[]}");
+                }));
+
+        var response = agent(model, catalog, noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "想找机制相近但名字记不清的游戏"),
+                "zh-CN");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(response.harness().catalogCalls()).isEqualTo(3);
+        assertThat(response.harness().actions()).containsExactly(
+                "SEARCH_BGG_BY_NAME",
+                "LOOKUP_BGG_CANDIDATES",
+                "SEARCH_BGG_CATALOG",
+                "REPLY_TO_USER");
     }
 
     @Test
@@ -1003,7 +1181,7 @@ class BoardGameRecommendationAgentTest {
                     assertThat(request.messages().getFirst().content())
                             .contains(
                                     "generate a diverse slate",
-                                    "prefer inspect_bgg_titles",
+                                    "prefer inspect_candidate_titles",
                                     "Do not browse merely because a request is semantic");
                     return action(
                             "inspect",
@@ -1054,20 +1232,27 @@ class BoardGameRecommendationAgentTest {
                                 .contains("\"remainingModelCalls\":1", "\"remainingActionCalls\":1");
                     }
                     return action(
-                            "search-" + index,
-                            BoardGameRecommendationAgent.SEARCH_TOOL,
-                            "{\"titles\":[\"Unknown Design " + index + "\"]}");
+                            "lookup-" + index,
+                            BoardGameRecommendationAgent.LOOKUP_TOOL,
+                            "{\"bggIds\":[" + (index + 1) + "]}");
                 })
                 .toList();
         ScriptedModel model = new ScriptedModel(turns);
 
         var response = agent(model, catalog, noResearch()).converse(
-                new ConversationRequest(RecommendationProfile.empty(), "找一款很冷门的设计"),
+                new ConversationRequest(
+                        RecommendationProfile.empty(),
+                        "继续核对这些候选",
+                        List.of(),
+                        List.of(),
+                        null,
+                        List.of(),
+                        List.of(1, 2, 3, 4, 5, 6)),
                 "zh-CN");
 
         assertThat(response.outcome()).isEqualTo(Outcome.UNAVAILABLE);
         assertThat(response.harness().modelCalls()).isEqualTo(6);
-        assertThat(response.harness().catalogCalls()).isEqualTo(12);
+        assertThat(response.harness().catalogCalls()).isEqualTo(6);
         assertThat(response.harness().actions()).contains("REACT_BUDGET_EXHAUSTED");
     }
 

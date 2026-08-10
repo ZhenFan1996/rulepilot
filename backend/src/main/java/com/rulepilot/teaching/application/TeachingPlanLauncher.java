@@ -42,7 +42,18 @@ public class TeachingPlanLauncher {
             int beginnerCount,
             int durationMinutes,
             String ownerUsername) {
+        return launch(documentVersionId, playerCount, beginnerCount, durationMinutes, null, ownerUsername);
+    }
+
+    public synchronized PlanLaunch launch(
+            UUID documentVersionId,
+            int playerCount,
+            int beginnerCount,
+            int durationMinutes,
+            String learningGoal,
+            String ownerUsername) {
         validate(playerCount, beginnerCount, durationMinutes);
+        String normalizedLearningGoal = normalizeLearningGoal(learningGoal);
         var existing = runs.findLatestOwned(
                         AssistantRunMode.TEACHING_PREPARATION, documentVersionId, ownerUsername)
                 .map(AssistantRuns.RunDetails::run)
@@ -55,7 +66,13 @@ public class TeachingPlanLauncher {
         RunSnapshot run = runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, ownerUsername);
         try {
             executor.execute(() -> prepare(
-                    run, documentVersionId, playerCount, beginnerCount, durationMinutes, ownerUsername));
+                    run,
+                    documentVersionId,
+                    playerCount,
+                    beginnerCount,
+                    durationMinutes,
+                    normalizedLearningGoal,
+                    ownerUsername));
         } catch (RuntimeException schedulingFailure) {
             runs.fail(run.id(), run.revision(), "TEACHING_PREPARATION_QUEUE_FULL", "Teaching preparation could not start");
             throw schedulingFailure;
@@ -69,6 +86,7 @@ public class TeachingPlanLauncher {
             int playerCount,
             int beginnerCount,
             int durationMinutes,
+            String learningGoal,
             String ownerUsername) {
         RunSnapshot current = initial;
         try {
@@ -79,7 +97,13 @@ public class TeachingPlanLauncher {
                     current.id(), current.revision(), AssistantRunState.LESSON_PLANNING,
                     "Reading rulebook pages and organizing the lesson");
             var plan = plans.create(
-                    documentVersionId, playerCount, beginnerCount, durationMinutes, ownerUsername, current.id());
+                    documentVersionId,
+                    playerCount,
+                    beginnerCount,
+                    durationMinutes,
+                    learningGoal,
+                    ownerUsername,
+                    current.id());
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.COMPLETED,
                     "Teaching plan is ready");
@@ -122,6 +146,15 @@ public class TeachingPlanLauncher {
                 || durationMinutes < 2 || durationMinutes > 180) {
             throw new IllegalArgumentException("teaching preferences are invalid");
         }
+    }
+
+    private String normalizeLearningGoal(String learningGoal) {
+        if (learningGoal == null || learningGoal.isBlank()) return null;
+        String normalized = learningGoal.strip();
+        if (normalized.length() > 500) {
+            throw new IllegalArgumentException("teaching learning goal is too long");
+        }
+        return normalized;
     }
 
     public record PlanLaunch(UUID assistantRunId, AssistantRunState state, boolean reused) {}

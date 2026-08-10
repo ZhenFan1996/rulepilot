@@ -38,6 +38,7 @@ public class TeachingPlanController {
                 request.playerCount(),
                 request.beginnerCount(),
                 request.durationMinutes(),
+                request.learningGoal(),
                 principal.getName());
     }
 
@@ -47,5 +48,5 @@ public class TeachingPlanController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "teaching plan does not exist"));
     }
 
-    record CreatePlanRequest(int playerCount, int beginnerCount, int durationMinutes) {}
+    record CreatePlanRequest(int playerCount, int beginnerCount, int durationMinutes, String learningGoal) {}
 }

@@ -22,10 +22,10 @@ public class CropRulePageImageNativeTool implements NativeAgentTool {
               "properties": {
                 "evidenceId": {"type": "string", "format": "uuid"},
                 "pageNumber": {"type": "integer", "minimum": 1},
-                "x": {"type": "integer", "minimum": 0, "maximum": 988},
-                "y": {"type": "integer", "minimum": 0, "maximum": 988},
-                "width": {"type": "integer", "minimum": 12, "maximum": 1000},
-                "height": {"type": "integer", "minimum": 12, "maximum": 1000}
+                "x": {"type": "integer", "minimum": 0, "maximum": 980},
+                "y": {"type": "integer", "minimum": 0, "maximum": 980},
+                "width": {"type": "integer", "minimum": 20, "maximum": 1000},
+                "height": {"type": "integer", "minimum": 20, "maximum": 1000}
               },
               "required": ["evidenceId", "pageNumber", "x", "y", "width", "height"],
               "additionalProperties": false
@@ -92,16 +92,16 @@ public class CropRulePageImageNativeTool implements NativeAgentTool {
 
     private void validate(Arguments value) {
         if (value.evidenceId() == null || value.pageNumber() < 1
-                || value.width() < 12 || value.height() < 12) {
+                || value.width() < 20 || value.height() < 20) {
             throw new IllegalArgumentException("visual crop arguments are invalid");
         }
     }
 
     private Rectangle normalize(Arguments value) {
-        int x = Math.max(0, Math.min(988, value.x()));
-        int y = Math.max(0, Math.min(988, value.y()));
-        int width = Math.max(12, Math.min(value.width(), 1_000 - x));
-        int height = Math.max(12, Math.min(value.height(), 1_000 - y));
+        int x = Math.max(0, Math.min(980, value.x()));
+        int y = Math.max(0, Math.min(980, value.y()));
+        int width = Math.max(20, Math.min(value.width(), 1_000 - x));
+        int height = Math.max(20, Math.min(value.height(), 1_000 - y));
         return new Rectangle(x, y, width, height);
     }
 

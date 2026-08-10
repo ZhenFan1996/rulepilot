@@ -55,6 +55,7 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
         List<ObservationRecord> observations = new java.util.ArrayList<>();
         Map<String, Integer> failedCallCounts = new HashMap<>();
         int toolCalls = 0;
+        boolean finalResponseOnly = false;
 
         for (int iteration = 1; iteration <= request.maxIterations(); iteration++) {
             if (Instant.now().isAfter(request.scope().deadlineAt())) {
@@ -68,8 +69,9 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
 
             ModelTurn turn;
             List<com.rulepilot.assistant.NativeToolModel.ToolSpec> advertisedTools =
-                    tools.specifications(request.role(), request.allowedTools());
-            if (!request.allowedTools().isEmpty()
+                    finalResponseOnly ? List.of() : tools.specifications(request.role(), request.allowedTools());
+            if (!finalResponseOnly
+                    && !request.allowedTools().isEmpty()
                     && advertisedTools.size() != request.allowedTools().size()) {
                 return fallback(request, "TOOL_ALLOWLIST_UNAVAILABLE", iteration - 1, toolCalls, observations);
             }
@@ -124,7 +126,36 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                                     + ". Continue with the advertised read-only tools. Do not answer from memory.");
                     continue;
                 }
-                if (turn.text().isBlank()) return fallback(request, "EMPTY_MODEL_RESULT", iteration, toolCalls, observations);
+                boolean emptyCompletion = turn.text().isBlank();
+                boolean terminalProtocolRejected = !request.requiredTerminalText().isBlank()
+                        && !request.requiredTerminalText().equals(turn.text().strip());
+                if (emptyCompletion || terminalProtocolRejected) {
+                    boolean recorded = recordDiagnostic(
+                            request.scope().runId(),
+                            ActivityType.VALIDATION,
+                            emptyCompletion ? "nativeEmptyCompletion" : "nativeCompletionProtocol",
+                            ActivityOutcome.REJECTED,
+                            emptyCompletion
+                                    ? "native model returned neither a tool call nor a terminal status"
+                                    : "native model returned a nonconforming terminal status");
+                    if (!recorded) return fallback(request, "AUDIT_FAILED", iteration, toolCalls, observations);
+                    if (iteration == request.maxIterations()) {
+                        return fallback(
+                                request,
+                                emptyCompletion ? "EMPTY_MODEL_RESULT" : "COMPLETION_PROTOCOL_REJECTED",
+                                iteration,
+                                toolCalls,
+                                observations);
+                    }
+                    conversation.appendAssistant(turn.text(), List.of(), advertisedTools);
+                    conversation.appendApplicationInstruction(
+                            "The application rejected this terminal turn. Review the unresolved request and prior observations, then choose one advertised read-only tool or return exactly: "
+                                    + (request.requiredTerminalText().isBlank()
+                                            ? "the terminal status required by the system instructions"
+                                            : request.requiredTerminalText())
+                                    + ". Do not answer from memory.");
+                    continue;
+                }
                 return new RunResult(
                         RunStatus.COMPLETED,
                         turn.text().strip(),
@@ -134,11 +165,26 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
                         observations);
             }
 
+            if (finalResponseOnly) {
+                boolean recorded = recordDiagnostic(
+                        request.scope().runId(),
+                        ActivityType.VALIDATION,
+                        "nativeToolAfterFinalization",
+                        ActivityOutcome.REJECTED,
+                        "native model requested a tool after the observation budget entered final response mode");
+                return fallback(
+                        request,
+                        recorded ? "TOOL_REQUESTED_AFTER_FINALIZATION" : "AUDIT_FAILED",
+                        iteration,
+                        toolCalls,
+                        observations);
+            }
+
             conversation.appendAssistant(turn.text(), turn.toolCalls(), advertisedTools);
             for (ModelToolCall call : turn.toolCalls()) {
                 if (toolCalls >= request.maxToolCalls()) {
                     if (completionRequirementsSatisfied(request, observations)) {
-                        return completedAtToolLimit(iteration, toolCalls, observations);
+                        return completedAtToolLimit(request, iteration, toolCalls, observations);
                     }
                     return fallback(request, "TOOL_CALL_LIMIT", iteration, toolCalls, observations);
                 }
@@ -205,10 +251,28 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
             }
             if (!request.requiredToolsBeforeCompletion().isEmpty()
                     && completionRequirementsSatisfied(request, observations)) {
-                return completedAfterRequiredEvidence(iteration, toolCalls, observations);
+                return completedAfterRequiredEvidence(request, iteration, toolCalls, observations);
+            }
+            if (finalResponseTriggered(request, observations)) {
+                finalResponseOnly = true;
+                conversation.appendApplicationInstruction(
+                        "The configured evidence-acquisition budget is complete. No more tools are available. Return "
+                                + "the final response required by the system instructions now, using only the prior "
+                                + "successful observations. Do not request another tool.");
             }
         }
         return fallback(request, "ITERATION_LIMIT", request.maxIterations(), toolCalls, observations);
+    }
+
+    private boolean finalResponseTriggered(
+            RunRequest request, List<ObservationRecord> observations) {
+        if (request.finalResponseAfterToolSuccesses().isEmpty()) return false;
+        return request.finalResponseAfterToolSuccesses().entrySet().stream().allMatch(target ->
+                observations.stream()
+                                .filter(observation -> target.getKey().equals(observation.toolName()))
+                                .filter(observation -> observation.observation().status() == ObservationStatus.SUCCESS)
+                                .count()
+                        >= target.getValue());
     }
 
     private boolean completionRequirementsSatisfied(
@@ -219,10 +283,13 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     }
 
     private RunResult completedAtToolLimit(
-            int iteration, int toolCalls, List<ObservationRecord> observations) {
+            RunRequest request,
+            int iteration,
+            int toolCalls,
+            List<ObservationRecord> observations) {
         return new RunResult(
                 RunStatus.COMPLETED,
-                "EVIDENCE_READY",
+                terminalText(request),
                 "REQUIRED_EVIDENCE_COLLECTED_AT_TOOL_LIMIT",
                 iteration,
                 toolCalls,
@@ -230,14 +297,21 @@ public class BoundedNativeToolAgent implements NativeToolAgent {
     }
 
     private RunResult completedAfterRequiredEvidence(
-            int iteration, int toolCalls, List<ObservationRecord> observations) {
+            RunRequest request,
+            int iteration,
+            int toolCalls,
+            List<ObservationRecord> observations) {
         return new RunResult(
                 RunStatus.COMPLETED,
-                "EVIDENCE_READY",
+                terminalText(request),
                 "REQUIRED_EVIDENCE_COLLECTED",
                 iteration,
                 toolCalls,
                 observations);
+    }
+
+    private String terminalText(RunRequest request) {
+        return request.requiredTerminalText().isBlank() ? "EVIDENCE_READY" : request.requiredTerminalText();
     }
 
     @Override

@@ -97,6 +97,45 @@ describe('LessonQuestionsView', () => {
     wrapper.unmount()
   })
 
+  it('sends a natural re-explanation as conversation context for the Answer Agent to interpret', async () => {
+    const answerRequests: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans/plan-1') return Response.json(planFixture('plan-1', '星际探索'))
+      if (path.endsWith('/illustrated-lessons/latest')) return Response.json(lessonFixture())
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.endsWith('/answers') && init?.method === 'POST') {
+        answerRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({
+          assistantRunId: `answer-run-${answerRequests.length}`,
+          answer: {
+            status: 'ANSWERED', shortVerdict: '完成放置后结算。', explanation: '规则书给出了这个顺序。',
+            citations: [], exceptions: [], confidence: 'HIGH', answerBasis: 'DIRECT_RULE', official: false,
+            confirmedRulingId: null, confirmedRulingVersion: null, clarification: null, warnings: [],
+          },
+        })
+      }
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountQuestions('/lesson/plan-1/questions')
+
+    expect(wrapper.text()).toContain('还是没懂，换个例子')
+    await wrapper.get('#lesson-question').setValue('这个行动什么时候结算？')
+    await wrapper.get('#lesson-question-panel form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('#lesson-question').setValue('还是没懂，换个例子。')
+    await wrapper.get('#lesson-question-panel form').trigger('submit')
+    await flushPromises()
+
+    expect(answerRequests.at(-1)).toMatchObject({
+      question: '还是没懂，换个例子。',
+      previousQuestion: '这个行动什么时候结算？',
+      learningIntent: null,
+      language: 'zh-CN',
+    })
+    wrapper.unmount()
+  })
+
   it('keeps the complete Q&A workspace localized in English', async () => {
     setLocale('en')
     const answerRequests: Array<Record<string, unknown>> = []

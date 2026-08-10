@@ -24,6 +24,24 @@ public class TeachingPlanFactory {
             int durationMinutes,
             String createdBy,
             OutlineDraft outline) {
+        return create(
+                documentVersionId,
+                playerCount,
+                beginnerCount,
+                durationMinutes,
+                null,
+                createdBy,
+                outline);
+    }
+
+    public TeachingPlan create(
+            UUID documentVersionId,
+            int playerCount,
+            int beginnerCount,
+            int durationMinutes,
+            String learningGoal,
+            String createdBy,
+            OutlineDraft outline) {
         validate(outline);
         Set<String> keys = new HashSet<>();
         List<PlannedSection> topics = java.util.stream.IntStream.range(0, outline.topics().size())
@@ -51,6 +69,7 @@ public class TeachingPlanFactory {
                 playerCount,
                 beginnerCount,
                 durationMinutes,
+                learningGoal,
                 outline.gameTitle(),
                 outline.premise(),
                 topics,

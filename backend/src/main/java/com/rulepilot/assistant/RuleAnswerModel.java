@@ -47,6 +47,7 @@ public interface RuleAnswerModel {
             String priorGroundedVerdict,
             QuestionType deterministicType,
             Set<MissingQuestionContext> deterministicMissingContext,
+            LearningIntent explicitLearningIntent,
             PlayerLocale outputLanguage) {
         public QuestionInterpretationRequest {
             if (question == null || question.isBlank() || question.length() > 800
@@ -59,6 +60,29 @@ public interface RuleAnswerModel {
             priorGroundedVerdict = optionalContext(priorGroundedVerdict);
             deterministicMissingContext = Set.copyOf(deterministicMissingContext);
             outputLanguage = outputLanguage == null ? PlayerLocale.ZH_CN : outputLanguage;
+        }
+
+        public QuestionInterpretationRequest(
+                String question,
+                String previousQuestion,
+                String priorGroundedQuestion,
+                String priorGroundedVerdict,
+                QuestionType deterministicType,
+                Set<MissingQuestionContext> deterministicMissingContext,
+                PlayerLocale outputLanguage) {
+            this(
+                    question,
+                    previousQuestion,
+                    priorGroundedQuestion,
+                    priorGroundedVerdict,
+                    deterministicType,
+                    deterministicMissingContext,
+                    null,
+                    outputLanguage);
+        }
+
+        public String explicitLearningIntentForPrompt() {
+            return explicitLearningIntent == null ? "GENERAL_QUESTION" : explicitLearningIntent.name();
         }
 
         private static String optionalContext(String value) {
@@ -103,6 +127,7 @@ public interface RuleAnswerModel {
             ReferenceBinding referenceBinding,
             List<String> terms,
             Set<MissingQuestionContext> missingContext,
+            LearningIntent learningIntent,
             List<PlannedSubquestion> subquestions) {
         public QuestionInterpretationDraft {
             if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
@@ -119,6 +144,15 @@ public interface RuleAnswerModel {
                     .toList();
             missingContext = Set.copyOf(missingContext);
             subquestions = List.copyOf(subquestions);
+        }
+
+        public QuestionInterpretationDraft(
+                QuestionType questionType,
+                ReferenceBinding referenceBinding,
+                List<String> terms,
+                Set<MissingQuestionContext> missingContext,
+                List<PlannedSubquestion> subquestions) {
+            this(questionType, referenceBinding, terms, missingContext, null, subquestions);
         }
     }
 

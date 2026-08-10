@@ -45,7 +45,8 @@ class VersionedAgentPromptsTest {
                 resource("teaching-outline-v10-chapter-ownership-system.txt"),
                 resource("teaching-outline-v11-visual-coverage-system.txt"),
                 resource("teaching-outline-v12-rulebook-scope-system.txt"),
-                resource("teaching-outline-v4-user.txt"),
+                resource("teaching-outline-v13-player-goal-system.txt"),
+                resource("teaching-outline-v5-user.txt"),
                 resource("rule-answer-agent-v6-system.txt"),
                 resource("rule-answer-agent-v7-fidelity-system.txt"),
                 resource("rule-answer-agent-v8-direct-rulings-system.txt"),
@@ -264,8 +265,12 @@ class VersionedAgentPromptsTest {
                         "missing visual catalog",
                         "end trigger, winner, victory condition",
                         "Rulebook-scope revision v12",
-                        "not one selected table size");
+                        "not one selected table size",
+                        "Player-learning-goal revision v13",
+                        "untrusted pedagogical preference",
+                        "cannot remove the game's objective");
         assertThat(prompts.teachingOutlineUser())
+                .contains("{learningGoal}", "untrusted_player_learning_goal")
                 .doesNotContain("{players}", "{beginners}", "players, including");
         assertThat(prompts.answerSystem())
                 .contains(

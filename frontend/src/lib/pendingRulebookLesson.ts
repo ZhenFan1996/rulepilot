@@ -4,6 +4,7 @@ export interface PendingRulebookLesson {
   playerCount: number
   beginnerCount: number
   durationMinutes: number
+  learningGoal?: string
 }
 
 export function readPendingRulebookLessons(storage: Storage, username: string) {
@@ -15,9 +16,11 @@ export function readPendingRulebookLessons(storage: Storage, username: string) {
       const candidate = item as Partial<PendingRulebookLesson>
       if (!boundedId(candidate.versionId) || !integerBetween(candidate.playerCount, 1, 20)) return false
       if (candidate.editionId !== undefined && !boundedId(candidate.editionId)) return false
+      if (candidate.learningGoal !== undefined
+        && (typeof candidate.learningGoal !== 'string' || candidate.learningGoal.trim().length > 500)) return false
       return integerBetween(candidate.beginnerCount, 0, candidate.playerCount)
         && integerBetween(candidate.durationMinutes, 2, 180)
-    })
+    }).map(normalizePendingLesson)
   } catch {
     return []
   }
@@ -28,9 +31,10 @@ export function rememberPendingRulebookLesson(
   username: string,
   pending: PendingRulebookLesson,
 ) {
+  const normalized = normalizePendingLesson(pending)
   const existing = readPendingRulebookLessons(storage, username)
-    .filter((item) => item.versionId !== pending.versionId)
-  storage.setItem(storageKey(username), JSON.stringify([pending, ...existing].slice(0, 5)))
+    .filter((item) => item.versionId !== normalized.versionId)
+  storage.setItem(storageKey(username), JSON.stringify([normalized, ...existing].slice(0, 5)))
 }
 
 export function forgetPendingRulebookLesson(storage: Storage, username: string, versionId: string) {
@@ -50,4 +54,11 @@ function boundedId(value: unknown): value is string {
 
 function integerBetween(value: unknown, minimum: number, maximum: number): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum
+}
+
+function normalizePendingLesson(pending: PendingRulebookLesson): PendingRulebookLesson {
+  const { learningGoal, ...rest } = pending
+  const normalizedGoal = learningGoal?.trim()
+  if (normalizedGoal && normalizedGoal.length > 500) throw new Error('teaching learning goal is too long')
+  return normalizedGoal ? { ...rest, learningGoal: normalizedGoal } : rest
 }

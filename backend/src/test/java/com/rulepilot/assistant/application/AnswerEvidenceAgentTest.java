@@ -182,6 +182,122 @@ class AnswerEvidenceAgentTest {
     }
 
     @Test
+    void preservesCanonicalExactPageEvidenceWhenOnlyTheFinalModelTurnIsEmpty() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
+        RuleEvidenceHit exact = source(UUID.randomUUID(), "Payment", "Pay after completing movement.");
+        ToolObservation pageObservation = ToolObservation.success(
+                "PAGE_EVIDENCE_FOUND",
+                Map.of("evidence", List.of(Map.of("evidenceId", exact.chunkId().toString()))),
+                1);
+        RunResult partial = new RunResult(
+                RunStatus.FALLBACK,
+                "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                "EMPTY_MODEL_RESULT",
+                4,
+                2,
+                List.of(new ObservationRecord(3, "read_rule_pages", "page-schema", pageObservation)));
+        Permit permit = mock(Permit.class);
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(partial),
+                (documentVersionId, chunkIds) -> List.of(exact),
+                scopes(),
+                limiter);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("Can I move, and when do I pay?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(initial));
+
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                .contains(exact.chunkId(), initial.evidence().chunkId());
+        verify(permit).close();
+    }
+
+    @Test
+    void preservesCanonicalExactPageEvidenceWhenOnlyTheTerminalProtocolIsRejected() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
+        RuleEvidenceHit exact = source(UUID.randomUUID(), "Payment", "Pay after completing movement.");
+        ToolObservation pageObservation = ToolObservation.success(
+                "PAGE_EVIDENCE_FOUND",
+                Map.of("evidence", List.of(Map.of("evidenceId", exact.chunkId().toString()))),
+                1);
+        RunResult partial = new RunResult(
+                RunStatus.FALLBACK,
+                "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                "COMPLETION_PROTOCOL_REJECTED",
+                4,
+                2,
+                List.of(new ObservationRecord(3, "read_rule_pages", "page-schema", pageObservation)));
+        Permit permit = mock(Permit.class);
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(partial),
+                (documentVersionId, chunkIds) -> List.of(exact),
+                scopes(),
+                limiter);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("Can I move, and when do I pay?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                ready(initial));
+
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().chunkId())
+                .contains(exact.chunkId(), initial.evidence().chunkId());
+        verify(permit).close();
+    }
+
+    @Test
+    void refusesToRecoverARejectedTerminalProtocolFromSearchOnlyObservations() {
+        HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
+        RuleEvidenceHit searchOnly = source(UUID.randomUUID(), "Payment", "Pay after movement.");
+        ToolObservation searchObservation = ToolObservation.success(
+                "EVIDENCE_FOUND",
+                Map.of("evidence", List.of(Map.of("evidenceId", searchOnly.chunkId().toString()))),
+                1);
+        RunResult partial = new RunResult(
+                RunStatus.FALLBACK,
+                "EVIDENCE_REFINEMENT_UNAVAILABLE",
+                "COMPLETION_PROTOCOL_REJECTED",
+                4,
+                2,
+                List.of(new ObservationRecord(3, "search_rule_evidence", "search-schema", searchObservation)));
+        Permit permit = mock(Permit.class);
+        RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+        when(limiter.acquireModel("player", null, "test-provider")).thenReturn(permit);
+        AtomicInteger hydrationCalls = new AtomicInteger();
+        AnswerEvidenceAgent agent = new AnswerEvidenceAgent(
+                fixedAgent(partial),
+                (documentVersionId, chunkIds) -> {
+                    hydrationCalls.incrementAndGet();
+                    return List.of(searchOnly);
+                },
+                scopes(),
+                limiter);
+        AnswerEvidenceRetriever.Result deterministic = ready(initial);
+
+        AnswerEvidenceRetriever.Result result = agent.refine(
+                runId,
+                question("Can I move, and when do I pay?"),
+                new QuestionContext(versionId),
+                "player",
+                null,
+                deterministic);
+
+        assertThat(result).isSameAs(deterministic);
+        assertThat(hydrationCalls).hasValue(0);
+        verify(permit).close();
+    }
+
+    @Test
     void ignoresMalformedAndOutOfScopeObservationIdentifiers() {
         HybridEvidenceHit initial = hit(UUID.randomUUID(), "Movement", "Move one space.");
         UUID missing = UUID.randomUUID();

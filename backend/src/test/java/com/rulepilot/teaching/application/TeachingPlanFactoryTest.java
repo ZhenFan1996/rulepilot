@@ -76,6 +76,30 @@ class TeachingPlanFactoryTest {
         assertThat(plan.sections().get(1).sourcePageNumbers()).containsExactly(7);
     }
 
+    @Test
+    void persistsThePlayerLearningGoalWithoutWeakeningCoreCoverageValidation() {
+        var outline = new OutlineDraft(
+                "Game",
+                "Premise",
+                List.of(
+                        topic("setup", "Set up", false, List.of("setup")),
+                        topic("actions", "Take actions", false, List.of("core_loop")),
+                        topic("finish", "Finish and score", false, List.of("end", "scoring"))));
+
+        var plan = new TeachingPlanFactory().create(
+                UUID.randomUUID(),
+                4,
+                4,
+                30,
+                "  先学会开局，再用例子解释行动衔接。  ",
+                "player",
+                outline);
+
+        assertThat(plan.learningGoal()).isEqualTo("先学会开局，再用例子解释行动衔接。");
+        assertThat(plan.sections()).extracting(section -> section.coverageTags())
+                .contains(List.of("setup"), List.of("core_loop"), List.of("end", "scoring"));
+    }
+
     private TopicDraft topic(String key, String title, boolean visualEvidenceRecommended, List<String> tags) {
         return new TopicDraft(
                 key, title, "Explain " + title, true, visualEvidenceRecommended, List.of(title), tags);

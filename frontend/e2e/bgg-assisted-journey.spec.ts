@@ -89,7 +89,7 @@ test('covers attributed discovery, official PDF intake, and explicit metadata co
     rightsConfirmed: true,
   })
   await expect(page.getByText('规则书正在后台获取')).toBeVisible()
-  await expect(page.getByText('正在下载 PDF')).toBeVisible()
+  await expect(page.getByText('正在下载规则书内容')).toBeVisible()
   await expect(page.getByText(/可以离开这一页/)).toBeVisible()
   await expect(page.getByText('已有 PDF', { exact: true })).toBeVisible()
 

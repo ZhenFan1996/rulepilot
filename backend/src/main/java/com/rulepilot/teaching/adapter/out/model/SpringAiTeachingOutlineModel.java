@@ -164,6 +164,7 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
                 .user(user -> {
                     user.text(prompts.teachingOutlineUser())
                             .param("duration", request.durationMinutes())
+                            .param("learningGoal", request.learningGoalForPrompt())
                             .param("pages", request.pages())
                             .param("visualPages", request.pageImages().stream()
                                     .map(TeachingOutlineModel.PageImageInput::pageNumber)

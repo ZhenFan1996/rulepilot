@@ -219,6 +219,57 @@ class BoundedNativeToolAgentTest {
     }
 
     @Test
+    void rejectsOneEmptyEarlyStopAndLetsTheAgentContinueWithinItsExistingBudget() {
+        QueueModel model = new QueueModel(
+                new ModelTurn("", List.of(), 10, 0),
+                finalTurn("EVIDENCE_READY"));
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence")),
+                audited);
+
+        var result = agent.run(request(scope(), 2));
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
+        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(model.requests).isEqualTo(2);
+        assertThat(audited.recordedOperations).contains("nativeEmptyCompletion");
+    }
+
+    @Test
+    void rejectsAProseCompletionWhenTheCallerRequiresAnExactTerminalProtocol() {
+        QueueModel model = new QueueModel(
+                finalTurn("I think the evidence is ready."),
+                finalTurn("EVIDENCE_READY"));
+        RecordingInvocations audited = new RecordingInvocations();
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence")),
+                audited);
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use the exact terminal protocol.",
+                "Verify the compound request.",
+                "Insufficient verified evidence.",
+                2,
+                256,
+                Set.of("search_rule_evidence"),
+                Set.of(),
+                2,
+                "EVIDENCE_READY");
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).isEqualTo("EVIDENCE_READY");
+        assertThat(result.iterations()).isEqualTo(2);
+        assertThat(audited.recordedOperations).contains("nativeCompletionProtocol");
+    }
+
+    @Test
     void feedsOneInvalidArgumentObservationBackWithoutPublishingItAsEvidence() {
         NativeAgentTool invalid = failingTool("search_rule_evidence", true);
         QueueModel model = new QueueModel(
@@ -310,6 +361,83 @@ class BoundedNativeToolAgentTest {
 
         assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
         assertThat(model.sawVisualMedia).isTrue();
+    }
+
+    @Test
+    void hidesToolsAfterTheConfiguredSuccessfulObservationAndLetsTheAgentComposeItsFinalResponse() {
+        AtomicInteger turn = new AtomicInteger();
+        List<List<String>> advertised = new ArrayList<>();
+        NativeToolModel model = request -> {
+            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
+            return switch (turn.incrementAndGet()) {
+                case 1 -> turn(call("call-page", "search_rule_evidence", "{}"));
+                case 2 -> turn(call("call-exact", "read_rule_pages", "{}"));
+                default -> finalTurn("{\"regions\":[{\"label\":\"已核对区域\"}]}");
+            };
+        };
+        BoundedNativeToolAgent agent = agent(
+                model,
+                List.of(successTool("search_rule_evidence"), successTool("read_rule_pages")),
+                new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use observed evidence before composing the final structure.",
+                "Inspect one bounded source and then finish.",
+                "No verified result.",
+                4,
+                256,
+                Set.of("search_rule_evidence", "read_rule_pages"),
+                Set.of(),
+                4,
+                "",
+                Map.of("read_rule_pages", 1));
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(result.text()).contains("已核对区域");
+        assertThat(result.toolCalls()).isEqualTo(2);
+        assertThat(advertised).hasSize(3);
+        assertThat(advertised.get(2)).isEmpty();
+    }
+
+    @Test
+    void keepsToolsAvailableWhenTheConfiguredObservationIsOnlyPartial() {
+        List<List<String>> advertised = new ArrayList<>();
+        AtomicInteger turn = new AtomicInteger();
+        NativeToolModel model = request -> {
+            advertised.add(request.tools().stream().map(NativeToolModel.ToolSpec::name).toList());
+            return turn.incrementAndGet() == 1
+                    ? turn(call("call-partial", "read_rule_pages", "{}"))
+                    : finalTurn("No complete source was found.");
+        };
+        NativeAgentTool partial = new TestTool("read_rule_pages", false, false) {
+            @Override
+            public ToolObservation execute(String argumentsJson, ToolScope scope) {
+                return ToolObservation.partial("PAGE_NOT_FOUND", Map.of(), 0);
+            }
+        };
+        BoundedNativeToolAgent agent = agent(model, List.of(partial), new RecordingInvocations());
+        RunRequest request = new RunRequest(
+                Role.ANSWER,
+                scope(),
+                "Use only successful observations.",
+                "Inspect one bounded source.",
+                "No verified result.",
+                3,
+                256,
+                Set.of("read_rule_pages"),
+                Set.of(),
+                3,
+                "",
+                Map.of("read_rule_pages", 1));
+
+        var result = agent.run(request);
+
+        assertThat(result.status()).isEqualTo(RunStatus.COMPLETED);
+        assertThat(advertised).hasSize(2);
+        assertThat(advertised.get(1)).containsExactly("read_rule_pages");
     }
 
     @Test

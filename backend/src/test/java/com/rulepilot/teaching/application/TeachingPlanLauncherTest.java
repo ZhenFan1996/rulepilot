@@ -47,7 +47,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id())).thenReturn(plan);
+        when(plans.create(documentVersionId, 4, 4, 25, null, "alice", received.id())).thenReturn(plan);
         when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
                 .thenReturn(completed);
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -90,7 +90,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
+        when(plans.create(documentVersionId, 4, 4, 25, null, "alice", received.id()))
                 .thenThrow(new IllegalStateException("model unavailable"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -117,7 +117,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
+        when(plans.create(documentVersionId, 4, 4, 25, null, "alice", received.id()))
                 .thenThrow(new IllegalArgumentException("outline omitted scoring"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -143,7 +143,7 @@ class TeachingPlanLauncherTest {
         when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
-        when(plans.create(documentVersionId, 4, 4, 25, "alice", received.id()))
+        when(plans.create(documentVersionId, 4, 4, 25, null, "alice", received.id()))
                 .thenThrow(new AssertionError("simulated worker fault"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -155,6 +155,55 @@ class TeachingPlanLauncherTest {
         verify(runs).fail(
                 received.id(), 3, "TEACHING_PREPARATION_FAILED", "Teaching preparation failed safely");
         verify(lessons, never()).launch(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void carriesTheNaturalLearningGoalIntoBackgroundPlanning() {
+        RunSnapshot received = run(AssistantRunState.RECEIVED, 1);
+        RunSnapshot ready = run(received.id(), AssistantRunState.DOCUMENT_READINESS, 2);
+        RunSnapshot planning = run(received.id(), AssistantRunState.LESSON_PLANNING, 3);
+        RunSnapshot completed = run(received.id(), AssistantRunState.COMPLETED, 4);
+        TeachingPlan plan = mock(TeachingPlan.class);
+        when(plan.id()).thenReturn(UUID.randomUUID());
+        when(runs.findLatestOwned(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(Optional.empty());
+        when(runs.start(AssistantRunMode.TEACHING_PREPARATION, documentVersionId, "alice"))
+                .thenReturn(received);
+        when(runs.advance(received.id(), 1, AssistantRunState.DOCUMENT_READINESS,
+                        "Rulebook pages are ready for teaching"))
+                .thenReturn(ready);
+        when(runs.advance(received.id(), 2, AssistantRunState.LESSON_PLANNING,
+                        "Reading rulebook pages and organizing the lesson"))
+                .thenReturn(planning);
+        when(plans.create(
+                        documentVersionId,
+                        4,
+                        4,
+                        25,
+                        "先让我能带大家开局，再重点讲行动衔接。",
+                        "alice",
+                        received.id()))
+                .thenReturn(plan);
+        when(runs.advance(received.id(), 3, AssistantRunState.COMPLETED, "Teaching plan is ready"))
+                .thenReturn(completed);
+        var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
+
+        launcher.launch(
+                documentVersionId,
+                4,
+                4,
+                25,
+                "先让我能带大家开局，再重点讲行动衔接。",
+                "alice");
+
+        verify(plans).create(
+                documentVersionId,
+                4,
+                4,
+                25,
+                "先让我能带大家开局，再重点讲行动衔接。",
+                "alice",
+                received.id());
     }
 
     private RunSnapshot run(AssistantRunState state, long revision) {

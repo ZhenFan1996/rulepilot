@@ -161,6 +161,8 @@ class NativeVisualAgentRealRulebookEvaluationTest {
                 Map.entry("modelCalls", audited.modelCalls),
                 Map.entry("toolCodes", audited.observations.stream().map(ToolObservation::code).toList()),
                 Map.entry("finalResponse", finalResponseDiagnostics(loop.result)),
+                Map.entry("runStatus", loop.result == null ? "MISSING" : loop.result.status().name()),
+                Map.entry("runReason", loop.result == null ? "MISSING" : loop.result.reason()),
                 Map.entry("targetIntersected", targetIntersected),
                 Map.entry("compactCrop", compact),
                 Map.entry("mechanicalRuleAuthority", authority),

@@ -29,8 +29,10 @@ public interface TeachingOutlineModel {
             int durationMinutes,
             List<PageInput> pages,
             List<PageImageInput> pageImages,
+            String learningGoal,
             String modelConfigurationOwner) {
         public OutlineRequest {
+            learningGoal = normalizeOptional(learningGoal);
             if (playerCount < 1 || beginnerCount < 0 || beginnerCount > playerCount
                     || durationMinutes < 2 || pages == null || pages.isEmpty() || pageImages == null) {
                 throw new IllegalArgumentException("teaching outline request is invalid");
@@ -42,17 +44,38 @@ public interface TeachingOutlineModel {
                     : modelConfigurationOwner.strip();
         }
 
+        public String learningGoalForPrompt() {
+            return learningGoal == null ? "NO_ADDITIONAL_GOAL" : learningGoal;
+        }
+
+        private static String normalizeOptional(String value) {
+            if (value == null || value.isBlank()) return null;
+            String normalized = value.strip();
+            if (normalized.length() > 500) throw new IllegalArgumentException("teaching learning goal is too long");
+            return normalized;
+        }
+
+        public OutlineRequest(
+                int playerCount,
+                int beginnerCount,
+                int durationMinutes,
+                List<PageInput> pages,
+                List<PageImageInput> pageImages,
+                String modelConfigurationOwner) {
+            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null, modelConfigurationOwner);
+        }
+
         public OutlineRequest(
                 int playerCount,
                 int beginnerCount,
                 int durationMinutes,
                 List<PageInput> pages,
                 List<PageImageInput> pageImages) {
-            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null);
+            this(playerCount, beginnerCount, durationMinutes, pages, pageImages, null, null);
         }
 
         public OutlineRequest(int playerCount, int beginnerCount, int durationMinutes, List<PageInput> pages) {
-            this(playerCount, beginnerCount, durationMinutes, pages, List.of(), null);
+            this(playerCount, beginnerCount, durationMinutes, pages, List.of(), null, null);
         }
     }
 

@@ -50,6 +50,10 @@ class AgenticVisualRegionLocatorTest {
         assertThat(fallback.calls).isZero();
         assertThat(agent.request.role()).isEqualTo(Role.VISUAL);
         assertThat(agent.request.playerRequest()).contains(evidenceId.toString(), "sourcePages");
+        assertThat(agent.request.allowedTools()).containsExactlyInAnyOrder(
+                "read_rule_page_image", "read_visual_page_facts", "crop_rule_page_image");
+        assertThat(agent.request.finalResponseAfterToolSuccesses())
+                .containsEntry("crop_rule_page_image", 1);
     }
 
     @Test

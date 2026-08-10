@@ -8,6 +8,11 @@ public interface OfficialRulebookCandidateFinder {
 
     List<Candidate> find(Request request);
 
+    /** One bounded recovery pass after ordinary search and source-page inspection produced no downloadable PDF. */
+    default List<Candidate> findAfterSourcePages(Request request, List<Candidate> observedSourcePages) {
+        return List.of();
+    }
+
     record Request(
             int bggId,
             String gameName,

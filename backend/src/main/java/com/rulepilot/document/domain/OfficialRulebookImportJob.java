@@ -24,6 +24,7 @@ public record OfficialRulebookImportJob(
         QUEUED,
         CONNECTING,
         DOWNLOADING,
+        COMPRESSING,
         VERIFYING_FILE,
         SAVING,
         COMPLETED,

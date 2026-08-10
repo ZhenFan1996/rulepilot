@@ -99,6 +99,14 @@ public class OfficialRulebookImportJobService {
                         }
 
                         @Override
+                        public void compressing() {
+                            var current = requireOwned(job.id(), job.ownerUsername());
+                            jobs.updateProgress(
+                                    job.id(), OfficialRulebookImportJob.Stage.COMPRESSING,
+                                    current.downloadedBytes(), current.totalBytes(), Instant.now(clock));
+                        }
+
+                        @Override
                         public void verifying() {
                             var current = requireOwned(job.id(), job.ownerUsername());
                             jobs.updateProgress(
@@ -121,6 +129,10 @@ public class OfficialRulebookImportJobService {
     }
 
     private String failureCode(RuntimeException exception) {
+        if (exception instanceof OfficialRulebookSourceAccessException access
+                && access.reason() == OfficialRulebookSourceAccessException.Reason.INTERACTIVE_BROWSER_REQUIRED) {
+            return "SOURCE_BROWSER_REQUIRED";
+        }
         if (exception instanceof IllegalArgumentException) return "INVALID_PDF_SOURCE";
         return "SOURCE_UNAVAILABLE";
     }

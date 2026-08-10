@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,13 @@ import java.util.List;
 import java.util.Map;
 import java.net.SocketTimeoutException;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
 class SpringAiTeachingOutlineModelTest {
 
@@ -136,5 +144,51 @@ class SpringAiTeachingOutlineModelTest {
                 "PLAYER TURN",
                 "do not start over",
                 "reorder whole topics");
+    }
+
+    @Test
+    void passesTheNaturalLearningGoalToTheOutlineAgentAsUntrustedContext() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        when(configuration.usesFake(Role.TEACHING, "player")).thenReturn(false);
+        when(configuration.modelFor(Role.TEACHING, "player")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(chatModel.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(prompts.teachingOutlineSystem()).thenReturn("Use the goal only as a teaching preference.");
+        when(prompts.teachingOutlineUser()).thenReturn(
+                "<untrusted_player_learning_goal>{learningGoal}</untrusted_player_learning_goal>\n{pages}\n{repair}");
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"gameTitle":"Game","premise":"Premise","topics":[{
+                          "key":"setup","title":"开局","objective":"说明开局。","required":true,
+                          "visualEvidenceRecommended":false,"retrievalQueries":["SETUP"],
+                          "coverageTags":["setup"],"sourcePageNumbers":[1]
+                        }]}
+                        """)))));
+        SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
+                configuration, prompts, new FakeTeachingOutlineModel());
+
+        try {
+            model.organize(new OutlineRequest(
+                    4,
+                    4,
+                    30,
+                    List.of(new PageInput(1, "SETUP: Give each player a board.")),
+                    List.of(),
+                    "先让我能带大家开局，再重点讲行动怎么衔接。",
+                    "player"));
+        } finally {
+            model.close();
+        }
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getInstructions())
+                .extracting(message -> message.getText())
+                .anySatisfy(text -> assertThat(text)
+                        .contains(
+                                "untrusted_player_learning_goal",
+                                "先让我能带大家开局，再重点讲行动怎么衔接。"));
     }
 }

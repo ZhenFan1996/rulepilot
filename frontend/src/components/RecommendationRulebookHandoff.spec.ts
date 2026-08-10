@@ -94,8 +94,10 @@ describe('RecommendationRulebookHandoff', () => {
       })
       if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
       if (path === '/api/v1/documents/official-imports') return Response.json({
-        duplicate: false,
-        version: { id: 'version-1', status: 'EXTRACTING' },
+        id: 'import-1', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/import-1') return Response.json({
+        id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
       })
       return new Response(null, { status: 404 })
     }))
@@ -115,6 +117,7 @@ describe('RecommendationRulebookHandoff', () => {
     expect(openSource).toHaveBeenCalledWith(
       'https://boardgamegeek.com/filepage/123/rules', '_blank', 'noopener,noreferrer',
     )
+    expect(wrapper.text()).toContain('搜索结果没有提供可验证的 PDF 直链')
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
 
     await wrapper.get('button[aria-pressed="false"]').trigger('click')
@@ -143,7 +146,111 @@ describe('RecommendationRulebookHandoff', () => {
       durationMinutes: 25,
     }])
     expect(router.currentRoute.value.name).toBe('teach')
-    expect(router.currentRoute.value.query).toEqual({ editionId: 'edition-1', onboarding: 'recommendation-agent' })
+    expect(router.currentRoute.value.query).toEqual({
+      editionId: 'edition-1', onboarding: 'recommendation-agent', importJob: 'import-1',
+    })
+  })
+
+  it('imports an ordered community page-image rulebook as part of the same teaching handoff', async () => {
+    const requests: Array<{ path: string; options?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      requests.push({ path, options })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: '官方规则书',
+          url: 'https://www.gstonegames.com/game/doc-1234.html',
+          publisher: '集石',
+          language: '简体中文',
+          edition: '基础版',
+          sourceDomain: 'www.gstonegames.com',
+          officialDomainVerified: false,
+          sourceType: 'COMMUNITY_PLATFORM',
+          acquisitionMode: 'IMAGE_GALLERY',
+        }],
+      })
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'gallery-import', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/gallery-import') return Response.json({
+        id: 'gallery-import', stage: 'COMPLETED', documentVersionId: 'version-gallery', duplicate: false, errorCode: null,
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper, router } = await mountHandoff()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('连续规则页图片，可合成为 PDF')
+    expect(wrapper.text()).toContain('社区规则书来源（如 BGG / 集石）')
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+    await flushPromises()
+
+    const request = requests.find(candidate => candidate.path === '/api/v1/documents/official-imports')
+    expect(JSON.parse(String(request?.options?.body))).toMatchObject({
+      title: '官方规则书',
+      officialSourceUrl: 'https://www.gstonegames.com/game/doc-1234.html',
+      rightsConfirmed: true,
+    })
+    expect(router.currentRoute.value.name).toBe('teach')
+  })
+
+  it('turns an account-gated exact BGG download into an actionable browser handoff', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/bgg/games/266192/import') return Response.json({
+        game: { id: 'game-1', name: '展翅翱翔' },
+        edition: { id: 'edition-1', name: 'BGG 版本' },
+        alreadyImported: false,
+      })
+      if (path.startsWith('/api/v1/documents/rulebook-candidates?')) return Response.json({
+        configured: true,
+        candidates: [{
+          title: 'Wingspan community rules',
+          url: 'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
+          publisher: 'Community uploader',
+          language: 'English',
+          edition: 'Base game',
+          sourceDomain: 'boardgamegeek.com',
+          officialDomainVerified: false,
+          sourceType: 'COMMUNITY_PLATFORM',
+          acquisitionMode: 'DIRECT_PDF',
+        }],
+      })
+      if (path === '/api/auth/session') return Response.json({ username: 'player', roles: ['USER'] })
+      if (path === '/api/v1/documents/official-imports') return Response.json({
+        id: 'bgg-import', stage: 'QUEUED', documentVersionId: null, duplicate: false, errorCode: null,
+      }, { status: 202 })
+      if (path === '/api/v1/documents/official-imports/bgg-import') return Response.json({
+        id: 'bgg-import', stage: 'FAILED', documentVersionId: null, duplicate: false,
+        errorCode: 'SOURCE_BROWSER_REQUIRED',
+      })
+      return new Response(null, { status: 404 })
+    }))
+    const { wrapper } = await mountHandoff()
+    await flushPromises()
+
+    await wrapper.get('button[aria-pressed="false"]').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已经找到这份文件')
+    const bggLink = wrapper.findAll('a').find(link => link.text().includes('在来源网站继续下载'))!
+    expect(bggLink.attributes('href')).toBe(
+      'https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/wingspan-rules.pdf',
+    )
+    expect(wrapper.text()).toContain('本地上传')
   })
 
   it('does not download when discovery is unavailable and preserves a manual edition-aware fallback', async () => {

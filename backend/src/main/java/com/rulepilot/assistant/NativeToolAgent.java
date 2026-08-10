@@ -4,6 +4,7 @@ import com.rulepilot.assistant.NativeAgentTool.Role;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /** Executes one bounded observe-decide-act loop without publishing its output. */
@@ -34,7 +35,61 @@ public interface NativeToolAgent {
             int maxOutputTokens,
             Set<String> allowedTools,
             Set<String> requiredToolsBeforeCompletion,
-            int maxToolCalls) {
+            int maxToolCalls,
+            String requiredTerminalText,
+            Map<String, Integer> finalResponseAfterToolSuccesses) {
+        public RunRequest(
+                Role role,
+                ToolScope scope,
+                String systemPrompt,
+                String playerRequest,
+                String fallbackText,
+                int maxIterations,
+                int maxOutputTokens,
+                Set<String> allowedTools,
+                Set<String> requiredToolsBeforeCompletion,
+                int maxToolCalls,
+                String requiredTerminalText) {
+            this(
+                    role,
+                    scope,
+                    systemPrompt,
+                    playerRequest,
+                    fallbackText,
+                    maxIterations,
+                    maxOutputTokens,
+                    allowedTools,
+                    requiredToolsBeforeCompletion,
+                    maxToolCalls,
+                    requiredTerminalText,
+                    Map.of());
+        }
+
+        public RunRequest(
+                Role role,
+                ToolScope scope,
+                String systemPrompt,
+                String playerRequest,
+                String fallbackText,
+                int maxIterations,
+                int maxOutputTokens,
+                Set<String> allowedTools,
+                Set<String> requiredToolsBeforeCompletion,
+                int maxToolCalls) {
+            this(
+                    role,
+                    scope,
+                    systemPrompt,
+                    playerRequest,
+                    fallbackText,
+                    maxIterations,
+                    maxOutputTokens,
+                    allowedTools,
+                    requiredToolsBeforeCompletion,
+                    maxToolCalls,
+                    "");
+        }
+
         public RunRequest(
                 Role role,
                 ToolScope scope,
@@ -53,7 +108,9 @@ public interface NativeToolAgent {
                     maxOutputTokens,
                     Set.of(),
                     Set.of(),
-                    Math.min(24, maxIterations * 4));
+                    Math.min(24, maxIterations * 4),
+                    "",
+                    Map.of());
         }
 
         /** Compatibility constructor: an empty allow-list means every tool registered for the role. */
@@ -76,7 +133,9 @@ public interface NativeToolAgent {
                     maxOutputTokens,
                     Set.of(),
                     requiredToolsBeforeCompletion,
-                    Math.min(24, maxIterations * 4));
+                    Math.min(24, maxIterations * 4),
+                    "",
+                    Map.of());
         }
 
         public RunRequest {
@@ -85,14 +144,31 @@ public interface NativeToolAgent {
                     || allowedTools == null
                     || requiredToolsBeforeCompletion == null
                     || maxToolCalls < 1 || maxToolCalls > 24
+                    || requiredTerminalText == null || requiredTerminalText.length() > 128
+                    || finalResponseAfterToolSuccesses == null
                     || allowedTools.stream().anyMatch(value -> value == null || value.isBlank())
-                    || requiredToolsBeforeCompletion.stream().anyMatch(value -> value == null || value.isBlank())) {
+                    || requiredToolsBeforeCompletion.stream().anyMatch(value -> value == null || value.isBlank())
+                    || finalResponseAfterToolSuccesses.entrySet().stream().anyMatch(entry ->
+                            entry.getKey() == null
+                                    || entry.getKey().isBlank()
+                                    || entry.getValue() == null
+                                    || entry.getValue() < 1
+                                    || entry.getValue() > maxToolCalls)) {
                 throw new IllegalArgumentException("native tool Agent request is invalid");
             }
             allowedTools = Set.copyOf(allowedTools);
             requiredToolsBeforeCompletion = Set.copyOf(requiredToolsBeforeCompletion);
+            requiredTerminalText = requiredTerminalText.strip();
+            finalResponseAfterToolSuccesses = Map.copyOf(finalResponseAfterToolSuccesses);
             if (!allowedTools.isEmpty() && !allowedTools.containsAll(requiredToolsBeforeCompletion)) {
                 throw new IllegalArgumentException("required native tools must be included in the allow-list");
+            }
+            if (!allowedTools.isEmpty() && !allowedTools.containsAll(finalResponseAfterToolSuccesses.keySet())) {
+                throw new IllegalArgumentException("final-response native tools must be included in the allow-list");
+            }
+            if (requiredToolsBeforeCompletion.stream().anyMatch(finalResponseAfterToolSuccesses::containsKey)) {
+                throw new IllegalArgumentException(
+                        "a native tool cannot both auto-complete and require a final model response");
             }
         }
     }

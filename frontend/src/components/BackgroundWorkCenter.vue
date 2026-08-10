@@ -21,7 +21,7 @@ interface RulebookImportJob {
   id: string
   title: string
   sourceDomain: string
-  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
+  stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
   totalBytes: number | null
   documentVersionId: string | null
@@ -76,19 +76,21 @@ const copy = computed(() => locale.value === 'zh-CN' ? {
   trigger: '后台任务', title: '后台任务', close: '关闭后台任务', empty: '当前没有后台任务。',
   safe: '可以继续浏览，离开页面不会中断这些任务。', retrying: '暂时没有拿到最新进度，正在自动重试。',
   download: '获取规则书', rulebook: '读取规则书', lesson: '生成讲解', done: '已完成', failed: '需要处理',
-  queued: '等待下载', connecting: '正在连接出版社', downloading: '正在下载 PDF', verifying: '正在核验 PDF',
+  queued: '等待下载', connecting: '正在连接规则书来源', downloading: '正在下载规则书内容', compressing: '文件较大，正在压缩 PDF', verifying: '正在核验 PDF',
   saving: '正在保存并交给规则书读取', uploaded: '等待开始读取', extracting: '正在提取规则文字',
   rendering: '正在生成规则书页面', structuring: '正在整理章节与图例', teaching: '正在组织讲解',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `第 ${done} / ${total} 页`,
+  browserRequired: '需要在来源网站刷新链接或登录',
   openRulebooks: '打开规则书', openLessons: '打开讲解中心',
 } : {
   trigger: 'Background work', title: 'Background work', close: 'Close background work', empty: 'No background work right now.',
   safe: 'You can keep browsing. Leaving this page will not interrupt these tasks.', retrying: 'Progress is temporarily unavailable; retrying automatically.',
   download: 'Get rulebook', rulebook: 'Read rulebook', lesson: 'Generate lesson', done: 'Complete', failed: 'Needs attention',
-  queued: 'Waiting to download', connecting: 'Connecting to publisher', downloading: 'Downloading PDF', verifying: 'Verifying PDF',
+  queued: 'Waiting to download', connecting: 'Connecting to rulebook source', downloading: 'Downloading rulebook content', compressing: 'Compressing the oversized PDF', verifying: 'Verifying PDF',
   saving: 'Saving and handing off for reading', uploaded: 'Waiting to read', extracting: 'Extracting searchable rules',
   rendering: 'Rendering rulebook pages', structuring: 'Organizing chapters and visual references', teaching: 'Organizing the lesson',
   bytes: (done: string, total: string) => `${done} / ${total}`, pages: (done: number, total: number) => `Page ${done} / ${total}`,
+  browserRequired: 'Refresh the link or sign in on the source site',
   openRulebooks: 'Open rulebooks', openLessons: 'Open lesson center',
 })
 
@@ -102,6 +104,7 @@ function importStage(job: RulebookImportJob) {
     QUEUED: copy.value.queued,
     CONNECTING: copy.value.connecting,
     DOWNLOADING: copy.value.downloading,
+    COMPRESSING: copy.value.compressing,
     VERIFYING_FILE: copy.value.verifying,
     SAVING: copy.value.saving,
     COMPLETED: copy.value.done,
@@ -133,7 +136,9 @@ const workItems = computed<WorkItem[]>(() => {
       const progress = job.stage === 'DOWNLOADING' && job.totalBytes
         ? Math.min(100, Math.round(job.downloadedBytes / job.totalBytes * 100))
         : job.stage === 'COMPLETED' ? 100 : null
-      const detail = job.stage === 'DOWNLOADING' && job.downloadedBytes > 0
+      const detail = job.stage === 'FAILED' && job.errorCode === 'SOURCE_BROWSER_REQUIRED'
+        ? copy.value.browserRequired
+        : job.stage === 'DOWNLOADING' && job.downloadedBytes > 0
         ? job.totalBytes
           ? copy.value.bytes(formatBytes(job.downloadedBytes), formatBytes(job.totalBytes))
           : formatBytes(job.downloadedBytes)
