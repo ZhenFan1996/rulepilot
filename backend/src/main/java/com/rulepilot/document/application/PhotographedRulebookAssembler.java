@@ -2,7 +2,7 @@ package com.rulepilot.document.application;
 
 import java.util.List;
 
-/** Turns player-provided rulebook page photos into the immutable PDF source used by ingestion. */
+/** Turns validated, ordered rulebook page images into the immutable PDF source used by ingestion. */
 public interface PhotographedRulebookAssembler {
 
     AssembledRulebook assemble(List<PhotographedRulebookUploadService.PhotoPage> pages);

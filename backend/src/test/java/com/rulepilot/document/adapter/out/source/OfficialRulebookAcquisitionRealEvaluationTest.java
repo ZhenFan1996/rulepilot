@@ -8,7 +8,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rulepilot.document.application.MinioStorageProperties;
 import com.rulepilot.document.application.OfficialRulebookCandidateFinder;
+import com.rulepilot.document.application.OfficialRulebookSourceFetcher;
 import com.rulepilot.document.application.OfficialRulebookSourceFetcher.FetchedRulebook;
+import com.rulepilot.document.application.OfficialRulebookSourceInspector;
+import com.rulepilot.document.adapter.out.pdf.PdfBoxPhotographedRulebookAssembler;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,7 +26,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import okhttp3.OkHttpClient;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +38,7 @@ import org.junit.jupiter.api.Test;
 class OfficialRulebookAcquisitionRealEvaluationTest {
 
     private static final long MAXIMUM_PDF_BYTES = 100L * 1024 * 1024;
+    private static final long DEFAULT_MAXIMUM_PDF_BYTES = 50L * 1024 * 1024;
     private final ObjectMapper json = JsonMapper.builder().findAndAddModules().build();
 
     @Test
@@ -82,9 +90,11 @@ class OfficialRulebookAcquisitionRealEvaluationTest {
                         "evaluation-secret",
                         "rulepilot-evaluation",
                         MAXIMUM_PDF_BYTES),
+                new PdfBoxPhotographedRulebookAssembler(),
                 Duration.ofSeconds(10),
                 Duration.ofSeconds(90),
-                Duration.ofMinutes(10));
+                Duration.ofMinutes(10),
+                1024 * 1024);
         FetchedRulebook fetched = null;
         String sha256 = "";
         String expectedSha256 = case_.path("expectedSha256").asText("").strip().toLowerCase(Locale.ROOT);
@@ -151,6 +161,182 @@ class OfficialRulebookAcquisitionRealEvaluationTest {
                         "rawPdfStored", false,
                         "rawProviderOutputStored", false,
                         "prohibitedQwenPlusUsed", false))) + "\n", StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void downloadsAnObservedPublicPageImageRulebookAndBuildsAReadablePdf() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_RULEBOOK_IMAGE_GALLERY_EVAL")));
+        String sourceUrl = requiredEnvironment("RULEBOOK_IMAGE_GALLERY_URL", "RULEBOOK_IMAGE_GALLERY_URL");
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                new MinioStorageProperties(
+                        "http://127.0.0.1:9000",
+                        "evaluation-access",
+                        "evaluation-secret",
+                        "rulepilot-evaluation",
+                        MAXIMUM_PDF_BYTES),
+                new PdfBoxPhotographedRulebookAssembler(),
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(90),
+                Duration.ofMinutes(10),
+                1024 * 1024);
+
+        FetchedRulebook fetched = fetcher.fetch(URI.create(sourceUrl));
+
+        assertThat(fetched.finalSource().toASCIIString()).startsWith("https://");
+        assertThat(fetched.content()).hasSizeLessThanOrEqualTo((int) MAXIMUM_PDF_BYTES);
+        try (var pdf = Loader.loadPDF(fetched.content())) {
+            assertThat(pdf.getNumberOfPages()).isBetween(2, 40);
+            String expectedPages = System.getenv("RULEBOOK_IMAGE_GALLERY_EXPECTED_PAGES");
+            if (expectedPages != null && !expectedPages.isBlank()) {
+                assertThat(pdf.getNumberOfPages()).isEqualTo(Integer.parseInt(expectedPages));
+            }
+        }
+    }
+
+    @Test
+    void findsAPublicGstoneRulebookFromItsExactGameNameAndBuildsThePdf() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_GSTONE_END_TO_END_EVAL")));
+        String gameName = requiredEnvironment("RULEBOOK_GSTONE_GAME_NAME", "RULEBOOK_GSTONE_GAME_NAME");
+        String expectedGameUrl = requiredEnvironment("RULEBOOK_GSTONE_EXPECTED_URL", "RULEBOOK_GSTONE_EXPECTED_URL");
+        String expectedDocumentUrl = requiredEnvironment(
+                "RULEBOOK_GSTONE_EXPECTED_DOCUMENT_URL", "RULEBOOK_GSTONE_EXPECTED_DOCUMENT_URL");
+        int expectedPages = Integer.parseInt(requiredEnvironment(
+                "RULEBOOK_IMAGE_GALLERY_EXPECTED_PAGES", "RULEBOOK_IMAGE_GALLERY_EXPECTED_PAGES"));
+        var lookup = new HttpGstoneRulebookCatalogLookup(new OkHttpClient(), true);
+        var request = new OfficialRulebookCandidateFinder.Request(
+                42, gameName, "基础版", 2024, "zh-CN");
+
+        var gamePage = lookup.find(request).stream()
+                .filter(candidate -> candidate.url().equals(expectedGameUrl))
+                .findFirst()
+                .orElseThrow();
+        var inspector = new HttpOfficialRulebookSourceInspector(Duration.ofSeconds(10), 1024 * 1024);
+        var documentPage = inspector.inspect(URI.create(gamePage.url())).orElseThrow().links().stream()
+                .map(OfficialRulebookSourceInspector.Link::target)
+                .filter(target -> target.toASCIIString().equals(expectedDocumentUrl))
+                .findFirst()
+                .orElseThrow();
+        assertThat(inspector.inspect(documentPage))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)
+                .isEqualTo(OfficialRulebookSourceInspector.MediaType.IMAGE_GALLERY);
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                new MinioStorageProperties(
+                        "http://127.0.0.1:9000",
+                        "evaluation-access",
+                        "evaluation-secret",
+                        "rulepilot-evaluation",
+                        MAXIMUM_PDF_BYTES),
+                new PdfBoxPhotographedRulebookAssembler(),
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(90),
+                Duration.ofMinutes(10),
+                1024 * 1024);
+
+        FetchedRulebook fetched = fetcher.fetch(documentPage);
+
+        try (var pdf = Loader.loadPDF(fetched.content())) {
+            assertThat(pdf.getNumberOfPages()).isEqualTo(expectedPages);
+        }
+    }
+
+    @Test
+    void resolvesAOneJourGamePageToItsObservedRulebookPdfWithoutUsingTheMcpDownloader() {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ONEJOUR_RULEBOOK_EVAL")));
+        URI sourcePage = URI.create(requiredEnvironment(
+                "RULEBOOK_ONEJOUR_SOURCE_PAGE", "RULEBOOK_ONEJOUR_SOURCE_PAGE"));
+        URI expectedPdf = URI.create(requiredEnvironment(
+                "RULEBOOK_ONEJOUR_EXPECTED_PDF", "RULEBOOK_ONEJOUR_EXPECTED_PDF"));
+        var inspector = new HttpOfficialRulebookSourceInspector(Duration.ofSeconds(20), 1024 * 1024);
+
+        var page = inspector.inspect(sourcePage).orElseThrow();
+
+        assertThat(page.mediaType()).isEqualTo(OfficialRulebookSourceInspector.MediaType.HTML);
+        assertThat(page.links())
+                .extracting(OfficialRulebookSourceInspector.Link::target)
+                .contains(expectedPdf);
+        assertThat(inspector.inspect(expectedPdf))
+                .get()
+                .extracting(OfficialRulebookSourceInspector.Inspection::mediaType)
+                .isEqualTo(OfficialRulebookSourceInspector.MediaType.PDF);
+    }
+
+    @Test
+    void downloadsAndCompressesTheObservedOversizedOneJourPdfThroughTheApplicationFetcher() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_OVERSIZED_PDF_COMPRESSION_EVAL")));
+        URI source = URI.create("https://cdn.1j1ju.com/medias/59/24/4c-ark-nova-rulebook.pdf");
+        var fetcher = new HttpOfficialRulebookSourceFetcher(
+                new MinioStorageProperties(
+                        "http://127.0.0.1:9000",
+                        "evaluation-access",
+                        "evaluation-secret",
+                        "rulepilot-evaluation",
+                        DEFAULT_MAXIMUM_PDF_BYTES),
+                new PdfBoxPhotographedRulebookAssembler(),
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(90),
+                Duration.ofMinutes(10),
+                1024 * 1024);
+        var declaredBytes = new AtomicLong(-1);
+        var compressionObserved = new AtomicBoolean();
+        long started = System.nanoTime();
+
+        FetchedRulebook fetched = fetcher.fetch(source, new OfficialRulebookSourceFetcher.ProgressListener() {
+            @Override
+            public void downloadStarted(Long totalBytes) {
+                if (totalBytes != null) declaredBytes.set(totalBytes);
+            }
+
+            @Override
+            public void downloaded(long downloadedBytes, Long totalBytes) {}
+
+            @Override
+            public void compressing() {
+                compressionObserved.set(true);
+            }
+
+            @Override
+            public void verifying() {}
+        });
+        byte[] compressed = fetched.content();
+        int pages;
+        int extractedCharacters;
+        try (var pdf = Loader.loadPDF(compressed)) {
+            pages = pdf.getNumberOfPages();
+            extractedCharacters = new PDFTextStripper().getText(pdf).strip().length();
+        }
+
+        assertThat(declaredBytes.get()).isGreaterThan(DEFAULT_MAXIMUM_PDF_BYTES);
+        assertThat(declaredBytes.get()).isLessThanOrEqualTo(MAXIMUM_PDF_BYTES);
+        assertThat(compressionObserved).isTrue();
+        assertThat(compressed.length).isLessThanOrEqualTo((int) DEFAULT_MAXIMUM_PDF_BYTES);
+        assertThat(pages).isPositive();
+        assertThat(extractedCharacters).isGreaterThan(1_000);
+
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        Path output = root.resolve(".local/agent-evaluation/rulebook-oversized-pdf-compression-real.json");
+        Files.createDirectories(output.getParent());
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("schemaVersion", 1);
+        report.put("generatedAt", Instant.now().toString());
+        report.put("sourcePage", "https://www.1jour-1jeu.com/jeu-de-plateau/2022-ark-nova");
+        report.put("sourcePdf", source.toASCIIString());
+        report.put("originalBytes", declaredBytes.get());
+        report.put("configuredMaximumBytes", DEFAULT_MAXIMUM_PDF_BYTES);
+        report.put("compressedBytes", compressed.length);
+        report.put("pages", pages);
+        report.put("searchableCharactersAfterCompression", extractedCharacters);
+        report.put("elapsedMs", elapsedMillis(started));
+        report.put("controls", Map.of(
+                "applicationFetcherUsed", true,
+                "compressionStageObserved", true,
+                "rawPdfStored", false,
+                "rawRulebookTextStored", false,
+                "credentialsUsed", false));
+        Files.writeString(
+                output,
+                json.writerWithDefaultPrettyPrinter().writeValueAsString(report) + "\n",
+                StandardCharsets.UTF_8);
     }
 
     private OfficialRulebookCandidateFinder.Request request(JsonNode case_) {

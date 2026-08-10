@@ -276,11 +276,15 @@ rulepilot:
     hourly-limit: ${RULEBOOK_DISCOVERY_HOURLY_LIMIT:30}
     provider-concurrency: ${RULEBOOK_DISCOVERY_PROVIDER_CONCURRENCY:1}
     trusted-domains: ${RULEBOOK_TRUSTED_DOMAINS:${RULEBOOK_OFFICIAL_DOMAINS:}}
+    gstone-catalog-enabled: ${RULEBOOK_GSTONE_CATALOG_ENABLED:true}
+    source-inspection-timeout: ${RULEBOOK_SOURCE_INSPECTION_TIMEOUT:PT8S}
+    max-source-page-bytes: ${RULEBOOK_SOURCE_PAGE_MAX_BYTES:1048576}
   rulebook-import:
     queue-capacity: ${RULEBOOK_IMPORT_QUEUE_CAPACITY:8}
     connect-timeout: ${RULEBOOK_IMPORT_CONNECT_TIMEOUT:PT10S}
     read-timeout: ${RULEBOOK_IMPORT_READ_TIMEOUT:PT1M30S}
     call-timeout: ${RULEBOOK_IMPORT_CALL_TIMEOUT:PT10M}
+    max-compressible-pdf-bytes: ${RULEBOOK_IMPORT_MAX_COMPRESSIBLE_PDF_BYTES:104857600}
   embedding:
     provider: ${EMBEDDING_PROVIDER:fake}
     qwen:

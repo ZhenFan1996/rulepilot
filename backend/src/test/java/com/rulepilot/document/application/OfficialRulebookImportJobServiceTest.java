@@ -88,6 +88,35 @@ class OfficialRulebookImportJobServiceTest {
     }
 
     @Test
+    void exposesOversizedPdfCompressionAsARecoverableBackgroundStage() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        UUID versionId = UUID.randomUUID();
+        doAnswer(invocation -> {
+            OfficialRulebookSourceFetcher.ProgressListener progress = invocation.getArgument(6);
+            progress.downloadStarted(60_000_000L);
+            progress.downloaded(60_000_000L, 60_000_000L);
+            progress.compressing();
+            progress.verifying();
+            progress.saving();
+            return uploadResult(versionId);
+        }).when(imports).importRulebook(
+                any(), anyString(), any(), anyString(), anyBoolean(), anyString(), any());
+        OfficialRulebookImportJobService service = service(jobs, imports, Runnable::run);
+
+        var launch = service.enqueue(command(), "alice");
+        var completed = service.requireOwned(launch.job().id(), "alice");
+
+        assertThat(completed.stage()).isEqualTo(OfficialRulebookImportJob.Stage.COMPLETED);
+        assertThat(jobs.stages).containsSubsequence(
+                OfficialRulebookImportJob.Stage.DOWNLOADING,
+                OfficialRulebookImportJob.Stage.COMPRESSING,
+                OfficialRulebookImportJob.Stage.VERIFYING_FILE,
+                OfficialRulebookImportJob.Stage.SAVING,
+                OfficialRulebookImportJob.Stage.COMPLETED);
+    }
+
+    @Test
     void recordsAStableFailureCodeWhenTheBackgroundFetchFails() {
         FakeJobs jobs = new FakeJobs();
         OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
@@ -101,6 +130,23 @@ class OfficialRulebookImportJobServiceTest {
         assertThat(failed.stage()).isEqualTo(OfficialRulebookImportJob.Stage.FAILED);
         assertThat(failed.errorCode()).isEqualTo("INVALID_PDF_SOURCE");
         assertThat(failed.completedAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void preservesAnInteractiveBrowserRequirementAsARecoverableSourceState() {
+        FakeJobs jobs = new FakeJobs();
+        OfficialRulebookImportService imports = mock(OfficialRulebookImportService.class);
+        when(imports.importRulebook(any(), anyString(), any(), eq(SOURCE), anyBoolean(), anyString(), any()))
+                .thenThrow(new OfficialRulebookSourceAccessException(
+                        OfficialRulebookSourceAccessException.Reason.INTERACTIVE_BROWSER_REQUIRED,
+                        "BGG sign-in required"));
+        OfficialRulebookImportJobService service = service(jobs, imports, Runnable::run);
+
+        var launch = service.enqueue(command(), "alice");
+        var failed = service.requireOwned(launch.job().id(), "alice");
+
+        assertThat(failed.stage()).isEqualTo(OfficialRulebookImportJob.Stage.FAILED);
+        assertThat(failed.errorCode()).isEqualTo("SOURCE_BROWSER_REQUIRED");
     }
 
     @Test

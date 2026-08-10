@@ -19,6 +19,8 @@ public interface OfficialRulebookSourceFetcher {
 
         void downloaded(long downloadedBytes, Long totalBytes);
 
+        default void compressing() {}
+
         void verifying();
 
         default void saving() {}

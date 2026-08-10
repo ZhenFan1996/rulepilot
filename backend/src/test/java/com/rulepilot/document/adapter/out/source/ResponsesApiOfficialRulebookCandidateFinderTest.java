@@ -65,6 +65,13 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                             "edition", "First",
                             "sourceIndexes", List.of(2)),
                     Map.of(
+                            "title", "Observed BGG download",
+                            "url", "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf",
+                            "publisher", "Community uploader",
+                            "language", "en",
+                            "edition", "First",
+                            "sourceIndexes", List.of(3)),
+                    Map.of(
                             "title", "Invented rules",
                             "url", "https://publisher.example/invented.pdf",
                             "publisher", "Publisher",
@@ -80,7 +87,10 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
                                             "url", "https://publisher.example/support/rules.pdf"),
                                     Map.of(
                                             "title", "BGG Files",
-                                            "url", "https://boardgamegeek.com/filepage/123/rulebook")))),
+                                            "url", "https://boardgamegeek.com/filepage/123/rulebook"),
+                                    Map.of(
+                                            "title", "BGG direct download",
+                                            "url", "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf")))),
                     Map.of("type", "message", "content", List.of(Map.of("type", "output_text", "text", content))))));
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
@@ -103,21 +113,84 @@ class ResponsesApiOfficialRulebookCandidateFinderTest {
 
             assertThat(candidates).extracting(OfficialRulebookCandidateFinder.Candidate::url).containsExactly(
                     "https://publisher.example/support/rules.pdf",
+                    "https://boardgamegeek.com/file/download_redirect/c66d839e5ef882cf86295abc25caef76456ef0ed43746421/catalog-game-rules.pdf",
                     "https://boardgamegeek.com/filepage/123/rulebook");
             assertThat(candidates).allSatisfy(candidate -> assertThat(candidate.toString()).doesNotContain("secret-key"));
             assertThat(authorization.get()).isEqualTo("Bearer secret-key");
             assertThat(requestBody.get()).contains(
                     "\"tools\":[{\"type\":\"web_search\"}]",
-                    "\"max_output_tokens\":700",
+                    "\"max_output_tokens\":900",
                     "\"reasoning\":{\"effort\":\"minimal\"}",
-                    "Stop expanding the search",
+                    "filetype:pdf",
                     "BoardGameGeek Files",
+                    "gstonegames.com",
+                    "1jour-1jeu.com",
+                    "/file/download_redirect/",
                     "Catalog Game",
                     "目录游戏",
                     "Publisher Studio",
                     "rules.example",
                     "\\\"bggId\\\":42");
             assertThat(requestBody.get()).doesNotContain("secret-key");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void takesOneBoundedRecoveryPassFromObservedSourcePagesAndAcceptsAnObservedImageDocument() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+        server.createContext("/responses", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            ObjectMapper json = new ObjectMapper();
+            String content = json.writeValueAsString(Map.of("candidates", List.of(Map.of(
+                    "title", "官方规则书",
+                    "url", "https://www.gstonegames.com/game/doc-1234.html",
+                    "publisher", "集石",
+                    "language", "zh-CN",
+                    "edition", "Base",
+                    "sourceIndexes", List.of(1)))));
+            byte[] response = json.writeValueAsBytes(Map.of("output", List.of(
+                    Map.of(
+                            "type", "web_search_call",
+                            "action", Map.of("sources", List.of(Map.of(
+                                    "url", "https://www.gstonegames.com/game/doc-1234.html")))),
+                    Map.of("type", "message", "content", List.of(Map.of(
+                            "type", "output_text", "text", content))))));
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var finder = new ResponsesApiOfficialRulebookCandidateFinder(
+                    new OkHttpClient(),
+                    new ObjectMapper(),
+                    true,
+                    "secret-key",
+                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                    "search-model");
+            var request = new OfficialRulebookCandidateFinder.Request(
+                    42, "Catalog Game", "Base", 2024, "zh-CN");
+
+            var candidates = finder.findAfterSourcePages(request, List.of(
+                    new OfficialRulebookCandidateFinder.Candidate(
+                            "Publisher support",
+                            "https://publisher.example/catalog-game/downloads",
+                            "Publisher",
+                            "zh-CN",
+                            "Base")));
+
+            assertThat(candidates)
+                    .singleElement()
+                    .extracting(OfficialRulebookCandidateFinder.Candidate::url)
+                    .isEqualTo("https://www.gstonegames.com/game/doc-1234.html");
+            assertThat(requestBody.get()).contains(
+                    "one final bounded recovery pass",
+                    "https://publisher.example/catalog-game/downloads",
+                    "gstonegames.com",
+                    "ordered rulebook-page image viewer");
         } finally {
             server.stop(0);
         }
