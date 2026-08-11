@@ -32,7 +32,10 @@ final class LessonReviewPlanner {
 
     private LessonReviewPlanner() {}
 
-    static LessonReviewBatch plan(List<TeachingSectionDraftCandidate> candidates, UUID assistantRunId) {
+    static LessonReviewBatch plan(
+            TeachingPlan plan,
+            List<TeachingSectionDraftCandidate> candidates,
+            UUID assistantRunId) {
         List<Claim> claims = new ArrayList<>();
         Map<Integer, TeachingSectionDraftCandidate> claimOwners = new LinkedHashMap<>();
         Map<UUID, RuleEvidence> evidence = new LinkedHashMap<>();
@@ -52,13 +55,12 @@ final class LessonReviewPlanner {
                 claimOwners.put(position, candidate);
             }
         }
-        String objective = candidates.stream()
-                .map(candidate -> "第" + candidate.planned().position() + "章「"
-                        + candidate.planned().title() + "」：" + candidate.planned().objective())
+        String objective = plan.sections().stream()
+                .map(section -> "第" + section.position() + "章「"
+                        + section.title() + "」：" + section.objective())
                 .collect(Collectors.joining("\n"));
-        String requiredCoverage = candidates.stream()
-                .map(candidate -> "第" + candidate.planned().position() + "章："
-                        + requiredCoverage(candidate.planned()))
+        String requiredCoverage = plan.sections().stream()
+                .map(section -> "第" + section.position() + "章：" + requiredCoverage(section))
                 .collect(Collectors.joining("\n"));
         Map<UUID, String> reviewExcerpts = candidates.stream()
                 .flatMap(candidate -> candidate.modelRequest().evidence().stream())
@@ -71,7 +73,7 @@ final class LessonReviewPlanner {
                 assistantRunId,
                 ContentType.LESSON,
                 ReviewMode.POST_PUBLICATION,
-                new TaskContext(objective, requiredCoverage),
+                new TaskContext(objective, requiredCoverage, plan.sections().size()),
                 claims,
                 evidence.values().stream()
                         .map(source -> new GeneratedContentCritic.Evidence(

@@ -117,6 +117,8 @@ rulepilot:
   teaching:
     provider: ${TEACHING_PROVIDER:fake}
     model-provider: ${TEACHING_MODEL_PROVIDER:gemini}
+    temperature: ${TEACHING_TEMPERATURE:0.2}
+    outline-temperature: ${TEACHING_OUTLINE_TEMPERATURE:0.1}
     import-handoff:
       batch-size: ${TEACHING_IMPORT_HANDOFF_BATCH_SIZE:4}
       fixed-delay: ${TEACHING_IMPORT_HANDOFF_FIXED_DELAY:2s}
@@ -175,6 +177,8 @@ rulepilot:
   answer:
     provider: ${ANSWER_PROVIDER:fake}
     model-provider: ${ANSWER_MODEL_PROVIDER:gemini}
+    temperature: ${ANSWER_TEMPERATURE:0.15}
+    interpretation-temperature: ${ANSWER_INTERPRETATION_TEMPERATURE:0.0}
     cache-retention: ${ANSWER_CACHE_RETENTION:PT6H}
     cache-retention-jitter: ${ANSWER_CACHE_RETENTION_JITTER:PT1H}
     rate-limit:
@@ -186,8 +190,8 @@ rulepilot:
   critic:
     provider: ${CRITIC_PROVIDER:fake}
     model-provider: ${CRITIC_MODEL_PROVIDER:gemini}
+    temperature: ${CRITIC_TEMPERATURE:0.0}
     evaluation-mode: ${CRITIC_EVALUATION_MODE:false}
-    atomic-confirmation-concurrency: ${CRITIC_ATOMIC_CONFIRMATION_CONCURRENCY:4}
   answer-regression:
     dataset: ${ANSWER_REGRESSION_DATASET:}
     name: ${ANSWER_REGRESSION_NAME:external-answer-regressions}
@@ -255,6 +259,7 @@ rulepilot:
       cache-ttl: ${BGG_RECOMMENDATION_AGENT_CACHE_TTL:P1D}
       hourly-limit: ${BGG_RECOMMENDATION_AGENT_HOURLY_LIMIT:240}
       provider-concurrency: ${BGG_RECOMMENDATION_AGENT_PROVIDER_CONCURRENCY:2}
+      temperature: ${BGG_RECOMMENDATION_TEMPERATURE:0.2}
       model-candidate-limit: ${BGG_RECOMMENDATION_MODEL_CANDIDATE_LIMIT:8}
       result-count: ${BGG_RECOMMENDATION_RESULT_COUNT:3}
       diversity-overlap-limit: ${BGG_RECOMMENDATION_DIVERSITY_OVERLAP_LIMIT:0.66}

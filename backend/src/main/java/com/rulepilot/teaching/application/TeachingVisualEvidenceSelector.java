@@ -7,12 +7,8 @@ import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
 /**
  * Deterministically selects a small, topic-relevant set of rulebook images for one teaching section.
@@ -47,10 +43,11 @@ final class TeachingVisualEvidenceSelector {
         Map<Integer, RulePageImage> images = new LinkedHashMap<>();
         Map<Integer, Integer> scores = new LinkedHashMap<>();
         Map<Integer, Integer> firstEvidenceRank = new LinkedHashMap<>();
-        Set<String> topicTerms = topicTerms(planned);
         IntStream.range(0, evidence.size()).forEach(index -> {
             RuleEvidence source = evidence.get(index);
-            int sourceScore = 100 + topicScore(source, topicTerms) + (source.pageFrom() == source.pageTo() ? 20 : 0);
+            boolean plannedPage = planned.sourcePageNumbers().stream()
+                    .anyMatch(page -> page >= source.pageFrom() && page <= source.pageTo());
+            int sourceScore = 100 + (plannedPage ? 40 : 0) + (source.pageFrom() == source.pageTo() ? 20 : 0);
             source.pageImages().stream()
                     .filter(image -> image.pageNumber() >= source.pageFrom()
                             && image.pageNumber() <= source.pageTo())
@@ -73,17 +70,4 @@ final class TeachingVisualEvidenceSelector {
                 .toList();
     }
 
-    private static Set<String> topicTerms(TeachingPlan.PlannedSection planned) {
-        return Stream.concat(
-                        Stream.of(planned.topicKey(), planned.title()),
-                        Stream.concat(planned.coverageTags().stream(), planned.retrievalQueries().stream()))
-                .flatMap(value -> Stream.of(value.toLowerCase(Locale.ROOT).split("[^\\p{L}\\p{N}]+")))
-                .filter(term -> term.length() >= 3)
-                .collect(Collectors.toUnmodifiableSet());
-    }
-
-    private static int topicScore(RuleEvidence source, Set<String> topicTerms) {
-        String sourceIdentity = (source.sectionType() + " " + source.heading()).toLowerCase(Locale.ROOT);
-        return (int) topicTerms.stream().filter(sourceIdentity::contains).limit(5).count() * 20;
-    }
 }

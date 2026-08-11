@@ -203,10 +203,19 @@ public class BggRecommendationAgentController {
         }
     }
 
-    record PreferenceHypothesisResponse(String text, String confidence, String basedOn) {
+    record PreferenceHypothesisResponse(
+            String field,
+            String value,
+            String text,
+            String confidence,
+            String basedOn) {
         static PreferenceHypothesisResponse from(BoardGameRecommendationAgent.PreferenceHypothesisView value) {
             return new PreferenceHypothesisResponse(
-                    value.text(), value.confidence().toLowerCase(Locale.ROOT), value.basedOn());
+                    value.field(),
+                    value.value(),
+                    value.text(),
+                    value.confidence().toLowerCase(Locale.ROOT),
+                    value.basedOn());
         }
     }
 
@@ -279,9 +288,20 @@ public class BggRecommendationAgentController {
             Integer minPlayers,
             Integer maxPlayers,
             Integer playingTimeMinutes,
+            Integer minimumPlayTimeMinutes,
+            Integer maximumPlayTimeMinutes,
+            Integer minimumAge,
+            Integer suggestedMinimumAge,
+            String bestWith,
+            String recommendedWith,
+            Integer languageDependenceLevel,
             BigDecimal averageWeight,
+            Integer weightVotes,
             List<String> categories,
             List<String> mechanics,
+            List<String> families,
+            List<String> designers,
+            List<String> publishers,
             String bggUrl) {
         static CatalogGameResponse from(
                 RecommendedGame recommendation,
@@ -313,9 +333,20 @@ public class BggRecommendationAgentController {
                     details == null ? null : details.minPlayers(),
                     details == null ? null : details.maxPlayers(),
                     details == null ? null : details.playingTimeMinutes(),
+                    details == null ? null : details.minimumPlayTimeMinutes(),
+                    details == null ? null : details.maximumPlayTimeMinutes(),
+                    details == null ? null : details.minimumAge(),
+                    details == null ? null : details.suggestedMinimumAge(),
+                    details == null ? "" : details.bestWith(),
+                    details == null ? "" : details.recommendedWith(),
+                    details == null ? null : details.languageDependenceLevel(),
                     details == null ? null : details.averageWeight(),
+                    details == null ? null : details.weightVotes(),
                     details == null ? List.of() : translate(details.categories(), taxonomy.categories()),
                     details == null ? List.of() : translate(details.mechanics(), taxonomy.mechanics()),
+                    details == null ? List.of() : details.families(),
+                    details == null ? List.of() : details.designers(),
+                    details == null ? List.of() : details.publishers(),
                     "https://boardgamegeek.com/boardgame/" + browse.ranking().bggId());
         }
 

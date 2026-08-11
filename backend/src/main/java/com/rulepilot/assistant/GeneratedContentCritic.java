@@ -69,7 +69,15 @@ public interface GeneratedContentCritic {
         }
     }
 
-    record TaskContext(String objective, String requiredCoverage) {}
+    record TaskContext(String objective, String requiredCoverage, int sectionCount) {
+        public TaskContext {
+            if (sectionCount < 0) throw new IllegalArgumentException("critic section count cannot be negative");
+        }
+
+        public TaskContext(String objective, String requiredCoverage) {
+            this(objective, requiredCoverage, 0);
+        }
+    }
 
     record Claim(int position, String text, List<UUID> citationIds) {
         public Claim {

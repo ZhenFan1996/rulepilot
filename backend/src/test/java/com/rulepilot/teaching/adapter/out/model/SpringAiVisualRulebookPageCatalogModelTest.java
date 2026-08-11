@@ -83,12 +83,13 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 """, request);
         assertThat(accepted.matchedLabel()).isEqualTo("card");
 
-        var acceptedWithVisualNoun = SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
-                {"identifier":"B#02","matchedLabel":"card token","quantity":1,
-                 "factualSummary":"Target identifier B#02: the lower-space reward is 1 card."}
-                """, request);
-        assertThat(acceptedWithVisualNoun.matchedLabel()).isEqualTo("card");
-        assertThat(acceptedWithVisualNoun.factualSummary()).startsWith("B#02:");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
+                                {"identifier":"B#02","matchedLabel":"card token","quantity":1,
+                                 "factualSummary":"Target identifier B#02: the lower-space reward is 1 card."}
+                                """, request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("outside the evidence set");
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                         SpringAiVisualRulebookPageCatalogModel.parseIdentifierCellVerification("""
@@ -345,7 +346,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void stripsGenericContainerLanguageFromCropReviewHintsButKeepsShapeVocabulary() {
+    void preservesTheStructuredAppearanceInsteadOfRewritingItsSemanticVocabulary() {
         var icon = new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
                 "vegetable",
                 "蔬菜",
@@ -359,10 +360,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 30);
 
         String hint = SpringAiVisualRulebookPageCatalogModel.cropReviewAppearance(icon);
-        assertThat(hint).doesNotContainIgnoringCase("card", "circle", "background", "containing");
-        assertThat(hint).containsIgnoringCase("purple");
-        assertThat(hint).containsIgnoringCase("vegetable");
-        assertThat(hint).containsIgnoringCase("illustration");
+        assertThat(hint).isEqualTo(icon.visualDescription());
     }
 
     @Test

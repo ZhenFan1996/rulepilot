@@ -11,11 +11,18 @@ import org.junit.jupiter.api.Test;
 class AnswerBasisPolicyTest {
 
     @Test
-    void classifiesAConclusionUsingThePlayersCompletedTableActionAsAGroundedApplication() {
-        var request = request("我刚拿走左边一列并补好牌，下一位能从哪里拿牌？");
+    void classifiesOnlyApplicationControlledArithmeticAsAGroundedApplication() {
+        var request = request("我有 8 个资源，可以得到多少分？");
         var draft = new RuleAnswerModel.ModelDraft(
-                "下一位选择规则允许的位置。", "按当前标记位置套用取牌限制。",
-                List.of(UUID.randomUUID()), List.of(), "HIGH");
+                true,
+                null,
+                "得到 10 分。",
+                "按引用的计分公式计算。",
+                List.of(UUID.randomUUID()),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE",
+                List.of(new RuleAnswerModel.CalculationRequest("floor(8 / 3) * 5")));
 
         var classified = AnswerBasisPolicy.classify(request, draft);
 

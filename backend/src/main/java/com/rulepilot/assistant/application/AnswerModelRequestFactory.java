@@ -7,11 +7,20 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import java.util.List;
+import java.util.Set;
 
 final class AnswerModelRequestFactory {
 
     ModelRequest create(
             UnderstoodQuestion question, QuestionContext context, List<HybridEvidenceHit> evidence) {
+        return create(question, context, evidence, AnswerQuestionPlan.fallback(question));
+    }
+
+    ModelRequest create(
+            UnderstoodQuestion question,
+            QuestionContext context,
+            List<HybridEvidenceHit> evidence,
+            AnswerQuestionPlan questionPlan) {
         return new ModelRequest(
                 question.normalizedQuestion(),
                 question.type(),
@@ -28,6 +37,10 @@ final class AnswerModelRequestFactory {
                                 hit.excerpt(),
                                 hit.pageFrom(),
                                 hit.pageTo()))
-                        .toList());
+                        .toList(),
+                questionPlan == null ? Set.of() : questionPlan.evidenceNeeds(),
+                questionPlan == null
+                        ? com.rulepilot.assistant.RuleAnswerModel.AnswerAid.forLearningIntent(context.learningIntent())
+                        : questionPlan.answerAid());
     }
 }

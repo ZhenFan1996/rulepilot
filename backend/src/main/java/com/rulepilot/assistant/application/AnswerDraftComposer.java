@@ -73,8 +73,6 @@ final class AnswerDraftComposer {
                         AnswerStatus.INSUFFICIENT_EVIDENCE,
                         AnswerRepairOutcomePolicy.insufficientRepairMessage(playerFacingRepair));
             }
-            draft = AnswerDraftSafetyPolicy.normalizeSingleMappedVisualGlyph(
-                    draft, AnswerVisualEvidencePolicy.resolvedComponents(modelRequest, draft));
             draft = AnswerDraftSafetyPolicy.normalizeDanglingPunctuation(draft);
             draft = AnswerDraftSafetyPolicy.normalizeInternalEvidenceReferences(draft);
             Optional<AnswerRepairOutcomePolicy.PublicationFailure> failure =

@@ -3,8 +3,10 @@ package com.rulepilot.assistant.application;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -37,12 +39,35 @@ class AnswerEvidenceReconsiderationPolicyTest {
                 .doesNotContain("replenishment", "DIRECT_REPLENISHMENT_PROCEDURE");
     }
 
+    @Test
+    void doesNotTurnMechanicsIntoAdviceWhileReconsideringAnAbstention() {
+        String feedback = AnswerEvidenceReconsiderationPolicy.feedbackFor(request(
+                        "有没有更容易赢的打法或建议？",
+                        "The game ends when a player reaches 30 points.",
+                        Set.of(EvidenceNeed.ADVICE)))
+                .getLast();
+
+        assertThat(feedback).contains(
+                "ADVICE_EXISTENCE_BOUNDARY",
+                "source-authored advice",
+                "universal, exhaustive, optimal, guaranteed",
+                "another resource contains tips is metadata",
+                "Keep the abstention only when",
+                "proper scope term exactly as it appears in the source");
+    }
+
     private RuleAnswerModel.ModelRequest request(String question, String excerpt) {
+        return request(question, excerpt, Set.of(EvidenceNeed.DIRECT_RULE));
+    }
+
+    private RuleAnswerModel.ModelRequest request(
+            String question, String excerpt, Set<EvidenceNeed> evidenceNeeds) {
         return new RuleAnswerModel.ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
                 new RuleAnswerModel.AnswerContext(null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
                 List.of(new RuleAnswerModel.EvidenceInput(
-                        UUID.randomUUID(), "RULES", "Rule", excerpt, 2, 2)));
+                        UUID.randomUUID(), "RULES", "Rule", excerpt, 2, 2)),
+                evidenceNeeds);
     }
 }

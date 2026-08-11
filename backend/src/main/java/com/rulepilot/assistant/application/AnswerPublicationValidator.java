@@ -239,12 +239,8 @@ final class AnswerPublicationValidator {
             List<RuleScopeResolution> scopeResolutions,
             List<RuleConceptComparison> conceptComparisons,
             List<RuleOption> ruleOptions) {
-        String shortVerdict = AnswerShortVerdictPolicy.normalizeCitedSummary(
-                draft.shortVerdict(), exceptionClauses);
-        AnswerDefinitionProsePolicy.Result definitionProse = AnswerDefinitionProsePolicy.normalize(
-                shortVerdict, draft.explanation(), termDefinitions);
-        shortVerdict = definitionProse.shortVerdict();
-        String explanation = definitionProse.explanation();
+        String shortVerdict = draft.shortVerdict();
+        String explanation = draft.explanation();
         if (shortVerdict == null || shortVerdict.isBlank() || shortVerdict.length() > 240
                 || explanation == null || explanation.isBlank() || explanation.length() > 1500
                 || draft.citationIds().isEmpty() || draft.exceptions().size() > 6

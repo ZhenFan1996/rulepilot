@@ -117,49 +117,6 @@ final class TeachingSectionDraftComposer {
                         repair,
                         ActivityOutcome.REJECTED,
                         TeachingDraftRejectionCategory.from(rejectedDraft));
-                IllegalArgumentException effectiveRejection = rejectedDraft;
-                SectionDraft timingPreserved = draftRecoveryPolicy.preserveCitedEndOfRoundTiming(draft, evidence);
-                if (timingPreserved != draft) {
-                    try {
-                        LessonSection accepted = validatedSection(
-                                plan, planned, evidence, modelRequest, timingPreserved, EvidenceStatus.CITED_DRAFT);
-                        recordValidation(
-                                assistantRunId,
-                                planned,
-                                repair,
-                                ActivityOutcome.SUCCEEDED,
-                                "END_OF_ROUND_TIMING_GUARDRAIL_APPLIED");
-                        return new TeachingSectionDraftCandidate(
-                                sectionIndex, planned, evidence, modelRequest, timingPreserved, accepted);
-                    } catch (IllegalArgumentException correctedDraftStillInvalid) {
-                        draft = timingPreserved;
-                        effectiveRejection = correctedDraftStillInvalid;
-                    }
-                }
-                SectionDraft playerCountSchedulePreserved =
-                        draftRecoveryPolicy.preserveCitedPlayerCountRoundSchedule(draft, evidence);
-                if (playerCountSchedulePreserved != draft) {
-                    try {
-                        LessonSection accepted = validatedSection(
-                                plan,
-                                planned,
-                                evidence,
-                                modelRequest,
-                                playerCountSchedulePreserved,
-                                EvidenceStatus.CITED_DRAFT);
-                        recordValidation(
-                                assistantRunId,
-                                planned,
-                                repair,
-                                ActivityOutcome.SUCCEEDED,
-                                "PLAYER_COUNT_ROUND_SCHEDULE_GUARDRAIL_APPLIED");
-                        return new TeachingSectionDraftCandidate(
-                                sectionIndex, planned, evidence, modelRequest, playerCountSchedulePreserved, accepted);
-                    } catch (IllegalArgumentException correctedDraftStillInvalid) {
-                        draft = playerCountSchedulePreserved;
-                        effectiveRejection = correctedDraftStillInvalid;
-                    }
-                }
                 if (draftRecoveryPolicy.shouldFallbackToCitedText(
                         hasPageImages, hasOnlyVisualPageEvidence, repair)) {
                     return fallbackToTextDraft(
@@ -172,13 +129,13 @@ final class TeachingSectionDraftComposer {
                             repair + 1);
                 }
                 if (repair == maxRepairAttempts) {
-                    throw effectiveRejection;
+                    throw rejectedDraft;
                 }
-                String diagnostic = effectiveRejection.getMessage() == null
+                String diagnostic = rejectedDraft.getMessage() == null
                         ? "The previous draft failed lesson validation."
-                        : effectiveRejection.getMessage();
+                        : rejectedDraft.getMessage();
                 List<String> feedback = draftRecoveryPolicy.repairFeedback(
-                        diagnostic, hasPageImages, isVisualLocalizationFailure(effectiveRejection));
+                        diagnostic, hasPageImages, isVisualLocalizationFailure(rejectedDraft));
                 log.info(
                         "Teaching topic {} structural repair {}/{}: {}",
                         planned.topicKey(),
@@ -288,9 +245,7 @@ final class TeachingSectionDraftComposer {
 
     SectionDraft normalizeDraft(
             SectionDraft draft, TeachingLessonModel.SectionRequest request, List<RuleEvidence> evidence) {
-        SectionDraft normalized = presentationNormalizer.normalize(draft, request);
-        normalized = draftRecoveryPolicy.removeUnsupportedTurnHandoff(normalized, evidence);
-        return draftRecoveryPolicy.removeUnsupportedTerminalZoneClaim(normalized, evidence);
+        return presentationNormalizer.normalize(draft, request);
     }
 
     LessonSection validatedSection(

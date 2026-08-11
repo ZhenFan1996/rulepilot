@@ -68,8 +68,7 @@ public class VisualLessonEnricher {
                         visualPageFacts,
                         candidates,
                         locator,
-                        cropPolicy,
-                        new VisualStepRelevancePolicy()),
+                        cropPolicy),
                 maxVisualStepsPerSection,
                 requestParallelism);
     }

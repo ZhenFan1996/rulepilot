@@ -104,7 +104,15 @@ class GameCatalogControllerTest {
                                 "Simplified Chinese edition",
                                 "https://example.test/wingspan-chinese.jpg",
                                 2020,
-                                List.of("Chinese")))));
+                                List.of("Chinese"))),
+                        40,
+                        90,
+                        12,
+                        "Best with 3 players",
+                        "Recommended with 2–4 players",
+                        2,
+                        987,
+                        List.of("Animals: Birds")));
         BggMetadataLocalizationService metadata = mock(BggMetadataLocalizationService.class);
         when(metadata.localize(bgg.gameDetails(266192), "zh-CN"))
                 .thenReturn(new LocalizedMetadata(
@@ -128,6 +136,14 @@ class GameCatalogControllerTest {
         assertThat(response.categories()).containsExactly("动物");
         assertThat(response.mechanics()).containsExactly("卡牌轮抽");
         assertThat(response.minimumAge()).isEqualTo(10);
+        assertThat(response.minimumPlayTimeMinutes()).isEqualTo(40);
+        assertThat(response.maximumPlayTimeMinutes()).isEqualTo(90);
+        assertThat(response.suggestedMinimumAge()).isEqualTo(12);
+        assertThat(response.bestWith()).isEqualTo("Best with 3 players");
+        assertThat(response.recommendedWith()).isEqualTo("Recommended with 2–4 players");
+        assertThat(response.languageDependenceLevel()).isEqualTo(2);
+        assertThat(response.weightVotes()).isEqualTo(987);
+        assertThat(response.families()).containsExactly("Animals: Birds");
         assertThat(response.editionImages()).singleElement().satisfies(image -> {
             assertThat(image.versionId()).isEqualTo(7);
             assertThat(image.languages()).containsExactly("Chinese");

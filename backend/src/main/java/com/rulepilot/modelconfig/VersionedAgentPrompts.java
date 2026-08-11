@@ -2,7 +2,6 @@ package com.rulepilot.modelconfig;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
@@ -18,7 +17,7 @@ public class VersionedAgentPrompts {
     private final String teachingOutlineUser;
     private final String answerSystem;
     private final String focusedAnswerCoreSystem;
-    private final Map<AnswerPromptMode, String> focusedAnswerModules;
+    private final Map<String, String> focusedAnswerModules;
     private final String answerUser;
     private final String answerRetrievalRewriteSystem;
     private final String answerRetrievalRewriteUser;
@@ -27,6 +26,7 @@ public class VersionedAgentPrompts {
     private final String atomicCriticSystem;
     private final String objectiveCoverageCriticSystem;
     private final String criticUser;
+    private final String atomicCriticUser;
     private final String structuredOutputRepair;
     private final String lessonLocalizationSystem;
     private final String lessonLocalizationUser;
@@ -118,13 +118,14 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/rule-answer-agent-v53-source-temporal-boundary-system.txt") Resource answerSourceTemporalBoundary,
             @Value("classpath:prompts/rule-answer-agent-v54-permission-ruling-system.txt") Resource answerPermissionRuling,
             @Value("classpath:prompts/rule-answer-agent-v55-focused-aid-routing-system.txt") Resource answerFocusedAidRouting,
-            @Value("classpath:prompts/rule-answer-agent-v4-user.txt") Resource answerUser,
+            @Value("classpath:prompts/rule-answer-agent-v56-source-advice-boundary-system.txt") Resource answerSourceAdviceBoundary,
+            @Value("classpath:prompts/rule-answer-agent-v5-user.txt") Resource answerUser,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-system.txt") Resource answerRetrievalRewriteSystem,
             @Value("classpath:prompts/rule-answer-retrieval-rewrite-v1-user.txt") Resource answerRetrievalRewriteUser,
             @Value("classpath:prompts/content-critic-v7-system.txt") Resource criticSystem,
             @Value("classpath:prompts/content-critic-v8-fidelity-system.txt") Resource criticFidelity,
             @Value("classpath:prompts/content-critic-v9-answer-scope-system.txt") Resource criticAnswerScope,
-            @Value("classpath:prompts/content-critic-v10-lesson-structure-system.txt") Resource criticLessonStructure,
+            @Value("classpath:prompts/content-critic-v11-lesson-structure-system.txt") Resource criticLessonStructure,
             @Value("classpath:prompts/content-critic-v11-actor-and-example-fidelity-system.txt") Resource criticActorAndExampleFidelity,
             @Value("classpath:prompts/content-critic-v12-grammatical-relation-fidelity-system.txt") Resource criticGrammaticalRelationFidelity,
             @Value("classpath:prompts/content-critic-v13-quantity-role-fidelity-system.txt") Resource criticQuantityRoleFidelity,
@@ -140,9 +141,11 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v23-source-causal-direction-system.txt") Resource criticSourceCausalDirection,
             @Value("classpath:prompts/content-critic-v24-source-temporal-boundary-system.txt") Resource criticSourceTemporalBoundary,
             @Value("classpath:prompts/content-critic-v25-permission-ruling-system.txt") Resource criticPermissionRuling,
+            @Value("classpath:prompts/content-critic-v33-focused-runtime-system.txt") Resource focusedCriticSystem,
             @Value("classpath:prompts/atomic-content-critic-v3-system.txt") Resource atomicCriticSystem,
             @Value("classpath:prompts/objective-coverage-critic-v3-system.txt") Resource objectiveCoverageCriticSystem,
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
+            @Value("classpath:prompts/atomic-content-critic-v4-user.txt") Resource atomicCriticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
             @Value("classpath:prompts/lesson-localization-v2-system.txt") Resource lessonLocalizationSystem,
             @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
@@ -235,7 +238,8 @@ public class VersionedAgentPrompts {
                 answerSourceCausalDirection,
                 answerSourceTemporalBoundary,
                 answerPermissionRuling,
-                answerFocusedAidRouting);
+                answerFocusedAidRouting,
+                answerSourceAdviceBoundary);
         this.focusedAnswerCoreSystem = combined(
                 answerSystem,
                 answerFidelity,
@@ -257,62 +261,46 @@ public class VersionedAgentPrompts {
                 answerSourceCausalDirection,
                 answerSourceTemporalBoundary,
                 answerPermissionRuling,
-                answerFocusedAidRouting);
+                answerFocusedAidRouting,
+                answerSourceAdviceBoundary);
         this.focusedAnswerModules = Map.ofEntries(
-                Map.entry(AnswerPromptMode.NONE, ""),
-                Map.entry(AnswerPromptMode.OPTIONS, combined(answerCompleteList, answerCitedRuleOptions)),
-                Map.entry(AnswerPromptMode.VISUAL, combined(answerResolvedVisualLanguage, answerMechanicalListConsistency)),
-                Map.entry(AnswerPromptMode.CALCULATION, read(answerGroundedCalculation)),
-                Map.entry(AnswerPromptMode.RELATIONSHIP, combined(
+                Map.entry("NONE", ""),
+                Map.entry("OPTIONS", combined(answerCompleteList, answerCitedRuleOptions)),
+                Map.entry("VISUAL", combined(answerResolvedVisualLanguage, answerMechanicalListConsistency)),
+                Map.entry("CALCULATION", read(answerGroundedCalculation)),
+                Map.entry("RULE_PRIORITY", combined(
                         answerRuleRelationshipFidelity,
                         answerCitedRulePriority,
                         answerCitedRuleConflictCheck,
                         answerSelfContainedConflictVerdict)),
-                Map.entry(AnswerPromptMode.WALKTHROUGH, combined(
+                Map.entry("WALKTHROUGH", combined(
                         answerCitedWalkthrough,
                         answerCitedRuleDependency,
                         answerPlayerReadableDependency,
                         answerSelfContainedWhyVerdict)),
-                Map.entry(AnswerPromptMode.DECISION_TABLE, read(answerCitedDecisionTable)),
-                Map.entry(AnswerPromptMode.EXCEPTIONS, combined(
+                Map.entry("DECISION_TABLE", read(answerCitedDecisionTable)),
+                Map.entry("EXCEPTIONS", combined(
                         answerCitedExceptionClauses,
                         answerExceptionFocus,
                         answerConciseExceptionVerdict,
                         answerSelfContainedExceptionClauses)),
-                Map.entry(AnswerPromptMode.DEFINITIONS, combined(
-                        answerCitedTermDefinitions,
-                        answerCitedConceptComparison)),
-                Map.entry(AnswerPromptMode.EXAMPLE, read(answerCitedWorkedExamples)),
-                Map.entry(AnswerPromptMode.TIMING, read(answerCitedTimingOrder)),
-                Map.entry(AnswerPromptMode.TIE, read(answerCitedTieResolution)),
-                Map.entry(AnswerPromptMode.SOURCE, read(answerDirectSourceEvidence)));
+                Map.entry("DEFINITIONS", read(answerCitedTermDefinitions)),
+                Map.entry("CONCEPT_COMPARISON", read(answerCitedConceptComparison)),
+                Map.entry("EXAMPLE", read(answerCitedWorkedExamples)),
+                Map.entry("TIMING", read(answerCitedTimingOrder)),
+                Map.entry("TIE", read(answerCitedTieResolution)),
+                Map.entry("SCOPE", read(answerCitedRuleScope)),
+                Map.entry("SOURCE", read(answerDirectSourceEvidence)),
+                Map.entry("PERMISSION", read(answerPermissionRuling)));
         this.answerUser = read(answerUser);
         this.answerRetrievalRewriteSystem = read(answerRetrievalRewriteSystem);
         this.answerRetrievalRewriteUser = read(answerRetrievalRewriteUser);
-        this.criticSystem = combined(
-                criticSystem,
-                criticFidelity,
-                criticAnswerScope,
-                criticLessonStructure,
-                criticActorAndExampleFidelity,
-                criticGrammaticalRelationFidelity,
-                criticQuantityRoleFidelity,
-                criticRuleDependencyFidelity,
-                criticPlayerReadableDependency,
-                criticPredicateOwnerFidelity,
-                criticSelfContainedWhyVerdict,
-                criticRuleConflictCheck,
-                criticSelfContainedConflictVerdict,
-                criticDirectSourceEvidence,
-                criticSourceScopeFidelity,
-                criticSourceTermNumberFidelity,
-                criticSourceCausalDirection,
-                criticSourceTemporalBoundary,
-                criticPermissionRuling);
-        this.lessonStructureCriticSystem = read(criticLessonStructure);
+        this.criticSystem = read(focusedCriticSystem);
+        this.lessonStructureCriticSystem = read(focusedCriticSystem);
         this.atomicCriticSystem = read(atomicCriticSystem);
         this.objectiveCoverageCriticSystem = read(objectiveCoverageCriticSystem);
         this.criticUser = read(criticUser);
+        this.atomicCriticUser = read(atomicCriticUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
         this.lessonLocalizationSystem = read(lessonLocalizationSystem);
         this.lessonLocalizationUser = read(lessonLocalizationUser);
@@ -347,8 +335,8 @@ public class VersionedAgentPrompts {
      * Runtime answer prompt: stable evidence rules plus at most one user-facing explanation aid.
      * The full historical prompt remains available to compatibility tests, but is not sent on every answer.
      */
-    public String answerSystem(String question, String learningIntent) {
-        String module = focusedAnswerModules.get(selectAnswerMode(question, learningIntent));
+    public String answerSystem(String answerAid) {
+        String module = focusedAnswerModules.get(answerAid == null || answerAid.isBlank() ? "NONE" : answerAid);
         return module == null || module.isBlank()
                 ? focusedAnswerCoreSystem
                 : focusedAnswerCoreSystem + "\n\n" + module;
@@ -386,6 +374,10 @@ public class VersionedAgentPrompts {
         return criticUser;
     }
 
+    public String atomicCriticUser() {
+        return atomicCriticUser;
+    }
+
     public String structuredOutputRepair() {
         return structuredOutputRepair;
     }
@@ -414,66 +406,4 @@ public class VersionedAgentPrompts {
         return combined.toString();
     }
 
-    private AnswerPromptMode selectAnswerMode(String question, String learningIntent) {
-        String intent = learningIntent == null ? "" : learningIntent.toUpperCase(Locale.ROOT);
-        if ("EXAMPLE".equals(intent)) return AnswerPromptMode.EXAMPLE;
-        if ("SOURCE".equals(intent)) return AnswerPromptMode.SOURCE;
-        if ("EXCEPTIONS".equals(intent)) return AnswerPromptMode.EXCEPTIONS;
-        String value = question == null ? "" : question.toLowerCase(Locale.ROOT);
-        if (containsAny(value, "tie", "tiebreak", "平局", "并列")) return AnswerPromptMode.TIE;
-        if (containsAny(value, "difference", "compare", "versus", " vs ", "区别", "不同", "对比")) {
-            return AnswerPromptMode.DEFINITIONS;
-        }
-        if (containsAny(value, "conflict", "override", "priority", "precedence", "contradict", "冲突", "覆盖", "优先", "矛盾")) {
-            return AnswerPromptMode.RELATIONSHIP;
-        }
-        if (containsAny(value, "exception", "unless", "except", "restriction", "例外", "除非", "限制")) {
-            return AnswerPromptMode.EXCEPTIONS;
-        }
-        if (containsAny(value, "all options", "all ways", "complete list", "which ways", "哪些", "所有方式", "完整列表", "列出")) {
-            return AnswerPromptMode.OPTIONS;
-        }
-        if (containsAny(value, "simultaneous", "in what order", "resolve first", "同时", "先后顺序", "先结算")) {
-            return AnswerPromptMode.TIMING;
-        }
-        if (containsAny(value, "calculate", "how many", "total", "算一下", "多少", "合计")) {
-            return AnswerPromptMode.CALCULATION;
-        }
-        if (containsAny(value, "step by step", "walk me through", "what happens next", "分步", "一步一步", "流程")) {
-            return AnswerPromptMode.WALKTHROUGH;
-        }
-        if (containsAny(value, "if ", "otherwise", "depending on", "如果", "否则", "取决于")) {
-            return AnswerPromptMode.DECISION_TABLE;
-        }
-        if (containsAny(value, "rulebook say", "exact wording", "which page", "source", "原文", "哪一页", "出处")) {
-            return AnswerPromptMode.SOURCE;
-        }
-        if (containsAny(value, "icon", "symbol", "diagram", "image", "图标", "符号", "图示", "图片")) {
-            return AnswerPromptMode.VISUAL;
-        }
-        return AnswerPromptMode.NONE;
-    }
-
-    private boolean containsAny(String value, String... needles) {
-        for (String needle : needles) {
-            if (value.contains(needle)) return true;
-        }
-        return false;
-    }
-
-    private enum AnswerPromptMode {
-        NONE,
-        OPTIONS,
-        VISUAL,
-        CALCULATION,
-        RELATIONSHIP,
-        WALKTHROUGH,
-        DECISION_TABLE,
-        EXCEPTIONS,
-        DEFINITIONS,
-        EXAMPLE,
-        TIMING,
-        TIE,
-        SOURCE
-    }
 }

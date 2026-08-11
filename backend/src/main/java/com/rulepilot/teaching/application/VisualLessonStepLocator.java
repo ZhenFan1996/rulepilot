@@ -24,21 +24,18 @@ final class VisualLessonStepLocator {
     private final VisualRegionCandidateSelector candidates;
     private final VisualRegionLocator locator;
     private final VisualReaderCropPolicy cropPolicy;
-    private final VisualStepRelevancePolicy stepRelevancePolicy;
 
     VisualLessonStepLocator(
             DocumentPageImages pageImages,
             VisualRulebookPageFacts visualPageFacts,
             VisualRegionCandidateSelector candidates,
             VisualRegionLocator locator,
-            VisualReaderCropPolicy cropPolicy,
-            VisualStepRelevancePolicy stepRelevancePolicy) {
+            VisualReaderCropPolicy cropPolicy) {
         this.pageImages = pageImages;
         this.visualPageFacts = visualPageFacts;
         this.candidates = candidates;
         this.locator = locator;
         this.cropPolicy = cropPolicy;
-        this.stepRelevancePolicy = stepRelevancePolicy;
     }
 
     boolean supportsVisualEvidence(String modelConfigurationOwner) {
@@ -108,9 +105,6 @@ final class VisualLessonStepLocator {
             }
             VisualLessonEnricher.Outcome rejection = rejectionFor(region, attachedCandidates, evidenceIds);
             if (rejection == null && !supportsExactStep(region, step)) {
-                rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
-            }
-            if (rejection == null && !stepRelevancePolicy.directlyIllustrates(step, region)) {
                 rejection = VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH;
             }
             if (rejection == null) return Result.accepted(region);

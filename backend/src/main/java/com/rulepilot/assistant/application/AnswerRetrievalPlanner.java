@@ -1,27 +1,26 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
-import com.rulepilot.assistant.domain.QuestionType;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.domain.LearningIntent;
+import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+/** Builds bounded retrieval queries from the accepted semantic question plan. */
 public final class AnswerRetrievalPlanner {
 
     private static final int MAX_QUERY_LENGTH = 500;
     private static final int MAX_SECTION_FILTERS = 4;
     private static final int MAX_INTENTS = 5;
-    private static final java.util.regex.Pattern QUESTION_PART_SEPARATOR =
-            java.util.regex.Pattern.compile("[?？!！;；]+");
+
     private AnswerRetrievalPlanner() {}
 
     public static List<RetrievalIntent> plan(UnderstoodQuestion question, QuestionContext context) {
-        return plan(question, context, List.of());
+        return plan(question, context, List.of(), AnswerQuestionPlan.fallback(question));
     }
 
     public static List<RetrievalIntent> plan(
@@ -37,53 +36,43 @@ public final class AnswerRetrievalPlanner {
         if (question == null || context == null) {
             throw new IllegalArgumentException("answer retrieval planning input is required");
         }
-        if (questionPlan == null) questionPlan = AnswerQuestionPlan.fallback(question);
-        Set<String> inferredSectionScope = inferredSections(question, context);
-        String currentSection = inferredSectionScope.stream().findFirst().orElse(null);
-        Set<String> directQuestionScope = directQuestionScope(question, currentSection);
-        List<RetrievalIntent> procedureIntents =
-                AnswerRetrievalProcedureIntents.plan(question.normalizedQuestion());
-        List<RetrievalIntent> intents = new ArrayList<>(procedureIntents.stream()
-                .filter(intent -> intent.purpose() == RetrievalPurpose.ENDGAME_RESOLUTION)
-                .toList());
-        List<RetrievalIntent> deferredConditionIntents = procedureIntents.stream()
-                .filter(intent -> intent.purpose() == RetrievalPurpose.CONDITION_PROCEDURE)
-                .toList();
-        String contextualQuestion = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
-        List<String> parts = questionPlan.agentPlanned()
-                ? questionPlan.subquestions().stream().map(AnswerQuestionPlan.Subquestion::text).toList()
-                : questionParts(contextualQuestion);
-        Set<String> learningScope = context.learningIntent() != null && currentSection != null
-                ? Set.of(currentSection)
-                : directQuestionScope;
-        int availableBeforeSupplementary =
-                Math.max(1, MAX_INTENTS - intents.size() - deferredConditionIntents.size() - 1);
-        if (parts.size() == 1) {
-            int rewriteBudget = Math.max(0, availableBeforeSupplementary - 1);
-            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
-            String directQuery = questionPlan.agentPlanned()
-                    ? plannedQuery(questionPlan.subquestions().getFirst())
-                    : expandSearchTerms(question.normalizedQuestion());
-            intents.add(new RetrievalIntent(directQuery, learningScope, currentSection, true));
-        } else {
-            if (questionPlan.agentPlanned()) {
-                questionPlan.subquestions().stream()
-                        .limit(availableBeforeSupplementary)
-                        .forEach(subquestion -> intents.add(new RetrievalIntent(
-                                plannedQuery(subquestion), learningScope, currentSection, true)));
-            } else {
-                parts.stream().limit(availableBeforeSupplementary).forEach(part -> intents.add(new RetrievalIntent(
-                        expandSearchTerms(part), learningScope, currentSection, true)));
-            }
-            int rewriteBudget = Math.max(0, MAX_INTENTS - intents.size() - 1);
-            addRewrittenQueries(intents, rewrittenQueries, rewriteBudget, directQuestionScope, currentSection);
+        AnswerQuestionPlan acceptedPlan = questionPlan == null ? AnswerQuestionPlan.fallback(question) : questionPlan;
+        List<RetrievalIntent> intents = new ArrayList<>();
+        for (AnswerQuestionPlan.Subquestion subquestion : acceptedPlan.subquestions()) {
+            addDistinct(intents, new RetrievalIntent(
+                    plannedQuery(subquestion), Set.of(), null, true, RetrievalPurpose.GENERAL));
+            if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
         }
-        deferredConditionIntents.forEach(intents::add);
-        intents.add(new RetrievalIntent(
-                supplementaryQuery(question, context),
-                inferredSectionScope,
-                currentSection));
+        if (rewrittenQueries != null) {
+            for (String rewritten : rewrittenQueries) {
+                String query = bounded(rewritten);
+                if (!query.isBlank()) {
+                    addDistinct(intents, new RetrievalIntent(query, Set.of(), null, false, RetrievalPurpose.GENERAL));
+                }
+                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
+            }
+        }
+        if (acceptedPlan.evidenceNeeds().contains(EvidenceNeed.ADVICE)) {
+            for (String cue : adviceSourceCueQueries()) {
+                addDistinct(intents, new RetrievalIntent(
+                        bounded(question.normalizedQuestion() + " " + cue),
+                        Set.of(),
+                        null,
+                        false,
+                        RetrievalPurpose.GENERAL));
+                if (intents.size() == MAX_INTENTS) return List.copyOf(intents);
+            }
+        }
+        String supplementary = supplementaryQuery(question, context, acceptedPlan);
+        addDistinct(intents, new RetrievalIntent(
+                supplementary, Set.of(), null, false, RetrievalPurpose.GENERAL));
         return intents.stream().limit(MAX_INTENTS).toList();
+    }
+
+    private static void addDistinct(List<RetrievalIntent> intents, RetrievalIntent candidate) {
+        if (intents.stream().noneMatch(existing -> existing.query().equalsIgnoreCase(candidate.query()))) {
+            intents.add(candidate);
+        }
     }
 
     private static String plannedQuery(AnswerQuestionPlan.Subquestion subquestion) {
@@ -94,179 +83,59 @@ public final class AnswerRetrievalPlanner {
         return bounded(query.toString());
     }
 
-    private static String evidenceNeedFacets(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed need) {
+    private static String evidenceNeedFacets(EvidenceNeed need) {
         return switch (need) {
             case DIRECT_RULE -> "direct rule clause";
             case CONDITION -> "condition prerequisite applicability";
             case SEQUENCE -> "order timing procedure";
-            case EXCEPTION -> "exception restriction unless";
+            case EXCEPTION -> "exception restriction";
             case DEFINITION -> "definition glossary terminology";
-            case RELATIONSHIP -> "conflict precedence special general rule";
+            case RELATIONSHIP -> "rule relationship conflict precedence replacement";
             case VISUAL_REFERENCE -> "icon diagram label printed reference";
-            case COMPLETE_LIST -> "complete list each all";
+            case COMPLETE_LIST -> "complete enumerated list";
+            case ADVICE -> "source-authored recommendation caution preferred choice";
             case PRIOR_TURN -> "follow-up dependency";
         };
     }
 
-    private static String contextualQuestion(String question, String previousQuestion) {
-        if (previousQuestion == null) {
-            return question;
-        }
-        return bounded("previous question: " + previousQuestion + " follow-up: " + question);
+    static List<String> adviceSourceCueQueries() {
+        return List.of(
+                "source-authored recommendation preferred choice ideal should recommendation advice",
+                "source-authored caution avoid warning watch out");
     }
 
-    private static List<String> questionParts(String question) {
-        java.util.regex.Pattern separator = AnswerEvidencePolicy.asksForCompleteList(question)
-                ? java.util.regex.Pattern.compile("[?？!！;；]+|[,，、]+|\\s+(?i:and|or)\\s+|\\s+(?:以及|和|或)\\s*")
-                : QUESTION_PART_SEPARATOR;
-        List<String> parts = separator.splitAsStream(question)
-                .map(String::strip)
-                .map(part -> part.replaceFirst("^(?i:and|or)\\s+", "").strip())
-                .filter(part -> part.length() >= 2)
-                .distinct()
-                .limit(MAX_INTENTS - 1L)
-                .toList();
-        return parts.isEmpty() ? List.of(question) : parts;
-    }
-
-    private static void addRewrittenQueries(
-            List<RetrievalIntent> intents,
-            List<String> rewrittenQueries,
-            int rewriteBudget,
-            Set<String> directQuestionScope,
-            String currentSection) {
-        if (rewrittenQueries == null || rewriteBudget <= 0) return;
-        rewrittenQueries.stream()
-                .map(AnswerRetrievalPlanner::bounded)
-                .filter(query -> !query.isBlank())
-                .distinct()
-                .limit(rewriteBudget)
-                .forEach(query -> intents.add(new RetrievalIntent(
-                        query,
-                        directQuestionScope,
-                        directQuestionScope.isEmpty() ? null : currentSection)));
-    }
-
-    private static String expandSearchTerms(String questionPart) {
-        return bounded(questionPart);
-    }
-
-    private static String supplementaryQuery(UnderstoodQuestion question, QuestionContext context) {
-        StringBuilder query = new StringBuilder(contextualQuestion(
-                question.normalizedQuestion(), context.previousQuestion()));
-        if (!question.terms().isEmpty()) {
-            append(query, String.join(" ", question.terms()));
-        }
-        append(query, facets(question.type()));
-        append(query, AnswerRetrievalProcedureIntents.endgameResolutionTerms(question.normalizedQuestion()));
+    private static String supplementaryQuery(
+            UnderstoodQuestion question, QuestionContext context, AnswerQuestionPlan plan) {
+        StringBuilder query = new StringBuilder(question.normalizedQuestion());
+        if (context.previousQuestion() != null) append(query, context.previousQuestion());
+        if (!question.terms().isEmpty()) append(query, String.join(" ", question.terms()));
+        append(query, questionTypeFacets(question.type()));
         append(query, learningFacets(context.learningIntent()));
-        append(query, permissionFacets(question.normalizedQuestion()));
+        plan.evidenceNeeds().stream()
+                .map(AnswerRetrievalPlanner::evidenceNeedFacets)
+                .forEach(facet -> append(query, facet));
         return bounded(query.toString());
     }
 
-    private static String permissionFacets(String question) {
-        return AnswerPermissionResolver.asksForPermission(question)
-                ? "permission prohibition may may not cannot allowed prerequisite exception 允许 禁止 可以 不能 条件 例外"
-                : null;
-    }
-
     private static String learningFacets(LearningIntent intent) {
-        if (intent == null) {
-            return null;
-        }
+        if (intent == null) return null;
         return switch (intent) {
-            case SIMPLIFY -> "core rule sequence must remember 核心规则 顺序 必须记住";
-            case EXAMPLE -> "worked example legal sequence cost result 具体示例 合法步骤 费用 结果";
-            case DEFINE -> "definition glossary terminology means refers to 定义 术语 名词 指的是 含义";
-            case WHY -> "rule prerequisite consequence order 前置条件 规则后果 执行顺序";
-            case EXCEPTIONS -> "restriction timing limit exception cannot 限制 时机 次数 例外 禁止";
-            case SOURCE -> "exact rule clause direct source wording page 原文 条款 直接依据 页码";
-            case VERIFY -> "direct rule condition timing exception contradiction 直接规则 条件 时机 例外 矛盾";
+            case SIMPLIFY -> "core rule";
+            case EXAMPLE -> "worked example setup action outcome";
+            case DEFINE -> "definition terminology";
+            case WHY -> "prerequisite consequence dependency";
+            case EXCEPTIONS -> "restriction exception";
+            case SOURCE -> "direct source clause";
+            case VERIFY -> "direct rule condition exception";
         };
     }
 
-    private static String facets(QuestionType type) {
+    private static String questionTypeFacets(QuestionType type) {
         return switch (type) {
-            case LESSON_STEP_FOLLOW_UP -> "step prerequisite consequence exception 步骤 前置条件 结果 例外";
-            case RULE_QUERY -> "rule definition timing restriction exception 规则 定义 时机 限制 例外";
-            case SITUATION_QUERY -> "legal action prerequisite timing cost exception 合法行动 前置条件 时机 费用 例外";
+            case LESSON_STEP_FOLLOW_UP -> "step prerequisite consequence";
+            case RULE_QUERY -> "rule condition consequence";
+            case SITUATION_QUERY -> "applicability prerequisite consequence";
         };
-    }
-
-    private static Set<String> inferredSections(UnderstoodQuestion question, QuestionContext context) {
-        LinkedHashSet<String> sections = new LinkedHashSet<>();
-        String text = contextualQuestion(question.normalizedQuestion(), context.previousQuestion());
-        addWhenContains(sections, text, "SETUP", "setup", "starting", "开局", "设置", "布置");
-        if (containsAny(text, "tie", "tied", "平局", "同分")) {
-            sections.add("TIE_BREAKERS");
-            sections.add("END_CONDITIONS");
-            sections.add("SCORING");
-        }
-        addWhenContains(
-                sections, text, "SCORING", "score", "point", "scoring", "计分", "得分", "分数", "名声", "声望");
-        addWhenContains(
-                sections, text, "END_CONDITIONS", "game end", "ending", "end of round", "结束条件", "游戏结束", "轮末", "结束");
-        addWhenContains(
-                sections,
-                text,
-                "ACTIONS",
-                "action",
-                "play card",
-                "play this card",
-                "行动",
-                "打出",
-                "卡牌");
-        addWhenContains(sections, text, "PHASES", "phase", "trick", "阶段", "墩");
-        addWhenContains(
-                sections,
-                text,
-                "ROUND_STRUCTURE",
-                "round",
-                "turn order",
-                "next trick",
-                "lead",
-                "轮次",
-                "一轮",
-                "回合结束",
-                "轮次结束",
-                "轮结束",
-                "下一次轮到",
-                "剩下的骰子",
-                "剩余骰子",
-                "回合顺序",
-                "下一墩",
-                "领出");
-        addWhenContains(sections, text, "COMPONENTS", "component", "piece", "组件", "配件", "棋子");
-        addWhenContains(sections, text, "OBJECTIVE", "objective", "win", "目标", "获胜", "胜利");
-        LinkedHashSet<String> bounded = new LinkedHashSet<>();
-        sections.stream().limit(MAX_SECTION_FILTERS).forEach(bounded::add);
-        return Collections.unmodifiableSet(bounded);
-    }
-
-    /** Question-derived scope may narrow an executable sequence; no caller supplies a chapter hint. */
-    private static Set<String> directQuestionScope(UnderstoodQuestion question, String currentSection) {
-        if (currentSection == null || !asksForExecutableSequence(question.normalizedQuestion())) {
-            return Set.of();
-        }
-        return Set.of(currentSection);
-    }
-
-    private static boolean asksForExecutableSequence(String question) {
-        return containsAny(
-                question,
-                "step", "steps", "order", "sequence", "walk through", "first", "then",
-                "步骤", "顺序", "逐步", "先", "然后", "依次", "怎么摆", "如何摆");
-    }
-
-    private static void addWhenContains(
-            Set<String> sections, String text, String section, String... indicators) {
-        if (containsAny(text, indicators)) {
-            sections.add(section);
-        }
-    }
-
-    static boolean containsAny(String text, String... indicators) {
-        return Arrays.stream(indicators).anyMatch(text::contains);
     }
 
     private static void append(StringBuilder target, String value) {
@@ -276,12 +145,14 @@ public final class AnswerRetrievalPlanner {
     }
 
     static String bounded(String value) {
+        if (value == null) return "";
         String normalized = value.replaceAll("\\s+", " ").strip();
         return normalized.length() <= MAX_QUERY_LENGTH
                 ? normalized
                 : normalized.substring(0, MAX_QUERY_LENGTH).strip();
     }
 
+    /** Historical purpose values remain readable in stored diagnostics; new plans use GENERAL. */
     public enum RetrievalPurpose {
         GENERAL,
         ENDGAME_RESOLUTION,

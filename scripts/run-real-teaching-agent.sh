@@ -13,9 +13,16 @@ set -a
 . "$ROOT_DIR/.env"
 set +a
 
-export RULEPILOT_REAL_TEACHING_AGENT_EVAL=true
-
 cd "$ROOT_DIR/backend"
-./mvnw -q -Dtest=TeachingEvidenceAgentRealRulebookEvaluationTest test
+RULEPILOT_REAL_TEACHING_AGENT_EVAL=true \
+	RULEPILOT_REAL_TEACHING_VALUE_EVAL=false \
+	./mvnw -q \
+	-Dtest='TeachingEvidenceAgentRealRulebookEvaluationTest#fillsTeachingCoverageGapsAcrossThreeRulebooksAndRejectsAnUnrelatedNeed' \
+	test
+RULEPILOT_REAL_TEACHING_AGENT_EVAL=false \
+	RULEPILOT_REAL_TEACHING_VALUE_EVAL=true \
+	./mvnw -q \
+	-Dtest='TeachingEvidenceAgentRealRulebookEvaluationTest#comparesCompleteTeachingSectionsWithAndWithoutTheBoundedToolPortfolio' \
+	test
 
-echo "Real-rulebook teaching Agent evaluation passed."
+echo "Real-rulebook teaching Agent evidence and publishable-section evaluations passed."

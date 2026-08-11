@@ -1,23 +1,26 @@
 package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.ContentCriticModel.CritiqueDraft;
 import com.rulepilot.assistant.GeneratedContentCritic.Claim;
 import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.Evidence;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
-import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
+import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
+import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class ConditionalGeneratedContentCriticTest {
@@ -27,10 +30,10 @@ class ConditionalGeneratedContentCriticTest {
     @Test
     void skipsStandardContentOutsideEvaluationMode() {
         AtomicInteger calls = new AtomicInteger();
-        var critic = new ConditionalGeneratedContentCritic(request -> {
+        var critic = critic(false, request -> {
             calls.incrementAndGet();
             return new CritiqueDraft(List.of());
-        }, new ImmediateAuditedAgentInvocations(), false);
+        });
 
         var review = critic.review(request(), ReviewRisk.STANDARD);
 
@@ -40,426 +43,208 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
-    void reviewsLowConfidenceContent() {
-        AtomicInteger calls = new AtomicInteger();
-        var critic = new ConditionalGeneratedContentCritic(request -> {
-            calls.incrementAndGet();
-            return new CritiqueDraft(List.of());
-        }, new ImmediateAuditedAgentInvocations(), false);
+    void reviewsLowConfidenceHighImpactAndEvaluationTrafficExactlyOnce() {
+        for (var scenario : List.of(
+                new Scenario(false, ReviewRisk.LOW_CONFIDENCE),
+                new Scenario(false, ReviewRisk.HIGH_IMPACT),
+                new Scenario(true, ReviewRisk.STANDARD))) {
+            AtomicInteger calls = new AtomicInteger();
+            var critic = critic(scenario.evaluationMode(), request -> {
+                calls.incrementAndGet();
+                return new CritiqueDraft(List.of());
+            });
 
-        var review = critic.review(request(), ReviewRisk.LOW_CONFIDENCE);
-
-        assertThat(review.performed()).isTrue();
-        assertThat(review.accepted()).isTrue();
-        assertThat(calls).hasValue(1);
+            assertThat(critic.review(request(), scenario.risk()).performed()).isTrue();
+            assertThat(calls).hasValue(1);
+        }
     }
 
     @Test
-    void reviewsHighImpactContentOutsideEvaluationMode() {
+    void confirmsPostPublicationCandidatesWithOneIndependentAtomicCall() {
         AtomicInteger calls = new AtomicInteger();
-        var critic = new ConditionalGeneratedContentCritic(request -> {
-            calls.incrementAndGet();
-            return new CritiqueDraft(List.of());
-        }, new ImmediateAuditedAgentInvocations(), false);
-
-        var review = critic.review(request(), ReviewRisk.HIGH_IMPACT);
-
-        assertThat(review.performed()).isTrue();
-        assertThat(calls).hasValue(1);
-    }
-
-    @Test
-    void evaluationModeReturnsValidatedBlockingIssues() {
+        List<ReviewRequest> observed = new ArrayList<>();
         Issue issue = new Issue(
                 IssueType.MISSING_EXCEPTION, 1, List.of(chunkId), "The cited exception was omitted.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(issue)), new ImmediateAuditedAgentInvocations(), true);
+        var critic = critic(true, request -> {
+            calls.incrementAndGet();
+            observed.add(request);
+            return new CritiqueDraft(List.of(issue));
+        });
+        ReviewRequest request = request(ReviewMode.POST_PUBLICATION);
 
-        var review = critic.review(request(), ReviewRisk.STANDARD);
+        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
 
+        assertThat(calls).hasValue(2);
+        assertThat(observed.getFirst()).isSameAs(request);
+        assertThat(observed.getLast().reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
+        assertThat(observed.getLast().taskContext().requiredCoverage())
+                .contains("1=[MISSING_EXCEPTION]", "only against its own cited evidence IDs");
         assertThat(review.performed()).isTrue();
-        assertThat(review.accepted()).isFalse();
         assertThat(review.issues()).containsExactly(issue);
     }
 
     @Test
-    void keepsMalformedModelIssueBlockingWhileNormalizingItsScope() {
-        Issue invalid = new Issue(
-                IssueType.OVERREACH, 2, List.of(UUID.randomUUID()), "Out of scope.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(invalid)), new ImmediateAuditedAgentInvocations(), true);
-
-        var review = critic.review(request(), ReviewRisk.STANDARD);
-
-        assertThat(review.accepted()).isFalse();
-        assertThat(review.issues().getFirst())
-                .extracting(Issue::claimPosition, Issue::evidenceIds)
-                .containsExactly(1, List.of());
-    }
-
-    @Test
-    void discardsSelfContradictingIssueThatExplicitlyConcludesThereIsNoIssue() {
-        Issue falsePositive = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "The claim exactly matches the cited evidence. No issue.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(falsePositive)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        var review = critic.review(request(), ReviewRisk.STANDARD);
-
-        assertThat(review.performed()).isTrue();
-        assertThat(review.accepted()).isTrue();
-        assertThat(review.issues()).isEmpty();
-    }
-
-    @Test
-    void discardsAuditNoteThatOnlyConcludesTheClaimIsSupported() {
-        Issue falsePositive = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "The first-orbiter reward is directly supported and the wording is correct.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(falsePositive)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        var review = critic.review(request(), ReviewRisk.STANDARD);
-
-        assertThat(review.accepted()).isTrue();
-        assertThat(review.issues()).isEmpty();
-    }
-
-    @Test
-    void keepsIssueThatAcknowledgesOneSupportedPartBeforeNamingARealDefect() {
-        Issue defect = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "The cost is supported, but the claimed reward is unsupported.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(defect)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        var review = critic.review(request(), ReviewRisk.STANDARD);
-
-        assertThat(review.accepted()).isFalse();
-        assertThat(review.issues()).containsExactly(defect);
-    }
-
-    @Test
-    void discardsBareSupportedConclusionWithoutAConcreteDefect() {
-        Issue falsePositive = new Issue(
-                IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "The statement matches E1. Supported.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(falsePositive)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
-    }
-
-    @Test
-    void keepsTranslationDisputeWhenNoDocumentGlossaryResolvesIt() {
-        Issue translationDispute = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "‘信用点’ is an incorrect translation; the source says credits and should be credits.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(translationDispute)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(translationDispute);
-    }
-
-    @Test
-    void discardsSelfNegatingSemanticAuditNoteButKeepsContrastedDefect() {
-        Issue noDefect = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "Evidence says gain publicity, which matches the claim. No contradiction.");
-        Issue actualDefect = new Issue(
-                IssueType.MISSING_EXCEPTION,
-                1,
-                List.of(chunkId),
-                "The base cost is supported, but the required discount condition is omitted.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(noDefect, actualDefect)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(actualDefect);
-    }
-
-    @Test
-    void trustsTerminalNoDefectConclusionAfterVerboseContrast() {
-        Issue selfNegating = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "The claim uses 默认, but the source says by default; 语义一致，无缺陷。");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(selfNegating)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
-    }
-
-    @Test
-    void discardsIssueThatEndsByAcknowledgingTheEvidenceSupportsTheClause() {
-        Issue selfNegating = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "E1未提及自由行动，但E4明确说明这是自由行动，支持该部分。");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(selfNegating)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).accepted()).isTrue();
-    }
-
-    @Test
-    void neverMistakesUnsupportedForTheWordSupported() {
-        Issue defect = new Issue(
-                IssueType.UNSUPPORTED_CLAIM,
-                1,
-                List.of(chunkId),
-                "The claimed reward is unsupported by E1.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(List.of(defect)),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-
-        assertThat(critic.review(request(), ReviewRisk.STANDARD).issues()).containsExactly(defect);
-    }
-
-    @Test
-    void acceptsCandidateIssueWhenIndependentAtomicReviewDoesNotConfirmIt() {
+    void dropsACandidateWhenIndependentSemanticConfirmationFindsNoDefect() {
         AtomicInteger calls = new AtomicInteger();
-        Issue candidate = new Issue(
-                IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "The reward is unsupported.");
-        var critic = new ConditionalGeneratedContentCritic(request -> calls.getAndIncrement() == 0
-                        ? new CritiqueDraft(List.of(candidate))
-                        : new CritiqueDraft(List.of()),
-                new ImmediateAuditedAgentInvocations(), true);
+        Issue selfContradictingCandidate = new Issue(
+                IssueType.UNSUPPORTED_CLAIM,
+                1,
+                List.of(chunkId),
+                "The claim exactly matches the evidence. No defect.");
+        var critic = critic(true, request -> calls.getAndIncrement() == 0
+                ? new CritiqueDraft(List.of(selfContradictingCandidate))
+                : new CritiqueDraft(List.of()));
 
-        var review = critic.review(request(), ReviewRisk.STANDARD);
+        var review = critic.review(request(ReviewMode.POST_PUBLICATION), ReviewRisk.HIGH_IMPACT);
 
-        assertThat(review.accepted()).isTrue();
         assertThat(calls).hasValue(2);
+        assertThat(review.accepted()).isTrue();
     }
 
     @Test
-    void returnsObjectiveCoverageIssueWithoutAtomicClaimConfirmation() {
-        AtomicInteger calls = new AtomicInteger();
-        Issue missing = new Issue(
-                IssueType.MISSING_CRITICAL_RULE, 1, List.of(chunkId), "Moon landing is missing.");
-        var critic = new ConditionalGeneratedContentCritic(request -> {
-            calls.incrementAndGet();
-            return new CritiqueDraft(List.of(missing));
-        }, new ImmediateAuditedAgentInvocations(), true);
-        ReviewRequest request = new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.OBJECTIVE_COVERAGE,
-                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
-                        "Teach landing on a planet or moon.", "core_loop"),
-                List.of(new Claim(1, "Land on a planet.", List.of(chunkId))),
-                List.of(new Evidence(chunkId, "Technology allows landing on a moon.")));
-
-        var review = critic.review(request, ReviewRisk.LOW_CONFIDENCE);
-
-        assertThat(review.issues()).containsExactly(missing);
-        assertThat(calls).hasValue(1);
-    }
-
-    @Test
-    void boundsAnOverlongPostPublicationReviewInsteadOfDiscardingIt() {
-        List<Issue> issues = java.util.stream.IntStream.rangeClosed(1, 15)
-                .mapToObj(position -> new Issue(
-                        IssueType.UNSUPPORTED_CLAIM,
-                        1,
-                        List.of(chunkId),
-                        "Unsupported detail " + position + "."))
-                .toList();
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> new CritiqueDraft(issues),
-                new ImmediateAuditedAgentInvocations(),
-                true);
-        ReviewRequest request = new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.POST_PUBLICATION,
-                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
-                        "Teach the complete lesson.", "All material rules."),
-                List.of(new Claim(1, "A generated claim.", List.of(chunkId))),
-                List.of(new Evidence(chunkId, "The cited rule.")));
-
-        assertThat(critic.review(request, ReviewRisk.HIGH_IMPACT).issues()).hasSize(12);
-    }
-
-    @Test
-    void keepsChapterScopeDuplicationFromPostPublicationReview() {
-        List<ReviewMode> observedModes = new ArrayList<>();
-        Issue duplication = new Issue(
-                IssueType.CHAPTER_SCOPE_DUPLICATION,
-                1,
-                List.of(chunkId),
-                "Keep the optional imprint stage; chapter 2 owns its payment detail.");
-        var critic = new ConditionalGeneratedContentCritic(
-                request -> {
-                    observedModes.add(request.reviewMode());
-                    return new CritiqueDraft(List.of(duplication));
-                },
-                new ImmediateAuditedAgentInvocations(),
-                true);
-        ReviewRequest request = new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                ReviewMode.POST_PUBLICATION,
-                new com.rulepilot.assistant.GeneratedContentCritic.TaskContext(
-                        "Chapter 1 gives the flow; chapter 2 explains imprint payment.", "core_loop; imprint cost"),
-                List.of(new Claim(1, "Optional imprint: pay two emotion.", List.of(chunkId))),
-                List.of(new Evidence(chunkId, "You may imprint a memory by paying two emotion.")));
-
-        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
-
-        assertThat(review.issues()).containsExactly(duplication);
-        assertThat(observedModes).containsExactly(
-                ReviewMode.POST_PUBLICATION, ReviewMode.POST_PUBLICATION_STRUCTURE);
-    }
-
-    @Test
-    void confirmsEachClaimOnlyAgainstItsCombinedCitations() {
-        UUID secondCitation = UUID.randomUUID();
-        UUID unrelatedEvidence = UUID.randomUUID();
+    void batchesCandidateClaimsWithSiblingContextAndRestrictsIssuesToCandidateTypes() {
+        UUID secondChunk = UUID.randomUUID();
+        UUID unrelatedChunk = UUID.randomUUID();
         List<ReviewRequest> observed = new ArrayList<>();
-        Issue candidate = new Issue(
-                IssueType.MISSING_EXCEPTION, 2, List.of(unrelatedEvidence), "The discount condition is missing.");
-        var critic = new ConditionalGeneratedContentCritic(request -> {
-            observed.add(request);
-            return request.reviewMode() == ReviewMode.DISCOVERY
-                    ? new CritiqueDraft(List.of(candidate))
-                    : new CritiqueDraft(List.of(new Issue(
-                            IssueType.MISSING_EXCEPTION,
-                            2,
-                            List.of(chunkId, secondCitation),
-                            "The discount condition is missing.")));
-        }, new ImmediateAuditedAgentInvocations(), true);
-        ReviewRequest request = new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.LESSON,
-                List.of(
-                        new Claim(1, "First claim.", List.of(unrelatedEvidence)),
-                        new Claim(2, "Discounted action.", List.of(chunkId, secondCitation))),
-                List.of(
-                        new Evidence(chunkId, "The action costs three energy."),
-                        new Evidence(secondCitation, "It costs two when any orbiter is present."),
-                        new Evidence(unrelatedEvidence, "Unrelated first claim evidence.")));
-
-        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
-
-        assertThat(review.issues()).hasSize(1);
-        assertThat(observed).hasSize(2);
-        ReviewRequest confirmation = observed.get(1);
-        assertThat(confirmation.reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
-        assertThat(confirmation.claims()).extracting(Claim::position).containsExactly(2);
-        assertThat(confirmation.evidence()).extracting(Evidence::chunkId)
-                .containsExactly(chunkId, secondCitation);
-    }
-
-    @Test
-    void confirmsIndependentClaimPositionsConcurrently() throws InterruptedException {
-        UUID secondChunk = UUID.randomUUID();
-        CountDownLatch confirmationsStarted = new CountDownLatch(2);
-        AtomicInteger calls = new AtomicInteger();
-        var critic = new ConditionalGeneratedContentCritic(request -> {
-            if (request.reviewMode() == ReviewMode.DISCOVERY) {
-                return new CritiqueDraft(List.of(
-                        new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First defect."),
-                        new Issue(IssueType.CONTRADICTION, 2, List.of(secondChunk), "Second defect.")));
-            }
-            calls.incrementAndGet();
-            confirmationsStarted.countDown();
-            try {
-                if (!confirmationsStarted.await(2, TimeUnit.SECONDS)) {
-                    throw new IllegalStateException("claim confirmations did not overlap");
-                }
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(exception);
-            }
-            return new CritiqueDraft(List.of());
-        }, new ImmediateAuditedAgentInvocations(), true, 2);
-        ReviewRequest request = new ReviewRequest(
-                UUID.randomUUID(),
-                ContentType.ANSWER,
-                List.of(
-                        new Claim(1, "First.", List.of(chunkId)),
-                        new Claim(2, "Second.", List.of(secondChunk))),
-                List.of(new Evidence(chunkId, "First."), new Evidence(secondChunk, "Second.")));
-
-        var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
-
-        assertThat(confirmationsStarted.await(0, TimeUnit.MILLISECONDS)).isTrue();
-        assertThat(calls).hasValue(2);
-        assertThat(review.accepted()).isTrue();
-    }
-
-    @Test
-    void confirmsMultipleLessonClaimsIndependentlyWithEvidenceScopedCalls() {
-        UUID secondChunk = UUID.randomUUID();
-        List<ReviewRequest> observed = java.util.Collections.synchronizedList(new ArrayList<>());
-        var critic = new ConditionalGeneratedContentCritic(request -> {
+        var critic = critic(true, request -> {
             observed.add(request);
             if (request.reviewMode() == ReviewMode.DISCOVERY) {
                 return new CritiqueDraft(List.of(
                         new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First candidate."),
-                        new Issue(IssueType.CONTRADICTION, 2, List.of(secondChunk), "Second candidate.")));
+                        new Issue(IssueType.MISSING_EXCEPTION, 2, List.of(secondChunk), "Second candidate.")));
             }
-            return request.claims().getFirst().position() == 1
-                    ? new CritiqueDraft(List.of(
-                            new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed.")))
-                    : new CritiqueDraft(List.of(
-                            new Issue(IssueType.OVERREACH, 2, List.of(secondChunk), "Unlisted type.")));
-        }, new ImmediateAuditedAgentInvocations(), true, 4);
+            return new CritiqueDraft(List.of(
+                    new Issue(IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId, secondChunk), "First confirmed."),
+                    new Issue(IssueType.OVERREACH, 2, List.of(secondChunk), "Unlisted type.")));
+        });
         ReviewRequest request = new ReviewRequest(
                 UUID.randomUUID(),
                 ContentType.LESSON,
+                ReviewMode.DISCOVERY,
+                new TaskContext("Teach two rules.", "Check both rules."),
                 List.of(
-                        new Claim(1, "First.", List.of(chunkId)),
-                        new Claim(2, "Second.", List.of(secondChunk))),
-                List.of(new Evidence(chunkId, "First."), new Evidence(secondChunk, "Second.")));
+                        new Claim(1, "First claim.", List.of(chunkId)),
+                        new Claim(2, "Second claim.", List.of(secondChunk)),
+                        new Claim(3, "Unflagged claim.", List.of(unrelatedChunk))),
+                List.of(
+                        new Evidence(chunkId, "First evidence."),
+                        new Evidence(secondChunk, "Second evidence."),
+                        new Evidence(unrelatedChunk, "Unrelated evidence.")));
 
         var review = critic.review(request, ReviewRisk.HIGH_IMPACT);
 
-        assertThat(observed).hasSize(3);
-        assertThat(observed.stream().filter(item -> item.reviewMode() == ReviewMode.ATOMIC_CONFIRMATION))
-                .allSatisfy(confirmation -> {
-                    assertThat(confirmation.claims()).hasSize(1);
-                    assertThat(confirmation.evidence()).hasSize(1);
-                });
-        assertThat(review.issues())
-                .containsExactly(new Issue(
-                        IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed."));
+        assertThat(observed).hasSize(2);
+        ReviewRequest confirmation = observed.getLast();
+        assertThat(confirmation.reviewMode()).isEqualTo(ReviewMode.ATOMIC_CONFIRMATION);
+        assertThat(confirmation.claims()).extracting(Claim::position).containsExactly(1, 2, 3);
+        assertThat(confirmation.evidence()).extracting(Evidence::chunkId)
+                .containsExactly(chunkId, secondChunk, unrelatedChunk);
+        assertThat(confirmation.taskContext().requiredCoverage())
+                .contains("Positions not listed are context only", "sibling claims");
+        assertThat(review.issues()).containsExactly(new Issue(
+                IssueType.UNSUPPORTED_CLAIM, 1, List.of(chunkId), "First confirmed."));
+    }
+
+    @Test
+    void doesNotRecursivelyConfirmObjectiveCoverageOrAtomicReviews() {
+        for (ReviewMode mode : List.of(ReviewMode.OBJECTIVE_COVERAGE, ReviewMode.ATOMIC_CONFIRMATION)) {
+            AtomicInteger calls = new AtomicInteger();
+            Issue issue = new Issue(IssueType.MISSING_CRITICAL_RULE, 1, List.of(chunkId), "Missing rule.");
+            var critic = critic(true, request -> {
+                calls.incrementAndGet();
+                return new CritiqueDraft(List.of(issue));
+            });
+
+            assertThat(critic.review(request(mode), ReviewRisk.HIGH_IMPACT).issues()).containsExactly(issue);
+            assertThat(calls).hasValue(1);
+        }
+    }
+
+    @Test
+    void normalizesOnlyProtocolScopeAndBudgetsWithoutRejudgingIssueMeaning() {
+        UUID outside = UUID.randomUUID();
+        String longSummary = "x".repeat(300);
+        List<Issue> issues = IntStream.rangeClosed(1, 14)
+                .mapToObj(index -> new Issue(
+                        IssueType.OVERREACH,
+                        99,
+                        List.of(outside, chunkId, chunkId),
+                        index == 1 ? longSummary : "Issue " + index))
+                .toList();
+        var critic = critic(true, request -> new CritiqueDraft(issues));
+
+        var review = critic.review(request(ReviewMode.OBJECTIVE_COVERAGE), ReviewRisk.STANDARD);
+
+        assertThat(review.issues()).hasSize(12);
+        assertThat(review.issues()).allSatisfy(issue -> {
+            assertThat(issue.claimPosition()).isEqualTo(1);
+            assertThat(issue.evidenceIds()).containsExactly(chunkId);
+        });
+        assertThat(review.issues().getFirst().summary()).hasSize(240);
+    }
+
+    @Test
+    void rejectsInvalidRequestsBeforeCallingTheModel() {
+        AtomicInteger calls = new AtomicInteger();
+        var critic = critic(true, request -> {
+            calls.incrementAndGet();
+            return new CritiqueDraft(List.of());
+        });
+
+        ReviewRequest noClaims = new ReviewRequest(
+                UUID.randomUUID(), ContentType.ANSWER, List.of(), List.of(new Evidence(chunkId, "Rule.")));
+        assertThatThrownBy(() -> critic.review(noClaims, ReviewRisk.HIGH_IMPACT))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        ReviewRequest duplicatePositions = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.ANSWER,
+                List.of(
+                        new Claim(1, "First.", List.of(chunkId)),
+                        new Claim(1, "Second.", List.of(chunkId))),
+                List.of(new Evidence(chunkId, "Rule.")));
+        assertThatThrownBy(() -> critic.review(duplicatePositions, ReviewRisk.HIGH_IMPACT))
+                .hasMessageContaining("unique");
+
+        ReviewRequest outsideCitation = new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.ANSWER,
+                List.of(new Claim(1, "Claim.", List.of(UUID.randomUUID()))),
+                List.of(new Evidence(chunkId, "Rule.")));
+        assertThatThrownBy(() -> critic.review(outsideCitation, ReviewRisk.HIGH_IMPACT))
+                .hasMessageContaining("supplied evidence");
+        assertThat(calls).hasValue(0);
+    }
+
+    @Test
+    void rejectsNullOrStructurallyInvalidModelOutput() {
+        assertThatThrownBy(() -> critic(true, request -> null)
+                        .review(request(), ReviewRisk.STANDARD))
+                .hasMessageContaining("critic output");
+        assertThatThrownBy(() -> critic(true, request -> new CritiqueDraft(List.of(
+                                new Issue(null, 1, List.of(chunkId), "bad"))))
+                        .review(request(), ReviewRisk.STANDARD))
+                .hasMessageContaining("critic issue");
+    }
+
+    private ConditionalGeneratedContentCritic critic(boolean evaluationMode, ContentCriticModel model) {
+        return new ConditionalGeneratedContentCritic(
+                model, new ImmediateAuditedAgentInvocations(), evaluationMode);
     }
 
     private ReviewRequest request() {
+        return request(ReviewMode.DISCOVERY);
+    }
+
+    private ReviewRequest request(ReviewMode mode) {
         return new ReviewRequest(
                 UUID.randomUUID(),
                 ContentType.ANSWER,
+                mode,
+                new TaskContext("Answer the rule question.", "Judge every claim."),
                 List.of(new Claim(1, "Each coin scores one point.", List.of(chunkId))),
                 List.of(new Evidence(chunkId, "Each coin scores one point.")));
     }
+
+    private record Scenario(boolean evaluationMode, ReviewRisk risk) {}
 }

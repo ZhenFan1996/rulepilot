@@ -97,45 +97,18 @@ final class VisualCropAcceptancePolicy {
         }
     }
 
-    static List<LocatedRegion> withoutOversizedIconLegends(List<LocatedRegion> regions) {
-        return regions.stream().filter(region -> !requiresTighterIconViewport(region)).toList();
-    }
-
     static List<LocatedRegion> withoutOversizedReaderViewports(List<LocatedRegion> regions) {
         return regions.stream().filter(region -> !requiresTighterReaderViewport(region)).toList();
     }
 
     static boolean requiresTighterReaderViewport(LocatedRegion region) {
-        return requiresTighterIconViewport(region)
-                || requiresTighterScoreExampleViewport(region)
-                || (long) region.width() * region.height() > MAX_READER_CROP_AREA;
-    }
-
-    static boolean requiresTighterIconViewport(LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        boolean iconLegend = observation.contains("图例")
-                || observation.contains("对照")
-                || (observation.contains("图标") && observation.contains("名称"))
-                || observation.matches(".*\\b(legend|icon group)\\b.*");
-        return iconLegend && region.height() * 10 > region.width() * 14;
-    }
-
-    static boolean requiresTighterScoreExampleViewport(LocatedRegion region) {
-        String observation = (region.label() + " " + region.visibleDescription()).toLowerCase(java.util.Locale.ROOT);
-        boolean scoreExample = (observation.contains("计分")
-                        || observation.contains("得分")
-                        || observation.contains("分数")
-                        || observation.matches(".*\\b(score|scoring|points)\\b.*"))
-                && (observation.contains("示例") || observation.matches(".*\\bexample\\b.*"));
-        return scoreExample && region.width() <= 340 && region.height() * 4 > region.width() * 3;
-    }
-
-    static String tightIconViewportInstruction() {
-        return "The previous icon crop was too tall and likely included unrelated numbered prose. Return a tighter rectangle around only the literal icons and their direct labels. Do not include adjacent steps, paragraphs, component counts, or a page footer. If that tight icon crop is not available, return an empty regions array.";
+        return (long) region.width() * region.height() > MAX_READER_CROP_AREA;
     }
 
     static String tightReaderViewportInstruction() {
-        return "The previous crop occupied too much of the page, was a portrait strip spanning neighbouring score examples, or included unrelated prose. Return a compact rectangle around only the literal diagram, component group, icon legend, one score reference, or worked state that directly helps the cited step. If the claim names one scoring pattern, include only that pattern's card row or compact group; do not include another animal's examples or partial rows above or below. Exclude surrounding instructions, component-count lists, empty page area, and page furniture. If no compact player-facing crop is available, return an empty regions array.";
+        return "The previous crop occupied too much of the page. Return a compact rectangle around only the visible "
+                + "region that directly supports the cited claim and step. Exclude unrelated surrounding content. If "
+                + "no compact player-facing crop is available, return an empty regions array.";
     }
 
     static VisualLocatorResponsePolicy.ModelRegion normalizedGeometry(

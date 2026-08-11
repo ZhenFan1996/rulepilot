@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,9 +35,6 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             "COMPLETION_PROTOCOL_REJECTED",
             "ITERATION_LIMIT",
             "TOOL_CALL_LIMIT");
-    private static final Pattern PRIOR_TURN_REFERENCE = Pattern.compile(
-            "(?iu)\\b(?:this|that|it|these|those|then|there|former|latter|such)\\b|"
-                    + "这个|那个|这样|那样|它|上述|前述|刚才|上面|这里|那里");
     private static final String SYSTEM_PROMPT = """
             You are the evidence-refinement stage of a board-game rules assistant. Never answer the player and never
             rely on rule knowledge outside the supplied evidence and tool observations. The application has already
@@ -56,7 +52,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             visible icon, label, table, diagram, arrow, or board layout,
             read_visual_page_facts may help locate literal printed content, but those facts have no mechanical-rule
             authority. Read exact pages after search or visual inspection to confirm the passages that cover the
-            missing need. When the player asks for an example, search for the player's topic together with neutral
+            missing need. For an ADVICE evidence need, locate source-authored recommendations, cautions, priorities,
+            or tips and preserve their stated faction, player-count, matchup, phase, and situation scope. A victory
+            condition, scoring route, or legal action is not itself advice. Do not declare advice covered merely
+            because the rules explain how points are earned. Do not spend the search budget repeatedly paraphrasing
+            "strategy" or "advice": search independent recommendation and caution/imperative cue families in the
+            rulebook's source language, combined with scope terms derived from the active document. A sentence that
+            merely says another resource contains tips is not the advice itself. Once a candidate actually expresses
+            guidance, read its exact page. When the player asks for an example, search for the player's topic together with neutral
             source cues such as worked example, for example, 示例, or 例如. A cue is only a retrieval hint: acquire the
             complete cited setup, action, and outcome, and do not turn that example into a general rule. For a compound question,
             check every requested condition, sequence, exception, and complete-list obligation separately. A result
@@ -134,13 +137,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     SYSTEM_PROMPT,
                     playerRequest(question, context, questionPlan, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    usesPriorPages(question, context)
+                    usesPriorPages(questionPlan, context)
                             ? 2
                             : questionPlan.subquestions().size() > 1 ? 5 : 4,
                     384,
                     toolPortfolio(question, context, questionPlan),
-                    requiredEvidenceTools(question, context),
-                    usesPriorPages(question, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4,
+                    requiredEvidenceTools(questionPlan, context),
+                    usesPriorPages(questionPlan, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4,
                     "EVIDENCE_READY"));
         } catch (RuntimeException failure) {
             LOGGER.warn(
@@ -152,6 +155,13 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         }
         List<Set<UUID>> exactPageGroups = NativeToolEvidenceHandles.exactPageObservationGroups(
                 result, 8, MAX_OBSERVED_EVIDENCE);
+        LOGGER.debug(
+                "Answer evidence refinement result: status={}, reason={}, toolCalls={}, exactPageGroups={}, observedHandles={}",
+                result.status(),
+                result.reason(),
+                result.toolCalls(),
+                exactPageGroups.size(),
+                exactPageGroups.stream().mapToInt(Set::size).sum());
         boolean declaredReady = result.status() == RunStatus.COMPLETED
                 && "EVIDENCE_READY".equals(result.text().strip())
                 && result.toolCalls() > 0;
@@ -175,40 +185,36 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                 .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
         if (observedIds.isEmpty()) return deterministic;
         return mergeCanonicalEvidence(
-                context.documentVersionId(), question.normalizedQuestion(), deterministic, observedIds, exactPageGroups);
+                context.documentVersionId(), deterministic, observedIds, exactPageGroups, questionPlan);
     }
 
     private Set<String> toolPortfolio(
             UnderstoodQuestion question, QuestionContext context, AnswerQuestionPlan questionPlan) {
-        if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
+        if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
         Set<String> tools = new java.util.LinkedHashSet<>(Set.of(
                 "search_rule_evidence", "expand_rule_evidence_context", "read_rule_pages"));
         Set<com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed> needs = questionPlan.evidenceNeeds();
-        if (needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.VISUAL_REFERENCE)
-                || (!questionPlan.agentPlanned()
-                        && AnswerEvidenceRefinementPolicy.asksAboutVisualReference(question.normalizedQuestion()))) {
+        if (needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.VISUAL_REFERENCE)) {
             tools.add("read_visual_page_facts");
         }
         if (needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.RELATIONSHIP)
-                || needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.EXCEPTION)
-                || (!questionPlan.agentPlanned()
-                        && AnswerEvidenceRefinementPolicy.asksAboutRuleRelationship(question.normalizedQuestion()))) {
+                || needs.contains(com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.EXCEPTION)) {
             tools.add("search_rule_relationships");
         }
         return Set.copyOf(tools);
     }
 
-    private Set<String> requiredEvidenceTools(UnderstoodQuestion question, QuestionContext context) {
-        if (usesPriorPages(question, context)) return Set.of("read_rule_pages");
+    private Set<String> requiredEvidenceTools(AnswerQuestionPlan questionPlan, QuestionContext context) {
+        if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
         return Set.of();
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(
             UUID documentVersionId,
-            String normalizedQuestion,
             AnswerEvidenceRetriever.Result deterministic,
             Set<UUID> observedIds,
-            List<Set<UUID>> exactPageObservationGroups) {
+            List<Set<UUID>> exactPageObservationGroups,
+            AnswerQuestionPlan questionPlan) {
         List<RuleEvidenceHit> hydrated;
         try {
             hydrated = evidenceLookup.findByChunkIds(documentVersionId, observedIds);
@@ -218,6 +224,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     documentVersionId);
             return deterministic;
         }
+        LOGGER.debug(
+                "Answer exact-page evidence hydration: requestedHandles={}, hydratedHandles={}",
+                observedIds.size(),
+                hydrated.size());
         Map<UUID, RuleEvidenceHit> hydratedById = hydrated.stream()
                 .filter(source -> documentVersionId.equals(source.documentVersionId()))
                 .filter(source -> observedIds.contains(source.chunkId()))
@@ -248,7 +258,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         List<List<HybridEvidenceHit>> confirmedPageGroups = canonicalPageGroups(
                 exactPageObservationGroups, hydratedById, merged);
         List<HybridEvidenceHit> selected = AnswerEvidenceSelectionPolicy.select(
-                normalizedQuestion, merged, observed, Set.of(), confirmedPageGroups);
+                merged, observed, Set.of(), questionPlan, confirmedPageGroups);
         return new AnswerEvidenceRetriever.Result(selected, AnswerEvidenceRetriever.State.READY);
     }
 
@@ -306,7 +316,7 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
             }
             request.append("\nResolve the player's reference, then re-read canonical current-version evidence before declaring ready.");
             List<Integer> priorPages = priorPages(context);
-            if (usesPriorPages(question, context)) {
+            if (usesPriorPages(questionPlan, context)) {
                 request.append("\nPrior cited pages to re-read: ")
                         .append(priorPages)
                         .append(". Call read_rule_pages once with exactly these pageNumbers; do not search.");
@@ -333,6 +343,14 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     .append(" | evidence needs: ")
                     .append(subquestion.evidenceNeeds());
         }
+        if (questionPlan.evidenceNeeds().contains(
+                com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE)) {
+            request.append("\nIndependent application-owned advice source-cue searches (combine each with terms "
+                    + "derived from active-document headings or observations; do not merely rephrase the player):");
+            for (String cueQuery : AnswerRetrievalPlanner.adviceSourceCueQueries()) {
+                request.append("\n- ").append(cueQuery);
+            }
+        }
         request.append("\nUse observations to cover every listed span. EVIDENCE_READY is accepted only when exact pages have been read.");
         return request.toString();
     }
@@ -343,9 +361,10 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
         return normalized.length() <= maximum ? normalized : normalized.substring(0, maximum);
     }
 
-    private boolean usesPriorPages(UnderstoodQuestion question, QuestionContext context) {
-        return question != null
-                && PRIOR_TURN_REFERENCE.matcher(question.normalizedQuestion()).find()
+    private boolean usesPriorPages(AnswerQuestionPlan questionPlan, QuestionContext context) {
+        return questionPlan != null
+                && questionPlan.referenceBinding()
+                        == com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding.PRIOR_GROUNDED_TURN
                 && !priorPages(context).isEmpty();
     }
 

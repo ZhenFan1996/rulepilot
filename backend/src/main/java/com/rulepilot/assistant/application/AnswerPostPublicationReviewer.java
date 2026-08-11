@@ -244,7 +244,9 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleCalculation> resolveCalculations(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.calculations().isEmpty()) return List.of();
+        if (draft.calculations().isEmpty() && !calculationResolver.requiresCalculation(modelRequest)) {
+            return List.of();
+        }
         if (invocations == null) return calculationResolver.resolve(modelRequest, draft);
         String expressions = draft.calculations().stream()
                 .map(calculation -> calculation == null ? "" : calculation.expression())
@@ -261,7 +263,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleSituationCheck> resolveSituationChecks(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        return List.of();
+        return situationCheckResolver.resolve(modelRequest, draft);
     }
 
     private List<com.rulepilot.assistant.domain.RuleWalkthroughStep> resolveWalkthrough(
@@ -276,13 +278,9 @@ final class AnswerPostPublicationReviewer {
         return invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
-                walkthroughResolver.requiresDependencyTrace(modelRequest)
-                        ? "traceRuleDependencies"
-                        : "buildRuleWalkthrough",
+                "buildRuleWalkthrough",
                 Math.max(1, (steps.length() + 3) / 4),
-                walkthroughResolver.requiresDependencyTrace(modelRequest)
-                        ? "Revised cited rule dependency chain validated"
-                        : "Revised cited rule walkthrough validated",
+                "Revised walkthrough schema and evidence scope validated",
                 () -> walkthroughResolver.resolve(modelRequest, draft),
                 results -> results.size() * 16);
     }
@@ -365,8 +363,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RulePriorityResolution> resolveRulePriority(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.priorityResolutions().isEmpty()
-                && !AnswerRulePriorityResolver.asksForPriority(modelRequest.question())) {
+        if (draft.priorityResolutions().isEmpty() && !rulePriorityResolver.requiresRulePriority(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return rulePriorityResolver.resolve(modelRequest, draft);
@@ -376,13 +373,9 @@ final class AnswerPostPublicationReviewer {
         return invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
-                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
-                        ? "checkRuleConflicts"
-                        : "resolveRulePriority",
+                "resolveRulePriority",
                 Math.max(1, (resolutions.length() + 3) / 4),
-                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
-                        ? "Revised cited priority or scope distinction validated"
-                        : "Revised cited rule priority relationships validated",
+                "Revised rule-priority schema and evidence scope validated",
                 () -> rulePriorityResolver.resolve(modelRequest, draft),
                 results -> results.size() * 20);
     }
@@ -404,7 +397,7 @@ final class AnswerPostPublicationReviewer {
     }
 
     private void verifyPermissionRuling(UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (!AnswerPermissionResolver.asksForPermission(modelRequest.question())) return;
+        if (!AnswerPermissionResolver.requiresPermission(modelRequest)) return;
         if (invocations == null) {
             permissionResolver.resolve(modelRequest, draft);
             return;
@@ -421,8 +414,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleTimingResolution> resolveTiming(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.timingResolutions().isEmpty()
-                && !AnswerTimingResolver.asksForTimingOrder(modelRequest.question())) {
+        if (draft.timingResolutions().isEmpty() && !timingResolver.requiresTiming(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return timingResolver.resolve(modelRequest, draft);
@@ -442,8 +434,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleTieResolution> resolveTies(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.tieResolutions().isEmpty()
-                && !AnswerTieResolver.asksForTieResolution(modelRequest.question())) {
+        if (draft.tieResolutions().isEmpty() && !tieResolver.requiresTie(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return tieResolver.resolve(modelRequest, draft);
@@ -463,7 +454,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleScopeResolution> resolveScope(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.scopeResolutions().isEmpty() && !AnswerScopeResolver.asksForScope(modelRequest.question())) {
+        if (draft.scopeResolutions().isEmpty() && !scopeResolver.requiresScope(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return scopeResolver.resolve(modelRequest, draft);
@@ -484,7 +475,7 @@ final class AnswerPostPublicationReviewer {
     private List<com.rulepilot.assistant.domain.RuleConceptComparison> resolveConceptComparisons(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
         if (draft.conceptComparisons().isEmpty()
-                && !AnswerConceptComparisonResolver.asksForComparison(modelRequest.question())) {
+                && !conceptComparisonResolver.requiresConceptComparison(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return conceptComparisonResolver.resolve(modelRequest, draft);
@@ -504,7 +495,7 @@ final class AnswerPostPublicationReviewer {
 
     private List<com.rulepilot.assistant.domain.RuleOption> resolveRuleOptions(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.ruleOptions().isEmpty() && !AnswerRuleOptionResolver.asksForOptions(modelRequest.question())) {
+        if (draft.ruleOptions().isEmpty() && !ruleOptionResolver.requiresRuleOptions(modelRequest)) {
             return List.of();
         }
         if (invocations == null) return ruleOptionResolver.resolve(modelRequest, draft);

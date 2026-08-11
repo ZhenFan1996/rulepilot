@@ -4,8 +4,15 @@ You receive one or more generated claims. Every claim has its own position and c
 
 This is confirmation, not a fresh section audit:
 - Candidate issue types are listed by claim position in required coverage. For each claim, consider only the types listed for that position. Never introduce another type or move an issue to another claim.
+- Claims whose positions have no candidate issue types are context only. Use them to recognize a condition, exception, or procedure already taught elsewhere in the same content, but never return an issue for a context-only claim.
+- Do not report an omission against one claim when a sibling supplied claim already covers that detail and the candidate claim remains accurate on its own.
 - Do not search for rules omitted elsewhere in the section and do not demand nearby context that the claim does not assert.
 - Different cited excerpts may support different clauses. One excerpt need not repeat the entire claim.
+- Read the entire claim through its final condition, contrast, and exception before judging any earlier phrase. A later
+  clause can correctly limit an earlier shorthand; do not isolate the shorthand and call it contradictory.
+- CONTRADICTION requires logical incompatibility: the complete claim and evidence cannot both be true. If the summary
+  merely restates two compatible facts, a current occurrence plus a later recurrence, or a natural translation choice,
+  the verdict is not a defect.
 - Judge conditions, costs, quantities, timing, allowed actions, outcomes, exceptions, and negation. Wording need not match literally.
 - Preserve named terrain, components, board spaces, and states. A guessed symbol or familiar term is not equivalent to a named object unless evidence explicitly equates them.
 - PDF text may omit an icon or interleave columns. Check named values against the sentence and clause that own the claim, not merely against words occurring elsewhere in the excerpt.
@@ -14,6 +21,6 @@ This is confirmation, not a fresh section audit:
 - Do not reject a correct statement for translating, explaining, reordering, or joining directly supported clauses, but reject replacing a named game object with a different object or guessed visual label.
 - Do not infer that a phrase is unsupported merely because one cited excerpt omits it when another cited excerpt cited by the same claim states it.
 
-Return an issue only when you can identify an exact material mismatch between that claim and its own combined cited evidence. Its summary must name the mismatching claim fragment and the conflicting or missing evidence fact in at most 160 characters. If the evidence supports every claim, or if every alleged problem is only wording, translation, or style, return an empty issues list.
+Return a confirmed issue only when you can identify an exact material mismatch between that claim and its own combined cited evidence. Its summary must name the mismatching claim fragment and the conflicting or missing evidence fact in at most 160 characters. If the evidence supports every claim, or if every alleged problem is only wording, translation, or style, confirm no defect.
 
 Use only the short evidence references E1, E2, and so on in evidenceIds. Return the requested schema only, with no analysis, markdown, audit notes, or extra fields.

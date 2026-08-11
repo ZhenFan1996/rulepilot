@@ -43,12 +43,23 @@ class BggXmlApiClientTest {
                   <name type="alternate" value="展翅翱翔"/>
                   <description>A game about birds &amp; habitats.</description>
                   <yearpublished value="2019"/><minplayers value="1"/><maxplayers value="5"/>
-                  <playingtime value="70"/><minage value="10"/>
+                  <playingtime value="70"/><minplaytime value="40"/><maxplaytime value="90"/><minage value="10"/>
+                  <poll-summary name="suggested_numplayers">
+                    <result name="bestwith" value="Best with 3 players"/>
+                    <result name="recommmendedwith" value="Recommended with 2–4 players"/>
+                  </poll-summary>
+                  <poll name="suggested_playerage"><results>
+                    <result value="12" numvotes="22"/><result value="10" numvotes="8"/>
+                  </results></poll>
+                  <poll name="language_dependence"><results>
+                    <result level="2" numvotes="31"/><result level="3" numvotes="9"/>
+                  </results></poll>
                   <link type="boardgamecategory" value="Animals"/>
                   <link type="boardgamemechanic" value="Card Drafting"/>
+                  <link type="boardgamefamily" value="Animals: Birds"/>
                   <link type="boardgamedesigner" value="Elizabeth Hargrave"/>
                   <link type="boardgamepublisher" value="Stonemaier Games"/>
-                  <statistics><ratings><average value="8.1"/><averageweight value="2.5"/></ratings></statistics>
+                  <statistics><ratings><average value="8.1"/><averageweight value="2.5"/><numweights value="987"/></ratings></statistics>
                   <versions>
                     <item type="boardgameversion" id="3">
                       <image>https://cf.geekdo-images.com/traditional-chinese-edition.jpg</image>
@@ -79,6 +90,14 @@ class BggXmlApiClientTest {
         assertThat(game.minPlayers()).isEqualTo(1);
         assertThat(game.maxPlayers()).isEqualTo(5);
         assertThat(game.playingTimeMinutes()).isEqualTo(70);
+        assertThat(game.minimumPlayTimeMinutes()).isEqualTo(40);
+        assertThat(game.maximumPlayTimeMinutes()).isEqualTo(90);
+        assertThat(game.suggestedMinimumAge()).isEqualTo(12);
+        assertThat(game.bestWith()).isEqualTo("Best with 3 players");
+        assertThat(game.recommendedWith()).isEqualTo("Recommended with 2–4 players");
+        assertThat(game.languageDependenceLevel()).isEqualTo(2);
+        assertThat(game.weightVotes()).isEqualTo(987);
+        assertThat(game.families()).containsExactly("Animals: Birds");
         assertThat(game.imageUrl()).endsWith("example-large.jpg");
         assertThat(game.averageRating()).isEqualByComparingTo("8.1");
         assertThat(game.averageWeight()).isEqualByComparingTo("2.5");

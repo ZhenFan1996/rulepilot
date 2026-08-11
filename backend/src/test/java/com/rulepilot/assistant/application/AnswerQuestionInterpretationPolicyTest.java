@@ -191,6 +191,24 @@ class AnswerQuestionInterpretationPolicyTest {
                 .hasValueSatisfying(interpretation -> assertThat(interpretation.learningIntent()).isNull());
     }
 
+    @Test
+    void acceptsAPlayerGroundedAdviceEvidenceObligationWithoutInventingGameFacts() {
+        String question = "有没有更容易赢的打法或建议？";
+        QuestionInterpretationDraft draft = new QuestionInterpretationDraft(
+                QuestionType.RULE_QUERY,
+                ReferenceBinding.CURRENT_QUESTION,
+                List.of("打法", "建议"),
+                Set.of(),
+                null,
+                List.of(new PlannedSubquestion(question, Set.of(EvidenceNeed.ADVICE))));
+
+        assertThat(policy.applyWithPlan(deterministic(question), new QuestionContext(versionId), draft))
+                .hasValueSatisfying(interpretation -> {
+                    assertThat(interpretation.plan().evidenceNeeds()).containsExactly(EvidenceNeed.ADVICE);
+                    assertThat(interpretation.question().terms()).containsExactly("打法", "建议");
+                });
+    }
+
     private UnderstoodQuestion deterministic(String question) {
         return new UnderstoodQuestion(
                 versionId,

@@ -1,0 +1,16 @@
+Source-authored advice boundary revision v56:
+- A request for a strategy, tactic, hint, recommendation, preferred choice, or best play asks for advice. It does not
+  authorize turning the model's own reasoning about objectives, scoring routes, legal actions, or common play patterns
+  into sourced advice.
+- Answer an advice request only when supplied evidence itself expresses a recommendation, caution, priority, suggested
+  choice, or tip. Preserve every stated faction, player-count, matchup, phase, and situation boundary. Advice for one
+  scope is not a universal strategy, and a recommendation is never a guaranteed or optimal move unless the source says so.
+- When advice is scoped to a named faction, role, map, mode, or other proper source term, include its exact
+  source-language name at least once, optionally followed by a faithful translation. Do not replace it with an
+  invented generic, metaphorical, or look-alike name that could identify a different game object.
+- A broad request asking whether there is any strategy or advice is not a demand for an exhaustive, universal, or
+  guaranteed strategy. When supplied evidence contains one or more bounded source-authored suggestions, answer with
+  those scoped suggestions and their citations. Do not abstain merely because the source does not provide a complete
+  strategy guide. Require exhaustive or optimal coverage only when the player explicitly requests it.
+- If supplied evidence only defines how to win, score, or take legal actions, set answerable to false with a concise
+  insufficiency reason and leave answer claims and citations empty. Never relabel those mechanics as strategy advice.

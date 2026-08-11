@@ -69,6 +69,26 @@ class BoardGameRecommendationSelectorTest {
     }
 
     @Test
+    void appliesTheRequestedBggRankingTypeToEveryCandidateRegardlessOfItsDiscoveryPath() {
+        RecommendationProfile partyProfile = new RecommendationProfile(
+                2, null, null, BggGameType.PARTY, InteractionPreference.ANY);
+
+        assertThat(selector.eligible(
+                        game(1, 45, new BigDecimal("1.5"), List.of("Voting"), BggGameType.PARTY),
+                        partyProfile))
+                .isTrue();
+        assertThat(selector.eligible(
+                        game(2, 45, new BigDecimal("2.0"), List.of("Pattern Building"), BggGameType.ABSTRACT),
+                        partyProfile))
+                .isFalse();
+        assertThat(selector.eligible(
+                        game(3, 45, new BigDecimal("2.0"), List.of("Set Collection"), null),
+                        partyProfile))
+                .as("unknown ranking type cannot satisfy an explicit type request")
+                .isFalse();
+    }
+
+    @Test
     void broadBrowseFiltersExcludedAndIneligibleGamesWithoutReorderingTheRemainingPool() {
         RecommendationProfile profile = new RecommendationProfile(
                 4, 60, null, BggGameType.ALL, InteractionPreference.ANY);
@@ -85,8 +105,25 @@ class BoardGameRecommendationSelectorTest {
     }
 
     private Game game(int id, int maximumMinutes, BigDecimal weight, List<String> mechanics) {
+        return game(id, maximumMinutes, weight, mechanics, BggGameType.ABSTRACT);
+    }
+
+    private Game game(
+            int id,
+            int maximumMinutes,
+            BigDecimal weight,
+            List<String> mechanics,
+            BggGameType type) {
         return new Game(
-                new Ranking(id, "Game " + id, 2024, id, new BigDecimal("7.0"), new BigDecimal("7.3"), 500),
+                new Ranking(
+                        id,
+                        "Game " + id,
+                        2024,
+                        id,
+                        new BigDecimal("7.0"),
+                        new BigDecimal("7.3"),
+                        500,
+                        type == null ? List.of() : List.of(type)),
                 new Details(
                         "Game " + id,
                         "",

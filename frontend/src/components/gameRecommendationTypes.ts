@@ -26,9 +26,20 @@ export type RecommendationGame = {
   minPlayers: number | null
   maxPlayers: number | null
   playingTimeMinutes: number | null
+  minimumPlayTimeMinutes?: number | null
+  maximumPlayTimeMinutes?: number | null
+  minimumAge?: number | null
+  suggestedMinimumAge?: number | null
+  bestWith?: string
+  recommendedWith?: string
+  languageDependenceLevel?: number | null
   averageWeight: number | null
+  weightVotes?: number | null
   categories: string[]
   mechanics: string[]
+  families?: string[]
+  designers?: string[]
+  publishers?: string[]
   bggUrl: string
 }
 
@@ -57,7 +68,13 @@ export type RecommendationAgentResponse = {
   candidatesEvaluated: number
   userModel?: {
     summary: string
-    hypotheses: { text: string; confidence: 'low' | 'medium' | 'high'; basedOn: string }[]
+    hypotheses: {
+      field?: string
+      value?: string
+      text: string
+      confidence: 'low' | 'medium' | 'high'
+      basedOn: string
+    }[]
   }
   researchSources?: ResearchSource[]
   harness?: {

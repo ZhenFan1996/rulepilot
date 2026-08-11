@@ -77,4 +77,16 @@ class ModuleArchitectureTest {
                 .resideInAPackage("com.rulepilot.recommendation..")
                 .check(productionClasses);
     }
+
+    @Test
+    void agentOrchestratorsDoNotOwnRegexEngines() {
+        noClasses()
+                .that()
+                .haveSimpleNameEndingWith("Agent")
+                .should()
+                .dependOnClassesThat()
+                .resideInAPackage("java.util.regex..")
+                .because("semantic interpretation belongs to structured model decisions, not title-specific regex guards")
+                .check(productionClasses);
+    }
 }

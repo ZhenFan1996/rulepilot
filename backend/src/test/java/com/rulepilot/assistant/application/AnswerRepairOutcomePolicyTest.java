@@ -15,43 +15,38 @@ import org.junit.jupiter.api.Test;
 
 class AnswerRepairOutcomePolicyTest {
 
+    private final UUID citationId = UUID.randomUUID();
+
     @Test
-    void keeps_player_safe_insufficiency_wording_for_visual_repairs() {
-        assertThat(AnswerRepairOutcomePolicy.insufficientRepairMessage(List.of("VISUAL_IDENTITY: icon")))
-                .isEqualTo("图标对应的规则资源无法从现有证据中可靠确定。");
+    void usesOneGenericMessageForARepairThatStillFailsPublication() {
+        assertThat(AnswerRepairOutcomePolicy.insufficientRepairMessage(List.of("diagnostic")))
+                .isEqualTo("回答修订后仍无法通过发布校验。");
     }
 
     @Test
-    void retains_the_existing_publication_guard_order_after_repair() {
-        UUID chunkId = UUID.randomUUID();
-        ModelRequest request = request(
-                "What happens next?",
-                new EvidenceInput(chunkId, "RULES", "Next", "After this action, continue the turn.", 3, 3));
-        ModelDraft internalReference = new ModelDraft(
-                "See [E12].", "Continue the turn.", List.of(chunkId), List.of(), "HIGH");
-        ModelDraft conflated = new ModelDraft(
-                "需要资源。", "该图标表示至少两张手牌才能发动。", List.of(chunkId), List.of(), "HIGH");
-        ModelDraft safe = answerable(chunkId);
+    void blocksRemainingInternalEvidenceReferences() {
+        var failure = AnswerRepairOutcomePolicy.publicationFailure(
+                request(), draft("See evidence E1.", "Internal reference remains."));
 
-        assertThat(AnswerRepairOutcomePolicy.publicationFailure(request, internalReference))
-                .contains(new AnswerRepairOutcomePolicy.PublicationFailure(
-                        AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。"));
-        assertThat(AnswerRepairOutcomePolicy.publicationFailure(request, conflated))
-                .contains(new AnswerRepairOutcomePolicy.PublicationFailure(
-                        AnswerStatus.INVALID_MODEL_OUTPUT, "回答混淆了规则资源与手牌数量，未向玩家发布。"));
-        assertThat(AnswerRepairOutcomePolicy.publicationFailure(request, safe)).isEmpty();
+        assertThat(failure).contains(new AnswerRepairOutcomePolicy.PublicationFailure(
+                AnswerStatus.INVALID_MODEL_OUTPUT, "回答包含内部证据标识，未向玩家发布。"));
     }
 
-    private ModelRequest request(String question, EvidenceInput evidence) {
+    @Test
+    void leavesSemanticPublicationJudgmentToTheCritic() {
+        assertThat(AnswerRepairOutcomePolicy.publicationFailure(
+                request(), draft("Direct verdict.", "A possibly incorrect semantic claim.")))
+                .isEmpty();
+    }
+
+    private ModelDraft draft(String verdict, String explanation) {
+        return new ModelDraft(verdict, explanation, List.of(citationId), List.of(), "HIGH");
+    }
+
+    private ModelRequest request() {
         return new ModelRequest(
-                question,
-                QuestionType.RULE_QUERY,
-                new AnswerContext(null, null, PlayerLocale.ZH_CN),
-                List.of(evidence));
-    }
-
-    private ModelDraft answerable(UUID chunkId) {
-        return new ModelDraft(
-                "继续行动。", "按规则继续行动。", List.of(chunkId), List.of(), "HIGH");
+                "Question", QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citationId, "RULE", "Rule", "Evidence.", 1, 1)));
     }
 }

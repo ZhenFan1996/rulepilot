@@ -4,6 +4,7 @@ import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel.QuestionInterpretationDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ReferenceBinding;
 import com.rulepilot.assistant.RuleAnswerModel.PlannedSubquestion;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.UnderstoodQuestion;
 import java.text.Normalizer;
@@ -46,12 +47,21 @@ final class AnswerQuestionInterpretationPolicy {
         LearningIntent plannedLearningIntent = context.learningIntent() == null
                 ? draft.learningIntent()
                 : context.learningIntent();
+        AnswerAid plannedAid = context.learningIntent() == null
+                ? draft.answerAid()
+                : AnswerAid.forLearningIntent(context.learningIntent());
+        AnswerAid intentAid = AnswerAid.forLearningIntent(draft.learningIntent());
+        if (intentAid != AnswerAid.NONE && draft.answerAid() != intentAid) return Optional.empty();
         if (understood.needsClarification()) {
             return Optional.of(new Interpretation(understood, null, plannedLearningIntent));
         }
         Optional<AnswerQuestionPlan> plan = groundedPlan(
                 draft.subquestions(), groundingText, deterministic.originalQuestion());
-        return plan.map(value -> new Interpretation(understood, value, plannedLearningIntent));
+        return plan.map(value -> new Interpretation(
+                understood,
+                new AnswerQuestionPlan(
+                        value.subquestions(), value.agentPlanned(), plannedAid, draft.referenceBinding()),
+                plannedLearningIntent));
     }
 
     private boolean available(ReferenceBinding binding, QuestionContext context) {

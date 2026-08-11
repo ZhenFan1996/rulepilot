@@ -422,7 +422,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         List<HybridEvidenceHit> evidence = admission.evidence();
         ModelRequest modelRequest;
         try {
-            modelRequest = modelRequestFactory.create(interpretedQuestion, context, evidence);
+            modelRequest = modelRequestFactory.create(interpretedQuestion, context, evidence, questionPlan);
         } catch (RuleAnswerModelTimeoutException exception) {
             return safe(context.documentVersionId(), AnswerStatus.MODEL_TIMEOUT, "回答生成超时，可以稍后重试或直接查看规则引用。");
         } catch (RuntimeException exception) {
@@ -911,7 +911,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<RuleCalculation> resolveCalculations(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.calculations().isEmpty()) return List.of();
+        if (draft.calculations().isEmpty() && !calculationResolver.requiresCalculation(modelRequest)) {
+            return List.of();
+        }
         String expressions = draft.calculations().stream()
                 .map(calculation -> calculation == null ? "" : calculation.expression())
                 .collect(java.util.stream.Collectors.joining(" "));
@@ -927,7 +929,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<RuleSituationCheck> resolveSituationChecks(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        return List.of();
+        return situationCheckResolver.resolve(modelRequest, draft);
     }
 
     private List<RuleWalkthroughStep> resolveWalkthrough(
@@ -941,13 +943,9 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
-                walkthroughResolver.requiresDependencyTrace(modelRequest)
-                        ? "traceRuleDependencies"
-                        : "buildRuleWalkthrough",
+                "buildRuleWalkthrough",
                 estimateTokens(steps),
-                walkthroughResolver.requiresDependencyTrace(modelRequest)
-                        ? "Cited prerequisite-to-consequence rule chain validated"
-                        : "Cited rule walkthrough built with explicit ordering basis",
+                "Cited rule walkthrough schema and evidence scope validated",
                 () -> walkthroughResolver.resolve(modelRequest, draft),
                 results -> results.size() * 16);
     }
@@ -1026,8 +1024,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<com.rulepilot.assistant.domain.RulePriorityResolution> resolveRulePriority(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.priorityResolutions().isEmpty()
-                && !AnswerRulePriorityResolver.asksForPriority(modelRequest.question())) {
+        if (draft.priorityResolutions().isEmpty() && !rulePriorityResolver.requiresRulePriority(modelRequest)) {
             return List.of();
         }
         String resolutions = draft.priorityResolutions().stream()
@@ -1036,21 +1033,16 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         return invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,
-                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
-                        ? "checkRuleConflicts"
-                        : "resolveRulePriority",
+                "resolveRulePriority",
                 estimateTokens(resolutions),
-                AnswerRulePriorityResolver.asksForPriority(modelRequest.question())
-                        ? "Cited priority or non-conflicting scope distinction validated"
-                        : "Cited rule priority relationships validated",
+                "Cited rule-priority schema and evidence scope validated",
                 () -> rulePriorityResolver.resolve(modelRequest, draft),
                 results -> results.size() * 20);
     }
 
     private List<com.rulepilot.assistant.domain.RuleTimingResolution> resolveTiming(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.timingResolutions().isEmpty()
-                && !AnswerTimingResolver.asksForTimingOrder(modelRequest.question())) {
+        if (draft.timingResolutions().isEmpty() && !timingResolver.requiresTiming(modelRequest)) {
             return List.of();
         }
         String resolutions = draft.timingResolutions().stream()
@@ -1069,8 +1061,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<com.rulepilot.assistant.domain.RuleTieResolution> resolveTies(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.tieResolutions().isEmpty()
-                && !AnswerTieResolver.asksForTieResolution(modelRequest.question())) {
+        if (draft.tieResolutions().isEmpty() && !tieResolver.requiresTie(modelRequest)) {
             return List.of();
         }
         String resolutions = draft.tieResolutions().stream()
@@ -1089,7 +1080,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<com.rulepilot.assistant.domain.RuleScopeResolution> resolveScope(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.scopeResolutions().isEmpty() && !AnswerScopeResolver.asksForScope(modelRequest.question())) {
+        if (draft.scopeResolutions().isEmpty() && !scopeResolver.requiresScope(modelRequest)) {
             return List.of();
         }
         String resolutions = draft.scopeResolutions().stream()
@@ -1109,7 +1100,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     private List<com.rulepilot.assistant.domain.RuleConceptComparison> resolveConceptComparisons(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
         if (draft.conceptComparisons().isEmpty()
-                && !AnswerConceptComparisonResolver.asksForComparison(modelRequest.question())) {
+                && !conceptComparisonResolver.requiresConceptComparison(modelRequest)) {
             return List.of();
         }
         String comparisons = draft.conceptComparisons().stream()
@@ -1128,7 +1119,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
 
     private List<com.rulepilot.assistant.domain.RuleOption> resolveRuleOptions(
             UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (draft.ruleOptions().isEmpty() && !AnswerRuleOptionResolver.asksForOptions(modelRequest.question())) {
+        if (draft.ruleOptions().isEmpty() && !ruleOptionResolver.requiresRuleOptions(modelRequest)) {
             return List.of();
         }
         String options = draft.ruleOptions().stream()
@@ -1158,7 +1149,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
     }
 
     private void verifyPermissionRuling(UUID assistantRunId, ModelRequest modelRequest, ModelDraft draft) {
-        if (!AnswerPermissionResolver.asksForPermission(modelRequest.question())) return;
+        if (!AnswerPermissionResolver.requiresPermission(modelRequest)) return;
         invocations.invoke(
                 assistantRunId,
                 ActivityType.TOOL,

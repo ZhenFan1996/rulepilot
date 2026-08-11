@@ -98,9 +98,9 @@ class BggRecommendationAgentControllerTest {
                 "2-4",
                 2,
                 1_000,
-                List.of(),
-                List.of(),
-                List.of());
+                List.of("Animals: Birds"),
+                List.of("Elizabeth Hargrave"),
+                List.of("Stonemaier Games"));
         when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
@@ -134,6 +134,17 @@ class BggRecommendationAgentControllerTest {
             assertThat(game.game().nameLocalized()).isTrue();
             assertThat(game.game().categories()).containsExactly("动物");
             assertThat(game.game().mechanics()).containsExactly("卡牌轮抽");
+            assertThat(game.game().minimumPlayTimeMinutes()).isEqualTo(40);
+            assertThat(game.game().maximumPlayTimeMinutes()).isEqualTo(70);
+            assertThat(game.game().minimumAge()).isEqualTo(10);
+            assertThat(game.game().suggestedMinimumAge()).isEqualTo(10);
+            assertThat(game.game().bestWith()).isEqualTo("3");
+            assertThat(game.game().recommendedWith()).isEqualTo("2-4");
+            assertThat(game.game().languageDependenceLevel()).isEqualTo(2);
+            assertThat(game.game().weightVotes()).isEqualTo(1_000);
+            assertThat(game.game().families()).containsExactly("Animals: Birds");
+            assertThat(game.game().designers()).containsExactly("Elizabeth Hargrave");
+            assertThat(game.game().publishers()).containsExactly("Stonemaier Games");
             assertThat(game.matches())
                     .containsExactly("支持 4 人游玩", "与参考游戏共有的 BGG 机制/类型：动物、卡牌轮抽");
             assertThat(game.reasons()).singleElement().satisfies(reason ->

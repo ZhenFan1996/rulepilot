@@ -17,11 +17,25 @@ const labels = computed(() => locale.value === 'zh-CN'
   ? {
       bgg: '为什么适合', inferred: '结合你刚才说的', researched: '进一步了解', tradeoff: '选择前留意',
       introduce: '介绍一下', select: '选这款，找规则书', details: '查看完整资料', source: '来源', noCover: '封面加载中', cover: '的 BGG 封面',
+      players: (min: number, max: number) => `${min}–${max} 人`, minutes: (min: number, max: number) => min === max ? `约 ${max} 分钟` : `${min}–${max} 分钟`, weight: (value: number) => `复杂度 ${value.toFixed(1)}`, designer: (value: string) => `设计：${value}`,
     }
   : {
       bgg: 'Why it fits', inferred: 'Based on what you said', researched: 'A closer look', tradeoff: 'Worth checking',
       introduce: 'Tell me more', select: 'Choose and find rulebook', details: 'View full details', source: 'Source', noCover: 'Cover loading', cover: ' BGG cover',
+      players: (min: number, max: number) => `${min}–${max} players`, minutes: (min: number, max: number) => min === max ? `About ${max} min` : `${min}–${max} min`, weight: (value: number) => `Weight ${value.toFixed(1)}`, designer: (value: string) => `By ${value}`,
     })
+
+const quickFacts = computed(() => {
+  const game = props.entry.game
+  const values: string[] = []
+  if (game.minPlayers !== null && game.maxPlayers !== null) values.push(labels.value.players(game.minPlayers, game.maxPlayers))
+  const minimum = game.minimumPlayTimeMinutes ?? game.playingTimeMinutes
+  const maximum = game.maximumPlayTimeMinutes ?? game.playingTimeMinutes
+  if (minimum !== null && maximum !== null) values.push(labels.value.minutes(minimum, maximum))
+  if (game.averageWeight !== null) values.push(labels.value.weight(game.averageWeight))
+  if (game.designers?.[0]) values.push(labels.value.designer(game.designers[0]))
+  return values
+})
 
 const groupedReasons = computed(() => {
   const reasons = props.entry.reasons?.length
@@ -52,6 +66,7 @@ function hideBrokenImage(event: Event) {
       </div>
       <h3 class="mt-3 line-clamp-2 font-display text-xl font-semibold leading-tight">{{ entry.game.name }}</h3>
       <p v-if="entry.game.nameLocalized" class="mt-1 line-clamp-1 text-xs text-ink/45">{{ entry.game.originalName }}</p>
+      <p v-if="quickFacts.length" class="mt-2 line-clamp-2 text-xs leading-5 text-ink/55">{{ quickFacts.join(' · ') }}</p>
     </button>
 
     <section v-if="groupedReasons.bgg_fact.length" class="mt-4">

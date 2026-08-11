@@ -185,21 +185,23 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void requests_a_tighter_retry_for_a_tall_icon_legend_but_not_for_a_worked_diagram_or_vertical_card() {
+    void viewportRetryUsesAreaRatherThanLabelsOrAspectSpecificSemanticRules() {
         var tallLegend = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 2, "资源图标图例", "五种资源名称下方分别是彩色立方体图标", 45, 510, 300, 483, List.of(UUID.randomUUID()));
         var workedDiagram = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 4, "建造示例", "建筑卡、资源方块和箭头展示建造前后状态", 350, 420, 650, 580, List.of(UUID.randomUUID()));
         var verticalCard = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 3, "纪念碑卡牌解剖图", "一张竖版卡牌标出标题、插画、资源图案和能力区域", 650, 308, 350, 692, List.of(UUID.randomUUID()));
+        var oversized = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
+                5, "opaque", "opaque", 50, 50, 900, 800, List.of(UUID.randomUUID()));
 
-        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(tallLegend)).isTrue();
-        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(workedDiagram)).isFalse();
-        assertThat(VisualCropAcceptancePolicy.requiresTighterIconViewport(verticalCard)).isFalse();
-        assertThat(VisualCropAcceptancePolicy.withoutOversizedIconLegends(List.of(tallLegend, workedDiagram)))
-                .containsExactly(workedDiagram);
-        assertThat(VisualCropAcceptancePolicy.tightIconViewportInstruction())
-                .contains("tighter rectangle", "numbered prose");
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(tallLegend)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(workedDiagram)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(verticalCard)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(oversized)).isTrue();
+        assertThat(VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
+                        List.of(tallLegend, workedDiagram, verticalCard, oversized)))
+                .containsExactly(tallLegend, workedDiagram, verticalCard);
     }
 
     @Test
@@ -219,7 +221,7 @@ class SpringAiVisualRegionLocatorTest {
     }
 
     @Test
-    void requests_a_tighter_retry_for_a_tall_score_example_column_but_keeps_a_compact_score_row_and_portrait_component_card() {
+    void compactCropsAreNotReclassifiedFromGameSpecificWordsInTheirDescriptions() {
         var stackedScoreExamples = new com.rulepilot.teaching.VisualRegionLocator.LocatedRegion(
                 11,
                 "鲑鱼计分卡示例",
@@ -248,14 +250,14 @@ class SpringAiVisualRegionLocatorTest {
                 180,
                 List.of(UUID.randomUUID()));
 
-        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(stackedScoreExamples)).isTrue();
-        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(portraitCard)).isFalse();
-        assertThat(VisualCropAcceptancePolicy.requiresTighterScoreExampleViewport(compactScoreRow)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(stackedScoreExamples)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(portraitCard)).isFalse();
+        assertThat(VisualCropAcceptancePolicy.requiresTighterReaderViewport(compactScoreRow)).isFalse();
         assertThat(VisualCropAcceptancePolicy.withoutOversizedReaderViewports(
                         List.of(stackedScoreExamples, compactScoreRow, portraitCard)))
-                .containsExactly(compactScoreRow, portraitCard);
+                .containsExactly(stackedScoreExamples, compactScoreRow, portraitCard);
         assertThat(VisualCropAcceptancePolicy.tightReaderViewportInstruction())
-                .contains("neighbouring score examples", "another animal's examples");
+                .contains("directly supports the cited claim", "unrelated surrounding content");
     }
 
     @Test

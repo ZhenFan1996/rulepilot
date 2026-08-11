@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class TeachingVisualEvidenceSelectorTest {
 
     @Test
-    void selectsTheMostTopicRelevantEvidencePagesBeforeEarlierGenericPages() {
+    void prioritizesExplicitPlannerPageBindingsWithoutGuessingFromHeadingVocabulary() {
         PlannedSection planned = new PlannedSection(
                 1,
                 "orbiter-setup",
@@ -22,7 +22,8 @@ class TeachingVisualEvidenceSelectorTest {
                 true,
                 true,
                 List.of("orbiter supply"),
-                List.of("components"));
+                List.of("components"),
+                List.of(2, 3));
         UUID versionId = UUID.randomUUID();
         RuleEvidence generic = evidence(versionId, "Components", 5, new RulePageImage(5, "image/jpeg", new byte[] {5}, 800, 1200));
         RuleEvidence bestMatch = evidence(versionId, "Orbiter supply", 2, new RulePageImage(2, "image/jpeg", new byte[] {2}, 800, 1200));

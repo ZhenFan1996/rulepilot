@@ -4,12 +4,8 @@ import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.teaching.domain.TeachingPlan;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -22,19 +18,10 @@ final class TeachingEvidenceRetrievalPolicy {
 
     private static final int MAX_EVIDENCE_PER_SECTION = 10;
     private static final int MAX_OBJECTIVE_QUERY_LENGTH = 480;
-    private static final Pattern QUERY_SEPARATOR = Pattern.compile("[^\\p{L}\\p{N}'’-]+");
-    private static final Set<String> ENGLISH_QUERY_FILLER = Set.of(
-            "a", "an", "and", "are", "do", "does", "for", "how", "is", "of", "the", "to", "what", "when",
-            "with", "you", "your");
-
     private TeachingEvidenceRetrievalPolicy() {}
 
     static String focusedQuery(String query) {
-        String focused = Stream.of(QUERY_SEPARATOR.split(query.strip()))
-                .filter(token -> !token.isBlank())
-                .filter(token -> !ENGLISH_QUERY_FILLER.contains(token.toLowerCase(Locale.ROOT)))
-                .collect(Collectors.joining(" "));
-        return focused.isBlank() ? query.strip() : focused;
+        return query.strip();
     }
 
     static List<String> queries(TeachingPlan.PlannedSection topic, int limit) {

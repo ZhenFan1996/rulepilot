@@ -24,11 +24,19 @@ interface BggGameDetails {
   minPlayers: number | null
   maxPlayers: number | null
   playingTimeMinutes: number | null
+  minimumPlayTimeMinutes: number | null
+  maximumPlayTimeMinutes: number | null
   minimumAge: number | null
+  suggestedMinimumAge: number | null
+  bestWith: string
+  recommendedWith: string
+  languageDependenceLevel: number | null
   averageRating: number | null
   averageWeight: number | null
+  weightVotes: number | null
   categories: string[]
   mechanics: string[]
+  families: string[]
   designers: string[]
   publishers: string[]
   editionImages: BggEditionImage[]
@@ -50,15 +58,15 @@ let requestSequence = 0
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '桌游详细资料', close: '关闭桌游资料', eyebrow: 'BGG 桌游资料', loading: '正在读取详细资料…', error: '暂时无法读取详细资料。', retry: '重试',
   select: '选这款，继续找规则书', source: '查看 BGG 原始资料', translated: '译自 BGG 原文', translating: '原文已显示，中文资料正在补齐…',
-  unknownYear: '发行年份未知', designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别', editions: '版本包装图',
+  unknownYear: '发行年份未知', designers: '设计师', publishers: '出版社', mechanics: '机制', categories: '类别', families: '系列与主题', communityFit: 'BGG 玩家投票', editions: '版本包装图',
   evidence: '这些资料用于识别和选游戏；后续讲解与答疑只引用你确认的规则书。',
-  players: (min: number, max: number) => `${min}–${max} 人`, minutes: (value: number) => `约 ${value} 分钟`, age: (value: number) => `${value} 岁以上`, rating: (value: number) => `BGG 评分 ${value.toFixed(1)}`, weight: (value: number) => `复杂度 ${value.toFixed(1)} / 5`,
+  players: (min: number, max: number) => `${min}–${max} 人`, minutes: (value: number) => `约 ${value} 分钟`, minutesRange: (min: number, max: number) => `${min}–${max} 分钟`, age: (value: number) => `官方 ${value} 岁以上`, suggestedAge: (value: number) => `玩家建议 ${value} 岁以上`, language: (value: number) => `语言依赖 ${value} / 5`, rating: (value: number) => `BGG 评分 ${value.toFixed(1)}`, weight: (value: number, votes: number | null) => `复杂度 ${value.toFixed(1)} / 5${votes ? `（${votes} 票）` : ''}`,
 } : {
   dialog: 'Game details', close: 'Close game details', eyebrow: 'BoardGameGeek details', loading: 'Loading full details…', error: 'Full details are temporarily unavailable.', retry: 'Retry',
   select: 'Choose and find its rulebook', source: 'View original BGG data', translated: 'Translated from BGG', translating: 'Source details are visible while localization finishes…',
-  unknownYear: 'Publication year unavailable', designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories', editions: 'Edition packaging',
+  unknownYear: 'Publication year unavailable', designers: 'Designers', publishers: 'Publishers', mechanics: 'Mechanics', categories: 'Categories', families: 'Families and themes', communityFit: 'BGG player polls', editions: 'Edition packaging',
   evidence: 'These details identify and help select the game. Teaching and Q&A cite only the rulebook you confirm.',
-  players: (min: number, max: number) => `${min}–${max} players`, minutes: (value: number) => `About ${value} min`, age: (value: number) => `Ages ${value}+`, rating: (value: number) => `BGG rating ${value.toFixed(1)}`, weight: (value: number) => `Weight ${value.toFixed(1)} / 5`,
+  players: (min: number, max: number) => `${min}–${max} players`, minutes: (value: number) => `About ${value} min`, minutesRange: (min: number, max: number) => `${min}–${max} min`, age: (value: number) => `Official age ${value}+`, suggestedAge: (value: number) => `Players suggest age ${value}+`, language: (value: number) => `Language dependence ${value} / 5`, rating: (value: number) => `BGG rating ${value.toFixed(1)}`, weight: (value: number, votes: number | null) => `Weight ${value.toFixed(1)} / 5${votes ? ` (${votes} votes)` : ''}`,
 })
 
 const stats = computed(() => {
@@ -66,10 +74,13 @@ const stats = computed(() => {
   if (!value) return []
   const result: string[] = []
   if (value.minPlayers !== null && value.maxPlayers !== null) result.push(copy.value.players(value.minPlayers, value.maxPlayers))
-  if (value.playingTimeMinutes !== null) result.push(copy.value.minutes(value.playingTimeMinutes))
+  if (value.minimumPlayTimeMinutes !== null && value.maximumPlayTimeMinutes !== null && value.minimumPlayTimeMinutes !== value.maximumPlayTimeMinutes) result.push(copy.value.minutesRange(value.minimumPlayTimeMinutes, value.maximumPlayTimeMinutes))
+  else if (value.playingTimeMinutes !== null) result.push(copy.value.minutes(value.playingTimeMinutes))
   if (value.minimumAge !== null) result.push(copy.value.age(value.minimumAge))
+  if (value.suggestedMinimumAge !== null && value.suggestedMinimumAge !== value.minimumAge) result.push(copy.value.suggestedAge(value.suggestedMinimumAge))
+  if (value.languageDependenceLevel !== null) result.push(copy.value.language(value.languageDependenceLevel))
   if (value.averageRating !== null) result.push(copy.value.rating(value.averageRating))
-  if (value.averageWeight !== null) result.push(copy.value.weight(value.averageWeight))
+  if (value.averageWeight !== null) result.push(copy.value.weight(value.averageWeight, value.weightVotes))
   return result
 })
 
@@ -86,13 +97,21 @@ function normalize(value: Partial<BggGameDetails>): BggGameDetails {
     minPlayers: value.minPlayers ?? props.game.minPlayers,
     maxPlayers: value.maxPlayers ?? props.game.maxPlayers,
     playingTimeMinutes: value.playingTimeMinutes ?? props.game.playingTimeMinutes,
-    minimumAge: value.minimumAge ?? null,
+    minimumPlayTimeMinutes: value.minimumPlayTimeMinutes ?? props.game.minimumPlayTimeMinutes ?? null,
+    maximumPlayTimeMinutes: value.maximumPlayTimeMinutes ?? props.game.maximumPlayTimeMinutes ?? null,
+    minimumAge: value.minimumAge ?? props.game.minimumAge ?? null,
+    suggestedMinimumAge: value.suggestedMinimumAge ?? props.game.suggestedMinimumAge ?? null,
+    bestWith: value.bestWith ?? props.game.bestWith ?? '',
+    recommendedWith: value.recommendedWith ?? props.game.recommendedWith ?? '',
+    languageDependenceLevel: value.languageDependenceLevel ?? props.game.languageDependenceLevel ?? null,
     averageRating: value.averageRating ?? props.game.averageRating,
     averageWeight: value.averageWeight ?? props.game.averageWeight,
+    weightVotes: value.weightVotes ?? props.game.weightVotes ?? null,
     categories: value.categories ?? props.game.categories,
     mechanics: value.mechanics ?? props.game.mechanics,
-    designers: value.designers ?? [],
-    publishers: value.publishers ?? [],
+    families: value.families ?? props.game.families ?? [],
+    designers: value.designers ?? props.game.designers ?? [],
+    publishers: value.publishers ?? props.game.publishers ?? [],
     editionImages: value.editionImages ?? [],
     descriptionTranslated: value.descriptionTranslated ?? false,
     categoriesTranslated: value.categoriesTranslated ?? false,
@@ -170,6 +189,8 @@ watch(() => [props.open, props.game.bggId, locale.value] as const, ([open]) => {
             <div v-if="details.publishers.length"><dt class="font-semibold text-ink/45">{{ copy.publishers }}</dt><dd class="mt-1 leading-6">{{ details.publishers.join('、') }}</dd></div>
             <div v-if="details.mechanics.length"><dt class="font-semibold text-ink/45">{{ copy.mechanics }}</dt><dd class="mt-1 leading-6">{{ details.mechanics.join('、') }}</dd></div>
             <div v-if="details.categories.length"><dt class="font-semibold text-ink/45">{{ copy.categories }}</dt><dd class="mt-1 leading-6">{{ details.categories.join('、') }}</dd></div>
+            <div v-if="details.families.length"><dt class="font-semibold text-ink/45">{{ copy.families }}</dt><dd class="mt-1 leading-6">{{ details.families.join('、') }}</dd></div>
+            <div v-if="details.bestWith || details.recommendedWith"><dt class="font-semibold text-ink/45">{{ copy.communityFit }}</dt><dd class="mt-1 leading-6">{{ [details.bestWith, details.recommendedWith].filter(Boolean).join(' · ') }}</dd></div>
           </dl>
           <div v-if="details.editionImages.length" class="mt-6 border-t border-ink/10 pt-5">
             <h3 class="font-display text-xl font-semibold">{{ copy.editions }}</h3>

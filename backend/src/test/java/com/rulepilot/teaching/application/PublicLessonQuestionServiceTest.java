@@ -84,7 +84,7 @@ class PublicLessonQuestionServiceTest {
     }
 
     @Test
-    void returnsAnExactSamePageVisualWhenAnswerEvidenceUsesAnotherChunkFromTheSameRule() {
+    void doesNotGuessAVisualFromPageOverlapWhenAnswerAndLessonEvidenceDiffer() {
         UUID planId = UUID.randomUUID();
         UUID versionId = UUID.randomUUID();
         UUID lessonChunk = UUID.randomUUID();
@@ -145,10 +145,7 @@ class PublicLessonQuestionServiceTest {
                 new PublicLessonQuestionService.QuestionRequest("骑士的一个回合分成哪两个阶段？", null));
 
         assertThat(result).hasValueSatisfying(value -> {
-            assertThat(value.visualAids()).singleElement().satisfies(aid -> {
-                assertThat(aid.relatedStep()).isEqualTo("骑士回合的两个阶段");
-                assertThat(aid.visualFocus().label()).isEqualTo("骑士回合阶段列表");
-            });
+            assertThat(value.visualAids()).isEmpty();
             assertThat(value.examples()).isEmpty();
         });
     }
@@ -172,7 +169,12 @@ class PublicLessonQuestionServiceTest {
 
         assertThat(result).hasValueSatisfying(value -> {
             assertThat(value.answer().shortVerdict()).isEqualTo("Place the marker first.");
-            assertThat(value.visualAids()).isEmpty();
+            assertThat(value.visualAids()).singleElement().satisfies(aid -> {
+                assertThat(aid.relatedStep()).isEqualTo("Cited rulebook illustration");
+                assertThat(aid.visualFocus().label()).isEqualTo("Rulebook illustration");
+                assertThat(aid.visualFocus().visibleDescription())
+                        .isEqualTo("圆形标记位于带箭头的起始格旁");
+            });
             assertThat(value.examples()).isEmpty();
         });
     }
@@ -238,7 +240,7 @@ class PublicLessonQuestionServiceTest {
                 new IllustratedLesson.VisualFocus(
                         2, "标记图例", "圆形标记位于带箭头的起始格旁", 100, 100, 200, 200));
         IllustratedLesson.LessonStep sameEvidenceButUnrelatedVisual = new IllustratedLesson.LessonStep(
-                1, "传递先手卡", IllustratedLesson.TeachingMove.VISUAL, "将先手卡传给下一位玩家。", List.of(2), List.of(chunk),
+                1, "传递先手卡", IllustratedLesson.TeachingMove.VISUAL, "将先手卡传给下一位玩家。", List.of(2), List.of(unrelatedChunk),
                 new IllustratedLesson.VisualFocus(2, "先手卡", 400, 100, 200, 200));
         IllustratedLesson.LessonStep example = new IllustratedLesson.LessonStep(
                 3, "放置示例", IllustratedLesson.TeachingMove.EXAMPLE, "把一个标记放到起始格。", List.of(2), List.of(chunk));
