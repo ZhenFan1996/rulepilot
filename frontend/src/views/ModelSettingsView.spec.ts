@@ -16,9 +16,10 @@ describe('ModelSettingsView', () => {
         { id: 'qwen', configured: false, baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-vl-plus', apiKeyConfigured: false, visionCapable: true },
         { id: 'compatible', configured: false, baseUrl: 'http://localhost:11434/v1', model: 'local-model', apiKeyConfigured: false, visionCapable: false },
       ],
-      assignments: { teaching: 'deepseek', visual: 'gemini', answer: 'fake', critic: 'fake' },
+      assignments: { recommendation: 'deepseek', teaching: 'deepseek', visual: 'gemini', answer: 'fake', critic: 'fake' },
       revision: 1,
       volatileSecrets: true,
+      managedStartupAccess: true,
     }
     vi.stubGlobal('fetch', vi.fn().mockImplementation((input: string | URL | Request) => {
       const path = String(input)
@@ -48,6 +49,7 @@ describe('ModelSettingsView', () => {
     expect(wrapper.text()).toContain('规则书页面视觉')
     expect(wrapper.text()).toContain('Qwen')
     expect(wrapper.text()).toContain('基础讲解发布后')
+    expect(wrapper.text()).toContain('服务端白名单')
     expect(wrapper.get('input[autocomplete="new-password"]').attributes('type')).toBe('password')
     expect(wrapper.text()).not.toContain('secret')
 

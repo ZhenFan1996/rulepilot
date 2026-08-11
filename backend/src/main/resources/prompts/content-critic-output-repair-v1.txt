@@ -1,0 +1,13 @@
+The previous critic response violated the verdict schema. Re-evaluate the same claims against the same supplied
+evidence; do not copy or discuss the previous response.
+
+Return {"issues":[]} when there is no concrete material defect. Never place a supported, compatible, acceptable, or
+"no defect" verdict inside issues, and never set defectConfirmed=true merely to fill the array. Every item that remains
+in issues must contain all of these fields:
+- defectConfirmed: true;
+- type: exactly one allowed issue type from the system contract;
+- claimPosition: the positive position of the defective claim;
+- evidenceIds: only supplied E1, E2, ... references relevant to that claim;
+- summary: a concise description of the exact material mismatch.
+
+Return one complete schema-valid JSON object only.

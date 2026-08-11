@@ -61,6 +61,8 @@ const launchingPlanId = ref('')
 const deletingPlanId = ref('')
 const cleanupLoading = ref(false)
 const cleanupMessage = ref('')
+const retryingJourneyId = ref('')
+const journeyRetryErrors = ref<Record<string, string>>({})
 const showingAllVersions = ref(false)
 const planFilter = ref<PlanFilter>('READABLE')
 const now = ref(Date.now())
@@ -82,12 +84,16 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   rulebook: '规则书', downloading: '正在获取并核验规则书', reading: '规则书已保存，正在读取页面与建立检索',
   preparing: '规则书已可用，正在建立讲解计划并启动逐章生成', failed: '任务需要处理',
   progress: '已确认下载进度', openRulebook: '先读规则书', openSource: '查看任务入口',
+  retryPreparation: '重新准备讲解', retryingPreparation: '正在重新启动…',
+  retryFailed: '没有成功启动新的讲解准备任务，请稍后再试。',
 } : {
   eyebrow: 'In My Guides', title: 'Guides being prepared',
   detail: 'These entries come from persisted download, rulebook-reading, or guide-preparation work. Refreshing, leaving, or switching entry points will not lose them.',
   rulebook: 'Rulebook', downloading: 'Acquiring and verifying the rulebook', reading: 'Rulebook saved; reading pages and building retrieval data',
   preparing: 'Rulebook ready; building the guide plan and starting chapter generation', failed: 'This task needs attention',
   progress: 'Confirmed download progress', openRulebook: 'Read rulebook now', openSource: 'Open task entry',
+  retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
+  retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
 })
 const pendingJourneys = computed(() => buildPendingGuideJourneys(
   plans.value,
@@ -448,6 +454,48 @@ async function launch(planId: string) {
   }
 }
 
+async function retryPendingJourney(journey: (typeof pendingJourneys.value)[number]) {
+  if (retryingJourneyId.value || journey.retryAction !== 'PREPARE_TEACHING' || !journey.documentVersionId) return
+  retryingJourneyId.value = journey.id
+  const nextErrors = { ...journeyRetryErrors.value }
+  delete nextErrors[journey.id]
+  journeyRetryErrors.value = nextErrors
+  try {
+    const csrfResponse = await checkedFetch('/api/auth/csrf')
+    if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
+    const csrf = await csrfResponse.json() as CsrfResponse
+    const response = await checkedFetch(
+      `/api/v1/document-versions/${encodeURIComponent(journey.documentVersionId)}/teaching-plans`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token },
+        body: JSON.stringify({ learningGoal: null }),
+      },
+    )
+    if (!response.ok) throw new Error(pendingCopy.value.retryFailed)
+    const launch = await response.json() as { assistantRunId: string; state: string }
+    preparationRuns.value = [
+      ...preparationRuns.value.filter(run => run.id !== launch.assistantRunId),
+      {
+        id: launch.assistantRunId,
+        subjectId: journey.documentVersionId,
+        state: launch.state,
+        updatedAt: new Date().toISOString(),
+        lastErrorCode: null,
+      },
+    ]
+    scheduleJourneyRefresh()
+    await loadPlans(true)
+  } catch (error) {
+    journeyRetryErrors.value = {
+      ...journeyRetryErrors.value,
+      [journey.id]: error instanceof Error ? error.message : pendingCopy.value.retryFailed,
+    }
+  } finally {
+    retryingJourneyId.value = ''
+  }
+}
+
 async function deletePlan(plan: TeachingPlan) {
   if (deletingPlanId.value || cleanupLoading.value) return
   if (!window.confirm(t('lessons.delete.confirm', { title: displayPlanTitle(plan) }))) return
@@ -565,10 +613,12 @@ onBeforeUnmount(() => {
               <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo/10"><div class="h-full rounded-full bg-indigo" :style="{ width: `${journey.progress}%` }" /></div>
             </div>
             <div class="mt-4 flex flex-wrap gap-4 text-sm font-semibold text-indigo">
+              <button v-if="journey.retryAction === 'PREPARE_TEACHING'" type="button" :disabled="Boolean(retryingJourneyId)" class="inline-flex min-h-10 items-center rounded-lg bg-indigo px-4 text-white disabled:opacity-40" @click="retryPendingJourney(journey)">{{ retryingJourneyId === journey.id ? pendingCopy.retryingPreparation : pendingCopy.retryPreparation }}</button>
               <RouterLink v-if="journey.documentVersionId && journey.canReadRulebook" :to="{ name: 'rulebook-reader', params: { versionId: journey.documentVersionId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openRulebook }}</RouterLink>
               <RouterLink v-if="journey.importJobId" :to="{ name: 'teach', query: { importJob: journey.importJobId } }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
               <RouterLink v-else-if="journey.state === 'failed'" :to="{ name: 'teach' }" class="inline-flex min-h-10 items-center underline">{{ pendingCopy.openSource }}</RouterLink>
             </div>
+            <p v-if="journeyRetryErrors[journey.id]" class="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs leading-5 text-red-800" role="alert">{{ journeyRetryErrors[journey.id] }}</p>
           </li>
         </ol>
       </section>

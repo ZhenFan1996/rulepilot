@@ -60,6 +60,38 @@ class ConditionalGeneratedContentCriticTest {
     }
 
     @Test
+    void carriesTheContentOwnerThroughDiscoveryAndIndependentConfirmation() {
+        List<String> observedOwners = new ArrayList<>();
+        AtomicInteger calls = new AtomicInteger();
+        ContentCriticModel ownerScoped = new ContentCriticModel() {
+            @Override
+            public CritiqueDraft critique(ReviewRequest request) {
+                throw new AssertionError("thread-local startup critic must not be invoked");
+            }
+
+            @Override
+            public CritiqueDraft critique(ReviewRequest request, String ownerUsername) {
+                observedOwners.add(ownerUsername);
+                if (calls.getAndIncrement() == 0) {
+                    return new CritiqueDraft(List.of(new Issue(
+                            IssueType.MISSING_EXCEPTION,
+                            1,
+                            List.of(chunkId),
+                            "Confirm the cited exception independently.")));
+                }
+                return new CritiqueDraft(List.of());
+            }
+        };
+        var critic = critic(true, ownerScoped);
+
+        var review = critic.review(
+                request(ReviewMode.POST_PUBLICATION), ReviewRisk.HIGH_IMPACT, "alice");
+
+        assertThat(review.accepted()).isTrue();
+        assertThat(observedOwners).containsExactly("alice", "alice");
+    }
+
+    @Test
     void confirmsPostPublicationCandidatesWithOneIndependentAtomicCall() {
         AtomicInteger calls = new AtomicInteger();
         List<ReviewRequest> observed = new ArrayList<>();

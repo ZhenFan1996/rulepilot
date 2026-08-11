@@ -46,6 +46,7 @@ import com.rulepilot.modelconfig.adapter.out.ChatModelFactory;
 import com.rulepilot.retrieval.RuleEvidenceLookup;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
+import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import io.micrometer.observation.ObservationRegistry;
 import java.io.File;
 import java.io.IOException;
@@ -125,6 +126,95 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
                 "generatedAt", Instant.now().toString(),
                 "results", results,
                 "crossRulebookNegative", negative)) + "\n", StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void answersBoundedVisualTranscriptionsAcrossPaidProvidersWithoutOutsideGameKnowledge() throws Exception {
+        assumeTrue("true".equalsIgnoreCase(System.getenv("RULEPILOT_REAL_ANSWER_AGENT_EVAL")));
+        Path root = Path.of(System.getProperty("user.dir")).getParent();
+        List<VisualTranscriptionCase> cases = List.of(
+                new VisualTranscriptionCase(
+                        "visual-transcription-zh",
+                        "deepseek",
+                        "我从一个公开供应区拿走一种标记后，剩下的标记放哪里？",
+                        "玩家从任意公开供应区拿走一种标记的全部副本，然后把该供应区其余标记全部移到桌面中央的公共区。",
+                        PlayerLocale.ZH_CN,
+                        "公共区"),
+                new VisualTranscriptionCase(
+                        "visual-transcription-en",
+                        "qwen",
+                        "After I choose one action card, what happens to the unplayed cards?",
+                        "After choosing one action card, place every unplayed card face down in the discard area.",
+                        PlayerLocale.EN,
+                        "discard"));
+        List<Map<String, Object>> results = new ArrayList<>();
+        List<Map<String, Object>> raw = new ArrayList<>();
+
+        for (VisualTranscriptionCase case_ : cases) {
+            ProviderConfiguration configured = provider(case_.provider());
+            DirectAuditedInvocations audited = new DirectAuditedInvocations();
+            SpringAiRuleAnswerModel model = answerModel(configured, audited);
+            RuleAnswerRateLimiter limiter = mock(RuleAnswerRateLimiter.class);
+            when(limiter.acquireModel(any(String.class), any(), any(String.class))).thenReturn(() -> {});
+            AnswerModelGateway gateway = new AnswerModelGateway(model, limiter, audited);
+            UUID versionId = UUID.nameUUIDFromBytes(case_.caseId().getBytes(StandardCharsets.UTF_8));
+            RuleEvidenceHit source = new RuleEvidenceHit(
+                    UUID.randomUUID(),
+                    versionId,
+                    "VISUAL_TRANSCRIPTION",
+                    "Rendered rulebook page",
+                    PageFact.transcribedRuleEvidenceText(case_.factualSummary()),
+                    3,
+                    3,
+                    1.0);
+            HybridEvidenceHit evidence = new HybridEvidenceHit(source, 1.0, 1, null, false);
+            ModelRequest request = modelRequest(
+                    case_.question(), List.of(evidence), case_.locale(), Set.of(EvidenceNeed.DIRECT_RULE));
+            long started = System.nanoTime();
+            AnswerDraftComposer.Result prepared = new AnswerDraftComposer(gateway)
+                    .compose(UUID.randomUUID(), "agent-evaluation", null, request);
+            long latencyMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+
+            assertThat(prepared.ready())
+                    .as(configured.provider() + " should use a bounded image-page transcription as supplied evidence")
+                    .isTrue();
+            StructuredRuleAnswer answer = new AnswerPublicationValidator(new PolicyEvidenceVerifier())
+                    .publish(versionId, prepared.draft(), List.of(evidence));
+            assertThat(answer.status().publishesConclusion()).isTrue();
+            assertThat(answer.citations()).singleElement().satisfies(citation -> {
+                assertThat(citation.pageFrom()).isEqualTo(3);
+                assertThat(citation.excerpt()).startsWith("Visual-transcribed rule evidence");
+            });
+            assertThat(visibleText(answer).toLowerCase(Locale.ROOT)).contains(case_.expectedTerm().toLowerCase(Locale.ROOT));
+
+            results.add(Map.of(
+                    "caseId", case_.caseId(),
+                    "provider", configured.provider(),
+                    "model", configured.model(),
+                    "status", answer.status().name(),
+                    "citationPages", answer.citations().stream().map(citation -> citation.pageFrom()).toList(),
+                    "latencyMs", latencyMs,
+                    "withinLatencyBudget", latencyMs < 120_000));
+            raw.add(Map.of(
+                    "caseId", case_.caseId(),
+                    "providerResponses", List.copyOf(audited.rawAnswerProviderResponses),
+                    "visibleDrafts", List.copyOf(audited.rawAnswerDrafts),
+                    "publishedAnswer", visibleAnswer(answer)));
+        }
+
+        Path output = root.resolve(".local/agent-evaluation/answer-visual-transcription-real.json");
+        Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
+                "schemaVersion", 1,
+                "generatedAt", Instant.now().toString(),
+                "results", results,
+                "controls", Map.of(
+                        "imageBytesGivenToAnswerModel", false,
+                        "pageScopedVisualLedgerOnly", true,
+                        "outsideGameKnowledgeAllowed", false))) + "\n", StandardCharsets.UTF_8);
+        Files.writeString(
+                root.resolve(".local/agent-evaluation/answer-visual-transcription-raw-visible.json").toFile().toPath(),
+                mapper.writerWithDefaultPrettyPrinter().writeValueAsString(raw) + "\n",
+                StandardCharsets.UTF_8);
     }
 
     @Test
@@ -990,10 +1080,21 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
         };
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(chatModel);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.ANSWER, "agent-evaluation"))
+                .thenReturn(chatModel);
         when(configuration.providerFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.ANSWER, "agent-evaluation"))
+                .thenReturn(provider.provider());
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(provider.model());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.ANSWER, "agent-evaluation"))
+                .thenReturn(provider.model());
         when(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER)).thenReturn(false);
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER, "agent-evaluation"))
+                .thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.ANSWER))
+                .thenReturn("deepseek".equals(provider.provider()));
+        when(configuration.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.ANSWER, "agent-evaluation"))
                 .thenReturn("deepseek".equals(provider.provider()));
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.register(VersionedAgentPrompts.class);
@@ -1083,6 +1184,14 @@ class AnswerEvidenceAgentRealRulebookEvaluationTest {
             ProviderConfiguration provider) {}
 
     private record ProviderConfiguration(String provider, String apiKey, String baseUrl, String model) {}
+
+    private record VisualTranscriptionCase(
+            String caseId,
+            String provider,
+            String question,
+            String factualSummary,
+            PlayerLocale locale,
+            String expectedTerm) {}
 
     private record BoundaryAnswer(
             AnswerQuestionPlan plan,

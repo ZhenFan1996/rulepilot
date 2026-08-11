@@ -7,6 +7,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class VisualRulebookCatalogPolicyTest {
@@ -126,6 +127,25 @@ class VisualRulebookCatalogPolicyTest {
         assertThat(merged.iconInventoryComplete()).isTrue();
         assertThat(merged.iconOccurrences()).hasSize(3);
         assertThat(merged.iconOccurrences().getFirst()).isEqualTo(grounded);
+    }
+
+    @Test
+    void persistsADenseValidPageByNarrowingUpstreamKeywordsInsteadOfDroppingThePage() {
+        PageSummary dense = new PageSummary(
+                3,
+                "Visible labels",
+                "A complete page-scoped factual ledger.",
+                IntStream.rangeClosed(1, 16).mapToObj(index -> "keyword-" + index).toList(),
+                List.of(),
+                List.of(),
+                true);
+
+        var fact = VisualRulebookCatalogPolicy.toPageFact(dense);
+
+        assertThat(fact.pageNumber()).isEqualTo(3);
+        assertThat(fact.factualSummary()).isEqualTo(dense.factualSummary());
+        assertThat(fact.keywords()).containsExactlyElementsOf(dense.keywords().subList(0, 12));
+        assertThat(fact.iconInventoryComplete()).isTrue();
     }
 
     @Test

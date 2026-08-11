@@ -78,7 +78,29 @@ describe('buildPendingGuideJourneys', () => {
     }], [], [])
 
     expect(journeys).toEqual([expect.objectContaining({
-      title: '花砖物语', phase: 'FAILED', state: 'failed',
+      title: '花砖物语', phase: 'FAILED', state: 'failed', retryAction: 'PREPARE_TEACHING',
+    })])
+  })
+
+  it('keeps a newer retry run authoritative over an older failed handoff run', () => {
+    const journeys = buildPendingGuideJourneys([], [{
+      id: 'import-1', title: '花砖物语', stage: 'COMPLETED', downloadedBytes: 100,
+      totalBytes: 100, documentVersionId: 'version-1', errorCode: null,
+      teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-failed',
+      updatedAt: '2026-08-10T10:00:00Z',
+    }], [
+      {
+        id: 'prep-retry', subjectId: 'version-1', state: 'LESSON_PLANNING',
+        updatedAt: '2026-08-10T10:02:00Z',
+      },
+      {
+        id: 'prep-failed', subjectId: 'version-1', state: 'FAILED',
+        updatedAt: '2026-08-10T10:01:00Z',
+      },
+    ], [], [])
+
+    expect(journeys).toEqual([expect.objectContaining({
+      title: '花砖物语', phase: 'PREPARING_GUIDE', state: 'active', retryAction: null,
     })])
   })
 
@@ -93,7 +115,7 @@ describe('buildPendingGuideJourneys', () => {
     }])
 
     expect(journeys).toEqual([expect.objectContaining({
-      title: 'unreadable.pdf', phase: 'FAILED', state: 'failed', canReadRulebook: false,
+      title: 'unreadable.pdf', phase: 'FAILED', state: 'failed', canReadRulebook: false, retryAction: null,
     })])
   })
 
@@ -109,7 +131,7 @@ describe('buildPendingGuideJourneys', () => {
     }], [])
 
     expect(journeys).toEqual([expect.objectContaining({
-      title: '花砖物语', phase: 'FAILED', state: 'failed', canReadRulebook: false,
+      title: '花砖物语', phase: 'FAILED', state: 'failed', canReadRulebook: false, retryAction: null,
     })])
   })
 })

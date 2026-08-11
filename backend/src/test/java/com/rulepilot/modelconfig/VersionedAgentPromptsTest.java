@@ -90,6 +90,11 @@ class VersionedAgentPromptsTest {
                         "{claims}",
                         "{evidence}");
         assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");
+        assertThat(prompts.criticOutputRepair()).contains(
+                "Return {\"issues\":[]}",
+                "defectConfirmed: true",
+                "exactly one allowed issue type",
+                "Never place a supported");
     }
 
     @Test

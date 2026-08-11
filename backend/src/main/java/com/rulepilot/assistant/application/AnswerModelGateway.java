@@ -35,7 +35,7 @@ final class AnswerModelGateway {
                     "composeRuleAnswer",
                     estimateTokens(request.toString()),
                     "Rule answer model output received",
-                    () -> model.compose(request),
+                    () -> model.compose(request, username),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -59,7 +59,7 @@ final class AnswerModelGateway {
                     operation,
                     estimateTokens(request.toString()) + estimateTokens(feedback.toString()),
                     successSummary,
-                    () -> model.revise(request, previousDraft, feedback),
+                    () -> model.revise(request, previousDraft, feedback, username),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -76,15 +76,15 @@ final class AnswerModelGateway {
                     "rewriteAnswerRetrievalQueries",
                     estimateTokens(request.question()),
                     "Cross-language retrieval phrases prepared",
-                    () -> model.rewriteRetrievalQueries(request),
+                    () -> model.rewriteRetrievalQueries(request, username),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
         }
     }
 
-    boolean supportsQuestionInterpretation() {
-        return model.supportsQuestionInterpretation();
+    boolean supportsQuestionInterpretation(String username) {
+        return model.supportsQuestionInterpretation(username);
     }
 
     Optional<QuestionInterpretationDraft> interpretQuestion(
@@ -100,7 +100,7 @@ final class AnswerModelGateway {
                     "interpretAnswerQuestion",
                     estimateTokens(request.toString()),
                     "Player question intent interpreted",
-                    () -> model.interpretQuestion(request),
+                    () -> model.interpretQuestion(request, username),
                     result -> estimateTokens(result.toString()));
         } finally {
             permit.close();
@@ -108,7 +108,7 @@ final class AnswerModelGateway {
     }
 
     private RuleAnswerRateLimiter.Permit acquire(String username, UUID gameSessionId) {
-        return rateLimiter.acquireModel(username, gameSessionId, model.providerId());
+        return rateLimiter.acquireModel(username, gameSessionId, model.providerId(username));
     }
 
     private int estimateTokens(String value) {

@@ -7,19 +7,41 @@ public interface BoardGameRecommendationModel {
 
     boolean configured();
 
+    /** Resolves one authenticated owner's private model configuration without thread-local security state. */
+    default boolean configured(String ownerUsername) {
+        return configured();
+    }
+
     Turn next(Request request);
+
+    default Turn next(Request request, String ownerUsername) {
+        return next(request);
+    }
 
     default boolean preferenceReviewConfigured() {
         return false;
+    }
+
+    default boolean preferenceReviewConfigured(String ownerUsername) {
+        return preferenceReviewConfigured();
     }
 
     default boolean preferenceInterpretationConfigured() {
         return false;
     }
 
+    default boolean preferenceInterpretationConfigured(String ownerUsername) {
+        return preferenceInterpretationConfigured();
+    }
+
     /** Extracts confirmed constraints and reversible assumptions before the ReAct loop. */
     default PreferenceInterpretation interpretPreferences(PreferenceInterpretationRequest request) {
         return new PreferenceInterpretation(List.of(), new Turn("", List.of()));
+    }
+
+    default PreferenceInterpretation interpretPreferences(
+            PreferenceInterpretationRequest request, String ownerUsername) {
+        return interpretPreferences(request);
     }
 
     /**
@@ -33,6 +55,10 @@ public interface BoardGameRecommendationModel {
                         request.proposals().size(),
                         new PreferenceDecision(PreferenceEvidenceStatus.DIRECT, "DIRECT")),
                 new Turn("", List.of()));
+    }
+
+    default PreferenceReview reviewPreferences(PreferenceReviewRequest request, String ownerUsername) {
+        return reviewPreferences(request);
     }
 
     record ToolSpec(String name, String description, String inputSchema) {

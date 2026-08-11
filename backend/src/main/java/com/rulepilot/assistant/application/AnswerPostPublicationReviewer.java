@@ -110,7 +110,9 @@ final class AnswerPostPublicationReviewer {
         try {
             ReviewRisk risk = AnswerCritiquePolicy.reviewRisk(question, context, answer);
             Review review = critic.review(
-                    AnswerCritiquePolicy.request(assistantRunId, question, context, answer, evidence), risk);
+                    AnswerCritiquePolicy.request(assistantRunId, question, context, answer, evidence),
+                    risk,
+                    username);
             if (review.accepted()) return Result.accepted(answer);
             if (!AnswerCritiquePolicy.allowsBoundedCorrection(question, context)) {
                 return unresolvedReview(answer, review, "事实一致性审查发现未修正的关键问题。");
@@ -137,7 +139,8 @@ final class AnswerPostPublicationReviewer {
             try {
                 revisionReview = critic.review(
                         AnswerCritiquePolicy.request(assistantRunId, question, context, revised, evidence),
-                        ReviewRisk.HIGH_IMPACT);
+                        ReviewRisk.HIGH_IMPACT,
+                        username);
             } catch (AgentExecutionStoppedException stopped) {
                 throw stopped;
             } catch (RuntimeException reviewFailure) {

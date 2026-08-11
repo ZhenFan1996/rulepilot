@@ -24,6 +24,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ReasonKind;
 import java.math.BigDecimal;
+import java.security.Principal;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -34,12 +35,13 @@ class BggRecommendationAgentControllerTest {
     private final BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
     private final BggRecommendationAgentController controller =
             new BggRecommendationAgentController(agent, presentation);
+    private final Principal principal = () -> "player";
 
     @Test
     void exposesTheTypedClarificationAndNormalizedProfile() {
         RecommendationProfile profile = new RecommendationProfile(
                 4, null, null, BggGameType.ALL, InteractionPreference.ANY);
-        when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
+        when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.NEEDS_CLARIFICATION,
                 DecisionMode.MODEL_ASSISTED,
                 "你们愿意为一局留出多长时间？",
@@ -59,7 +61,8 @@ class BggRecommendationAgentControllerTest {
                         new BggRecommendationAgentController.RecommendationProfileRequest(
                                 4, null, null, "all", "any"),
                         ""),
-                "zh-CN");
+                "zh-CN",
+                principal);
 
         assertThat(response.outcome()).isEqualTo("needs_clarification");
         assertThat(response.profile().players()).isEqualTo(4);
@@ -101,7 +104,7 @@ class BggRecommendationAgentControllerTest {
                 List.of("Animals: Birds"),
                 List.of("Elizabeth Hargrave"),
                 List.of("Stonemaier Games"));
-        when(agent.converse(any(), eq("zh-CN"))).thenReturn(new ConversationResponse(
+        when(agent.converse(any(), eq("zh-CN"), eq("player"))).thenReturn(new ConversationResponse(
                 Outcome.RECOMMENDATIONS,
                 DecisionMode.MODEL_ASSISTED,
                 "下面这些各有侧重。",
@@ -124,7 +127,8 @@ class BggRecommendationAgentControllerTest {
 
         var response = controller.converse(
                 new BggRecommendationAgentController.RecommendationConversationRequest(null, "四个人一起玩"),
-                "zh-CN");
+                "zh-CN",
+                principal);
 
         assertThat(response.mode()).isEqualTo("model_assisted");
         assertThat(response.sourceCount()).isEqualTo(179_737);

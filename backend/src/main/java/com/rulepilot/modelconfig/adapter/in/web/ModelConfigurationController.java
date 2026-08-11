@@ -43,11 +43,24 @@ public class ModelConfigurationController {
 
     @PutMapping("/assignments")
     Snapshot assign(@RequestBody AssignmentsRequest request, Principal principal) {
+        if (request.recommendation() == null || request.recommendation().isBlank()) {
+            return configuration.assign(
+                    principal.getName(),
+                    request.teaching(),
+                    request.visual(),
+                    request.answer(),
+                    request.critic());
+        }
         return configuration.assign(
-                principal.getName(), request.teaching(), request.visual(), request.answer(), request.critic());
+                principal.getName(),
+                request.teaching(),
+                request.visual(),
+                request.answer(),
+                request.critic(),
+                request.recommendation());
     }
 
     record ConfigureProviderRequest(String apiKey, String baseUrl, String model, boolean visionCapable) {}
 
-    record AssignmentsRequest(String teaching, String visual, String answer, String critic) {}
+    record AssignmentsRequest(String teaching, String visual, String answer, String critic, String recommendation) {}
 }

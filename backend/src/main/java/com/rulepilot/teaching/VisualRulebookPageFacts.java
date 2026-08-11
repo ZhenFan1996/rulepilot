@@ -1,5 +1,6 @@
 package com.rulepilot.teaching;
 
+import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -166,17 +167,23 @@ public interface VisualRulebookPageFacts {
                             + " | rect=" + anchor.x() + "," + anchor.y() + ","
                             + anchor.width() + "," + anchor.height())
                     .collect(java.util.stream.Collectors.joining("\n- ", "\n- ", ""));
-            return "Visual-transcribed rule evidence. Only the statements under Visible rule facts are rule evidence. "
-                    + "Do not derive a per-item value from a worked total, attach a detached number to a nearby label, "
-                    + "or fill a missing prerequisite, action, timing, score, or exception."
-                    + "\nVisible rule facts: " + factualSummary
+            return transcribedRuleEvidenceText(factualSummary)
                     + (visualAnchors.isEmpty()
                             ? "\nCataloged visual anchors: none"
                             : "\nCataloged visual anchors (presentation only; 0-1000 page coordinates):" + anchors);
         }
 
+        /**
+         * Projects a persisted factual ledger into the same bounded transcription contract when the caller does not
+         * need visual anchors. Answer retrieval uses this overload after it has proved that the canonical page has no
+         * extracted prose; ordinary text-backed pages continue to treat the same ledger as presentation data only.
+         */
+        public static String transcribedRuleEvidenceText(String factualSummary) {
+            return VisualTranscribedRuleEvidence.render(factualSummary);
+        }
+
         public static boolean isTranscribedRuleEvidence(String value) {
-            return value != null && value.startsWith("Visual-transcribed rule evidence.");
+            return VisualTranscribedRuleEvidence.contains(value);
         }
 
         private static String bounded(String value, int maximum) {

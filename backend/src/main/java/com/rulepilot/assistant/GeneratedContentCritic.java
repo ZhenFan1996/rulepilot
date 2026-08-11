@@ -7,6 +7,10 @@ public interface GeneratedContentCritic {
 
     Review review(ReviewRequest request, ReviewRisk risk);
 
+    default Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
+        return review(request, risk);
+    }
+
     enum ContentType {
         LESSON,
         ANSWER

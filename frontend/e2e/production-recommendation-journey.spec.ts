@@ -10,6 +10,7 @@ const PRESERVED_DRAFT = '下次我还想给完全没玩过桌游的家人找一�
 const RULE_QUESTION = '我从一个工厂展示板拿走同色砖以后，剩下的砖要放到哪里？请用日常的话简短回答，并引用规则书页码。'
 
 interface RulebookCandidate {
+  title: string
   url: string
   sourceDomain: string
   language: string
@@ -25,6 +26,8 @@ interface ImportJob {
   id: string
   title?: string
   rulebookTitle?: string
+  editionId: string | null
+  sourceDomain?: string
   stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
   documentVersionId: string | null
@@ -39,6 +42,7 @@ interface ImportJob {
 interface BoundGameResponse {
   game: { id: string; name: string }
   edition: { id: string; name: string }
+  bggId: number
 }
 
 interface CatalogGameResponse {
@@ -64,6 +68,11 @@ interface DocumentProgressResponse {
   complete: boolean
 }
 
+interface RuleDocumentResponse {
+  document: { gameEditionId: string | null; title: string }
+  latestVersion: { id: string }
+}
+
 interface RunDetailsResponse {
   run: {
     state: string
@@ -84,6 +93,12 @@ interface ProductionJourneyReport {
   confirmedMilestonesAtSourceReview: number
   confirmedMilestonesFinal: number
   boundGameInCatalog: boolean
+  boundBggId: number | null
+  boundGameName: string | null
+  boundEditionId: string | null
+  candidateEditionMatchesSelection: boolean
+  importEditionMatchesSelection: boolean
+  documentEditionMatchesSelection: boolean
   myGuidesEntryVisibleBeforeLesson: boolean
   myGuidesPlanListed: boolean
   planGameTitleMatchesSelection: boolean
@@ -91,6 +106,7 @@ interface ProductionJourneyReport {
   detailsDialogOpenedAndClosed: boolean
   discoveryMs: number | null
   sourceDomain: string | null
+  sourceUrl: string | null
   sourceMode: string | null
   importRequestCount: number
   importReused: boolean | null
@@ -191,10 +207,14 @@ test('recommendation becomes one readable, taught, and answerable production jou
   let importRequestCount = 0
   let observedDocumentVersionId: string | null = null
   let observedPreparationRunId: string | null = null
+  let observedImportRequest: { editionId?: string; officialSourceUrl?: string } | null = null
   page.on('pageerror', error => pageErrors.push(error))
   page.on('request', request => {
     const path = new URL(request.url()).pathname
-    if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') importRequestCount += 1
+    if (path === '/api/v1/documents/official-imports' && request.method() === 'POST') {
+      importRequestCount += 1
+      observedImportRequest = request.postDataJSON() as { editionId?: string; officialSourceUrl?: string }
+    }
   })
 
   const report: ProductionJourneyReport = {
@@ -202,9 +222,11 @@ test('recommendation becomes one readable, taught, and answerable production jou
     routeStayedOnDiscover: false, journeyBackdropVisible: false, journeySurfaceOpaque: false,
     lessonBackdropVisible: false, lessonSurfaceOpaque: false,
     confirmedMilestonesAtSourceReview: 0, confirmedMilestonesFinal: 0,
-    boundGameInCatalog: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
+    boundGameInCatalog: false, boundBggId: null, boundGameName: null, boundEditionId: null,
+    candidateEditionMatchesSelection: false, importEditionMatchesSelection: false,
+    documentEditionMatchesSelection: false, myGuidesEntryVisibleBeforeLesson: false, myGuidesPlanListed: false,
     planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
-    discoveryMs: null, sourceDomain: null, sourceMode: null, importRequestCount: 0,
+    discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
     importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
@@ -257,6 +279,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
     ])
     const boundGame = await bindingResponse.json() as BoundGameResponse
     const candidateResult = await candidatesResponse.json() as CandidateResponse
+    report.boundBggId = boundGame.bggId
+    report.boundGameName = boundGame.game.name
+    report.boundEditionId = boundGame.edition.id
+    expect(boundGame.bggId, 'The binding response did not preserve the selected BGG identity').toBe(TARGET_BGG_ID)
+    expect(boundGame.game.name, 'The binding response used an unexpected game title').toMatch(TARGET_NAME)
+    report.candidateEditionMatchesSelection = new URL(candidatesResponse.url()).searchParams.get('editionId')
+      === boundGame.edition.id
+    expect(report.candidateEditionMatchesSelection,
+      'Rulebook discovery used a different edition from the selected recommendation').toBe(true)
     report.discoveryMs = elapsed(discoveryStartedAt)
     expect(candidateResult.configured).toBe(true)
     const gstoneCandidate = candidateResult.candidates.find(candidate =>
@@ -265,6 +296,7 @@ test('recommendation becomes one readable, taught, and answerable production jou
       && candidate.acquisitionMode !== 'SOURCE_PAGE')
     expect(gstoneCandidate, 'No importable Chinese Gstone rulebook was discovered').toBeDefined()
     report.sourceDomain = gstoneCandidate!.sourceDomain
+    report.sourceUrl = gstoneCandidate!.url
     report.sourceMode = gstoneCandidate!.acquisitionMode
 
     const catalogResponse = await page.request.get('/api/v1/games')
@@ -307,12 +339,22 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(importResponse.status()).toBe(202)
     const launchedJob = await importResponse.json() as ImportJob
     report.importReused = launchedJob.reused
+    report.importEditionMatchesSelection = launchedJob.editionId === boundGame.edition.id
+      && observedImportRequest?.editionId === boundGame.edition.id
+      && observedImportRequest?.officialSourceUrl === gstoneCandidate!.url
+    expect(report.importEditionMatchesSelection,
+      'The official import request or persisted job changed the selected edition/source identity').toBe(true)
+    expect(launchedJob.title, 'The official import response did not retain the selected game title')
+      .toBe(boundGame.game.name)
+    expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
+      .toBe(gstoneCandidate!.sourceDomain)
 
     const completedJob = await waitForCompletedImport(page.request, launchedJob.id)
     expect(completedJob.downloadedBytes).toBeGreaterThan(0)
     expect(completedJob.documentVersionId).not.toBeNull()
     expect(completedJob.teachingHandoffState).toBe('LAUNCHED')
     expect(completedJob.teachingPreparationRunId).not.toBeNull()
+    expect(completedJob.editionId).toBe(boundGame.edition.id)
     observedDocumentVersionId = completedJob.documentVersionId
     observedPreparationRunId = completedJob.teachingPreparationRunId
     report.importDuplicate = completedJob.duplicate
@@ -328,6 +370,13 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.documentProgressComplete = progressPayload.complete
     expect(progressPayload).toMatchObject({ stage: 'READY', complete: true })
     expect(importRequestCount).toBe(1)
+    const documentsResponse = await page.request.get('/api/v1/documents')
+    expect(documentsResponse.ok(), `Documents returned HTTP ${documentsResponse.status()}`).toBe(true)
+    const documents = await documentsResponse.json() as RuleDocumentResponse[]
+    const importedDocument = documents.find(document => document.latestVersion.id === completedJob.documentVersionId)
+    report.documentEditionMatchesSelection = importedDocument?.document.gameEditionId === boundGame.edition.id
+    expect(report.documentEditionMatchesSelection,
+      'The readable document was not persisted against the selected game edition').toBe(true)
 
     guidesPage = await page.context().newPage()
     guidesPage.on('pageerror', error => pageErrors.push(error))

@@ -56,6 +56,7 @@ export interface PendingGuideJourney {
   state: 'active' | 'failed'
   progress: number | null
   canReadRulebook: boolean
+  retryAction: 'PREPARE_TEACHING' | null
   updatedAt: string
 }
 
@@ -71,7 +72,7 @@ export function buildPendingGuideJourneys(
   const documentByVersion = new Map(documents.map(document => [document.latestVersion.id, document]))
   const gameByEdition = new Map(catalog.flatMap(entry =>
     entry.editions.map(edition => [edition.id, entry.game.name] as const)))
-  const preparationByVersion = new Map(preparationRuns.map(run => [run.subjectId, run]))
+  const preparationByVersion = latestPreparationByVersion(preparationRuns)
   const representedVersions = new Set<string>()
 
   const fromImports = imports.flatMap((job): PendingGuideJourney[] => {
@@ -86,6 +87,9 @@ export function buildPendingGuideJourneys(
       || job.teachingHandoffState === 'FAILED'
       || document?.latestVersion.status === 'FAILED'
       || preparationFailed
+    const canRetryPreparation = Boolean(job.documentVersionId)
+      && (preparationFailed || job.teachingHandoffState === 'FAILED')
+      && document?.latestVersion.status !== 'FAILED'
     return [{
       id: `import:${job.id}`,
       title: job.title,
@@ -103,6 +107,7 @@ export function buildPendingGuideJourneys(
         || preparation != null
         || job.teachingHandoffState === 'LAUNCHING'
         || job.teachingHandoffState === 'LAUNCHED',
+      retryAction: canRetryPreparation ? 'PREPARE_TEACHING' : null,
       updatedAt: preparation?.updatedAt ?? job.updatedAt,
     }]
   })
@@ -119,6 +124,8 @@ export function buildPendingGuideJourneys(
     const failed = handoff.state === 'FAILED'
       || document?.latestVersion.status === 'FAILED'
       || preparationFailed
+    const canRetryPreparation = (preparationFailed || handoff.state === 'FAILED')
+      && document?.latestVersion.status !== 'FAILED'
     return [{
       id: `upload:${handoff.id}`,
       title: gameTitle ?? handoff.rulebookTitle,
@@ -136,6 +143,7 @@ export function buildPendingGuideJourneys(
         || preparation != null
         || handoff.state === 'LAUNCHING'
         || handoff.state === 'LAUNCHED',
+      retryAction: canRetryPreparation ? 'PREPARE_TEACHING' : null,
       updatedAt: preparation?.updatedAt ?? handoff.updatedAt,
     }]
   })
@@ -158,12 +166,35 @@ export function buildPendingGuideJourneys(
       state: failed ? 'failed' : 'active',
       progress: null,
       canReadRulebook: true,
+      retryAction: failed ? 'PREPARE_TEACHING' : null,
       updatedAt: run.updatedAt,
     }]
   })
 
   return [...fromImports, ...fromUploads, ...fromPreparation]
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+}
+
+const TERMINAL_PREPARATION_STATES = new Set(['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'])
+
+function latestPreparationByVersion(runs: PendingGuidePreparationRun[]) {
+  const latest = new Map<string, PendingGuidePreparationRun>()
+  for (const run of runs) {
+    const existing = latest.get(run.subjectId)
+    if (!existing) {
+      latest.set(run.subjectId, run)
+      continue
+    }
+    const existingTime = Date.parse(existing.updatedAt)
+    const candidateTime = Date.parse(run.updatedAt)
+    const candidateIsNewer = Number.isFinite(candidateTime)
+      && (!Number.isFinite(existingTime) || candidateTime > existingTime)
+    const sameInstantButCandidateIsActive = candidateTime === existingTime
+      && TERMINAL_PREPARATION_STATES.has(existing.state)
+      && !TERMINAL_PREPARATION_STATES.has(run.state)
+    if (candidateIsNewer || sameInstantButCandidateIsActive) latest.set(run.subjectId, run)
+  }
+  return latest
 }
 
 function importProgress(job: PendingGuideImport) {

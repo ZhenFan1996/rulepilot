@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -53,36 +54,49 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
 
     @Override
     public String providerId() {
-        return models.providerFor(Role.CRITIC);
+        return providerId(null);
+    }
+
+    @Override
+    public String providerId(String ownerUsername) {
+        return providerFor(ownerUsername);
     }
 
     @Override
     public CritiqueDraft critique(ReviewRequest request) {
-        if (models.usesFake(Role.CRITIC)) {
+        return critique(request, null);
+    }
+
+    @Override
+    public CritiqueDraft critique(ReviewRequest request, String ownerUsername) {
+        if (usesFake(ownerUsername)) {
             return fakeModel.critique(request);
         }
         RuntimeException firstFailure;
         try {
-            return critiqueOnce(request, "");
+            return critiqueOnce(request, "", ownerUsername);
         } catch (RuntimeException exception) {
             firstFailure = exception;
         }
         try {
-            return critiqueOnce(request, prompts.structuredOutputRepair());
+            String repair = prompts.criticOutputRepair();
+            if (repair == null || repair.isBlank()) repair = prompts.structuredOutputRepair();
+            return critiqueOnce(request, repair, ownerUsername);
         } catch (RuntimeException secondFailure) {
             secondFailure.addSuppressed(firstFailure);
             throw secondFailure;
         }
     }
 
-    private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
+    private CritiqueDraft critiqueOnce(
+            ReviewRequest request, String repair, String ownerUsername) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
-        boolean deepSeekNonThinking = models.usesDeepSeekNonThinkingGeneration(Role.CRITIC);
-        boolean qwen = usesQwen();
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
+        boolean deepSeekNonThinking = usesDeepSeekNonThinkingGeneration(ownerUsername);
+        boolean qwen = usesQwen(ownerUsername);
         if (deepSeekNonThinking || qwen) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.model(models.modelNameFor(Role.CRITIC));
+            options.model(modelNameFor(ownerUsername));
             options.temperature(temperature);
             if (deepSeekNonThinking) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
@@ -110,16 +124,54 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         if (draft == null) throw new IllegalArgumentException("critic returned no draft");
         return new CritiqueDraft(draft.issues().stream()
                 .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
-                .map(issue -> new Issue(
-                        issue.type(),
-                        issue.claimPosition(),
-                        resolveReferences(issue.evidenceIds(), evidenceIds),
-                        issue.summary()))
+                .map(issue -> confirmedIssue(issue, evidenceIds))
                 .toList());
     }
 
-    private boolean usesQwen() {
-        return "qwen".equals(models.providerFor(Role.CRITIC));
+    private Issue confirmedIssue(ModelIssue issue, Map<String, UUID> evidenceIds) {
+        if (issue.type() == null || issue.claimPosition() < 1
+                || issue.summary() == null || issue.summary().isBlank()) {
+            throw new IllegalArgumentException("confirmed critic issue is incomplete");
+        }
+        return new Issue(
+                issue.type(),
+                issue.claimPosition(),
+                resolveReferences(issue.evidenceIds(), evidenceIds),
+                issue.summary());
+    }
+
+    private boolean usesQwen(String ownerUsername) {
+        return "qwen".equals(providerFor(ownerUsername));
+    }
+
+    private ChatModel modelFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelFor(Role.CRITIC)
+                : models.modelFor(Role.CRITIC, ownerUsername);
+    }
+
+    private String providerFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.providerFor(Role.CRITIC)
+                : models.providerFor(Role.CRITIC, ownerUsername);
+    }
+
+    private String modelNameFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelNameFor(Role.CRITIC)
+                : models.modelNameFor(Role.CRITIC, ownerUsername);
+    }
+
+    private boolean usesFake(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesFake(Role.CRITIC)
+                : models.usesFake(Role.CRITIC, ownerUsername);
+    }
+
+    private boolean usesDeepSeekNonThinkingGeneration(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)
+                : models.usesDeepSeekNonThinkingGeneration(Role.CRITIC, ownerUsername);
     }
 
     private String systemPrompt(ReviewMode mode) {
@@ -198,15 +250,6 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         private ModelIssue {
             if (defectConfirmed == null) {
                 throw new IllegalArgumentException("critic issue verdict is missing");
-            }
-            if (type == null) {
-                throw new IllegalArgumentException("critic issue type is missing");
-            }
-            if (claimPosition < 1) {
-                throw new IllegalArgumentException("critic issue claim position is invalid");
-            }
-            if (summary == null || summary.isBlank()) {
-                throw new IllegalArgumentException("critic issue summary is missing");
             }
             evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
         }

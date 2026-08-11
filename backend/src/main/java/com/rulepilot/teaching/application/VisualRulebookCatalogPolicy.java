@@ -79,6 +79,24 @@ final class VisualRulebookCatalogPolicy {
                 .toList();
     }
 
+    /**
+     * Narrows the model-facing summary contract to the durable fact contract. The model may return up to sixteen
+     * retrieval keywords so parsing can preserve a dense page, while the stored ledger deliberately indexes twelve.
+     * A valid page must not be discarded merely because it used the larger upstream allowance.
+     */
+    static PageFact toPageFact(
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
+        return new PageFact(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords().stream().distinct().limit(12).toList(),
+                summary.visualAnchors(),
+                IconEvidencePolicy.sanitize(summary.iconOccurrences()),
+                summary.iconInventoryComplete(),
+                PageFact.CURRENT_SCHEMA_VERSION);
+    }
+
     static List<PageInput> pageInputs(List<DocumentProcessing.PageView> documentPages, List<PageFact> facts) {
         Map<Integer, PageFact> factsByPage = facts.stream().collect(Collectors.toMap(
                 PageFact::pageNumber, Function.identity(), (first, duplicate) -> first));

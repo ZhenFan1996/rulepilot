@@ -527,15 +527,7 @@ class VisualRulebookCataloger {
     }
 
     private static PageFact pageFact(VisualRulebookPageCatalogModel.PageSummary summary) {
-        return new PageFact(
-                summary.pageNumber(),
-                summary.printedTerms(),
-                summary.factualSummary(),
-                summary.keywords(),
-                summary.visualAnchors(),
-                IconEvidencePolicy.sanitize(summary.iconOccurrences()),
-                summary.iconInventoryComplete(),
-                PageFact.CURRENT_SCHEMA_VERSION);
+        return VisualRulebookCatalogPolicy.toPageFact(summary);
     }
 
     private static VisualRulebookPageCatalogModel.PageSummary pageSummary(PageFact fact) {

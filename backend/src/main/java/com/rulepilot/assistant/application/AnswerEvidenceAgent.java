@@ -137,13 +137,11 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
                     SYSTEM_PROMPT,
                     playerRequest(question, context, questionPlan, deterministic.evidence()),
                     "EVIDENCE_REFINEMENT_UNAVAILABLE",
-                    usesPriorPages(questionPlan, context)
-                            ? 2
-                            : questionPlan.subquestions().size() > 1 ? 5 : 4,
+                    refinementBudget(questionPlan, context),
                     384,
                     toolPortfolio(question, context, questionPlan),
                     requiredEvidenceTools(questionPlan, context),
-                    usesPriorPages(questionPlan, context) ? 1 : questionPlan.subquestions().size() > 1 ? 5 : 4,
+                    refinementToolBudget(questionPlan, context),
                     "EVIDENCE_READY"));
         } catch (RuntimeException failure) {
             LOGGER.warn(
@@ -206,7 +204,25 @@ public class AnswerEvidenceAgent implements AnswerEvidenceRefiner {
 
     private Set<String> requiredEvidenceTools(AnswerQuestionPlan questionPlan, QuestionContext context) {
         if (usesPriorPages(questionPlan, context)) return Set.of("read_rule_pages");
+        if (requiresSourceAuthoredAdvice(questionPlan)) return Set.of("read_rule_pages");
         return Set.of();
+    }
+
+    private int refinementBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
+        if (usesPriorPages(questionPlan, context)) return 2;
+        if (questionPlan.subquestions().size() > 1 || requiresSourceAuthoredAdvice(questionPlan)) return 5;
+        return 4;
+    }
+
+    private int refinementToolBudget(AnswerQuestionPlan questionPlan, QuestionContext context) {
+        if (usesPriorPages(questionPlan, context)) return 1;
+        if (questionPlan.subquestions().size() > 1 || requiresSourceAuthoredAdvice(questionPlan)) return 5;
+        return 4;
+    }
+
+    private boolean requiresSourceAuthoredAdvice(AnswerQuestionPlan questionPlan) {
+        return questionPlan.evidenceNeeds().contains(
+                com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed.ADVICE);
     }
 
     private AnswerEvidenceRetriever.Result mergeCanonicalEvidence(

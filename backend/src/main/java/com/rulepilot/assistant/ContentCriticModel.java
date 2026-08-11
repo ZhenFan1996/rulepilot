@@ -10,7 +10,15 @@ public interface ContentCriticModel {
         return "unspecified";
     }
 
+    default String providerId(String ownerUsername) {
+        return providerId();
+    }
+
     CritiqueDraft critique(ReviewRequest request);
+
+    default CritiqueDraft critique(ReviewRequest request, String ownerUsername) {
+        return critique(request);
+    }
 
     record CritiqueDraft(List<Issue> issues) {
         public CritiqueDraft {
