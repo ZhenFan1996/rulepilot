@@ -2,6 +2,7 @@ package com.rulepilot.recommendation.application;
 
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Game;
+import com.rulepilot.catalog.BggGameType;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Candidate;
 import com.rulepilot.recommendation.BoardGameRecommendationWebResearch.Research;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.InteractionPreference;
@@ -43,8 +44,12 @@ class BoardGameRecommendationSelector {
     }
 
     boolean eligible(Game game, RecommendationProfile profile) {
-        if (game == null || game.details() == null) return false;
+        if (game == null || game.ranking() == null || game.details() == null) return false;
         Details details = game.details();
+        BggGameType requiredType = profile.type();
+        if (requiredType != null
+                && requiredType != BggGameType.ALL
+                && !game.ranking().types().contains(requiredType)) return false;
         if (profile.players() != null
                 && (details.minPlayers() == null
                         || details.maxPlayers() == null

@@ -48,44 +48,6 @@ import org.junit.jupiter.api.Test;
 class GroundedTeachingAgentTest {
 
     @Test
-    void rejectsImmediateEndingWhenCitedRuleKeepsTheEndOfRoundBoundary() {
-        RuleEvidence endOfRound = new RuleEvidence(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                "ENDING",
-                "End game",
-                "The game ends at the end of a round if any player has at least 30 Fame.",
-                2,
-                2);
-
-        assertThat(GroundedTeachingAgent.claimsImmediateEndingForEndOfRoundTrigger(
-                        "任意玩家达到30名声后，游戏立即结束。", List.of(endOfRound)))
-                .isTrue();
-        assertThat(GroundedTeachingAgent.claimsImmediateEndingForEndOfRoundTrigger(
-                        "任意玩家达到30名声后，在本轮结束时结算并结束游戏。", List.of(endOfRound)))
-                .isFalse();
-    }
-
-    @Test
-    void rejectsMovingACitedCleanupEndgameCheckToFinalScoring() {
-        RuleEvidence cleanup = new RuleEvidence(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                "CLEANUP",
-                "Cleanup",
-                "1. End Game? If any player has at least 30 Fame, end game. Smugglers score pledged Cargo.",
-                9,
-                9);
-
-        assertThat(GroundedTeachingAgent.defersCitedEndgameCheck(
-                        "清理步骤中不检查游戏结束，游戏结束发生在最终计分阶段。", List.of(cleanup)))
-                .isTrue();
-        assertThat(GroundedTeachingAgent.defersCitedEndgameCheck(
-                        "清理的第一步检查是否结束游戏。", List.of(cleanup)))
-                .isFalse();
-    }
-
-    @Test
     void publishesTextFirstBaseLessonBeforeRunningOneBoundedWholeLessonReview() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -365,7 +327,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void replacesAnEnglishVisualCropLabelWithTheChineseStepHeading() {
+    void preservesTheVisualModelsObservedLabelInsteadOfReplacingItByLanguageHeuristic() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -408,7 +370,8 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().label()).isEqualTo("找到主棋盘");
+        assertThat(lesson.sections().getFirst().steps().getFirst().visualFocus().label())
+                .isEqualTo("Gameplay Overview Diagram");
     }
 
     @Test
@@ -730,7 +693,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void repairs_a_player_step_that_ends_in_an_incomplete_ellipsis() {
+    void doesNotRewriteNaturalPunctuationWhenTheSemanticCriticAcceptsTheDraft() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AtomicInteger revisions = new AtomicInteger();
@@ -757,8 +720,9 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(revisions).hasValue(1);
-        assertThat(lesson.sections().getFirst().steps().getFirst().text()).doesNotContain("……");
+        assertThat(revisions).hasValue(0);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("……");
     }
 
     @Test
@@ -1302,7 +1266,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
         assertThat(revisions).hasValue(1);
-        assertThat(reviewCalls).hasValue(1);
+        assertThat(reviewCalls).hasValue(2);
         assertThat(retrievalQueries).anyMatch(query -> query.contains("tunnel route"));
         assertThat(lesson.sections().getFirst().steps())
                 .extracting(LessonStep::text)
@@ -1339,7 +1303,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void derivesMissingPresentationMetadataFromAnEvidenceCitedTeachingStep() {
+    void doesNotSynthesizeMissingPresentationMetadataFromPlayerFacingProse() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
@@ -1363,10 +1327,9 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().visualCaption())
-                .isEqualTo("选择一项有证据支持的探测行动并结算。");
-        assertThat(lesson.sections().getFirst().visualSourceChunkIds()).containsExactly(chunkId);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -1610,7 +1573,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void normalizesUnresolvedPdfIconMarkersBeforeTextFallbackValidation() {
+    void withholdsUnresolvedExtractionMarkersInsteadOfInventingTheirMeaning() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -1642,14 +1605,13 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().title()).isEqualTo("准备 “BOOST”图标 与 “脚印（移动）”图标 骰子");
-        assertThat(lesson.sections().getFirst().steps().getFirst().text())
-                .isEqualTo("把 “BOOST”图标 骰子和 “脚印（移动）”图标放在玩家板旁。");
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
-    void removesLeadingInternalEvidenceLanguageBeforeTeachingValidation() {
+    void preservesNaturalModelWordingInsteadOfDeletingEvidenceRelatedPhrases() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -1682,12 +1644,14 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().visualCaption()).isEqualTo("把加速骰子放在玩家板旁。");
-        assertThat(lesson.sections().getFirst().steps().getFirst().text()).isEqualTo("把加速骰子放在玩家板旁。");
+        assertThat(lesson.sections().getFirst().visualCaption())
+                .isEqualTo("当前证据显示：把加速骰子放在玩家板旁。");
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("根据已提供的证据，把加速骰子放在玩家板旁。");
     }
 
     @Test
-    void restoresThePlannedTitleWhenTheModelReturnsAnInvalidSectionTitle() {
+    void withholdsAnInvalidTitleInsteadOfSilentlyReplacingModelOutput() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence evidence = new RuleEvidence(
@@ -1719,8 +1683,9 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().title()).isEqualTo("SETUP");
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -1771,7 +1736,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void ranksPagesByTopicEvidenceCoverageInsteadOfFirstImageOrder() {
+    void keepsRetrievedImageOrderWhenNoStructuredPageBindingRanksThem() {
         UUID versionId = UUID.randomUUID();
         RulePageImage componentPage = new RulePageImage(2, "image/jpeg", new byte[] {2}, 1_086, 1_511);
         RulePageImage setupPage = new RulePageImage(4, "image/jpeg", new byte[] {4}, 1_086, 1_511);
@@ -1793,7 +1758,7 @@ class GroundedTeachingAgentTest {
 
             @Override
             public SectionDraft compose(SectionRequest request) {
-                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(4, 2);
+                assertThat(request.pageImages()).extracting(PageImageInput::pageNumber).containsExactly(2, 4);
                 return new SectionDraft(
                         "完成开局",
                         VisualKind.TABLE_LAYOUT,
@@ -1821,11 +1786,11 @@ class GroundedTeachingAgentTest {
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
         assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(reviewedClaimCounts).containsExactly(1);
+        assertThat(reviewedClaimCounts).containsExactly(2);
     }
 
     @Test
-    void fallsBackToCitedTextInsteadOfPublishingAWholePageFocus() {
+    void withholdsAWholePageFocusWhenTheModelAlsoFailsTheExplicitTextFallback() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         RuleEvidence visualEvidence = new RuleEvidence(
@@ -1870,17 +1835,14 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(compositions).hasValue(3);
-        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
-            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
-            assertThat(step.visualFocus()).isNull();
-            assertThat(step.text()).isEqualTo("组装主棋盘并放到桌面中央。");
-        });
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(compositions).hasValue(4);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
-    void turnsAnUnbackedVisualBlockIntoCitedTextWhenNoPageImageReachedTheModel() {
+    void withholdsAnUnbackedVisualBlockInsteadOfRewritingItsTeachingKind() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools tools = request -> List.of(evidence(chunkId, versionId));
@@ -1904,12 +1866,9 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().steps()).singleElement().satisfies(step -> {
-            assertThat(step.kind()).isEqualTo(TeachingMove.UNDERSTAND);
-            assertThat(step.visualFocus()).isNull();
-            assertThat(step.text()).isEqualTo("找到版图中央的放置区域。");
-        });
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -2127,7 +2086,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void acceptsAGroundedSectionWhenTheSecondBoundedTextRepairSucceeds() {
+    void limitsInvalidTextDraftsToOneSchemaRepairAttempt() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         AtomicInteger revisions = new AtomicInteger();
@@ -2155,11 +2114,10 @@ class GroundedTeachingAgentTest {
 
         IllustratedLesson lesson = agent.createBase(plan(versionId), UUID.randomUUID(), null, ignored -> {});
 
-        assertThat(revisions).hasValue(2);
-        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
-        assertThat(lesson.sections().getFirst().steps().getFirst().sourceChunkIds())
-                .containsExactly(evidence.chunkId());
+        assertThat(revisions).hasValue(1);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus())
+                .isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
     }
 
     @Test
@@ -2293,7 +2251,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void rejectsInternalEvidenceLanguageFromPlayerFacingSteps() {
+    void leavesNaturalEvidenceRelatedLanguageToTheSemanticCritic() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2316,12 +2274,14 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
+        assertThat(lesson.sections().getFirst().steps().getFirst().text())
+                .isEqualTo("已提供的证据中没有提到具体奖励。");
     }
 
     @Test
-    void rejectsPendingRuleLanguageFromPlayerFacingSteps() {
+    void leavesInsufficientRuleLanguageToTheSemanticCritic() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2344,12 +2304,12 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
     }
 
     @Test
-    void rejectsAClaimThatTheSuppliedRulebookPageDoesNotContainTheEndingRule() {
+    void doesNotInferEndingCoverageFromApplicationVocabulary() {
         UUID versionId = UUID.randomUUID();
         RuleEvidence evidence = evidence(UUID.randomUUID(), versionId);
         TeachingLessonModel model = request -> new SectionDraft(
@@ -2372,8 +2332,8 @@ class GroundedTeachingAgentTest {
 
         var lesson = agent.create(plan(versionId), UUID.randomUUID());
 
-        assertThat(lesson.status()).isEqualTo(LessonStatus.INCOMPLETE);
-        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(lesson.status()).isEqualTo(LessonStatus.COMPLETE);
+        assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
     }
 
     @Test
@@ -2528,7 +2488,7 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
-    void retainsACitedSectionAfterOneBoundedPostPublicationCorrection() {
+    void retainsACitedSectionWhenCorrectionAndRepairLeaveTheFlaggedClaimUnchanged() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
         AssistantReadTools retrieval = request -> List.of(evidence(chunkId, versionId));
@@ -2562,7 +2522,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().evidenceStatus())
                 .isEqualTo(EvidenceStatus.CITED_DRAFT);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("任意放置");
-        assertThat(modelCalls).hasValue(2);
+        assertThat(modelCalls).hasValue(3);
         assertThat(criticCalls).hasValue(1);
         assertThat(invocations.diagnostics).containsExactly(
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.SUCCEEDED,
@@ -2571,10 +2531,8 @@ class GroundedTeachingAgentTest {
                         "Teaching section published: CITED_DRAFT_PUBLISHED"),
                 new Diagnostic("validateTeachingSection|1|0", ActivityOutcome.REJECTED,
                         "Teaching draft rejected: CRITIC_CONTRADICTION@1"),
-                new Diagnostic("validateTeachingSection|1|1", ActivityOutcome.SUCCEEDED,
-                        "Teaching draft accepted: POST_PUBLICATION_CORRECTION_APPLIED"),
                 new Diagnostic("publishTeachingSection|1", ActivityOutcome.SUCCEEDED,
-                "Teaching section published: POST_PUBLICATION_REVIEW_PENDING"));
+                        "Teaching section published: POST_PUBLICATION_REVIEW_RETAINED_CITED_DRAFT"));
     }
 
     @Test
@@ -2606,10 +2564,26 @@ class GroundedTeachingAgentTest {
                 return oneStepDraft(chunkId, "把主棋盘放在桌面中央。");
             }
         };
-        GeneratedContentCritic critic = (request, risk) -> new GeneratedContentCritic.Review(
-                true,
-                List.of(new Issue(
-                        IssueType.CONTRADICTION, 1, List.of(chunkId), "The placement contradicts the evidence.")));
+        AtomicInteger criticCalls = new AtomicInteger();
+        GeneratedContentCritic critic = (request, risk) -> {
+            criticCalls.incrementAndGet();
+            boolean corrected = request.claims().stream()
+                    .anyMatch(claim -> claim.text().contains("桌面中央"));
+            int contradictedClaimPosition = request.claims().stream()
+                    .filter(claim -> claim.text().contains("任意放置"))
+                    .mapToInt(GeneratedContentCritic.Claim::position)
+                    .findFirst()
+                    .orElse(1);
+            return corrected
+                    ? new GeneratedContentCritic.Review(true, List.of())
+                    : new GeneratedContentCritic.Review(
+                            true,
+                            List.of(new Issue(
+                                    IssueType.CONTRADICTION,
+                                    contradictedClaimPosition,
+                                    List.of(chunkId),
+                                    "The placement contradicts the evidence.")));
+        };
         RecordingInvocations invocations = new RecordingInvocations();
         GroundedTeachingAgent agent = new GroundedTeachingAgent(
                 request -> List.of(evidence(chunkId, versionId)),
@@ -2625,6 +2599,7 @@ class GroundedTeachingAgentTest {
         assertThat(lesson.sections().getFirst().evidenceStatus()).isEqualTo(EvidenceStatus.SUPPORTED);
         assertThat(lesson.sections().getFirst().steps().getFirst().text()).contains("桌面中央");
         assertThat(revisions).hasValue(2);
+        assertThat(criticCalls).hasValue(2);
     }
 
     @Test
@@ -2698,7 +2673,10 @@ class GroundedTeachingAgentTest {
                 revisions.incrementAndGet();
                 assertThat(request.topicKey()).isEqualTo("turn-flow");
                 assertThat(feedback).singleElement().satisfies(value -> assertThat(value)
-                        .contains("CHAPTER_SCOPE_DUPLICATION", "retain the player-visible stage"));
+                        .contains(
+                                "CHAPTER_SCOPE_DUPLICATION",
+                                "preserve independently supported content",
+                                "chapter objective"));
                 return new SectionDraft(
                         "回合顺序",
                         VisualKind.REFERENCE_CARD,
@@ -2715,16 +2693,17 @@ class GroundedTeachingAgentTest {
             assertThat(request.reviewMode()).isEqualTo(GeneratedContentCritic.ReviewMode.POST_PUBLICATION);
             assertThat(request.taskContext().objective())
                     .contains("without expanding its payment", "payment and EP reward");
-            int claimPosition = request.claims().stream()
+            var paymentClaim = request.claims().stream()
                     .filter(claim -> claim.text().contains("支付2点情绪值"))
-                    .findFirst()
-                    .orElseThrow()
-                    .position();
+                    .findFirst();
+            if (paymentClaim.isEmpty()) {
+                return new GeneratedContentCritic.Review(true, List.of());
+            }
             return new GeneratedContentCritic.Review(
                     true,
                     List.of(new Issue(
                             IssueType.CHAPTER_SCOPE_DUPLICATION,
-                            claimPosition,
+                            paymentClaim.orElseThrow().position(),
                             List.of(chunkId),
                             "Keep the optional imprint stage; chapter 2 owns the payment and EP detail.")));
         };

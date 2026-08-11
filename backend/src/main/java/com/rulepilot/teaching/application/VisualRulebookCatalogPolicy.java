@@ -12,33 +12,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /** Deterministic visual-page catalog transformations; model and storage work stay in the caller. */
 final class VisualRulebookCatalogPolicy {
-
-    private static final Pattern ICON_BEARING_ANCHOR = Pattern.compile(
-            "(?iu)(?:\\b(?:icon|symbol|legend|key|token|marker|badge|scor(?:e|ing)|resource|pattern)\\b"
-                    + "|图标|符号|图例|标记|代币|计分|得分|资源|花纹|图案)");
-    private static final Pattern NON_ICON_SUBJECT = Pattern.compile(
-            "(?iu)(?:\\b(?:example|illustration|photograph|whole\\s+(?:card|tile|token)|"
-                    + "(?:card|tile|token))\\b$|示例|插图|照片|整张卡|整个(?:图块|瓦片|代币)|(?:图块|瓦片|代币)$)");
-    private static final Pattern NON_GAMEPLAY_IDENTITY = Pattern.compile(
-            "(?iu)(?:\\b(?:logo|publisher|compliance|certification|trademark|safety\\s+warning|"
-                    + "age\\s+restriction)\\b|徽标|商标|出版商|合规|认证标志|年龄限制|安全警告)");
-    private static final Pattern NON_GAMEPLAY_PAGE = Pattern.compile(
-            "(?iu)(?:\\b(?:credits?|copyright|all\\s+rights\\s+reserved|printed\\s+in|choking\\s+hazard|"
-                    + "safety\\s+warning|advertisement|acknowledg(?:e)?ments?|table\\s+of\\s+contents|index)\\b"
-                    + "|版权|致谢|鸣谢|目录|广告|安全警告|窒息危险)");
-    private static final Pattern NON_ICON_DESCRIPTION = Pattern.compile(
-            "(?iu)(?:\\b(?:uppercase|lowercase|letters?|numbers?|numeral|printed\\s+text|text\\s+(?:label|mention)|"
-                    + "whole\\s+(?:card|tile|token)|"
-                    + "(?:hexagonal|connected|component)\\s+tiles?|empty\\s+circle|"
-                    + "(?:beige|colored)\\s+background)\\b"
-                    + "|\\btext\\s+(?:labels?|mention(?:s|ing)?)\\b"
-                    + "|字母|数字|文本|瓷砖|板块|图块|瓦片)");
 
     private VisualRulebookCatalogPolicy() {}
 
@@ -147,18 +125,8 @@ final class VisualRulebookCatalogPolicy {
                 .filter(value -> !value.isBlank())
                 .distinct()
                 .count();
-        if (NON_GAMEPLAY_PAGE.matcher(summary.printedTerms() + "\n" + summary.factualSummary()).find()) {
-            return false;
-        }
         if (visibleLabels >= 8 || summary.iconOccurrences().size() >= 8) return true;
-        if (!summary.iconOccurrences().isEmpty()) {
-            return false;
-        }
-        if (summary.visualAnchors().isEmpty()) return false;
-        return visibleLabels >= 8 || summary.visualAnchors().stream()
-                .anyMatch(anchor -> ICON_BEARING_ANCHOR
-                        .matcher(anchor.kind() + " " + anchor.label())
-                        .find());
+        return summary.iconOccurrences().isEmpty() && !summary.visualAnchors().isEmpty();
     }
 
     /**
@@ -210,8 +178,8 @@ final class VisualRulebookCatalogPolicy {
     }
 
     /**
-     * A glossary crop represents one compact symbol, never a page callout or a component-sized region. This
-     * geometry and vocabulary gate is intentionally game-independent and runs after model localization.
+     * A glossary crop must be a compact, bounded region rather than a page- or component-sized rectangle. Semantic
+     * classification belongs to the structured visual model; this gate checks geometry and a non-trivial label only.
      */
     static boolean publishableLocalizedIcon(
             IconOccurrence icon, int x, int y, int width, int height) {
@@ -223,12 +191,7 @@ final class VisualRulebookCatalogPolicy {
                 || longSide > shortSide * 4) {
             return false;
         }
-        String identity = (icon.groupKey() + " " + icon.name()).strip();
-        if (icon.name().matches("(?iu)[a-z0-9]") || NON_ICON_DESCRIPTION.matcher(icon.visualDescription()).find()) {
-            return false;
-        }
-        return !NON_ICON_SUBJECT.matcher(identity).find()
-                && !NON_GAMEPLAY_IDENTITY.matcher(identity).find();
+        return icon.name().codePointCount(0, icon.name().length()) >= 2;
     }
 
     private static IconOccurrence preferIconEvidence(IconOccurrence first, IconOccurrence second) {

@@ -3,7 +3,6 @@ package com.rulepilot.assistant.adapter.out.model;
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
 import com.rulepilot.assistant.GeneratedContentCritic.IssueType;
-import com.rulepilot.assistant.GeneratedContentCritic.ContentType;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.modelconfig.RuntimeModelConfiguration;
@@ -15,7 +14,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -26,12 +29,26 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     private final RuntimeModelConfiguration models;
     private final FakeContentCriticModel fakeModel;
     private final VersionedAgentPrompts prompts;
+    private final double temperature;
 
     public SpringAiContentCriticModel(
             RuntimeModelConfiguration models, FakeContentCriticModel fakeModel, VersionedAgentPrompts prompts) {
+        this(models, fakeModel, prompts, 0.0);
+    }
+
+    @Autowired
+    public SpringAiContentCriticModel(
+            RuntimeModelConfiguration models,
+            FakeContentCriticModel fakeModel,
+            VersionedAgentPrompts prompts,
+            @Value("${rulepilot.critic.temperature:0.0}") double temperature) {
+        if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
+            throw new IllegalArgumentException("critic model temperature must be between 0 and 2");
+        }
         this.models = models;
         this.fakeModel = fakeModel;
         this.prompts = prompts;
+        this.temperature = temperature;
     }
 
     @Override
@@ -52,30 +69,35 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
         }
         try {
             return critiqueOnce(request, prompts.structuredOutputRepair());
-        } catch (RuntimeException exception) {
-            exception.addSuppressed(firstFailure);
-            throw exception;
+        } catch (RuntimeException secondFailure) {
+            secondFailure.addSuppressed(firstFailure);
+            throw secondFailure;
         }
     }
 
     private CritiqueDraft critiqueOnce(ReviewRequest request, String repair) {
         Map<String, UUID> evidenceIds = evidenceIds(request);
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.CRITIC)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.CRITIC)
-                && (request.reviewMode() == ReviewMode.DISCOVERY
-                        || request.reviewMode() == ReviewMode.OBJECTIVE_COVERAGE
-                        || request.reviewMode() == ReviewMode.POST_PUBLICATION
-                        || request.reviewMode() == ReviewMode.POST_PUBLICATION_STRUCTURE
-                        || request.contentType() == ContentType.ANSWER)) {
+        boolean deepSeekNonThinking = models.usesDeepSeekNonThinkingGeneration(Role.CRITIC);
+        boolean qwen = usesQwen();
+        if (deepSeekNonThinking || qwen) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.model(models.modelNameFor(Role.CRITIC));
-            options.temperature(0.0);
-            options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            options.temperature(temperature);
+            if (deepSeekNonThinking) {
+                options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
+            } else {
+                options.responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+                options.extraBody(Map.of("enable_thinking", false));
+            }
             prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder()
+                    .temperature(temperature));
         }
         ModelCritiqueDraft draft = prompt
                 .system(systemPrompt(request.reviewMode()))
-                .user(user -> user.text(prompts.criticUser())
+                .user(user -> user.text(userPrompt(request.reviewMode()))
                         .param("type", request.contentType())
                         .param("mode", request.reviewMode())
                         .param("objective", request.taskContext().objective())
@@ -87,12 +109,17 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
                 .entity(ModelCritiqueDraft.class);
         if (draft == null) throw new IllegalArgumentException("critic returned no draft");
         return new CritiqueDraft(draft.issues().stream()
+                .filter(issue -> Boolean.TRUE.equals(issue.defectConfirmed()))
                 .map(issue -> new Issue(
                         issue.type(),
                         issue.claimPosition(),
                         resolveReferences(issue.evidenceIds(), evidenceIds),
                         issue.summary()))
                 .toList());
+    }
+
+    private boolean usesQwen() {
+        return "qwen".equals(models.providerFor(Role.CRITIC));
     }
 
     private String systemPrompt(ReviewMode mode) {
@@ -102,6 +129,10 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
             case ATOMIC_CONFIRMATION -> prompts.atomicCriticSystem();
             case OBJECTIVE_COVERAGE -> prompts.objectiveCoverageCriticSystem();
         };
+    }
+
+    private String userPrompt(ReviewMode mode) {
+        return mode == ReviewMode.ATOMIC_CONFIRMATION ? prompts.atomicCriticUser() : prompts.criticUser();
     }
 
     private List<ModelClaim> modelClaims(ReviewRequest request) {
@@ -159,8 +190,24 @@ public class SpringAiContentCriticModel implements ContentCriticModel {
     }
 
     private record ModelIssue(
-            IssueType type, int claimPosition, List<String> evidenceIds, String summary) {
+            Boolean defectConfirmed,
+            IssueType type,
+            int claimPosition,
+            List<String> evidenceIds,
+            String summary) {
         private ModelIssue {
+            if (defectConfirmed == null) {
+                throw new IllegalArgumentException("critic issue verdict is missing");
+            }
+            if (type == null) {
+                throw new IllegalArgumentException("critic issue type is missing");
+            }
+            if (claimPosition < 1) {
+                throw new IllegalArgumentException("critic issue claim position is invalid");
+            }
+            if (summary == null || summary.isBlank()) {
+                throw new IllegalArgumentException("critic issue summary is missing");
+            }
             evidenceIds = evidenceIds == null ? List.of() : List.copyOf(evidenceIds);
         }
     }

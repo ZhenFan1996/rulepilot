@@ -169,7 +169,15 @@ public interface BoardGameGeekCatalog {
             List<String> designers,
             List<String> publishers,
             List<String> officialChineseNames,
-            List<EditionImage> editionImages) {
+            List<EditionImage> editionImages,
+            Integer minimumPlayTimeMinutes,
+            Integer maximumPlayTimeMinutes,
+            Integer suggestedMinimumAge,
+            String bestWith,
+            String recommendedWith,
+            Integer languageDependenceLevel,
+            Integer weightVotes,
+            List<String> families) {
         public GameDetails {
             categories = List.copyOf(categories);
             mechanics = List.copyOf(mechanics);
@@ -180,6 +188,35 @@ public interface BoardGameGeekCatalog {
                     .distinct()
                     .toList();
             editionImages = List.copyOf(editionImages);
+            bestWith = bestWith == null ? "" : bestWith;
+            recommendedWith = recommendedWith == null ? "" : recommendedWith;
+            families = families == null ? List.of() : List.copyOf(families);
+        }
+
+        public GameDetails(
+                int bggId,
+                String name,
+                String description,
+                String thumbnailUrl,
+                Integer publicationYear,
+                Integer minPlayers,
+                Integer maxPlayers,
+                Integer playingTimeMinutes,
+                Integer minimumAge,
+                String imageUrl,
+                BigDecimal averageRating,
+                BigDecimal averageWeight,
+                List<String> categories,
+                List<String> mechanics,
+                List<String> designers,
+                List<String> publishers,
+                List<String> officialChineseNames,
+                List<EditionImage> editionImages) {
+            this(
+                    bggId, name, description, thumbnailUrl, publicationYear, minPlayers, maxPlayers,
+                    playingTimeMinutes, minimumAge, imageUrl, averageRating, averageWeight, categories,
+                    mechanics, designers, publishers, officialChineseNames, editionImages,
+                    playingTimeMinutes, playingTimeMinutes, null, "", "", null, null, List.of());
         }
 
         public GameDetails(
@@ -203,7 +240,8 @@ public interface BoardGameGeekCatalog {
             this(
                     bggId, name, description, thumbnailUrl, publicationYear, minPlayers, maxPlayers,
                     playingTimeMinutes, minimumAge, imageUrl, averageRating, averageWeight, categories,
-                    mechanics, designers, publishers, officialChineseNames, List.of());
+                    mechanics, designers, publishers, officialChineseNames, List.of(),
+                    playingTimeMinutes, playingTimeMinutes, null, "", "", null, null, List.of());
         }
 
         public GameDetails(
@@ -234,6 +272,14 @@ public interface BoardGameGeekCatalog {
                     List.of(),
                     List.of(),
                     List.of(),
+                    List.of(),
+                    playingTimeMinutes,
+                    playingTimeMinutes,
+                    null,
+                    "",
+                    "",
+                    null,
+                    null,
                     List.of());
         }
     }

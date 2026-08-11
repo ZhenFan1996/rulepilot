@@ -4,16 +4,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.RuleAnswerModel.RuleTimingRequest;
-import com.rulepilot.assistant.domain.LearningIntent;
 import com.rulepilot.assistant.domain.QuestionType;
 import com.rulepilot.assistant.domain.TimingOrderBasis;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class AnswerTimingResolverTest {
@@ -22,98 +25,90 @@ class AnswerTimingResolverTest {
     private final UUID citationId = UUID.randomUUID();
 
     @Test
-    void resolvesCitedCurrentPlayerOrdering() {
-        ModelRequest request = request("If two things happen at the same time, who chooses the order?");
-        ModelDraft draft = draft(new RuleTimingRequest(
-                "Two effects happen at the same time during a player's turn.",
-                "Resolve them in the order selected by that player.",
+    void resolvesACompleteCitedTimingSchema() {
+        var result = resolver.resolve(request(AnswerAid.TIMING), draft(List.of(timing(
+                "Two effects share a timing window.",
+                "Resolve them in the current player's chosen order.",
                 "The player taking the current turn.",
                 "CURRENT_PLAYER_CHOOSES",
-                List.of(citationId)));
+                citationId))));
 
-        var result = resolver.resolve(request, draft);
-
-        assertThat(result).singleElement().satisfies(resolution -> {
-            assertThat(resolution.basis()).isEqualTo(TimingOrderBasis.CURRENT_PLAYER_CHOOSES);
-            assertThat(resolution.citationIds()).containsExactly(citationId);
+        assertThat(result).singleElement().satisfies(item -> {
+            assertThat(item.basis()).isEqualTo(TimingOrderBasis.CURRENT_PLAYER_CHOOSES);
+            assertThat(item.citationIds()).containsExactly(citationId);
         });
     }
 
     @Test
-    void rejectsProseOnlyDirectTimingAnswer() {
-        ModelRequest request = request("同时触发时哪个先结算？");
+    void followsTheAcceptedAidRatherThanSimultaneousEffectKeywords() {
+        ModelRequest selected = request(AnswerAid.TIMING);
+        assertThat(resolver.requiresTiming(selected)).isTrue();
+        assertThatThrownBy(() -> resolver.resolve(selected, draft(List.of())))
+                .hasMessageContaining("required");
 
-        assertThatThrownBy(() -> resolver.resolve(request, draft(null)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("omitted");
+        ModelRequest notSelected = request(AnswerAid.NONE);
+        assertThat(resolver.requiresTiming(notSelected)).isFalse();
+        assertThat(resolver.resolve(notSelected, draft(List.of()))).isEmpty();
     }
 
     @Test
-    void rejectsUnsupportedBasisAndOutOfScopeCitation() {
-        ModelRequest request = request("What order do simultaneous effects resolve?");
-        RuleTimingRequest inventedBasis = new RuleTimingRequest(
-                "Two effects coincide.", "Resolve the newer effect first.", "The newest card.",
-                "NEWEST_EFFECT_FIRST", List.of(citationId));
-        RuleTimingRequest outsideScope = new RuleTimingRequest(
-                "Two effects coincide.", "Resolve top to bottom.", "Printed card order.",
-                "PRINTED_TOP_TO_BOTTOM", List.of(UUID.randomUUID()));
+    void acceptsSupportedEnumsAndRejectsInvalidStructureOrCitationScope() {
+        assertThat(resolver.resolve(request(AnswerAid.TIMING), draft(List.of(timing(
+                        "Printed effects.", "Resolve top to bottom.", "Printed order.",
+                        "PRINTED_TOP_TO_BOTTOM", citationId)))))
+                .singleElement().extracting(item -> item.basis())
+                .isEqualTo(TimingOrderBasis.PRINTED_TOP_TO_BOTTOM);
+        assertThat(resolver.resolve(request(AnswerAid.TIMING), draft(List.of(timing(
+                        "Several actors move.", "Use normal turn order.", "The cited rule.",
+                        "NORMAL_TURN_ORDER", citationId)))))
+                .singleElement().extracting(item -> item.basis())
+                .isEqualTo(TimingOrderBasis.NORMAL_TURN_ORDER);
 
-        assertThatThrownBy(() -> resolver.resolve(request, draft(inventedBasis)))
+        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(List.of(timing(
+                        "Context", "Order", "Source", "NEWEST_FIRST", citationId)))))
                 .hasMessageContaining("basis");
-        assertThatThrownBy(() -> resolver.resolve(request, draft(outsideScope)))
+        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(List.of(timing(
+                        "Context", "Order", "Source", "NORMAL_TURN_ORDER", UUID.randomUUID())))))
                 .hasMessageContaining("outside");
     }
 
     @Test
-    void rejectsASectionTitleInPlaceOfTheCurrentPlayerOrderSource() {
-        ModelRequest request = request("If two things happen at the same time, who chooses the order?");
-        RuleTimingRequest shiftedMeaning = new RuleTimingRequest(
-                "Two things happen at the same time.",
-                "The player taking their turn chooses the order.",
-                "Simultaneous Timing rule",
-                "CURRENT_PLAYER_CHOOSES",
-                List.of(citationId));
+    void rejectsDuplicateContextsAndBoundsTheResolutionCount() {
+        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(List.of(
+                        timing("Same context", "First", "Source", "NORMAL_TURN_ORDER", citationId),
+                        timing(" same context ", "Second", "Source", "NORMAL_TURN_ORDER", citationId)))))
+                .hasMessageContaining("duplicate");
 
-        assertThatThrownBy(() -> resolver.resolve(request, draft(shiftedMeaning)))
-                .hasMessageContaining("current-player timing fields");
+        List<RuleTimingRequest> tooMany = IntStream.rangeClosed(1, 4)
+                .mapToObj(index -> timing(
+                        "Context " + index, "Order " + index, "Source " + index,
+                        "NORMAL_TURN_ORDER", citationId))
+                .toList();
+        assertThatThrownBy(() -> resolver.resolve(request(AnswerAid.TIMING), draft(tooMany)))
+                .hasMessageContaining("too many timing resolutions");
     }
 
-    @Test
-    void acceptsPrintedAndNormalTurnOrderOnlyWhenTheirSourcesStayExplicit() {
-        ModelRequest request = request("What order do simultaneous effects resolve?");
-        RuleTimingRequest printed = new RuleTimingRequest(
-                "A card has two effects with the same timing.",
-                "Resolve the effects from top to bottom.",
-                "The card's printed top-to-bottom order.",
-                "PRINTED_TOP_TO_BOTTOM",
-                List.of(citationId));
-        RuleTimingRequest turnOrder = new RuleTimingRequest(
-                "Multiple pieces must move at once.",
-                "Move them one at a time in normal turn order.",
-                "The rule mandates normal turn order.",
-                "NORMAL_TURN_ORDER",
-                List.of(citationId));
-
-        assertThat(resolver.resolve(request, draft(printed))).singleElement()
-                .extracting(resolution -> resolution.basis())
-                .isEqualTo(TimingOrderBasis.PRINTED_TOP_TO_BOTTOM);
-        assertThat(resolver.resolve(request, draft(turnOrder))).singleElement()
-                .extracting(resolution -> resolution.basis())
-                .isEqualTo(TimingOrderBasis.NORMAL_TURN_ORDER);
-    }
-
-    private ModelRequest request(String question) {
+    private ModelRequest request(AnswerAid aid) {
         return new ModelRequest(
-                question,
+                "How are the cited effects ordered?",
                 QuestionType.RULE_QUERY,
-                new AnswerContext(null, LearningIntent.VERIFY, PlayerLocale.EN),
-                List.of(new EvidenceInput(citationId, "RULE", "Timing", "Timing rule text", 2, 2)));
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citationId, "RULE", "Timing", "Cited timing rule.", 2, 2)),
+                Set.of(EvidenceNeed.SEQUENCE),
+                aid);
     }
 
-    private ModelDraft draft(RuleTimingRequest timing) {
+    private ModelDraft draft(List<RuleTimingRequest> timings) {
+        List<UUID> citations = timings.stream().flatMap(item -> item.citationIds().stream()).distinct().toList();
+        if (citations.isEmpty()) citations = List.of(citationId);
         return new ModelDraft(
-                true, null, "Order is fixed.", "Use the cited timing rule.", List.of(citationId), List.of(),
-                "HIGH", "DIRECT_RULE", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
-                List.of(), timing == null ? List.of() : List.of(timing));
+                true, null, "Order is fixed.", "Use the cited timing rule.", citations,
+                List.of(), "HIGH", "DIRECT_RULE", List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(), timings);
+    }
+
+    private RuleTimingRequest timing(
+            String context, String order, String source, String basis, UUID citation) {
+        return new RuleTimingRequest(context, order, source, basis, List.of(citation));
     }
 }

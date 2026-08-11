@@ -108,7 +108,40 @@ public interface RuleAnswerModel {
         RELATIONSHIP,
         VISUAL_REFERENCE,
         COMPLETE_LIST,
+        ADVICE,
         PRIOR_TURN
+    }
+
+    /** One bounded player-facing shape selected by the semantic planning stage. */
+    enum AnswerAid {
+        NONE,
+        WALKTHROUGH,
+        DECISION_TABLE,
+        EXCEPTIONS,
+        DEFINITIONS,
+        EXAMPLE,
+        RULE_PRIORITY,
+        TIMING,
+        TIE,
+        SCOPE,
+        CONCEPT_COMPARISON,
+        OPTIONS,
+        SOURCE,
+        PERMISSION,
+        CALCULATION,
+        VISUAL;
+
+        public static AnswerAid forLearningIntent(LearningIntent intent) {
+            if (intent == null) return NONE;
+            return switch (intent) {
+                case EXAMPLE -> EXAMPLE;
+                case DEFINE -> DEFINITIONS;
+                case WHY -> WALKTHROUGH;
+                case EXCEPTIONS -> EXCEPTIONS;
+                case SOURCE -> SOURCE;
+                case SIMPLIFY, VERIFY -> NONE;
+            };
+        }
     }
 
     record PlannedSubquestion(String questionSpan, Set<EvidenceNeed> evidenceNeeds) {
@@ -128,11 +161,12 @@ public interface RuleAnswerModel {
             List<String> terms,
             Set<MissingQuestionContext> missingContext,
             LearningIntent learningIntent,
+            AnswerAid answerAid,
             List<PlannedSubquestion> subquestions) {
         public QuestionInterpretationDraft {
             if (questionType == null || referenceBinding == null || terms == null || terms.size() > 12
                     || missingContext == null || missingContext.size() > 2
-                    || subquestions == null || subquestions.size() > 4) {
+                    || answerAid == null || subquestions == null || subquestions.size() > 4) {
                 throw new IllegalArgumentException("question interpretation draft is invalid");
             }
             if (terms.stream().anyMatch(value -> value == null || value.isBlank() || value.length() > 80)) {
@@ -151,18 +185,71 @@ public interface RuleAnswerModel {
                 ReferenceBinding referenceBinding,
                 List<String> terms,
                 Set<MissingQuestionContext> missingContext,
+                LearningIntent learningIntent,
                 List<PlannedSubquestion> subquestions) {
-            this(questionType, referenceBinding, terms, missingContext, null, subquestions);
+            this(
+                    questionType,
+                    referenceBinding,
+                    terms,
+                    missingContext,
+                    learningIntent,
+                    AnswerAid.forLearningIntent(learningIntent),
+                    subquestions);
+        }
+
+        public QuestionInterpretationDraft(
+                QuestionType questionType,
+                ReferenceBinding referenceBinding,
+                List<String> terms,
+                Set<MissingQuestionContext> missingContext,
+                List<PlannedSubquestion> subquestions) {
+            this(questionType, referenceBinding, terms, missingContext, null, AnswerAid.NONE, subquestions);
         }
     }
 
-    record ModelRequest(String question, QuestionType questionType, AnswerContext context, List<EvidenceInput> evidence) {
+    record ModelRequest(
+            String question,
+            QuestionType questionType,
+            AnswerContext context,
+            List<EvidenceInput> evidence,
+            Set<EvidenceNeed> evidenceNeeds,
+            AnswerAid answerAid) {
         public ModelRequest {
             if (question == null || question.isBlank() || questionType == null || context == null
-                    || evidence == null || evidence.isEmpty()) {
+                    || evidence == null || evidence.isEmpty() || evidenceNeeds == null || answerAid == null) {
                 throw new IllegalArgumentException("answer model request is invalid");
             }
             evidence = List.copyOf(evidence);
+            evidenceNeeds = Set.copyOf(evidenceNeeds);
+        }
+
+        public ModelRequest(
+                String question,
+                QuestionType questionType,
+                AnswerContext context,
+                List<EvidenceInput> evidence,
+                Set<EvidenceNeed> evidenceNeeds) {
+            this(
+                    question,
+                    questionType,
+                    context,
+                    evidence,
+                    evidenceNeeds,
+                    AnswerAid.forLearningIntent(context.learningIntent()));
+        }
+
+        public ModelRequest(
+                String question,
+                QuestionType questionType,
+                AnswerContext context,
+                List<EvidenceInput> evidence) {
+            this(
+                    question,
+                    questionType,
+                    context,
+                    evidence,
+                    Set.of(EvidenceNeed.DIRECT_RULE),
+                    AnswerAid.forLearningIntent(context.learningIntent()));
         }
     }
 

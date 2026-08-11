@@ -350,14 +350,18 @@ class VisualRulebookCataloger {
                 List<VisualRulebookPageCatalogModel.IdentifierCellFact> facts = new ArrayList<>();
                 List<VisualRulebookPageCatalogModel.IdentifierReferencePage> referencePages = identifierReferencePages(
                         documentVersionId, summary, referenceFacts);
-                Set<String> subjectTerms = referenceTerms(summary.printedTerms() + " " + summary.factualSummary());
                 List<String> allowedReferenceLabels = referencePages.isEmpty()
                         ? List.of()
-                        : referenceTerms(referencePages.getFirst().evidenceText()).stream()
-                                .filter(term -> !Set.of(
-                                                "drawn", "four", "income", "one", "resource", "sequence", "showing",
-                                                "starting", "step", "token", "tucked", "under")
-                                        .contains(term))
+                        : referenceFacts.stream()
+                                .filter(fact -> fact.pageNumber() == referencePages.getFirst().image().pageNumber())
+                                .flatMap(fact -> fact.iconOccurrences().stream())
+                                .filter(icon -> icon.meaningStatus()
+                                        != com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED)
+                                .map(icon -> icon.verifiedVisualLabel().isBlank()
+                                        ? icon.name()
+                                        : icon.verifiedVisualLabel())
+                                .filter(label -> label != null && !label.isBlank())
+                                .distinct()
                                 .limit(12)
                                 .toList();
                 int cellBatchSize = referencePages.isEmpty() ? 4 : 1;
@@ -398,11 +402,7 @@ class VisualRulebookCataloger {
                                     result -> Math.max(1, result.factualSummary().length() / 4));
                             String verifiedSummary = "NONE".equals(verifiedFact.matchedLabel())
                                     ? fact.factualSummary()
-                                    : removeConflictingReferenceLabels(
-                                            verifiedFact.factualSummary(),
-                                            verifiedFact.matchedLabel(),
-                                            verifiedFact.quantity(),
-                                            allowedReferenceLabels);
+                                    : verifiedFact.factualSummary();
                             facts.add(new VisualRulebookPageCatalogModel.IdentifierCellFact(
                                     fact.identifier(), verifiedSummary));
                         } catch (RuntimeException rejectedVerification) {
@@ -416,11 +416,7 @@ class VisualRulebookCataloger {
                                         result -> Math.max(1, result.factualSummary().length() / 4));
                                 String retriedSummary = "NONE".equals(retried.matchedLabel())
                                         ? fact.factualSummary()
-                                        : removeConflictingReferenceLabels(
-                                                retried.factualSummary(),
-                                                retried.matchedLabel(),
-                                                retried.quantity(),
-                                                allowedReferenceLabels);
+                                        : retried.factualSummary();
                                 facts.add(new VisualRulebookPageCatalogModel.IdentifierCellFact(
                                         fact.identifier(), retriedSummary));
                             } catch (RuntimeException retryRejected) {
@@ -465,219 +461,45 @@ class VisualRulebookCataloger {
             VisualRulebookPageCatalogModel.PageSummary subject,
             List<PageFact> candidates) {
         if (candidates == null || candidates.isEmpty()) return List.of();
-        Set<String> subjectTerms = referenceTerms(subject.printedTerms() + " " + subject.factualSummary());
-        List<Integer> selected = candidates.stream()
+        PageFact reference = candidates.stream()
                 .filter(candidate -> candidate.pageNumber() != subject.pageNumber())
-                .map(candidate -> {
-                    Optional<String> focusedAnchor = candidate.visualAnchors().stream()
-                            .filter(anchor -> referenceAnchorRank(anchor) > 0)
-                            .map(anchor -> anchor.label() + " " + anchor.visibleDescription())
-                            .filter(text -> quantifiedSharedTerms(subjectTerms, text) >= 3)
-                            .max(java.util.Comparator.comparingInt(
-                                    text -> sharedTerms(subjectTerms, referenceTerms(text))));
-                    String evidence = focusedAnchor.orElse(candidate.printedTerms() + " " + candidate.factualSummary());
-                    int quantifiedCoverage = quantifiedSharedTerms(subjectTerms, evidence);
-                    int compactCoverage = compactSharedTerms(subjectTerms, evidence);
-                    int totalCoverage = sharedTerms(subjectTerms, referenceTerms(evidence));
-                    return Map.entry(
-                            candidate.pageNumber(),
-                            focusedAnchor.map(text -> candidate.visualAnchors().stream()
-                                            .filter(anchor -> (anchor.label() + " " + anchor.visibleDescription()).equals(text))
-                                            .mapToInt(VisualRulebookCataloger::referenceAnchorRank)
-                                            .max().orElse(0) * 1_000_000)
-                                    .orElse(0)
-                                    + quantifiedCoverage * 10_000 + compactCoverage * 100 + totalCoverage);
-                })
-                .filter(entry -> entry.getValue() >= 202)
-                .sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()
-                        .thenComparing(Map.Entry.comparingByKey()))
-                .map(Map.Entry::getKey)
-                .distinct()
-                .limit(1)
-                .toList();
-        if (selected.isEmpty()) {
-            selected = candidates.stream()
-                    .filter(candidate -> candidate.pageNumber() != subject.pageNumber())
-                    .flatMap(candidate -> candidate.visualAnchors().stream()
-                            .filter(anchor -> referenceAnchorRank(anchor) > 0)
-                            .filter(anchor -> quantifiedReferenceTermCount(
-                                            anchor.label() + " " + anchor.visibleDescription())
-                                    >= 3)
-                            .map(anchor -> Map.entry(
-                                    candidate.pageNumber(),
-                                    referenceAnchorRank(anchor) * 1_000
-                                            + quantifiedReferenceTermCount(
-                                                    anchor.label() + " " + anchor.visibleDescription()))))
-                    .sorted(Map.Entry.<Integer, Integer>comparingByValue().reversed()
-                            .thenComparing(Map.Entry.comparingByKey()))
-                    .map(Map.Entry::getKey)
-                    .distinct()
-                    .limit(1)
-                    .toList();
-        }
-        if (selected.isEmpty()) return List.of();
-        List<Integer> selectedPages = List.copyOf(selected);
+                .filter(PageFact::iconInventoryComplete)
+                .filter(candidate -> candidate.iconOccurrences().stream().filter(icon -> icon.meaningStatus()
+                                != com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED)
+                        .count() >= 2)
+                .max(java.util.Comparator.comparingInt(candidate -> candidate.iconOccurrences().size()))
+                .orElse(null);
+        if (reference == null) return List.of();
+        List<Integer> selectedPages = List.of(reference.pageNumber());
         Map<Integer, PageFact> factsByPage = candidates.stream().collect(Collectors.toMap(
                 PageFact::pageNumber, java.util.function.Function.identity(), (first, ignored) -> first));
         return pageImages.read(documentVersionId, new LinkedHashSet<>(selectedPages)).stream()
                 .sorted(java.util.Comparator.comparingInt(page -> selectedPages.indexOf(page.pageNumber())))
                 .map(page -> {
                     PageFact fact = factsByPage.get(page.pageNumber());
-                    Optional<VisualRulebookPageFacts.VisualAnchor> bestAnchor = fact == null
-                            ? Optional.empty()
-                            : fact.visualAnchors().stream()
-                                    .filter(anchor -> referenceAnchorRank(anchor) > 0)
-                                    .map(anchor -> Map.entry(
-                                            anchor,
-                                            sharedTerms(subjectTerms, referenceTerms(
-                                                    anchor.label() + " " + anchor.visibleDescription()))))
-                                    .filter(entry -> quantifiedSharedTerms(
-                                                    subjectTerms,
-                                                    entry.getKey().label() + " " + entry.getKey().visibleDescription())
-                                            >= 3)
-                                    .max(Map.Entry.comparingByValue())
-                                    .map(Map.Entry::getKey);
-                    if (bestAnchor.isEmpty() && fact != null) {
-                        bestAnchor = fact.visualAnchors().stream()
-                                .filter(anchor -> referenceAnchorRank(anchor) > 0)
-                                .filter(anchor -> quantifiedReferenceTermCount(
-                                                anchor.label() + " " + anchor.visibleDescription())
-                                        >= 3)
-                                .max(java.util.Comparator.comparingInt(anchor -> referenceAnchorRank(anchor) * 1_000
-                                        + quantifiedReferenceTermCount(
-                                                anchor.label() + " " + anchor.visibleDescription())));
-                    }
-                    String evidence = bestAnchor
-                            .map(anchor -> anchor.label() + ": " + anchor.visibleDescription())
-                            .orElseGet(() -> fact == null
-                                    ? "The complete rendered page is the only reference evidence."
-                                    : fact.printedTerms() + "\n" + fact.factualSummary());
+                    String evidence = fact == null
+                            ? "The complete rendered page is the only reference evidence."
+                            : fact.printedTerms() + "\n" + fact.factualSummary();
                     if (evidence.length() > 1_600) evidence = evidence.substring(0, 1_600).stripTrailing();
-                    PageImageInput referenceImage = bestAnchor
-                            .map(anchor -> PrintedIdentifierCellPolicy.referenceCrop(
-                                    page, anchor.x(), anchor.y(), anchor.width(), anchor.height()))
-                            .orElseGet(() -> new PageImageInput(
-                                    page.pageNumber(), page.mediaType(), page.content()));
                     return new VisualRulebookPageCatalogModel.IdentifierReferencePage(
-                            referenceImage, evidence);
+                            new PageImageInput(page.pageNumber(), page.mediaType(), page.content()), evidence);
                 })
                 .toList();
-    }
-
-    private static Set<String> referenceTerms(String text) {
-        if (text == null || text.isBlank()) return Set.of();
-        Set<String> ignored = Set.of(
-                "action", "board", "component", "during", "from", "have", "page", "place", "player", "rule",
-                "solar", "space", "system", "tech", "the", "this", "tile", "when", "with", "your");
-        return java.util.Arrays.stream(text.toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+"))
-                .filter(term -> term.length() >= 4 && !ignored.contains(term) && !term.matches("[a-z]{1,4}\\d{1,3}"))
-                .map(term -> term.length() > 4 && term.endsWith("s") ? term.substring(0, term.length() - 1) : term)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    private static int sharedTerms(Set<String> first, Set<String> second) {
-        return (int) first.stream().filter(second::contains).count();
-    }
-
-    private static int compactSharedTerms(Set<String> subjectTerms, String evidence) {
-        if (evidence == null || evidence.isBlank()) return 0;
-        String normalized = evidence.toLowerCase(java.util.Locale.ROOT);
-        int maximum = 0;
-        for (int start = 0; start < normalized.length(); start += 160) {
-            String window = normalized.substring(start, Math.min(normalized.length(), start + 360));
-            maximum = Math.max(maximum, (int) subjectTerms.stream().filter(window::contains).count());
-        }
-        return maximum;
-    }
-
-    private static int quantifiedSharedTerms(Set<String> subjectTerms, String evidence) {
-        if (evidence == null || evidence.isBlank()) return 0;
-        String normalized = evidence.toLowerCase(java.util.Locale.ROOT);
-        return (int) subjectTerms.stream()
-                .filter(term -> java.util.regex.Pattern.compile(
-                                "\\b\\d+\\s+(?:[\\p{L}-]+\\s+){0,2}" + java.util.regex.Pattern.quote(term) + "s?\\b")
-                        .matcher(normalized)
-                        .find())
-                .count();
-    }
-
-    private static int quantifiedReferenceTermCount(String evidence) {
-        if (evidence == null || evidence.isBlank()) return 0;
-        Set<String> terms = new LinkedHashSet<>();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
-                        "(?iu)\\b\\d+\\s+(?:[\\p{L}-]+\\s+){0,2}([\\p{L}-]{4,})s?\\b")
-                .matcher(evidence);
-        while (matcher.find()) terms.add(matcher.group(1).toLowerCase(java.util.Locale.ROOT));
-        return terms.size();
-    }
-
-    static String removeConflictingReferenceLabels(
-            String summary, String matchedLabel, int quantity, List<String> allowedLabels) {
-        String sanitized = summary;
-        for (String label : allowedLabels) {
-            if (label.equalsIgnoreCase(matchedLabel)) continue;
-            sanitized = sanitized.replaceAll(
-                    "(?iu)(?:\\s*(?:and|or|/|,)\\s*)?\\b\\d+\\s+"
-                            + java.util.regex.Pattern.quote(label) + "s?\\s*(?:and|or|/|,)?\\s*",
-                    " ");
-        }
-        sanitized = sanitized.replaceAll("\\s+", " ").replaceAll("\\s+([.,;:!?])", "$1").strip();
-        if (!normalizedContainsLabel(sanitized, matchedLabel)) {
-            sanitized = sanitized + " Verified reference match: " + quantity + " " + matchedLabel + ".";
-        }
-        return sanitized;
     }
 
     static String mergeIdentifierFactsWithSharedRules(String identifierFacts, String pageSummary) {
-        List<String> identifierLines = List.of(identifierFacts.split("\\R+"));
-        List<Set<String>> identifierTerms = identifierLines.stream().map(VisualRulebookCataloger::factTerms).toList();
-        List<String> sharedRules = java.util.Arrays.stream(pageSummary.split("(?<=[.!?])\\s+|\\R+"))
-                .map(String::strip)
-                .filter(rule -> !rule.isBlank())
-                .filter(rule -> PrintedIdentifierCellPolicy.identifiers(rule).isEmpty())
-                .filter(rule -> {
-                    Set<String> terms = factTerms(rule);
-                    if (terms.isEmpty()) return false;
-                    return identifierTerms.stream().noneMatch(bound -> overlapRatio(terms, bound) >= 0.65);
-                })
-                .distinct()
-                .toList();
-        StringBuilder merged = new StringBuilder(identifierFacts.strip());
-        for (String sharedRule : sharedRules) {
-            if (merged.length() + 1 + sharedRule.length() > 4_000) continue;
-            merged.append('\n').append(sharedRule);
+        LinkedHashSet<String> blocks = new LinkedHashSet<>();
+        if (identifierFacts != null && !identifierFacts.isBlank()) blocks.add(identifierFacts.strip());
+        if (pageSummary != null && !pageSummary.isBlank()) blocks.add(pageSummary.strip());
+        StringBuilder merged = new StringBuilder();
+        for (String block : blocks) {
+            int separator = merged.isEmpty() ? 0 : 1;
+            int remaining = 4_000 - merged.length() - separator;
+            if (remaining <= 0) break;
+            if (!merged.isEmpty()) merged.append('\n');
+            merged.append(block, 0, Math.min(block.length(), remaining));
         }
         return merged.toString();
-    }
-
-    private static Set<String> factTerms(String text) {
-        Set<String> terms = new LinkedHashSet<>();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[\\p{L}\\p{N}#]{3,}")
-                .matcher(text.toLowerCase(java.util.Locale.ROOT));
-        while (matcher.find()) terms.add(matcher.group());
-        return terms;
-    }
-
-    private static double overlapRatio(Set<String> source, Set<String> candidate) {
-        long shared = source.stream().filter(candidate::contains).count();
-        return (double) shared / source.size();
-    }
-
-    private static boolean normalizedContainsLabel(String text, String label) {
-        String normalizedText = text.toLowerCase(java.util.Locale.ROOT);
-        String normalizedLabel = label.toLowerCase(java.util.Locale.ROOT);
-        return normalizedText.contains(normalizedLabel)
-                || (normalizedLabel.length() > 4 && normalizedLabel.endsWith("s")
-                        && normalizedText.contains(normalizedLabel.substring(0, normalizedLabel.length() - 1)));
-    }
-
-    private static int referenceAnchorRank(VisualRulebookPageFacts.VisualAnchor anchor) {
-        String kind = anchor.kind().toLowerCase(java.util.Locale.ROOT);
-        if (kind.contains("component") || kind.contains("species") || kind.contains("board")) return 0;
-        if (kind.contains("legend") || kind.contains("glossary") || kind.contains("reference")) return 3;
-        if (kind.contains("worked example") || kind.contains("resource")) return 2;
-        if (kind.contains("labeled icon")) return 1;
-        return 0;
     }
 
     /**

@@ -18,7 +18,7 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void auditsEmptyIconAnchorsAndLabelDensePartialInventories() {
+    void requestsTileAuditFromStructuredDensitySignalsWithoutClassifyingPageVocabulary() {
         PageSummary scoringReference = summary(
                 new VisualAnchor("table", "Scoring reference", "A structured reference.", 100, 100, 300, 300));
         PageSummary labeledIconGroup = summary(
@@ -75,11 +75,11 @@ class VisualRulebookCatalogPolicyTest {
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseVisualPageWithNoProposedIcons))
                 .isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(densePartialInventory)).isTrue();
-        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(cover)).isFalse();
-        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(setupProse)).isFalse();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(cover)).isTrue();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(setupProse)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseProseWithNoVisualAnchor))
                 .isTrue();
-        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseCreditsPage)).isFalse();
+        assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(denseCreditsPage)).isTrue();
         assertThat(VisualRulebookCatalogPolicy.needsIconTileFallback(simpleInventory)).isFalse();
     }
 
@@ -129,7 +129,7 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
-    void publishesCompactSymbolsButRejectsCalloutsComponentsAndRowSizedRegions() {
+    void publishesStructurallyValidCompactRegionsWithoutGuessingTheirSemanticRole() {
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("leaf", "叶子图标"), 100, 100, 24, 28))
                 .isTrue();
@@ -155,19 +155,19 @@ class VisualRulebookCatalogPolicyTest {
                         100,
                         24,
                         24))
-                .isFalse();
+                .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("check", "对勾", "Green checkmark next to text labels."), 100, 100, 24, 24))
-                .isFalse();
+                .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("rainbow", "彩虹", "Small arc next to text mentioning a button."), 100, 100, 24, 24))
-                .isFalse();
+                .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("cat illustration", "猫插图"), 100, 100, 64, 64))
-                .isFalse();
+                .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("publisher logo", "出版社徽标", "Red shield with white letters."), 100, 100, 64, 64))
-                .isFalse();
+                .isTrue();
         assertThat(VisualRulebookCatalogPolicy.publishableLocalizedIcon(
                         icon("adjacency example", "同色相邻示例"), 100, 100, 177, 35))
                 .isFalse();

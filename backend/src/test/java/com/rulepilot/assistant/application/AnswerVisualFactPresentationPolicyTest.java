@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class AnswerVisualFactPresentationPolicyTest {
 
     @Test
-    void keepsMechanicalBindingsAndRemovesAppearanceOnlyAuditClauses() {
+    void preservesStoredVisualObservationsWithoutSemanticRegexRewriting() {
         PageFactMatch fact = new PageFactMatch(
                 7,
                 "A-01; B-02; C-03",
@@ -22,17 +22,7 @@ class AnswerVisualFactPresentationPolicyTest {
                 1.0);
 
         assertThat(AnswerVisualFactPresentationPolicy.evidenceText(fact))
-                .contains(
-                        "A-01: Gain one energy",
-                        "B-02: Lower-space reward is one card",
-                        "C-03: Gain 2 points",
-                        "Every upper space gives 2 points")
-                .doesNotContain(
-                        "green bolt",
-                        "blue rectangle",
-                        "upper space shows level 2",
-                        "A #01 shows",
-                        "wreath pictogram",
-                        "Printed terms");
+                .startsWith("Visual page facts (literal observations only; verify rules against the cited page).")
+                .contains(fact.factualSummary());
     }
 }

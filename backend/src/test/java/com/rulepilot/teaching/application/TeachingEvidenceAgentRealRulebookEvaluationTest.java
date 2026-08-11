@@ -15,12 +15,16 @@ import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AuditedAgentInvocations;
+import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.NativeAgentTool.ToolScope;
 import com.rulepilot.assistant.NativeAgentTool.ToolObservation;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.NativeToolScopes;
+import com.rulepilot.assistant.adapter.out.model.FakeContentCriticModel;
+import com.rulepilot.assistant.adapter.out.model.SpringAiContentCriticModel;
 import com.rulepilot.assistant.adapter.out.model.SpringAiNativeToolModel;
 import com.rulepilot.assistant.application.BoundedNativeToolAgent;
+import com.rulepilot.assistant.application.ConditionalGeneratedContentCritic;
 import com.rulepilot.assistant.application.ExpandRuleEvidenceContextNativeTool;
 import com.rulepilot.assistant.application.NativeAgentToolRegistry;
 import com.rulepilot.assistant.application.PolicyEvidenceVerifier;
@@ -37,6 +41,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.adapter.out.model.FakeTeachingLessonModel;
 import com.rulepilot.teaching.adapter.out.model.SpringAiTeachingLessonModel;
 import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
+import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.TeachingMove;
 import com.rulepilot.teaching.domain.IllustratedLesson.VisualKind;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -58,6 +63,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import java.util.regex.Pattern;
@@ -80,8 +86,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         Path root = Path.of(System.getProperty("user.dir")).getParent();
         JsonNode manifest = mapper.readTree(root.resolve(".local/agent-evaluation/manifest.json").toFile());
         JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
-        JsonNode evaluation = mapper.readTree(root.resolve(
-                ".local/agent-evaluation/teaching-agent-cases.json").toFile());
+        JsonNode evaluation = evaluationCases();
         List<CaseConfiguration> cases = new ArrayList<>();
         for (JsonNode caseNode : evaluation.path("cases")) {
             cases.add(caseFor(
@@ -121,14 +126,12 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         Path root = Path.of(System.getProperty("user.dir")).getParent();
         JsonNode manifest = mapper.readTree(root.resolve(".local/agent-evaluation/manifest.json").toFile());
         JsonNode inventory = mapper.readTree(root.resolve(".local/public-corpus/source-preflight.json").toFile());
-        JsonNode evaluation = mapper.readTree(root.resolve(
-                ".local/agent-evaluation/teaching-agent-cases.json").toFile());
+        JsonNode evaluation = evaluationCases();
         List<Map<String, Object>> results = new ArrayList<>();
         Path output = root.resolve(".local/agent-evaluation/teaching-tool-value-generated-sections.json");
         String selectedCase = System.getenv("RULEPILOT_TEACHING_VALUE_CASE");
 
         for (JsonNode caseNode : evaluation.path("cases")) {
-            if (results.size() == 2) break;
             if (selectedCase != null && !selectedCase.isBlank()
                     && !selectedCase.equals(caseNode.path("caseId").asText())) continue;
             ProviderConfiguration provider = provider("TEXT_LAYER".equals(caseNode.path("family").asText())
@@ -137,17 +140,48 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             CaseConfiguration configured = caseFor(root, manifest, inventory, caseNode, provider);
             results.add(compareTeachingSection(configured));
             Files.writeString(output, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(Map.of(
-                    "schemaVersion", 1,
+                    "schemaVersion", 2,
                     "generatedAt", Instant.now().toString(),
                     "results", List.copyOf(results))) + "\n", StandardCharsets.UTF_8);
         }
 
-        assertThat(results).hasSize(selectedCase == null || selectedCase.isBlank() ? 2 : 1)
-                .allSatisfy(result -> assertThat(result)
-                .containsEntry("toolSectionCoversRequiredDetails", true)
-                .containsEntry("toolSectionUsesExpectedPage", true)
-                .containsEntry("boundedToolCalls", true)
-                .containsEntry("completeOutcomesRecordedForInspection", true));
+        int expectedCaseCount = selectedCase == null || selectedCase.isBlank()
+                ? evaluation.path("cases").size()
+                : 1;
+        assertThat(results).hasSize(expectedCaseCount);
+        results.forEach(result -> {
+            String caseId = String.valueOf(result.get("caseId"));
+            assertThat(result.get("publishableSectionProduced"))
+                    .as("%s produced a publishable section", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("reviewedEvidenceStatus"))
+                    .as("%s completed production post-publication review", caseId)
+                    .isEqualTo(EvidenceStatus.SUPPORTED.name());
+            assertThat((Integer) result.get("criticCalls"))
+                    .as("%s stayed within the bounded semantic review and confirmation passes", caseId)
+                    .isBetween(1, 8);
+            assertThat((List<?>) result.get("criticOperations"))
+                    .as("%s exercised production post-publication review", caseId)
+                    .anyMatch("reviewPublishedTeachingLesson"::equals);
+            assertThat(result.get("sourceCitationsPresent"))
+                    .as("%s retained source citations on every step", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("toolSectionUsesExpectedPage"))
+                    .as("%s used the expected source page", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("boundedToolCalls"))
+                    .as("%s stayed within its expected tool portfolio", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("withinLatencyBudget"))
+                    .as("%s completed the readable cited lesson and review within three minutes", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("rawVisibleResponsesRecorded"))
+                    .as("%s retained provider-visible output outside Git", caseId)
+                    .isEqualTo(true);
+            assertThat(result.get("completeOutcomesRecordedForInspection"))
+                    .as("%s retained the complete comparison outcome", caseId)
+                    .isEqualTo(true);
+        });
     }
 
     private Map<String, Object> compareTeachingSection(CaseConfiguration case_) throws IOException {
@@ -180,55 +214,110 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         TeachingEvidenceAgent evidenceAgent = agent(case_.provider(), corpus, toolAudit, versionId, runId);
         long toolStarted = System.nanoTime();
         var refined = evidenceAgent.refine(plan, planned, runId, deterministic);
-        int evidenceToolModelCalls = toolAudit.modelCalls;
-        int evidenceToolCalls = toolAudit.toolCalls;
+        int evidenceToolModelCalls = toolAudit.modelCalls.get();
+        int evidenceToolCalls = toolAudit.toolCalls.get();
         DirectAuditedInvocations compositionAudit = new DirectAuditedInvocations();
         List<String> toolRawResponses = new ArrayList<>();
         RecordingTeachingLessonModel toolModel = new RecordingTeachingLessonModel(
                 teachingModel(case_.provider(), toolRawResponses));
+        TeachingSectionDraftComposer toolComposer = sectionComposer(toolModel, compositionAudit);
         TeachingSectionDraftCandidate withTools = null;
         String toolFailure = null;
         try {
-            withTools = composeSection(
-                    toolModel, compositionAudit, plan, planned, refined.evidence(), runId);
+            withTools = toolComposer.compose(
+                    plan,
+                    planned,
+                    List.of(),
+                    refined.evidence(),
+                    runId,
+                    planned.position() - 1,
+                    false);
         } catch (IllegalArgumentException rejected) {
             toolFailure = rejected.getMessage() == null ? "SECTION_REJECTED" : rejected.getMessage();
         }
+        DirectAuditedInvocations reviewAudit = new DirectAuditedInvocations();
+        List<String> criticRawResponses = new ArrayList<>();
+        ProviderConfiguration criticProvider = provider(
+                "qwen".equals(case_.provider().provider()) ? "deepseek" : "qwen");
+        LessonSection reviewedSection = null;
+        if (withTools != null) {
+            TeachingSectionDraftCandidate reviewCandidate = withTools;
+            List<LessonSection> reviewedSections = new ArrayList<>(List.of(reviewCandidate.section()));
+            new TeachingPublishedLessonReviewer(
+                            toolModel,
+                            contentCritic(criticProvider, criticRawResponses, reviewAudit),
+                            reviewAudit,
+                            toolComposer,
+                            new TeachingReviewCorrectionPolicy())
+                    .review(plan, List.of(reviewCandidate), reviewedSections, runId, () -> {});
+            reviewedSection = reviewedSections.getFirst();
+        }
         long toolLatencyMs = Duration.ofNanos(System.nanoTime() - toolStarted).toMillis();
 
-        String baselineText = baseline == null ? "" : visibleSectionText(baseline.section());
-        String toolText = withTools == null ? "" : visibleSectionText(withTools.section());
+        String toolText = reviewedSection == null ? "" : visibleSectionText(reviewedSection);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("caseId", case_.caseId());
         result.put("provider", case_.provider().provider());
+        result.put("criticProvider", criticProvider.provider());
         result.put("objective", planned.objective());
         result.put("withoutTools", baseline == null
                 ? Map.of("status", "REJECTED", "reason", baselineFailure)
                 : visibleSection(baseline.section()));
         result.put("withoutToolsDraftAttempts", baselineModel.drafts().stream().map(this::visibleDraft).toList());
         result.put("withoutToolsRawResponses", List.copyOf(baselineRawResponses));
-        result.put("withoutToolsCoversRequiredDetails", covers(case_, baselineText));
         result.put("withoutToolsUsesExpectedPage", baseline != null && usesExpectedPage(case_, baseline.section()));
-        result.put("withoutToolsModelCalls", baselineAudit.modelCalls);
+        result.put("withoutToolsModelCalls", baselineAudit.modelCalls.get());
         result.put("withoutToolsLatencyMs", baselineLatencyMs);
-        result.put("withTools", withTools == null
+        result.put("citedDraftWithTools", withTools == null
                 ? Map.of("status", "REJECTED", "reason", toolFailure)
                 : visibleSection(withTools.section()));
+        result.put("withTools", reviewedSection == null
+                ? Map.of("status", "REJECTED", "reason", toolFailure)
+                : visibleSection(reviewedSection));
+        result.put("reviewedEvidenceStatus", reviewedSection == null
+                ? "REJECTED"
+                : reviewedSection.evidenceStatus().name());
         result.put("withToolsDraftAttempts", toolModel.drafts().stream().map(this::visibleDraft).toList());
         result.put("withToolsRawResponses", List.copyOf(toolRawResponses));
-        result.put("toolSectionCoversRequiredDetails", covers(case_, toolText));
-        result.put("toolSectionUsesExpectedPage", withTools != null && usesExpectedPage(case_, withTools.section()));
+        result.put("criticRawResponses", List.copyOf(criticRawResponses));
+        result.put("toolSectionUsesExpectedPage", reviewedSection != null && usesExpectedPage(case_, reviewedSection));
         result.put("evidenceAdded", refined.evidence().size() - deterministic.evidence().size());
         result.put("initialEvidence", visibleEvidence(deterministic.evidence()));
         result.put("toolRefinedEvidence", visibleEvidence(refined.evidence()));
         result.put("toolCalls", evidenceToolCalls);
         result.put("toolLoopModelCalls", evidenceToolModelCalls);
-        result.put("toolSectionModelCalls", compositionAudit.modelCalls);
+        result.put("toolSectionModelCalls", compositionAudit.modelCalls.get());
+        result.put("criticCalls", reviewAudit.criticCalls.get());
+        result.put("criticOperations", List.copyOf(reviewAudit.criticOperations));
+        result.put("blankCriticResponseAttempts", criticRawResponses.stream()
+                .filter(response -> response == null || response.isBlank())
+                .count());
+        result.put("reviewCorrectionModelCalls", reviewAudit.modelCalls.get());
         result.put("withToolsLatencyMs", toolLatencyMs);
+        result.put("withinLatencyBudget", toolLatencyMs < 180_000);
         result.put("boundedToolCalls", evidenceToolCalls == 1);
+        result.put("publishableSectionProduced", reviewedSection != null
+                && reviewedSection.evidenceStatus() == EvidenceStatus.SUPPORTED);
+        result.put("sourceCitationsPresent", reviewedSection != null && reviewedSection.steps().stream()
+                .allMatch(step -> !step.sourceChunkIds().isEmpty() && !step.sourcePages().isEmpty()));
+        result.put("rawVisibleResponsesRecorded", !toolRawResponses.isEmpty()
+                && toolRawResponses.stream().allMatch(java.util.Objects::nonNull)
+                && toolRawResponses.stream().anyMatch(response -> !response.isBlank())
+                && !criticRawResponses.isEmpty()
+                && criticRawResponses.stream().allMatch(java.util.Objects::nonNull)
+                && criticRawResponses.stream().anyMatch(response -> !response.isBlank()));
         result.put("completeOutcomesRecordedForInspection", (!toolText.isBlank() || !toolModel.drafts().isEmpty())
                 && (baseline != null || baselineFailure != null && !baselineFailure.isBlank()));
         return Map.copyOf(result);
+    }
+
+    private JsonNode evaluationCases() throws IOException {
+        var input = TeachingEvidenceAgentRealRulebookEvaluationTest.class
+                .getResourceAsStream("/evaluation/teaching-agent-cases-v2.json");
+        if (input == null) throw new IllegalStateException("teaching evaluation cases are missing");
+        try (input) {
+            return mapper.readTree(input);
+        }
     }
 
     private List<Map<String, Object>> visibleEvidence(List<RuleEvidence> evidence) {
@@ -248,9 +337,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             PlannedSection planned,
             List<RuleEvidence> evidence,
             UUID runId) {
-        TeachingSectionDraftComposer composer = new TeachingSectionDraftComposer(
-                model, new PolicyEvidenceVerifier(), audited, VisualRulebookPageFacts.empty());
-        return composer.compose(
+        return sectionComposer(model, audited).compose(
                 plan,
                 planned,
                 List.of(),
@@ -258,6 +345,12 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 runId,
                 planned.position() - 1,
                 false);
+    }
+
+    private TeachingSectionDraftComposer sectionComposer(
+            TeachingLessonModel model, DirectAuditedInvocations audited) {
+        return new TeachingSectionDraftComposer(
+                model, new PolicyEvidenceVerifier(), audited, VisualRulebookPageFacts.empty());
     }
 
     private Map<String, Object> visibleSection(com.rulepilot.teaching.domain.IllustratedLesson.LessonSection section) {
@@ -293,13 +386,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 .strip();
     }
 
-    private boolean covers(CaseConfiguration case_, String text) {
-        String normalized = text.toLowerCase(Locale.ROOT).replaceAll("[-‐‑‒–—]", "");
-        return case_.expectedOutputTermGroups().stream().allMatch(group -> group.stream()
-                .map(term -> term.toLowerCase(Locale.ROOT).replaceAll("[-‐‑‒–—]", ""))
-                .anyMatch(normalized::contains));
-    }
-
     private boolean usesExpectedPage(
             CaseConfiguration case_, com.rulepilot.teaching.domain.IllustratedLesson.LessonSection section) {
         return section.steps().stream().anyMatch(step -> step.sourcePages().contains(case_.expectedPage()));
@@ -327,14 +413,14 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 .findFirst()
                 .orElse(null);
         boolean citationAccepted = expected != null && citationAccepted(plan, refined.evidence(), expected);
-        int modelCallsBeforeDirect = audited.modelCalls;
+        int modelCallsBeforeDirect = audited.modelCalls.get();
         TeachingPlan directPlan = plan(versionId, case_.caseNode(), List.of(case_.initialPage()));
         var directResult = agent.refine(directPlan, directPlan.sections().getFirst(), runId, deterministic);
 
         return Map.ofEntries(
                 Map.entry("caseId", case_.caseId()),
                 Map.entry("provider", case_.provider().provider()),
-                Map.entry("toolCalls", audited.toolCalls),
+                Map.entry("toolCalls", audited.toolCalls.get()),
                 Map.entry("toolObservationCodes", audited.observations.stream()
                         .map(ToolObservation::code)
                         .toList()),
@@ -350,7 +436,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                         .map(RuleEvidence::pageFrom)
                         .distinct()
                         .toList()),
-                Map.entry("directAdditionalModelCalls", audited.modelCalls - modelCallsBeforeDirect),
+                Map.entry("directAdditionalModelCalls", audited.modelCalls.get() - modelCallsBeforeDirect),
                 Map.entry("directEvidenceUnchanged", directResult == deterministic),
                 Map.entry("latencyMs", latencyMs),
                 Map.entry("withinLatencyBudget", latencyMs < 90_000));
@@ -401,7 +487,7 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 "caseId", node.path("caseId").asText(),
                 "state", result.state().name(),
                 "evidenceCount", result.evidence().size(),
-                "toolCalls", audited.toolCalls,
+                "toolCalls", audited.toolCalls.get(),
                 "crossScopeEvidence", result.evidence().stream()
                         .anyMatch(source -> !versionId.equals(source.documentVersionId())));
     }
@@ -466,17 +552,56 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
 
     private SpringAiTeachingLessonModel teachingModel(
             ProviderConfiguration provider, List<String> rawResponses) {
-        ChatModel delegate = new ChatModelFactory(ObservationRegistry.NOOP, Duration.ofSeconds(120))
+        ChatModel chatModel = recordingChatModel(provider, Duration.ofSeconds(120), rawResponses);
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
+                .thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
+                .thenReturn(provider.provider());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
+                .thenReturn(provider.model());
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
+                .thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
+                .thenReturn("deepseek".equals(provider.provider()));
+        return new SpringAiTeachingLessonModel(
+                configuration,
+                new FakeTeachingLessonModel(),
+                prompts());
+    }
+
+    private GeneratedContentCritic contentCritic(
+            ProviderConfiguration provider,
+            List<String> rawResponses,
+            DirectAuditedInvocations audited) {
+        ChatModel chatModel = recordingChatModel(provider, Duration.ofSeconds(120), rawResponses);
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(chatModel);
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.model());
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(false);
+        when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
+                .thenReturn("deepseek".equals(provider.provider()));
+        var model = new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts());
+        return new ConditionalGeneratedContentCritic(model, audited, true);
+    }
+
+    private ChatModel recordingChatModel(
+            ProviderConfiguration provider, Duration timeout, List<String> rawResponses) {
+        ChatModel delegate = new ChatModelFactory(ObservationRegistry.NOOP, timeout)
                 .create(provider.provider(), provider.apiKey(), provider.baseUrl(), provider.model());
-        ChatModel chatModel = new ChatModel() {
+        return new ChatModel() {
             @Override
             public org.springframework.ai.chat.model.ChatResponse call(
                     org.springframework.ai.chat.prompt.Prompt prompt) {
                 var response = delegate.call(prompt);
-                String text = response == null || response.getResult() == null || response.getResult().getOutput() == null
+                String responseText = response == null
+                                || response.getResult() == null
+                                || response.getResult().getOutput() == null
                         ? ""
                         : response.getResult().getOutput().getText();
-                rawResponses.add(text == null ? "" : text);
+                rawResponses.add(responseText == null ? "" : responseText);
                 return response;
             }
 
@@ -490,25 +615,13 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 return delegate.getOptions();
             }
         };
-        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
-        when(configuration.modelFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
-                .thenReturn(chatModel);
-        when(configuration.providerFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
-                .thenReturn(provider.provider());
-        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
-                .thenReturn(provider.model());
-        when(configuration.usesFake(RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
-                .thenReturn(false);
-        when(configuration.usesDeepSeekNonThinkingGeneration(
-                        RuntimeModelConfiguration.Role.TEACHING, "agent-evaluation"))
-                .thenReturn("deepseek".equals(provider.provider()));
+    }
+
+    private VersionedAgentPrompts prompts() {
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.register(VersionedAgentPrompts.class);
             context.refresh();
-            return new SpringAiTeachingLessonModel(
-                    configuration,
-                    new FakeTeachingLessonModel(),
-                    context.getBean(VersionedAgentPrompts.class));
+            return context.getBean(VersionedAgentPrompts.class);
         }
     }
 
@@ -535,15 +648,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         node.path("sourcePages").forEach(page -> pages.add(page.asInt()));
         List<String> expectedTerms = new ArrayList<>();
         node.path("expectedTerms").forEach(term -> expectedTerms.add(term.asText().toLowerCase(Locale.ROOT)));
-        List<List<String>> expectedOutputTermGroups = new ArrayList<>();
-        node.path("expectedOutputTermGroups").forEach(group -> {
-            List<String> alternatives = new ArrayList<>();
-            group.forEach(term -> alternatives.add(term.asText()));
-            expectedOutputTermGroups.add(List.copyOf(alternatives));
-        });
-        if (expectedOutputTermGroups.isEmpty()) {
-            expectedTerms.forEach(term -> expectedOutputTermGroups.add(List.of(term)));
-        }
         return new CaseConfiguration(
                 caseId,
                 pdf,
@@ -552,7 +656,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 List.copyOf(pages),
                 node.path("expectedPage").asInt(),
                 List.copyOf(expectedTerms),
-                List.copyOf(expectedOutputTermGroups),
                 provider);
     }
 
@@ -579,7 +682,6 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
             List<Integer> sourcePages,
             int expectedPage,
             List<String> expectedTerms,
-            List<List<String>> expectedOutputTermGroups,
             ProviderConfiguration provider) {}
 
     private record ProviderConfiguration(String provider, String apiKey, String baseUrl, String model) {}
@@ -627,8 +729,10 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
     }
 
     private static final class DirectAuditedInvocations implements AuditedAgentInvocations {
-        private int modelCalls;
-        private int toolCalls;
+        private final AtomicInteger modelCalls = new AtomicInteger();
+        private final AtomicInteger toolCalls = new AtomicInteger();
+        private final AtomicInteger criticCalls = new AtomicInteger();
+        private final List<String> criticOperations = new ArrayList<>();
         private final List<ToolObservation> observations = new ArrayList<>();
 
         @Override
@@ -640,8 +744,12 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
                 String successSummary,
                 Supplier<T> invocation,
                 ToIntFunction<T> outputTokenEstimator) {
-            if (type == ActivityType.MODEL) modelCalls++;
-            if (type == ActivityType.TOOL) toolCalls++;
+            if (type == ActivityType.MODEL) modelCalls.incrementAndGet();
+            if (type == ActivityType.TOOL) toolCalls.incrementAndGet();
+            if (type == ActivityType.CRITIC) {
+                criticCalls.incrementAndGet();
+                criticOperations.add(operation);
+            }
             T result = invocation.get();
             if (result instanceof NativeAgentToolRegistry.ToolExecution execution) {
                 observations.add(execution.observation());

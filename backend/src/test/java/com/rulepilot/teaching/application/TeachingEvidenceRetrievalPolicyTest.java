@@ -11,13 +11,12 @@ import org.junit.jupiter.api.Test;
 class TeachingEvidenceRetrievalPolicyTest {
 
     @Test
-    void removesEnglishQuestionFillerWithoutDroppingRetrievalConditions() {
+    void preservesTheModelChosenQueryInsteadOfApplyingSemanticStopWordRules() {
         assertThat(TeachingEvidenceRetrievalPolicy.focusedQuery(
                         "What is the cost to launch a probe and what is the default limit on probes in space?"))
-                .isEqualTo("cost launch probe default limit on probes in space");
-        assertThat(TeachingEvidenceRetrievalPolicy.focusedQuery(
-                        "When landing on a planet that already has an orbiter, what is the cost reduction?"))
-                .isEqualTo("landing on planet that already has orbiter cost reduction");
+                .isEqualTo("What is the cost to launch a probe and what is the default limit on probes in space?");
+        assertThat(TeachingEvidenceRetrievalPolicy.focusedQuery("  任意语言的完整检索条件  "))
+                .isEqualTo("任意语言的完整检索条件");
     }
 
     @Test

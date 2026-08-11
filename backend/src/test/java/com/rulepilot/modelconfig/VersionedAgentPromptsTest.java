@@ -3,559 +3,104 @@ package com.rulepilot.modelconfig;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.core.io.ClassPathResource;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 
+@ExtendWith(SpringExtension.class)
+@ContextConfiguration(classes = VersionedAgentPrompts.class)
 class VersionedAgentPromptsTest {
 
-    @Test
-    void loadsVersionedContractsWithEvidenceAndInjectionBoundaries() throws Exception {
-        VersionedAgentPrompts prompts = new VersionedAgentPrompts(
-                resource("teaching-agent-v43-intrinsic-depth-system.txt"),
-                resource("teaching-agent-v17-fidelity-system.txt"),
-                resource("teaching-agent-v18-visual-fit-system.txt"),
-                resource("teaching-agent-v19-player-language-system.txt"),
-                resource("teaching-agent-v20-visual-output-contract-system.txt"),
-                resource("teaching-agent-v21-complete-instructions-system.txt"),
-                resource("teaching-agent-v22-ordered-procedure-fidelity-system.txt"),
-                resource("teaching-agent-v23-chapter-scope-map-system.txt"),
-                resource("teaching-agent-v24-actor-and-example-fidelity-system.txt"),
-                resource("teaching-agent-v25-conditional-values-fidelity-system.txt"),
-                resource("teaching-agent-v26-conditional-scope-and-tie-fidelity-system.txt"),
-                resource("teaching-agent-v27-visible-observation-system.txt"),
-                resource("teaching-agent-v28-rulebook-scope-system.txt"),
-                resource("teaching-agent-v29-grammatical-relation-fidelity-system.txt"),
-                resource("teaching-agent-v30-quantity-role-fidelity-system.txt"),
-                resource("teaching-agent-v31-rule-dependency-fidelity-system.txt"),
-                resource("teaching-agent-v32-player-readable-rule-dependency-system.txt"),
-                resource("teaching-agent-v33-predicate-owner-fidelity-system.txt"),
-                resource("teaching-agent-v34-rule-conflict-check-system.txt"),
-                resource("teaching-agent-v35-self-contained-conflict-verdict-system.txt"),
-                resource("teaching-agent-v36-direct-source-evidence-system.txt"),
-                resource("teaching-agent-v37-source-scope-fidelity-system.txt"),
-                resource("teaching-agent-v38-source-term-number-fidelity-system.txt"),
-                resource("teaching-agent-v39-source-causal-direction-system.txt"),
-                resource("teaching-agent-v40-source-temporal-boundary-system.txt"),
-                resource("teaching-agent-v41-permission-ruling-system.txt"),
-                resource("teaching-agent-v42-focused-runtime-system.txt"),
-                resource("teaching-agent-v12-user.txt"),
-                resource("teaching-outline-v14-intrinsic-scope-system.txt"),
-                resource("teaching-outline-v7-fidelity-system.txt"),
-                resource("teaching-outline-v8-visual-density-system.txt"),
-                resource("teaching-outline-v9-core-evidence-system.txt"),
-                resource("teaching-outline-v10-chapter-ownership-system.txt"),
-                resource("teaching-outline-v11-visual-coverage-system.txt"),
-                resource("teaching-outline-v15-retired-audience-system.txt"),
-                resource("teaching-outline-v13-player-goal-system.txt"),
-                resource("teaching-outline-v6-user.txt"),
-                resource("rule-answer-agent-v6-system.txt"),
-                resource("rule-answer-agent-v7-fidelity-system.txt"),
-                resource("rule-answer-agent-v8-direct-rulings-system.txt"),
-                resource("rule-answer-agent-v9-prohibition-fidelity-system.txt"),
-                resource("rule-answer-agent-v10-completeness-boundary-system.txt"),
-                resource("rule-answer-agent-v11-scope-discipline-system.txt"),
-                resource("rule-answer-agent-v12-direct-clause-citations-system.txt"),
-                resource("rule-answer-agent-v13-grounded-application-system.txt"),
-                resource("rule-answer-agent-v14-natural-language-condition-system.txt"),
-                resource("rule-answer-agent-v16-fallback-branch-fidelity-system.txt"),
-                resource("rule-answer-agent-v17-correctable-revision-system.txt"),
-                resource("rule-answer-agent-v18-counterfactual-follow-up-system.txt"),
-                resource("rule-answer-agent-v19-complete-list-system.txt"),
-                resource("rule-answer-agent-v20-identifier-binding-system.txt"),
-                resource("rule-answer-agent-v21-resolved-visual-language-system.txt"),
-                resource("rule-answer-agent-v22-mechanical-list-consistency-system.txt"),
-                resource("rule-answer-agent-v23-grounded-terminology-system.txt"),
-                resource("rule-answer-agent-v24-grounded-calculation-system.txt"),
-                resource("rule-answer-agent-v25-rule-relationship-fidelity-system.txt"),
-                resource("rule-answer-agent-v26-grounded-situation-check-system.txt"),
-                resource("rule-answer-agent-v27-cited-walkthrough-system.txt"),
-                resource("rule-answer-agent-v28-cited-decision-table-system.txt"),
-                resource("rule-answer-agent-v29-cited-exception-clauses-system.txt"),
-                resource("rule-answer-agent-v30-exception-focus-system.txt"),
-                resource("rule-answer-agent-v31-concise-exception-verdict-system.txt"),
-                resource("rule-answer-agent-v32-self-contained-exception-clauses-system.txt"),
-                resource("rule-answer-agent-v33-cited-term-definitions-system.txt"),
-                resource("rule-answer-agent-v34-cited-worked-examples-system.txt"),
-                resource("rule-answer-agent-v35-cited-rule-priority-system.txt"),
-                resource("rule-answer-agent-v36-cited-timing-order-system.txt"),
-                resource("rule-answer-agent-v37-cited-tie-resolution-system.txt"),
-                resource("rule-answer-agent-v38-cited-rule-scope-system.txt"),
-                resource("rule-answer-agent-v39-cited-concept-comparison-system.txt"),
-                resource("rule-answer-agent-v40-cited-rule-options-system.txt"),
-                resource("rule-answer-agent-v41-grammatical-relation-fidelity-system.txt"),
-                resource("rule-answer-agent-v42-quantity-role-fidelity-system.txt"),
-                resource("rule-answer-agent-v43-cited-rule-dependency-system.txt"),
-                resource("rule-answer-agent-v44-player-readable-rule-dependency-system.txt"),
-                resource("rule-answer-agent-v45-predicate-owner-fidelity-system.txt"),
-                resource("rule-answer-agent-v46-self-contained-why-verdict-system.txt"),
-                resource("rule-answer-agent-v47-cited-rule-conflict-check-system.txt"),
-                resource("rule-answer-agent-v48-self-contained-conflict-verdict-system.txt"),
-                resource("rule-answer-agent-v49-direct-source-evidence-system.txt"),
-                resource("rule-answer-agent-v50-source-scope-fidelity-system.txt"),
-                resource("rule-answer-agent-v51-source-term-number-fidelity-system.txt"),
-                resource("rule-answer-agent-v52-source-causal-direction-system.txt"),
-                resource("rule-answer-agent-v53-source-temporal-boundary-system.txt"),
-                resource("rule-answer-agent-v54-permission-ruling-system.txt"),
-                resource("rule-answer-agent-v55-focused-aid-routing-system.txt"),
-                resource("rule-answer-agent-v4-user.txt"),
-                resource("rule-answer-retrieval-rewrite-v1-system.txt"),
-                resource("rule-answer-retrieval-rewrite-v1-user.txt"),
-                resource("content-critic-v7-system.txt"),
-                resource("content-critic-v8-fidelity-system.txt"),
-                resource("content-critic-v9-answer-scope-system.txt"),
-                resource("content-critic-v10-lesson-structure-system.txt"),
-                resource("content-critic-v11-actor-and-example-fidelity-system.txt"),
-                resource("content-critic-v12-grammatical-relation-fidelity-system.txt"),
-                resource("content-critic-v13-quantity-role-fidelity-system.txt"),
-                resource("content-critic-v14-rule-dependency-fidelity-system.txt"),
-                resource("content-critic-v15-player-readable-rule-dependency-system.txt"),
-                resource("content-critic-v16-predicate-owner-fidelity-system.txt"),
-                resource("content-critic-v17-self-contained-why-verdict-system.txt"),
-                resource("content-critic-v18-rule-conflict-check-system.txt"),
-                resource("content-critic-v19-self-contained-conflict-verdict-system.txt"),
-                resource("content-critic-v20-direct-source-evidence-system.txt"),
-                resource("content-critic-v21-source-scope-fidelity-system.txt"),
-                resource("content-critic-v22-source-term-number-fidelity-system.txt"),
-                resource("content-critic-v23-source-causal-direction-system.txt"),
-                resource("content-critic-v24-source-temporal-boundary-system.txt"),
-                resource("content-critic-v25-permission-ruling-system.txt"),
-                resource("atomic-content-critic-v3-system.txt"),
-                resource("objective-coverage-critic-v3-system.txt"),
-                resource("content-critic-v4-user.txt"),
-                resource("structured-output-repair-v1.txt"),
-                resource("lesson-localization-v2-system.txt"),
-                resource("lesson-localization-v1-user.txt"));
+    @Autowired
+    private VersionedAgentPrompts prompts;
 
-        assertThat(prompts.teachingSystem())
-                .contains(
-                        "untrusted data",
-                        "directly support the whole step",
-                        "short references E1",
-                        "continuity data is not evidence",
-                        "visualCitationIds",
-                        "attached page",
-                        "icon-to-label",
-                        "visualFocus",
-                        "0-1000",
-                        "source terminology consistently",
-                        "scope gate",
-                        "solo rival",
-                        "hypothetical label",
-                        "Never substitute an emoji",
-                        "describe it generically as the displayed reward",
-                        "separate concepts",
-                        "unused temporary points persist",
-                        "ownership quantifiers",
-                        "win condition",
-                        "X or Y",
-                        "Preserve relative rules as relative rules",
-                        "distinct Chinese names",
-                        "asymmetric game",
-                        "first-game walkthrough",
-                        "supported rule complexity",
-                        "without deleting another material rule",
-                        "strongest complete rule sentence",
-                        "indispensable visual relationships for the objective",
-                        "printed order exactly",
-                        "complete objective coverage",
-                        "crop earns its place",
-                        "block of example prose",
-                        "natural Simplified Chinese",
-                        "Player-language revision v19",
-                        "Visual-output revision v20",
-                        "Complete-instruction revision v21",
-                        "unanswered alternative",
-                        "Ordered-procedure fidelity revision v22",
-                        "must do B, then may do C or D",
-                        "Chapter-scope-map revision v23",
-                        "Actor-and-example fidelity revision v24",
-                        "your figures",
-                        "Conditional-value fidelity revision v25",
-                        "player-count/value condition",
-                        "Conditional-scope and tie fidelity revision v26",
-                        "tie-break chain",
-                        "Visible-observation revision v27",
-                        "visibleDescription",
-                        "Rulebook-scope revision v28",
-                        "Grammatical-relation fidelity revision v29",
-                        "Keep physical objects, their locations, and printed indicators distinct",
-                        "Quantity-role fidelity revision v30",
-                        "never teach that there are M objects",
-                        "Rule-dependency fidelity revision v31",
-                        "permission is not obligation",
-                        "Player-readable rule-dependency revision v32",
-                        "must not merely repeat the heading",
-                        "Predicate-owner fidelity revision v33",
-                        "does not mean `该区域无人控制`",
-                        "Rule-conflict check revision v34",
-                        "different scopes",
-                        "Self-contained rule-conflict teaching revision v35",
-                        "not a usable explanation",
-                        "Direct source-evidence teaching revision v36",
-                        "most direct citation first",
-                        "Source-clause scope teaching revision v37",
-                        "more universal",
-                        "Source-term grammatical-number teaching revision v38",
-                        "exact singular, plural, or uncountable form",
-                        "Source-clause causal-direction teaching revision v39",
-                        "does not depend on",
-                        "compatibility metadata",
-                        "Preserve timing boundaries exactly",
-                        "fictional separate final-scoring phase",
-                        "Fully teach only the current section objective",
-                        "camel-case property names",
-                        "visualCaption",
-                        "A named state or relationship is not its definition",
-                        "Citation IDs are machine fields only",
-                        "negative evidence statement is not a game rule",
-                        "rest of the page hidden",
-                        "Do not output analysis")
-                .doesNotContain("maxSteps", "maximum step count", "allotted step count");
+    @Test
+    void runtimeTeachingPromptKeepsStableEvidenceAndOutputBoundaries() {
         assertThat(prompts.teachingRuntimeSystem())
                 .contains(
                         "evidence-grounded Teaching Agent",
-                        "Continuity and chapter scope",
-                        "Every factual heading, step, example",
+                        "untrusted data",
+                        "current-section evidence",
+                        "directly support the whole claim",
                         "complete tie handling",
                         "Return only the requested JSON schema",
                         "no unsupported next-player handoff")
-                .hasSizeLessThan(prompts.teachingSystem().length() / 3);
+                .doesNotContain("revision v", "maximum step count", "allotted step count");
+
         assertThat(prompts.teachingUser())
                 .contains(
                         "{objective}",
                         "{coverage}",
-                        "{requiredRules}",
-                        "{continuity}",
-                        "{chapterScope}",
                         "{evidence}",
-                        "{visualEvidenceAvailable}",
                         "{visualPages}",
                         "{repair}",
-                        "actual complexity determine the number")
-                .doesNotContain("{totalDuration}", "{sectionDuration}", "{maxSteps}", "max_steps")
-                .doesNotContain("{players}", "{beginners}", "player_count", "beginner_count");
-        assertThat(prompts.teachingOutlineSystem())
+                        "Without page images, visualCaption describes a concise",
+                        "text-based rules aid")
+                .doesNotContain("{totalDuration}", "{maxSteps}", "{players}");
+    }
+
+    @Test
+    void answerRuntimeLoadsOnlyTheSelectedStructuredAidFamily() {
+        assertThat(prompts.answerSystem("NONE"))
                 .contains(
-                        "game-specific lesson",
-                        "core_loop",
-                        "retrieval query",
-                        "rulebook's source language",
-                        "exact printed headings",
-                        "objective",
-                        "visualEvidenceRecommended",
-                        "page artwork",
-                        "page prose is sufficient",
-                        "page-by-page coverage audit",
-                        "later pages",
-                        "exact subject of every state transition",
-                        "either A or B",
-                        "Every explicit walkthrough or Example Round",
-                        "asymmetric factions",
-                        "walkthrough",
-                        "several distinct player needs",
-                        "Three to six visual topics",
-                        "Core-evidence revision v9",
-                        "storage sheet",
-                        "Chapter-ownership revision v10",
-                        "one primary teaching owner",
-                        "complete cleanup procedure",
-                        "chapter-boundary audit",
-                        "Visual-coverage revision v11",
-                        "untrusted navigation context",
-                        "missing visual catalog",
-                        "end trigger, winner, victory condition",
-                        "Rulebook-scope revision v15",
-                        "not one selected table size",
-                        "receives no audience counts or target duration",
-                        "Player-learning-goal revision v13",
-                        "untrusted pedagogical preference",
-                        "cannot remove the game's objective")
-                .doesNotContain(
-                        "compatibility metadata",
-                        "requested player count",
-                        "Produce 6-14 unique topics",
-                        "fixed topic count");
-        assertThat(prompts.teachingOutlineUser())
-                .contains("{learningGoal}", "untrusted_player_learning_goal")
-                .doesNotContain("{duration}", "minute lesson", "{players}", "{beginners}", "players, including");
-        assertThat(prompts.answerSystem())
-                .contains(
-                        "set answerable to false",
-                        "prior knowledge",
-                        "SIMPLIFY",
-                        "EXAMPLE",
-                        "designer intent",
-                        "repeated use",
-                        "MAIN ACTIONS",
-                        "main column",
-                        "player turn",
-                        "Pass/跳过",
-                        "default next-actor rule",
-                        "unable to act",
-                        "unused piece can remain for a later turn",
-                        "unlisted component",
-                        "empty exceptions list",
-                        "Every explanatory sentence",
-                        "matching",
-                        "same type",
-                        "Direct-ruling revision v8",
-                        "full decisive condition in the question itself",
-                        "Initial setup or inventory evidence",
-                        "Prohibition-fidelity revision v9",
-                        "does not bypass a prohibited terrain",
-                        "Evidence-completeness revision v10",
-                        "Selected evidence is not a complete rulebook index",
-                        "Scope-discipline revision v11",
-                        "Direct-clause citation revision v12",
-                        "Grounded-terminology revision v23",
-                        "Grounded-calculation revision v24",
-                        "application independently evaluates",
-                        "Rule-relationship fidelity revision v25",
-                        "not a universal precedence rule",
-                        "govern different actors, objects, timings, modes, or conditions",
-                        "Grounded-situation-check revision v26",
-                        "copy the shortest decisive wording",
-                        "NOT_PROVIDED must never become an assumed table fact",
-                        "Cited-walkthrough revision v27",
-                        "Printed page order, paragraph order, bullet layout",
-                        "not hidden reasoning",
-                        "Cited-decision-table revision v28",
-                        "RULEBOOK_EXAMPLE",
-                        "Do not invent an unmentioned fallback",
-                        "mentioning it only in `shortVerdict` or `explanation` is not complete",
-                        "Do not add procedural quantities or derived counts",
-                        "A visible pattern is not a reusable rule",
-                        "Do not coin compressed role, score, or component labels",
-                        "Cited-exception revision v29",
-                        "exceptionClauses",
-                        "exact condition-to-effect relationship",
-                        "legacy `exceptions` list empty",
-                        "Focused-exception revision v30",
-                        "do not add later setup, shuffling, dealing, turn-order",
-                        "Concise-exception-verdict revision v31",
-                        "at most 200 characters",
-                        "Self-contained-exception revision v32",
-                        "independently actionable",
-                        "include that gate in every affected condition",
-                        "visible summary broader than the cited clauses",
-                        "Cited-term-definition revision v33",
-                        "termDefinitions",
-                        "mere use of the term is not a definition",
-                        "another game",
-                        "Cited-worked-example revision v34",
-                        "workedExamples",
-                        "RULEBOOK_EXAMPLE",
-                        "EVIDENCE_BOUND_ILLUSTRATION",
-                        "setup-action-outcome",
-                        "Cited-rule-priority revision v35",
-                        "priorityResolutions",
-                        "IMPOSSIBILITY_PRIORITY",
-                        "CONFLICT_ONLY_OVERRIDE",
-                        "both if possible",
-                        "Cited-timing-order revision v36",
-                        "timingResolutions",
-                        "CURRENT_PLAYER_CHOOSES",
-                        "PRINTED_TOP_TO_BOTTOM",
-                        "NORMAL_TURN_ORDER",
-                        "Cited-tie-resolution revision v37",
-                        "tieResolutions",
-                        "SINGLE_TIEBREAKER",
-                        "ORDERED_TIEBREAKERS",
-                        "RANK_REWARD_SHIFT",
-                        "POSITIONAL_PRIORITY",
-                        "shared victory",
-                        "Cited-rule-scope revision v38",
-                        "scopeResolutions",
-                        "PLAYER_COUNT_EXCEPTION",
-                        "governingCondition",
-                        "currentSituation",
-                        "Cited-concept-comparison revision v39",
-                        "Complete cited option lists",
-                        "Grammatical-relation fidelity revision v41",
-                        "Do not move a prepositional phrase onto a nearby object",
-                        "Quantity-role fidelity revision v42",
-                        "never rewrite that as M objects",
-                        "Cited rule-dependency revision v43",
-                        "prerequisite or trigger",
-                        "never why a designer may have wanted it",
-                        "Player-readable rule-dependency revision v44",
-                        "either one is enough",
-                        "Never copy or lightly paraphrase",
-                        "Predicate-owner fidelity revision v45",
-                        "never compress them into",
-                        "Self-contained WHY verdict revision v46",
-                        "Never use placeholder summaries",
-                        "Cited rule-conflict check revision v47",
-                        "untrusted framing, not evidence",
-                        "Self-contained rule-conflict verdict revision v48",
-                        "Never return only",
-                        "Direct source-evidence revision v49",
-                        "strongest complete rule clause first",
-                        "Source-clause scope fidelity revision v50",
-                        "all bird cards you own",
-                        "Source-term grammatical-number revision v51",
-                        "Persuasions",
-                        "Source-clause causal-direction revision v52",
-                        "Source-clause temporal-boundary revision v53",
-                        "does not by itself mean",
-                        "Permission-ruling revision v54",
-                        "governing modal direction",
-                        "Silence about a dimension",
-                        "RULE_SCOPE",
-                        "ruleOptions",
-                        "SOURCE_SELECTION",
-                        "conceptComparisons",
-                        "ACTION_WINDOW",
-                        "practicalBoundary",
-                        "translated or rewritten query must not displace",
-                        "enumerated cleanup check",
-                        "loop-prevention rule",
-                        "player's wording is not a component definition",
-                        "Grounded-application revision v13",
-                        "GROUNDED_APPLICATION",
-                        "not private reasoning",
-                        "Natural-language condition revision v14",
-                        "Identifier-binding revision v20",
-                        "directly binds that identifier",
-                        "Resolved-visual language revision v21",
-                        "omit color, silhouette, artwork, pictogram",
-                        "Mechanical-list consistency revision v22",
-                        "reward as a level",
-                        "not required to use the rulebook's label",
-                        "Fallback-branch fidelity revision v16",
-                        "no-op",
-                        "Correctable-revision completion revision v17",
-                        "answerable=true",
-                        "Counterfactual follow-up coverage revision v18",
-                        "even when the immediate verdict is no",
-                        "Complete-list coverage revision v19",
-                        "coverage contract",
-                        "Do not swap neighboring entries");
+                        "Use only supplied evidence",
+                        "Focused answer-aid routing revision v55",
+                        "at most one primary structured aid family",
+                        "situationChecks` must always be empty",
+                        "Source-authored advice boundary revision v56")
+                .doesNotContain("Cited-tie-resolution revision v37", "Cited-worked-example revision v34");
+
+        assertThat(prompts.answerSystem("TIE"))
+                .contains("Cited-tie-resolution revision v37")
+                .doesNotContain("Cited-rule-options revision v40", "Cited-worked-example revision v34");
+        assertThat(prompts.answerSystem("EXAMPLE"))
+                .contains("Cited-worked-example revision v34")
+                .doesNotContain("Cited-decision-table revision v28", "Cited-tie-resolution revision v37");
+
         assertThat(prompts.answerUser())
+                .contains("{questionType}", "{evidenceNeeds}", "{answerAid}", "{evidence}")
+                .doesNotContain("{lessonSection}", "{playerCount}");
+    }
+
+    @Test
+    void criticRuntimeUsesOneCompactSemanticDefectContract() {
+        assertThat(prompts.criticSystem())
                 .contains(
-                        "{questionType}",
-                        "{learningIntent}",
-                        "{outputLanguage}",
-                        "A named state or relationship is not its definition")
-                .doesNotContain(
-                        "{lessonSection}", "{gamePhase}", "{playerCount}", "{activeExpansionCount}");
-        assertThat(prompts.lessonLocalizationSystem())
+                        "independent evidence critic",
+                        "judge meaning rather than keyword overlap",
+                        "UNSUPPORTED_CLAIM",
+                        "CONTRADICTION",
+                        "MISSING_EXCEPTION",
+                        "MISSING_CRITICAL_RULE",
+                        "OVERREACH",
+                        "CHAPTER_SCOPE_DUPLICATION",
+                        "defectConfirmed=true",
+                        "empty issues array",
+                        "Return only the requested JSON schema")
+                .doesNotContain("revision v", "keyword checklist", "ATOMIC_CONFIRMATION");
+
+        assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{claims}", "{evidence}");
+        assertThat(prompts.atomicCriticUser())
                 .contains(
-                        "constrained translation",
-                        "exact section and step positions",
-                        "Do not add rules",
-                        "80 characters",
-                        "240 characters");
-        assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");
+                        "defectConfirmed=false",
+                        "defectConfirmed=true",
+                        "complete claim",
+                        "current-turn/later-turn distinction",
+                        "{claims}",
+                        "{evidence}");
+        assertThat(prompts.structuredOutputRepair()).contains("schema-valid object only");
+    }
+
+    @Test
+    void supportingPromptContractsKeepUntrustedInputAndLocalizationBoundaries() {
         assertThat(prompts.answerRetrievalRewriteSystem())
-                .contains("retrieval", "English phrase", "search phrases", "untrusted data", "Return JSON only");
+                .contains("retrieval", "untrusted data", "Return JSON only");
         assertThat(prompts.answerRetrievalRewriteUser())
                 .contains("{question}", "{previousQuestion}")
                 .doesNotContain("{lessonSection}");
-        assertThat(prompts.criticSystem())
-                .contains(
-                        "MISSING_EXCEPTION",
-                        "MISSING_CRITICAL_RULE",
-                        "visual description",
-                        "outside knowledge",
-                        "causal bridge",
-                        "resource ledger",
-                        "starting inventory",
-                        "cost in one unit",
-                        "named object",
-                        "negation",
-                        "Answer-scope revision v9",
-                        "loop-prevention rule",
-                        "Lesson-structure revision v10",
-                        "CHAPTER_SCOPE_DUPLICATION",
-                        "earlier chapter expands",
-                        "POST_PUBLICATION_STRUCTURE",
-                        "Prioritize a chapter whose title or objective says overview",
-                        "heading ownership",
-                        "player turn (回合)",
-                        "default next-actor rules",
-                        "Grammatical-relation fidelity review v12",
-                        "grammatical owner",
-                        "Quantity-role fidelity review v13",
-                        "exact source unit and role",
-                        "Rule-dependency fidelity review v14",
-                        "dependency is reversed",
-                        "Player-readable rule-dependency review v15",
-                        "formal-logic jargon",
-                        "Predicate-owner fidelity review v16",
-                        "turns `not by this actor` into `not by anyone`",
-                        "Self-contained WHY verdict review v17",
-                        "redirects the player to a later explanation",
-                        "Rule-conflict check review v18",
-                        "alleged conflict",
-                        "Self-contained rule-conflict review v19",
-                        "truncated or respelled",
-                        "Direct source-evidence review v20",
-                        "page-only redirect",
-                        "Source-clause scope review v21",
-                        "plausible consequence",
-                        "Source-term grammatical-number review v22",
-                        "invents a singular or plural form",
-                        "Source-clause causal-direction review v23",
-                        "absence of tokens",
-                        "Source-clause temporal-boundary review v24",
-                        "on completion of",
-                        "Permission-ruling review v25",
-                        "governing condition",
-                        "left active play",
-                        "invented baseline",
-                        "Never emit an issue as an audit note",
-                        "semantic rule meaning",
-                        "combined evidence set",
-                        "Recount every enumerated list",
-                        "invented species",
-                        "same official term",
-                        "state-transition subjects word by word",
-                        "exclusive branches",
-                        "reverses two explicitly ordered state changes",
-                        "Re-audit every corrected claim",
-                        "at most 12 issues",
-                        "ATOMIC_CONFIRMATION",
-                        "faithful contextual translation",
-                        "at most 160 characters");
-        assertThat(prompts.criticSystem()).contains(
-                "Actor-and-example fidelity revision v11",
-                "temporary illustration",
-                        "merely related padding citations");
-        assertThat(prompts.answerSystem("How do I move?", "GENERAL_QUESTION"))
-                .contains("Focused answer-aid routing revision v55", "situationChecks` must always be empty")
-                .doesNotContain("Grounded-situation-check revision v26", "Cited-tie-resolution revision v37");
-        assertThat(prompts.answerSystem("What are all tie-breakers in order?", "GENERAL_QUESTION"))
-                .contains("Cited-tie-resolution revision v37")
-                .doesNotContain("Cited-rule-options revision v40", "Grounded-situation-check revision v26");
-        assertThat(prompts.answerSystem("Give me an example.", "EXAMPLE"))
-                .contains("Cited-worked-example revision v34")
-                .doesNotContain("Cited-decision-table revision v28");
-        assertThat(prompts.lessonStructureCriticSystem())
-                .contains("POST_PUBLICATION_STRUCTURE", "only CHAPTER_SCOPE_DUPLICATION");
-        assertThat(prompts.atomicCriticSystem())
-                .contains(
-                        "one or more generated claims",
-                        "Judge each claim independently",
-                        "types listed for that position",
-                        "combined evidence set",
-                        "semantic meaning",
-                        "guessed symbol",
-                        "missing glyph",
-                        "nearby sidebar",
-                        "return an empty issues list");
-        assertThat(prompts.objectiveCoverageCriticSystem())
-                .contains(
-                        "objective coverage",
-                        "complete generated board-game lesson",
-                        "MISSING_CRITICAL_RULE",
-                        "X or Y",
-                        "generic parent heading",
-                        "selected evidence");
-        assertThat(prompts.criticUser()).contains("{mode}", "{objective}", "{coverage}", "{claims}", "{evidence}");
-        assertThat(prompts.structuredOutputRepair()).contains("Regenerate", "schema-valid object only");
-    }
-
-    private ClassPathResource resource(String name) {
-        return new ClassPathResource("prompts/" + name);
+        assertThat(prompts.lessonLocalizationSystem())
+                .contains("constrained translation", "Do not add rules");
+        assertThat(prompts.lessonLocalizationUser()).contains("{targetLanguage}", "{section}");
     }
 }

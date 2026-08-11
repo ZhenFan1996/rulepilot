@@ -1,5 +1,6 @@
 package com.rulepilot.assistant.application;
 
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
@@ -20,7 +21,10 @@ final class AnswerCalculationResolver {
     private final BoundedRuleCalculator calculator = new BoundedRuleCalculator();
 
     List<RuleCalculation> resolve(ModelRequest request, ModelDraft draft) {
+        if (request == null || draft == null) throw invalid();
         List<CalculationRequest> requested = draft.calculations();
+        AnswerStructuredAidPolicy.validateSelection(
+                request, AnswerAid.CALCULATION, requested.isEmpty(), "calculations");
         if (requested.isEmpty()) return List.of();
         if (requested.size() > MAX_CALCULATIONS || draft.citationIds().isEmpty()) throw invalid();
 
@@ -51,6 +55,10 @@ final class AnswerCalculationResolver {
         permittedOutputValues.addAll(results);
         if (playerFacingValues.stream().anyMatch(value -> !permittedOutputValues.contains(value))) throw invalid();
         return resolved;
+    }
+
+    boolean requiresCalculation(ModelRequest request) {
+        return AnswerStructuredAidPolicy.required(request, AnswerAid.CALCULATION);
     }
 
     private Set<BigDecimal> values(String source) {

@@ -29,6 +29,13 @@ final class TeachingDraftRejectionCategory {
         if (message.contains("internal evidence or retrieval language")) return "INTERNAL_EVIDENCE_LANGUAGE";
         if (message.contains("internal short evidence references")) return "INTERNAL_EVIDENCE_REFERENCE";
         if (message.contains("source gap, pending rule")) return "PLAYER_FACING_SOURCE_GAP";
+        if (message.contains("named tie-break term")) return "SOURCE_TERM_FIDELITY";
+        if (message.contains("Critic-flagged player-facing claim unchanged")) {
+            return "CRITIC_CORRECTION_INCOMPLETE";
+        }
+        if (message.contains("modal direction")
+                || message.contains("permission distinct from obligation")
+                || message.contains("obligation distinct from permission")) return "MODAL_DIRECTION_CHANGED";
         if (message.contains("end condition occurs at the end of a round")) return "END_OF_ROUND_TIMING_LOST";
         if (message.contains("cited end-game check")) return "ENDGAME_CHECK_DEFERRED";
         if (message.contains("VISUAL") && message.contains("attached rulebook page")) return "VISUAL_PAGE_REQUIRED";

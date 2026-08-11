@@ -2,7 +2,6 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.retrieval.evidence.HybridEvidenceHit;
 import com.rulepilot.retrieval.evidence.RuleEvidenceHit;
 import java.util.UUID;
@@ -11,74 +10,44 @@ import org.junit.jupiter.api.Test;
 class AnswerEvidencePolicyTest {
 
     @Test
-    void keepsEndgameResolutionBoundToAnActualTriggerRatherThanAComponentList() {
-        EvidenceInput components = new EvidenceInput(
-                UUID.randomUUID(), "COMPONENTS", "Components", "End game marker and score tokens.", 2, 2);
-        EvidenceInput trigger = new EvidenceInput(
-                UUID.randomUUID(), "ENDGAME", "Ending the game", "When the final round ends, the game ends.", 8, 8);
-
-        assertThat(AnswerEvidencePolicy.hasEndgameResolution(components)).isFalse();
-        assertThat(AnswerEvidencePolicy.hasEndgameResolution(trigger)).isTrue();
-        assertThat(AnswerEvidencePolicy.isEndgameResolutionQuestion("When does the game end and how is the winner scored?"))
-                .isTrue();
-        assertThat(AnswerEvidencePolicy.isEndgameResolutionQuestion(
-                        "如果我可以选择结束游戏，其他玩家还会继续玩吗？"))
-                .isTrue();
-    }
-
-    @Test
-    void requiresOneDirectEndgameSourceAndKeepsOnlyItsCitation() {
-        EvidenceInput resolution = new EvidenceInput(
+    void recognizesOnlyMechanicalVisualPlaceholderAndLanguageBoundaries() {
+        HybridEvidenceHit placeholder = hit(
                 UUID.randomUUID(),
-                "ENDGAME",
-                "Game end",
-                "When the final round ends, the game ends. Players score points for their completed rows. "
-                        + "On a tie, the player with more coins wins.",
-                8,
-                9);
-        EvidenceInput peripheral = new EvidenceInput(
-                UUID.randomUUID(), "SETUP", "Setup", "Place the round marker on the first space.", 2, 2);
-        var evidence = java.util.List.of(resolution, peripheral);
-        String question = "When does the game end, how do we score, and who wins a tie?";
-
-        assertThat(AnswerEvidencePolicy.requiresEndgameResolutionCitation(question, evidence)).isTrue();
-        assertThat(AnswerEvidencePolicy.citesEndgameResolution(
-                        question, evidence, java.util.List.of(peripheral.chunkId())))
-                .isFalse();
-        assertThat(AnswerEvidencePolicy.citesEndgameResolution(
-                        question, evidence, java.util.List.of(resolution.chunkId())))
-                .isTrue();
-        assertThat(AnswerEvidencePolicy.requiredEndgameCitationIds(
-                        question,
-                        evidence,
-                        java.util.List.of(resolution.chunkId(), peripheral.chunkId())))
-                .containsExactly(resolution.chunkId());
-    }
-
-    @Test
-    void keepsVisualPlaceholdersOutOfTextEvidenceSelectionAndExpandsChineseQueries() {
-        RuleEvidenceHit placeholder = new RuleEvidenceHit(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                "RULES",
                 "Visual page",
                 "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.",
-                3,
-                3,
-                0.1);
+                3);
+        HybridEvidenceHit ordinary = hit(
+                UUID.randomUUID(), "Visual page", "The rendered page shows a green token.", 3);
 
-        assertThat(AnswerEvidencePolicy.isVisualPlaceholder(new HybridEvidenceHit(placeholder, 0.1, 1, null, false)))
-                .isTrue();
+        assertThat(AnswerEvidencePolicy.isVisualPlaceholder(placeholder)).isTrue();
+        assertThat(AnswerEvidencePolicy.isVisualPlaceholder(ordinary)).isFalse();
         assertThat(AnswerEvidencePolicy.requiresCrossLanguageExpansion("这个图标表示什么？")).isTrue();
         assertThat(AnswerEvidencePolicy.requiresCrossLanguageExpansion("one icon")).isFalse();
     }
 
     @Test
-    void treatsDocumentDerivedPrintedIdentifiersAsVisualLocators() {
-        assertThat(AnswerEvidencePolicy.visualEvidencePriority("A-01 的功能是什么？")).isTrue();
-        assertThat(AnswerEvidencePolicy.printedIdentifiers("比较 a - 01、B#02 和 A-01"))
-                .containsExactly("A-01", "B#02");
-        assertThat(AnswerEvidencePolicy.visualEvidencePriority("How does this ordinary action work?"))
-                .isFalse();
+    void extractsDocumentPrintedIdentifiersWithoutInterpretingQuestionIntent() {
+        assertThat(AnswerEvidencePolicy.printedIdentifiers("比较 a - 01、B#02、x_7 和 A-01"))
+                .containsExactly("A-01", "B#02", "X_7");
+        assertThat(AnswerEvidencePolicy.printedIdentifiers("How does this ordinary action work?"))
+                .isEmpty();
+    }
+
+    @Test
+    void comparesCompleteEvidenceSnapshotsInsteadOfNaturalLanguageSimilarity() {
+        UUID chunkId = UUID.randomUUID();
+        HybridEvidenceHit first = hit(chunkId, "Timing", "Resolve movement before drawing.", 6);
+        HybridEvidenceHit same = hit(chunkId, "Timing", "Resolve movement before drawing.", 6);
+        HybridEvidenceHit changed = hit(chunkId, "Timing", "Draw before movement.", 6);
+
+        assertThat(AnswerEvidencePolicy.sameEvidenceSnapshot(first, same)).isTrue();
+        assertThat(AnswerEvidencePolicy.sameEvidenceSnapshot(first, changed)).isFalse();
+    }
+
+    private HybridEvidenceHit hit(UUID chunkId, String heading, String excerpt, int page) {
+        RuleEvidenceHit evidence = new RuleEvidenceHit(
+                chunkId, UUID.nameUUIDFromBytes("version".getBytes()), "RULE", heading, excerpt,
+                page, page, 0.8);
+        return new HybridEvidenceHit(evidence, 0.8, 1, null, false);
     }
 }

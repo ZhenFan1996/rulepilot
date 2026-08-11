@@ -233,7 +233,8 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
                         ranked.overallRank(),
                         ranked.bayesAverage(),
                         ranked.averageRating(),
-                        ranked.usersRated()),
+                        ranked.usersRated(),
+                        ranked.types()),
                 publicDetails);
     }
 
@@ -293,7 +294,8 @@ public class BggRankedCatalogService implements BggRankedCatalog, BoardGameRecom
                 ranked.overallRank(),
                 ranked.bayesAverage(),
                 ranked.averageRating(),
-                ranked.usersRated());
+                ranked.usersRated(),
+                ranked.types());
     }
 
     private List<BggGameType> recommendationChannels(BggGameType requiredType, List<BggGameType> suggestedTypes) {

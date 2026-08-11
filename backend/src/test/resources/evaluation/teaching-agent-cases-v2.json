@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "cases": [
+    {
+      "caseId": "rr-text-001",
+      "family": "TEXT_LAYER",
+      "topicKey": "ending-resolution",
+      "title": "Finish play and resolve the winner",
+      "objective": "Teach when the end condition is checked, the triggered and non-triggered branches, optional endgame resolution, the winner, and the complete ordered tie resolution.",
+      "coverageTags": ["end", "scoring", "ties"],
+      "initialPage": 6,
+      "sourcePages": [6, 13],
+      "expectedPage": 13,
+      "expectedTerms": ["tiebreakers", "spice", "solari", "water", "garrisoned troops"]
+    },
+    {
+      "caseId": "rr-long-001",
+      "family": "LONG_EXCEPTION_HEAVY",
+      "topicKey": "exception-procedure",
+      "title": "Recover from a failed required action",
+      "objective": "Teach every step of the turmoil exception and exactly when the current phase ends.",
+      "coverageTags": ["actions", "exceptions", "timing"],
+      "initialPage": 12,
+      "sourcePages": [12, 13],
+      "expectedPage": 13,
+      "expectedTerms": ["humiliated", "purged", "deposed", "rest", "end daylight"]
+    },
+    {
+      "caseId": "rr-cross-language-001",
+      "family": "CROSS_LANGUAGE_QUESTION",
+      "topicKey": "first-round-flow",
+      "title": "从准备进入第一轮",
+      "objective": "讲清楚玩家准备好手牌后，第一墩如何开始、轮到玩家时有哪些选择、何时赢得这一墩，以及一轮何时结束。",
+      "coverageTags": ["setup", "first_round", "core_loop"],
+      "initialPage": 7,
+      "sourcePages": [7, 8],
+      "expectedPage": 8,
+      "expectedTerms": [
+        "players take turns playing cards or passing",
+        "all players consecutively pass",
+        "wins the trick",
+        "begins the next trick",
+        "only one player has cards left"
+      ]
+    }
+  ],
+  "crossRulebookNegative": {
+    "caseId": "rr-cross-language-001",
+    "topicKey": "unrelated-procedure",
+    "title": "Resolve an unrelated resource phase",
+    "objective": "Teach spice accumulation during the Makers phase and whether Agents block it.",
+    "coverageTags": ["exceptions"],
+    "sourcePages": []
+  }
+}

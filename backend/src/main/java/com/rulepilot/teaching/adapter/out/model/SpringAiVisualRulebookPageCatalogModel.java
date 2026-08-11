@@ -363,17 +363,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     static String cropReviewAppearance(IconOccurrence icon) {
-        String appearance = appearanceWithoutProposedIdentity(icon);
-        // The crop reviewer needs enough literal shape/color vocabulary to distinguish siblings, but container and
-        // typography words bias it toward returning a whole card. These are generic layout terms, not a game lexicon.
-        return appearance
-                .replaceAll(
-                        "(?iu)\\b(?:card|tile|panel|token|background|container|circle|border|corner|"
-                                + "rectangular|square|rounded|text|label|above|below|inside|within|containing|"
-                                + "centered|featuring)\\b",
-                        " ")
-                .replaceAll("\\s+", " ")
-                .strip();
+        return appearanceWithoutProposedIdentity(icon).strip();
     }
 
     private static String appearanceWithoutProposedIdentity(IconOccurrence icon) {
@@ -678,11 +668,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             } else {
                 String normalizedReturned = normalizedEvidenceLabel(returnedLabel);
                 List<String> matched = request.allowedLabels().stream()
-                        .filter(label -> {
-                            String normalizedAllowed = normalizedEvidenceLabel(label);
-                            return normalizedAllowed.equals(normalizedReturned)
-                                    || normalizedReturned.matches(".*\\b" + Pattern.quote(normalizedAllowed) + "\\b.*");
-                        })
+                        .filter(label -> normalizedEvidenceLabel(label).equals(normalizedReturned))
                         .toList();
                 if (matched.size() != 1) {
                     throw new IllegalArgumentException(
@@ -734,13 +720,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     private static String normalizedEvidenceLabel(String value) {
-        String normalized = value == null ? "" : value.strip().toLowerCase(java.util.Locale.ROOT)
-                .replaceAll("(?iu)\\b(?:icon|pictogram|resource|token)s?\\b", " ")
+        return java.text.Normalizer.normalize(
+                        value == null ? "" : value, java.text.Normalizer.Form.NFKC)
+                .strip()
+                .toLowerCase(java.util.Locale.ROOT)
                 .replaceAll("\\s+", " ")
                 .strip();
-        return normalized.length() > 4 && normalized.endsWith("s")
-                ? normalized.substring(0, normalized.length() - 1)
-                : normalized;
     }
 
     private static String identifierBoundSummary(String identifier, String summary) {

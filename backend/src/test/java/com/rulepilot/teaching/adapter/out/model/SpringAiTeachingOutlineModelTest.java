@@ -1,6 +1,7 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -35,11 +36,12 @@ class SpringAiTeachingOutlineModelTest {
         when(configuration.usesDeepSeekNonThinkingGeneration(Role.TEACHING, "player"))
                 .thenReturn(true);
         SpringAiTeachingOutlineModel model = new SpringAiTeachingOutlineModel(
-                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel());
+                configuration, mock(VersionedAgentPrompts.class), new FakeTeachingOutlineModel(), 0.37);
 
         var options = model.providerOptions(Role.TEACHING, "player");
 
         assertThat(options.build().getExtraBody()).isEqualTo(Map.of("thinking", Map.of("type", "disabled")));
+        assertThat(options.build().getTemperature()).isEqualTo(0.37);
     }
 
     @Test
@@ -176,11 +178,22 @@ class SpringAiTeachingOutlineModelTest {
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getOptions().getTemperature()).isEqualTo(0.1);
         assertThat(prompt.getValue().getInstructions())
                 .extracting(message -> message.getText())
                 .anySatisfy(text -> assertThat(text)
                         .contains(
                                 "untrusted_player_learning_goal",
                                 "先让我能带大家开局，再重点讲行动怎么衔接。"));
+    }
+
+    @Test
+    void rejectsInvalidOutlineTemperature() {
+        assertThatThrownBy(() -> new SpringAiTeachingOutlineModel(
+                        mock(RuntimeModelConfiguration.class),
+                        mock(VersionedAgentPrompts.class),
+                        new FakeTeachingOutlineModel(),
+                        Double.POSITIVE_INFINITY))
+                .hasMessageContaining("teaching outline model temperature");
     }
 }

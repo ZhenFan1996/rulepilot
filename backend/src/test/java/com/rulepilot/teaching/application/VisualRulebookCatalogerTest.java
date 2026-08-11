@@ -430,7 +430,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void verifiesIconRectanglesInADedicatedPassAndRetainsLocalizedObservations() throws IOException {
+    void verifiesIconRectanglesInADedicatedPassWithoutSemanticNameFiltering() throws IOException {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger localizationCalls = new AtomicInteger();
@@ -506,13 +506,20 @@ class VisualRulebookCatalogerTest {
         assertThat(cropReviewCalls).hasValue(4);
         assertThat(result).singleElement().satisfies(fact -> {
             assertThat(fact.iconInventoryComplete()).isTrue();
-            assertThat(fact.iconOccurrences()).hasSize(1);
+            assertThat(fact.iconOccurrences()).hasSize(2);
             assertThat(fact.iconOccurrences().getFirst()).satisfies(icon -> {
                 assertThat(icon.name()).isEqualTo("叶子");
                 assertThat(icon.x()).isEqualTo(130);
                 assertThat(icon.y()).isEqualTo(250);
                 assertThat(icon.width()).isEqualTo(20);
                 assertThat(icon.height()).isEqualTo(22);
+            });
+            assertThat(fact.iconOccurrences().get(1)).satisfies(icon -> {
+                assertThat(icon.name()).isEqualTo("积分卡");
+                assertThat(icon.x()).isEqualTo(700);
+                assertThat(icon.y()).isEqualTo(700);
+                assertThat(icon.width()).isEqualTo(30);
+                assertThat(icon.height()).isEqualTo(30);
             });
         });
     }
@@ -777,25 +784,16 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void removesAConflictingQuantifiedLabelWithoutLeavingADanglingConjunction() {
-        assertThat(VisualRulebookCataloger.removeConflictingReferenceLabels(
-                        "B#04: gain 2 amber and 2 teal.",
-                        "amber",
-                        2,
-                        List.of("amber", "teal", "card")))
-                .isEqualTo("B#04: gain 2 amber.");
-    }
-
-    @Test
-    void preservesSharedCatalogRulesWithoutRepeatingIdentifierEffects() {
+    void preservesBothExactCatalogBlocksWithoutSemanticTokenRewriting() {
         String merged = VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules(
                 "A-01: Move one space.\nA-02: Draw one card.",
                 "Move one space. Draw one card. Items may occupy any slot. Fill upper slots from left to right.");
 
         assertThat(merged)
                 .contains("A-01: Move one space.", "A-02: Draw one card.", "Items may occupy any slot.",
-                        "Fill upper slots from left to right.")
-                .doesNotContain("\nMove one space.\n", "\nDraw one card.\n");
+                        "Fill upper slots from left to right.", "Move one space. Draw one card.");
+        assertThat(VisualRulebookCataloger.mergeIdentifierFactsWithSharedRules("same block", "same block"))
+                .isEqualTo("same block");
     }
 
     @Test

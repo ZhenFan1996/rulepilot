@@ -453,14 +453,6 @@ public class GroundedTeachingAgent {
                 model.supportsVisualEvidence(plan.createdBy()));
     }
 
-    static boolean claimsImmediateEndingForEndOfRoundTrigger(String playerText, List<RuleEvidence> citedEvidence) {
-        return LessonDraftValidator.claimsImmediateEndingForEndOfRoundTrigger(playerText, citedEvidence);
-    }
-
-    static boolean defersCitedEndgameCheck(String playerText, List<RuleEvidence> citedEvidence) {
-        return LessonDraftValidator.defersCitedEndgameCheck(playerText, citedEvidence);
-    }
-
     private void recordPublication(
             UUID runId,
             TeachingPlan.PlannedSection section,

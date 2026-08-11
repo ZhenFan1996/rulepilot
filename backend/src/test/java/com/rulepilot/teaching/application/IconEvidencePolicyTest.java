@@ -10,198 +10,101 @@ import org.junit.jupiter.api.Test;
 class IconEvidencePolicyTest {
 
     @Test
-    void demotesBracketAndEmojiStandInsThatAreNotExactVisibleText() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
-                icon("Adjacent [house icon] scores 1 point."),
-                icon("Each building scores Victory Points 🟢.")));
+    void preservesStructuredModelStatusesWithoutReinterpretingTheirProse() {
+        List<IconOccurrence> icons = List.of(
+                icon(IconMeaningStatus.EXPLICIT, "opaque evidence A", ""),
+                icon(IconMeaningStatus.IDENTIFIED, "opaque label B", "opaque label B"),
+                icon(IconMeaningStatus.UNEXPLAINED, "", ""));
 
-        assertThat(sanitized).allSatisfy(icon -> {
-            assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-            assertThat(icon.explanation()).isEmpty();
-            assertThat(icon.evidenceText()).isEmpty();
-        });
+        assertThat(IconEvidencePolicy.sanitize(icons)).containsExactlyElementsOf(icons);
+        assertThat(IconEvidencePolicy.sanitize(null)).isEmpty();
     }
 
     @Test
-    void recordsAPlainLiteralLegendLabelWithoutInventingARuleEffect() {
-        IconOccurrence sanitized = IconEvidencePolicy.sanitize(List.of(icon("WHEAT"))).getFirst();
+    void keepsExplicitMeaningOnlyWhenItsEvidenceOccursOnTheSourcePage() {
+        IconOccurrence supported = icon(
+                IconMeaningStatus.EXPLICIT,
+                "A star grants one point.",
+                "");
+        IconOccurrence unsupported = icon(
+                IconMeaningStatus.EXPLICIT,
+                "A circle grants two points.",
+                "");
 
-        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.explanation()).isEmpty();
-        assertThat(sanitized.evidenceText()).isEqualTo("WHEAT");
+        List<IconOccurrence> result = IconEvidencePolicy.sanitize(
+                List.of(supported, unsupported),
+                "ICON LEDGER\nA star grants one point.\nNo other definition is printed.");
+
+        assertThat(result.getFirst()).isEqualTo(supported);
+        assertDemoted(result.get(1));
     }
 
     @Test
-    void demotesUsageProseAndNearbyHeadingsThatDoNotNameTheProposedIcon() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
-                icon("carrot", "Flip the cards from the point side to the veggie side."),
-                icon("small orange fruit", "POINT SCORING CONDITIONS")));
+    void sourceComparisonNormalizesUnicodeCaseAndWhitespaceOnly() {
+        IconOccurrence icon = icon(
+                IconMeaningStatus.EXPLICIT,
+                "ＦＯＯ   BAR",
+                "");
 
-        assertThat(sanitized).allSatisfy(icon -> {
-            assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-            assertThat(icon.explanation()).isEmpty();
-            assertThat(icon.evidenceText()).isEmpty();
-        });
+        assertThat(IconEvidencePolicy.sanitize(List.of(icon), "prefix foo bar suffix").getFirst())
+                .isEqualTo(icon);
     }
 
     @Test
-    void retainsAVisibleDefinitionThatNamesTheOriginalLanguageIdentity() {
-        IconOccurrence sanitized = IconEvidencePolicy.sanitize(List.of(
-                        icon("victory point", "The star icon represents one victory point.")))
-                .getFirst();
-
-        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
-    }
-
-    @Test
-    void canonicalizesAQuotedPrintedLabelButRejectsAUsageExample() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
-                icon("cabbage", "卡片下方明确标注'CABBAGE'。"),
-                icon("cabbage", "Veggies that do not match scoring conditions are not scored (e.g., cabbage).")));
-
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CABBAGE");
-        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-    }
-
-    @Test
-    void retainsAnEquivalentPrintedLabelButDemotesShortActionAndConditionText() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(List.of(
-                icon("rainbow-button-icon", "Rainbow Button"),
-                icon("rainbow-button-icon", "Gain a Rainbow Button"),
-                icon("button", "Collect no buttons"),
-                icon("cat-icon", "Cat Scoring Tiles to be used")));
-
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("Rainbow Button");
-        assertThat(sanitized.subList(1, 4)).allSatisfy(icon -> {
-            assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-            assertThat(icon.explanation()).isEmpty();
-            assertThat(icon.evidenceText()).isEmpty();
-        });
-    }
-
-    @Test
-    void requiresPublishedEvidenceToOccurInTheExtractedSourcePage() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(
-                List.of(
-                        icon("victory point", "The star icon represents one victory point."),
-                        icon("cat head", "猫头图标表示该行得分条件与猫相关。")),
-                "ICON LEGEND\nThe star icon represents one victory point.");
-
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.EXPLICIT);
-        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-        assertThat(sanitized.get(1).evidenceText()).isEmpty();
-    }
-
-    @Test
-    void acceptsAnExactLabelIndependentlyReadFromTheLocalizedImageButNotADifferentLabel() {
-        List<IconOccurrence> sanitized = IconEvidencePolicy.sanitize(
-                List.of(
-                        iconWithVerifiedLabel("carrot", "CARROT", "CARROT"),
-                        iconWithVerifiedLabel("cabbage", "CABBAGE", "ONION")),
-                "The PDF text layer contains no card labels.");
-
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
-        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
-    }
-
-    @Test
-    void preservesAnAlreadyIdentifiedContainerWhenTheIndependentImageLabelMatches() {
-        IconOccurrence identified = new IconOccurrence(
-                "resource cube - wood",
-                "木头资源方块",
-                "Brown cube with wood grain texture.",
-                "",
-                "WOOD",
-                "WOOD",
+    void independentlyVerifiedLiteralLabelCanRetainAnIdentifiedCrop() {
+        IconOccurrence verified = icon(
                 IconMeaningStatus.IDENTIFIED,
-                100,
-                100,
-                20,
-                20);
+                "ALPHA-7",
+                "ALPHA-7");
+        IconOccurrence conflicting = icon(
+                IconMeaningStatus.IDENTIFIED,
+                "ALPHA-7",
+                "BETA-9");
 
-        IconOccurrence sanitized =
-                IconEvidencePolicy.sanitize(List.of(identified), "The PDF text layer has no resource legend.")
-                        .getFirst();
+        List<IconOccurrence> result = IconEvidencePolicy.sanitize(
+                List.of(verified, conflicting),
+                "The text layer does not contain either crop label.");
 
-        assertThat(sanitized.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.evidenceText()).isEqualTo("WOOD");
+        assertThat(result.getFirst()).isEqualTo(verified);
+        assertDemoted(result.get(1));
     }
 
     @Test
-    void promotesAnUnexplainedCropOnlyWhenItsIndependentLabelMatchesTheProposedIdentity() {
-        IconOccurrence matching = unexplainedWithVerifiedLabel("carrot card icon", "CARROT");
-        IconOccurrence camelCaseContainer = unexplainedWithVerifiedLabel("brickCube", "BRICK");
-        IconOccurrence prefixedContainers = unexplainedWithVerifiedLabel("resource cube - wood", "WOOD");
-        IconOccurrence neighboring = unexplainedWithVerifiedLabel("point card icon", "SALAD");
+    void unexplainedObservationNeverGainsMeaningFromNearbySourceText() {
+        IconOccurrence unexplained = icon(IconMeaningStatus.UNEXPLAINED, "", "ALPHA-7");
 
-        List<IconOccurrence> sanitized =
-                IconEvidencePolicy.sanitize(
-                        List.of(matching, camelCaseContainer, prefixedContainers, neighboring),
-                        "The text layer has no card labels.");
-
-        assertThat(sanitized.getFirst().meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.getFirst().evidenceText()).isEqualTo("CARROT");
-        assertThat(sanitized.get(1).meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.get(1).evidenceText()).isEqualTo("BRICK");
-        assertThat(sanitized.get(2).meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
-        assertThat(sanitized.get(2).evidenceText()).isEqualTo("WOOD");
-        assertThat(sanitized.get(3).meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+        assertThat(IconEvidencePolicy.sanitize(
+                        List.of(unexplained),
+                        "ALPHA-7 means three points.").getFirst())
+                .isEqualTo(unexplained);
     }
 
     @Test
-    void doesNotTreatDescriptiveQualifiersAsNeutralIdentityContainers() {
-        assertThat(IconEvidencePolicy.compatibleIdentity("WOOD", "red resource cube - wood")).isFalse();
-        assertThat(IconEvidencePolicy.compatibleIdentity("WOOD", "resource cube - stone")).isFalse();
+    void identityCompatibilityIsExactAfterMechanicalNormalization() {
+        assertThat(IconEvidencePolicy.compatibleIdentity(" Ａlpha   7 ", "alpha 7")).isTrue();
+        assertThat(IconEvidencePolicy.compatibleIdentity("WOOD", "resource cube - wood")).isFalse();
+        assertThat(IconEvidencePolicy.compatibleIdentity("", "anything")).isFalse();
     }
 
-    private static IconOccurrence icon(String evidence) {
-        return icon("wheat", evidence);
-    }
-
-    private static IconOccurrence icon(String groupKey, String evidence) {
+    private static IconOccurrence icon(
+            IconMeaningStatus status, String evidenceText, String verifiedVisualLabel) {
         return new IconOccurrence(
-                groupKey,
-                "小麦",
-                "黄色资源符号。",
-                "代表小麦资源。",
-                evidence,
-                IconMeaningStatus.EXPLICIT,
+                "opaque-group",
+                "不透明符号",
+                "一个边界明确的可见图形。",
+                status == IconMeaningStatus.EXPLICIT ? "模型给出的结构化含义。" : "",
+                evidenceText,
+                verifiedVisualLabel,
+                status,
                 100,
                 100,
-                20,
-                20);
+                24,
+                24);
     }
 
-    private static IconOccurrence iconWithVerifiedLabel(String groupKey, String evidence, String verifiedLabel) {
-        return new IconOccurrence(
-                groupKey,
-                groupKey,
-                "A compact visible pictogram.",
-                "代表" + groupKey + "类别。",
-                evidence,
-                verifiedLabel,
-                IconMeaningStatus.EXPLICIT,
-                100,
-                100,
-                20,
-                20);
-    }
-
-    private static IconOccurrence unexplainedWithVerifiedLabel(String groupKey, String verifiedLabel) {
-        return new IconOccurrence(
-                groupKey,
-                groupKey,
-                "A compact visible pictogram.",
-                "",
-                "",
-                verifiedLabel,
-                IconMeaningStatus.UNEXPLAINED,
-                100,
-                100,
-                20,
-                20);
+    private static void assertDemoted(IconOccurrence icon) {
+        assertThat(icon.meaningStatus()).isEqualTo(IconMeaningStatus.UNEXPLAINED);
+        assertThat(icon.explanation()).isEmpty();
+        assertThat(icon.evidenceText()).isEmpty();
     }
 }

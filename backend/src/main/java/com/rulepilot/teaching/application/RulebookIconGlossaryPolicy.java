@@ -230,24 +230,12 @@ final class RulebookIconGlossaryPolicy {
     }
 
     private static String groupingIdentity(IconOccurrence icon) {
-        String proposedIdentity = semanticIdentity(icon.groupKey());
-        String verifiedLabel = semanticIdentity(icon.verifiedVisualLabel());
+        String proposedIdentity = normalized(icon.groupKey());
+        String verifiedLabel = normalized(icon.verifiedVisualLabel());
         return !verifiedLabel.isBlank()
-                        && (verifiedLabel.equals(proposedIdentity)
-                                || IconEvidencePolicy.compatibleIdentity(verifiedLabel, proposedIdentity))
+                        && IconEvidencePolicy.compatibleIdentity(verifiedLabel, proposedIdentity)
                 ? verifiedLabel
-                : normalized(icon.groupKey());
-    }
-
-    private static String semanticIdentity(String value) {
-        return normalized(value == null ? "" : value)
-                .replaceAll("(?iu)\\b(?:icon|icons|symbol|symbols|mark|marker|pictogram|silhouette|shape)\\b", " ")
-                .replace("图标", "")
-                .replace("符号", "")
-                .replace("标记", "")
-                .replace("轮廓", "")
-                .replaceAll("\\s+", " ")
-                .strip();
+                : proposedIdentity;
     }
 
     record GlossaryProjection(List<IconGroup> groups, Set<String> conflictingGroupKeys) {}

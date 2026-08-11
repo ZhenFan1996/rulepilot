@@ -627,11 +627,21 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             Integer minPlayers = null;
             Integer maxPlayers = null;
             Integer playingTime = null;
+            Integer minimumPlayTime = null;
+            Integer maximumPlayTime = null;
             Integer minimumAge = null;
+            Integer suggestedMinimumAge = null;
             BigDecimal averageRating = null;
             BigDecimal averageWeight = null;
+            Integer weightVotes = null;
+            String bestWith = "";
+            String recommendedWith = "";
+            Integer languageDependenceLevel = null;
+            int languageDependenceVotes = -1;
+            int suggestedAgeVotes = -1;
             List<String> categories = new ArrayList<>();
             List<String> mechanics = new ArrayList<>();
+            List<String> families = new ArrayList<>();
             List<String> designers = new ArrayList<>();
             List<String> publishers = new ArrayList<>();
             List<String> simplifiedChineseNames = new ArrayList<>();
@@ -646,6 +656,8 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
             Integer versionYear = null;
             List<String> versionLanguages = new ArrayList<>();
             boolean chineseVersion = false;
+            boolean inPlayerSummary = false;
+            String currentPoll = null;
             while (reader.hasNext()) {
                 int event = reader.next();
                 if (event == XMLStreamConstants.END_ELEMENT
@@ -667,6 +679,13 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                             versionLanguages);
                     inVersion = false;
                     continue;
+                }
+                if (event == XMLStreamConstants.END_ELEMENT
+                        && "poll-summary".equals(reader.getLocalName())) {
+                    inPlayerSummary = false;
+                } else if (event == XMLStreamConstants.END_ELEMENT
+                        && "poll".equals(reader.getLocalName())) {
+                    currentPoll = null;
                 }
                 if (event != XMLStreamConstants.START_ELEMENT) continue;
                 String element = reader.getLocalName();
@@ -714,17 +733,46 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     maxPlayers = integer(reader.getAttributeValue(null, "value"));
                 } else if ("playingtime".equals(element)) {
                     playingTime = integer(reader.getAttributeValue(null, "value"));
+                } else if ("minplaytime".equals(element)) {
+                    minimumPlayTime = integer(reader.getAttributeValue(null, "value"));
+                } else if ("maxplaytime".equals(element)) {
+                    maximumPlayTime = integer(reader.getAttributeValue(null, "value"));
                 } else if ("minage".equals(element)) {
                     minimumAge = integer(reader.getAttributeValue(null, "value"));
                 } else if ("average".equals(element)) {
                     averageRating = positiveDecimal(reader.getAttributeValue(null, "value"));
                 } else if ("averageweight".equals(element)) {
                     averageWeight = positiveDecimal(reader.getAttributeValue(null, "value"));
+                } else if ("numweights".equals(element)) {
+                    weightVotes = integer(reader.getAttributeValue(null, "value"));
+                } else if ("poll-summary".equals(element)) {
+                    inPlayerSummary = "suggested_numplayers".equals(reader.getAttributeValue(null, "name"));
+                } else if ("poll".equals(element)) {
+                    currentPoll = reader.getAttributeValue(null, "name");
+                } else if ("result".equals(element) && inPlayerSummary) {
+                    String summaryName = reader.getAttributeValue(null, "name");
+                    if ("bestwith".equals(summaryName)) bestWith = value(reader);
+                    if ("recommmendedwith".equals(summaryName)) recommendedWith = value(reader);
+                } else if ("result".equals(element) && "language_dependence".equals(currentPoll)) {
+                    Integer votes = integer(reader.getAttributeValue(null, "numvotes"));
+                    Integer level = integer(reader.getAttributeValue(null, "level"));
+                    if (votes != null && level != null && votes > languageDependenceVotes) {
+                        languageDependenceVotes = votes;
+                        languageDependenceLevel = level;
+                    }
+                } else if ("result".equals(element) && "suggested_playerage".equals(currentPoll)) {
+                    Integer votes = integer(reader.getAttributeValue(null, "numvotes"));
+                    Integer age = integer(reader.getAttributeValue(null, "value"));
+                    if (votes != null && age != null && votes > suggestedAgeVotes) {
+                        suggestedAgeVotes = votes;
+                        suggestedMinimumAge = age;
+                    }
                 } else if ("link".equals(element)) {
                     String type = reader.getAttributeValue(null, "type");
                     String value = reader.getAttributeValue(null, "value");
                     if (value != null && "boardgamecategory".equals(type)) categories.add(value);
                     if (value != null && "boardgamemechanic".equals(type)) mechanics.add(value);
+                    if (value != null && "boardgamefamily".equals(type)) families.add(value);
                     if (value != null && "boardgamedesigner".equals(type)) designers.add(value);
                     if (value != null && "boardgamepublisher".equals(type)) publishers.add(value);
                 }
@@ -752,7 +800,15 @@ public class BggXmlApiClient implements BoardGameGeekCatalog {
                     designers,
                     publishers,
                     officialChineseNames,
-                    editionImages);
+                    editionImages,
+                    minimumPlayTime,
+                    maximumPlayTime,
+                    suggestedMinimumAge,
+                    bestWith,
+                    recommendedWith,
+                    languageDependenceLevel,
+                    weightVotes,
+                    families);
         } catch (XMLStreamException exception) {
             throw new IllegalStateException("BGG returned invalid XML", exception);
         }

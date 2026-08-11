@@ -263,7 +263,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void rejects_a_structured_rule_text_box_that_has_no_player_facing_visual_handle() {
+    void acceptsACompactLocatorRegionWithoutReclassifyingItsDescriptionVocabulary() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -282,8 +282,10 @@ class VisualLessonEnricherTest {
                                 List.of(1))))
                 .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
 
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
@@ -313,7 +315,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void rejects_a_contents_list_even_when_it_names_real_game_components() {
+    void trustsTheLocatorStructuredStepBindingInsteadOfRejectingContentsVocabulary() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -332,12 +334,14 @@ class VisualLessonEnricherTest {
                                 List.of(1))))
                 .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
 
+        assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
-    void rejects_a_tiny_label_and_a_prose_paragraph_even_when_the_model_calls_them_visuals() {
+    void expandsSmallBoundedRegionsAndDoesNotSemanticallyReclassifyReturnedDescriptions() {
         UUID chunk = UUID.randomUUID();
         var tiny = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -357,9 +361,14 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), lesson(chunk), "owner");
 
         assertThat(tiny.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_TOO_SMALL);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
         assertThat(paragraph.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_NON_VISUAL);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
+        assertThat(tiny.lesson().sections().getFirst().steps().getFirst().visualFocus())
+                .extracting(
+                        IllustratedLesson.VisualFocus::width,
+                        IllustratedLesson.VisualFocus::height)
+                .containsExactly(180, 120);
     }
 
     @Test
@@ -587,7 +596,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void rejects_a_resource_legend_when_the_exact_step_is_about_a_player_board() {
+    void acceptsTheLocatorExplicitStepBindingWithoutHeadingKeywordComparison() {
         UUID evidence = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -607,13 +616,13 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), playerBoardLesson(evidence), "owner");
 
         assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
-    void rejects_a_regular_score_table_when_the_exact_step_explains_a_tie_break() {
+    void leavesTieBreakVisualSemanticsToTheStructuredLocator() {
         UUID evidence = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -633,13 +642,13 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), tieBreakLesson(evidence), "owner");
 
         assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
-    void rejects_a_setup_overview_when_the_step_requires_an_actual_placement() {
+    void leavesPlacementVisualSemanticsToTheStructuredLocator() {
         UUID evidence = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -659,9 +668,9 @@ class VisualLessonEnricherTest {
                 .enrichWithReport(UUID.randomUUID(), lesson(evidence), "owner");
 
         assertThat(result.lesson().sections().getFirst().steps().getFirst().kind())
-                .isEqualTo(IllustratedLesson.TeachingMove.DO);
+                .isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(result.outcomes()).singleElement().extracting(VisualLessonEnricher.SectionOutcome::outcome)
-                .isEqualTo(VisualLessonEnricher.Outcome.REJECTED_STEP_MISMATCH);
+                .isEqualTo(VisualLessonEnricher.Outcome.ADDED);
     }
 
     @Test
@@ -798,7 +807,7 @@ class VisualLessonEnricherTest {
     }
 
     @Test
-    void replaces_a_narrow_tall_score_example_that_stacks_neighbouring_rules() {
+    void keepsAnExistingBoundedCropWithoutGameSpecificAspectRatioRules() {
         UUID chunk = UUID.randomUUID();
         var result = new VisualLessonEnricher(
                         ignored -> understanding(),
@@ -821,8 +830,7 @@ class VisualLessonEnricherTest {
         assertThat(step.kind()).isEqualTo(IllustratedLesson.TeachingMove.VISUAL);
         assertThat(step.visualFocus())
                 .isEqualTo(new IllustratedLesson.VisualFocus(
-                        2, "鲑鱼计分卡", "四张鲑鱼计分卡的粉色鲑鱼图标与相邻分数格", 45, 510, 300, 180));
-        assertThat(step.text()).isEqualTo("鲑鱼按相邻游群计分。");
+                        2, "鲑鱼计分卡示例", 45, 460, 260, 540));
     }
 
     @Test

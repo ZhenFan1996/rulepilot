@@ -8,7 +8,11 @@ const game = {
   bggId: 266192, name: '展翅翱翔', originalName: 'Wingspan', nameLocalized: true, publicationYear: 2019,
   overallRank: 34, geekRating: 7.79, averageRating: 8.09, usersRated: 102030,
   thumbnailUrl: 'https://example.test/thumb.jpg', minPlayers: 1, maxPlayers: 5,
-  playingTimeMinutes: 70, averageWeight: 2.5, categories: ['Animals'], mechanics: ['Card Drafting'],
+  playingTimeMinutes: 70, minimumPlayTimeMinutes: 40, maximumPlayTimeMinutes: 90,
+  minimumAge: 10, suggestedMinimumAge: 12, bestWith: 'Best with 3 players', recommendedWith: 'Recommended with 2–4 players',
+  languageDependenceLevel: 2, averageWeight: 2.5, weightVotes: 987,
+  categories: ['Animals'], mechanics: ['Card Drafting'], families: ['Animals: Birds'],
+  designers: ['Elizabeth Hargrave'], publishers: ['Stonemaier Games'],
   bggUrl: 'https://boardgamegeek.com/boardgame/266192',
 }
 
@@ -40,6 +44,12 @@ describe('RecommendationGameDetailsDialog', () => {
 
     expect(wrapper.text()).toContain('Build a habitat for birds.')
     expect(wrapper.text()).toContain('原文已显示，中文资料正在补齐')
+    expect(wrapper.text()).toContain('40–90 分钟')
+    expect(wrapper.text()).toContain('玩家建议 12 岁以上')
+    expect(wrapper.text()).toContain('语言依赖 2 / 5')
+    expect(wrapper.text()).toContain('复杂度 2.5 / 5（987 票）')
+    expect(wrapper.text()).toContain('Animals: Birds')
+    expect(wrapper.text()).toContain('Best with 3 players')
     expect(wrapper.get('a[href="https://boardgamegeek.com/boardgame/266192"]').attributes('target')).toBe('_blank')
 
     resolveLocalized(Response.json({

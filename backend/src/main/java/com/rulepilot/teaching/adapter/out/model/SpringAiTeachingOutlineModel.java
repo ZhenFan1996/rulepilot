@@ -13,8 +13,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.util.MimeTypeUtils;
 import org.springframework.context.annotation.Primary;
@@ -36,12 +39,26 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     private final FakeTeachingOutlineModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final ExecutorService outlineCalls = Executors.newVirtualThreadPerTaskExecutor();
+    private final double temperature;
 
     public SpringAiTeachingOutlineModel(
             RuntimeModelConfiguration models, VersionedAgentPrompts prompts, FakeTeachingOutlineModel fake) {
+        this(models, prompts, fake, 0.1);
+    }
+
+    @Autowired
+    public SpringAiTeachingOutlineModel(
+            RuntimeModelConfiguration models,
+            VersionedAgentPrompts prompts,
+            FakeTeachingOutlineModel fake,
+            @Value("${rulepilot.teaching.outline-temperature:0.1}") double temperature) {
+        if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
+            throw new IllegalArgumentException("teaching outline model temperature must be between 0 and 2");
+        }
         this.models = models;
         this.prompts = prompts;
         this.fake = fake;
+        this.temperature = temperature;
     }
 
     @Override
@@ -158,6 +175,9 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
         if (options != null) {
             options.model(models.modelNameFor(role, owner));
             prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder()
+                    .temperature(temperature));
         }
         OutlineDraft outline = prompt
                 .system(prompts.teachingOutlineSystem())
@@ -188,11 +208,12 @@ public class SpringAiTeachingOutlineModel implements TeachingOutlineModel {
     OpenAiChatOptions.Builder providerOptions(Role role, String owner) {
         if (models.usesDeepSeekNonThinkingGeneration(role, owner)) {
             return OpenAiChatOptions.builder()
+                    .temperature(temperature)
                     .extraBody(java.util.Map.of("thinking", java.util.Map.of("type", "disabled")));
         }
         if (usesQwen(role, owner)) {
             return OpenAiChatOptions.builder()
-                    .temperature(0.0)
+                    .temperature(temperature)
                     .maxTokens(MAX_OUTLINE_COMPLETION_TOKENS)
                     .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                     .extraBody(java.util.Map.of("enable_thinking", false));

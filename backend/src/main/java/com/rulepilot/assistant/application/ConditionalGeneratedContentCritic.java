@@ -2,7 +2,6 @@ package com.rulepilot.assistant.application;
 
 import com.rulepilot.assistant.ContentCriticModel;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
-import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.assistant.GeneratedContentCritic;
 import com.rulepilot.assistant.GeneratedContentCritic.Issue;
@@ -12,17 +11,13 @@ import com.rulepilot.assistant.GeneratedContentCritic.ReviewMode;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRequest;
 import com.rulepilot.assistant.GeneratedContentCritic.ReviewRisk;
 import com.rulepilot.assistant.GeneratedContentCritic.TaskContext;
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,32 +29,27 @@ import org.springframework.stereotype.Service;
 public class ConditionalGeneratedContentCritic implements GeneratedContentCritic {
 
     private static final int MAX_ISSUES = 12;
-    private static final int MAX_POST_PUBLICATION_FACTUAL_ISSUES = 8;
-    private static final int MAX_POST_PUBLICATION_STRUCTURE_ISSUES = 4;
-    private static final Pattern TERMINAL_NO_DEFECT = Pattern.compile(
-            "(?is).*(无问题|没有问题|无缺陷|无新增缺陷|无异议|无矛盾|非规则错误|支持该部分|证据支持|no (?:concrete )?(?:issue|defect)|no contradiction|fully supported|is supported|is consistent)[。.!！）)\\s]*$");
     private final ContentCriticModel model;
     private final AuditedAgentInvocations invocations;
     private final boolean evaluationMode;
-    private final int atomicConfirmationConcurrency;
 
     @Autowired
     public ConditionalGeneratedContentCritic(
             ContentCriticModel model,
             AuditedAgentInvocations invocations,
-            @Value("${rulepilot.critic.evaluation-mode:false}") boolean evaluationMode,
-            @Value("${rulepilot.critic.atomic-confirmation-concurrency:4}") int atomicConfirmationConcurrency) {
+            @Value("${rulepilot.critic.evaluation-mode:false}") boolean evaluationMode) {
         this.model = model;
         this.invocations = invocations;
         this.evaluationMode = evaluationMode;
-        this.atomicConfirmationConcurrency = Math.max(1, atomicConfirmationConcurrency);
     }
 
+    /** Compatibility constructor for historical evaluation fixtures; confirmation concurrency is no longer used. */
     ConditionalGeneratedContentCritic(
             ContentCriticModel model,
             AuditedAgentInvocations invocations,
-            boolean evaluationMode) {
-        this(model, invocations, evaluationMode, 4);
+            boolean evaluationMode,
+            int ignoredConfirmationConcurrency) {
+        this(model, invocations, evaluationMode);
     }
 
     @Override
@@ -80,49 +70,15 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             case POST_PUBLICATION_STRUCTURE -> "Published teaching lesson structure review completed";
             default -> "Generated content critique completed";
         };
-        List<Issue> candidateIssues = critique(request, operation, successSummary);
-        if (request.reviewMode() == ReviewMode.POST_PUBLICATION && request.contentType() == GeneratedContentCritic.ContentType.LESSON) {
-            return new Review(true, mergePostPublicationIssues(request, candidateIssues));
+        List<Issue> candidates = critique(request, operation, successSummary);
+        if (candidates.isEmpty() || !requiresAtomicConfirmation(request.reviewMode())) {
+            return new Review(true, candidates);
         }
-        if (candidateIssues.isEmpty() || request.reviewMode() != ReviewMode.DISCOVERY) {
-            return new Review(true, candidateIssues);
-        }
-        return new Review(true, confirmAtomicIssues(request, candidateIssues));
+        return new Review(true, confirmCandidateIssues(request, candidates));
     }
 
-    private List<Issue> mergePostPublicationIssues(ReviewRequest request, List<Issue> factualIssues) {
-        ReviewRequest structureRequest = new ReviewRequest(
-                request.assistantRunId(),
-                request.contentType(),
-                ReviewMode.POST_PUBLICATION_STRUCTURE,
-                request.taskContext(),
-                request.claims(),
-                request.evidence());
-        List<Issue> structuralIssues;
-        try {
-            structuralIssues = critique(
-                    structureRequest,
-                    "reviewPublishedTeachingStructure",
-                    "Published teaching lesson structure review completed");
-        } catch (AgentExecutionStoppedException stopped) {
-            throw stopped;
-        } catch (RuntimeException structureFailure) {
-            return factualIssues;
-        }
-        List<Issue> scopeIssues = structuralIssues.stream()
-                .filter(issue -> issue.type() == IssueType.CHAPTER_SCOPE_DUPLICATION)
-                .limit(MAX_POST_PUBLICATION_STRUCTURE_ISSUES)
-                .toList();
-        if (scopeIssues.isEmpty()) return factualIssues;
-        return java.util.stream.Stream.concat(
-                        factualIssues.stream().limit(MAX_POST_PUBLICATION_FACTUAL_ISSUES),
-                        scopeIssues.stream())
-                .distinct()
-                .sorted(Comparator.comparingInt(Issue::claimPosition)
-                        .thenComparing(Issue::type)
-                        .thenComparing(Issue::summary))
-                .limit(MAX_ISSUES)
-                .toList();
+    private boolean requiresAtomicConfirmation(ReviewMode mode) {
+        return mode == ReviewMode.DISCOVERY || mode == ReviewMode.POST_PUBLICATION;
     }
 
     private List<Issue> critique(ReviewRequest request, String operation, String successSummary) {
@@ -144,81 +100,80 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .map(GeneratedContentCritic.Claim::position)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         return draft.issues().stream()
-                .filter(issue -> issue == null
-                        || issue.summary() == null
-                        || !explicitlyDescribesNoDefect(issue.summary()))
                 .map(issue -> normalizeIssue(issue, claimPositions, allowedEvidence))
                 .limit(MAX_ISSUES)
                 .toList();
     }
 
-    private List<Issue> confirmAtomicIssues(ReviewRequest request, List<Issue> candidates) {
-        Map<Integer, List<Issue>> byClaimPosition = candidates.stream()
+    private List<Issue> confirmCandidateIssues(ReviewRequest request, List<Issue> candidates) {
+        Map<Integer, Set<IssueType>> candidateTypesByPosition = candidates.stream()
                 .collect(Collectors.groupingBy(
                         Issue::claimPosition,
                         LinkedHashMap::new,
-                        Collectors.toList()));
-        List<Map.Entry<Integer, List<Issue>>> groups = byClaimPosition.entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
+                        Collectors.mapping(Issue::type, Collectors.toUnmodifiableSet())));
+        List<GeneratedContentCritic.Claim> contextualClaims = request.claims().stream()
+                .sorted(Comparator.comparingInt(GeneratedContentCritic.Claim::position))
                 .toList();
-        try (var executor = Executors.newFixedThreadPool(Math.min(atomicConfirmationConcurrency, groups.size()))) {
-            var confirmations = groups.stream()
-                    .map(group -> executor.submit(() -> confirmClaimIssues(request, group.getKey(), group.getValue())))
-                    .toList();
-            List<Issue> confirmed = new ArrayList<>();
-            for (var confirmation : confirmations) {
-                confirmed.addAll(confirmation.get());
-            }
-            return confirmed.stream()
-                    .sorted(Comparator.comparingInt(Issue::claimPosition).thenComparing(Issue::type))
-                    .toList();
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("atomic critic confirmation was interrupted", exception);
-        } catch (ExecutionException exception) {
-            if (exception.getCause() instanceof RuntimeException runtimeException) {
-                throw runtimeException;
-            }
-            throw new IllegalStateException("atomic critic confirmation failed", exception.getCause());
-        }
-    }
-
-    private List<Issue> confirmClaimIssues(ReviewRequest request, int claimPosition, List<Issue> candidates) {
-        var claim = request.claims().stream()
-                .filter(candidate -> candidate.position() == claimPosition)
-                .findFirst()
-                .orElseThrow();
-        Set<UUID> citationIds = Set.copyOf(claim.citationIds());
-        List<GeneratedContentCritic.Evidence> citedEvidence = request.evidence().stream()
-                .filter(evidence -> citationIds.contains(evidence.chunkId()))
-                .toList();
-        if (citedEvidence.isEmpty()) {
-            return List.of();
-        }
-        Set<IssueType> candidateTypes = candidates.stream()
-                .map(Issue::type)
+        Set<UUID> contextualCitationIds = contextualClaims.stream()
+                .flatMap(claim -> claim.citationIds().stream())
                 .collect(Collectors.toUnmodifiableSet());
-        String types = candidateTypes.stream()
-                .sorted()
-                .map(Enum::name)
-                .collect(Collectors.joining(", "));
+        List<GeneratedContentCritic.Evidence> contextualEvidence = request.evidence().stream()
+                .filter(evidence -> contextualCitationIds.contains(evidence.chunkId()))
+                .toList();
+        if (contextualClaims.isEmpty() || contextualEvidence.isEmpty()) {
+            throw new IllegalArgumentException("critic candidates cannot be confirmed without cited evidence");
+        }
+
         ReviewRequest confirmationRequest = new ReviewRequest(
                 request.assistantRunId(),
                 request.contentType(),
                 ReviewMode.ATOMIC_CONFIRMATION,
                 new TaskContext(
-                        "Independently confirm candidate factual defects for claim position " + claimPosition + ".",
-                        "Confirm only these candidate issue types: " + types
-                                + ". Use the claim's cited evidence as one combined evidence set."),
-                List.of(claim),
-                citedEvidence);
+                        "Independently confirm candidate factual defects without relying on the discovery verdict.",
+                        atomicCoverage(candidateTypesByPosition)),
+                contextualClaims,
+                contextualEvidence);
+        Map<Integer, Set<UUID>> claimEvidenceByPosition = contextualClaims.stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        GeneratedContentCritic.Claim::position,
+                        claim -> Set.copyOf(claim.citationIds())));
         return critique(
                         confirmationRequest,
-                        "confirmGeneratedClaim" + claimPosition,
-                        "Atomic claim critique completed")
+                        "confirmGeneratedClaims",
+                        "Candidate claim defects independently confirmed")
                 .stream()
-                .filter(issue -> candidateTypes.contains(issue.type()))
+                .filter(issue -> candidateTypesByPosition
+                        .getOrDefault(issue.claimPosition(), Set.of())
+                        .contains(issue.type()))
+                .map(issue -> scopeEvidenceToClaim(issue, claimEvidenceByPosition))
+                .distinct()
+                .sorted(Comparator.comparingInt(Issue::claimPosition)
+                        .thenComparing(Issue::type)
+                        .thenComparing(Issue::summary))
+                .limit(MAX_ISSUES)
                 .toList();
+    }
+
+    private String atomicCoverage(Map<Integer, Set<IssueType>> candidateTypesByPosition) {
+        String candidates = candidateTypesByPosition.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + "=[" + entry.getValue().stream()
+                        .sorted()
+                        .map(Enum::name)
+                        .collect(Collectors.joining(", ")) + "]")
+                .collect(Collectors.joining("; "));
+        return "Confirm only these candidate issue types by claim position: " + candidates
+                + ". Positions not listed are context only and cannot produce issues. Judge every claim only against "
+                + "its own cited evidence IDs, while using sibling claims to recognize coverage already supplied "
+                + "elsewhere in the content; return no issue for a supported claim.";
+    }
+
+    private Issue scopeEvidenceToClaim(Issue issue, Map<Integer, Set<UUID>> claimEvidenceByPosition) {
+        Set<UUID> claimEvidence = claimEvidenceByPosition.getOrDefault(issue.claimPosition(), Set.of());
+        List<UUID> scopedEvidence = issue.evidenceIds().stream()
+                .filter(claimEvidence::contains)
+                .toList();
+        return new Issue(issue.type(), issue.claimPosition(), scopedEvidence, issue.summary());
     }
 
     private void validateRequest(ReviewRequest request) {
@@ -264,73 +219,6 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             summary = summary.substring(0, 240).stripTrailing();
         }
         return new Issue(issue.type(), claimPosition, evidenceIds, summary);
-    }
-
-    private boolean explicitlyDescribesNoDefect(String summary) {
-        String normalized = summary.toLowerCase(java.util.Locale.ROOT);
-        if (TERMINAL_NO_DEFECT.matcher(normalized).matches()) {
-            return true;
-        }
-        boolean contrast = normalized.contains(" but ")
-                || normalized.contains("however")
-                || normalized.contains("although")
-                || normalized.contains("except")
-                || normalized.contains(" yet ")
-                || normalized.contains("；但")
-                || normalized.contains("，但")
-                || normalized.contains("但是")
-                || normalized.contains("却");
-        boolean noDefectConclusion = normalized.contains("no issue")
-                || normalized.contains("no defect")
-                || normalized.contains("no concrete issue")
-                || normalized.contains("no contradiction")
-                || normalized.contains("no actual error")
-                || normalized.contains("无问题")
-                || normalized.contains("没有问题")
-                || normalized.contains("无异议")
-                || normalized.contains("无矛盾")
-                || normalized.contains("非规则错误")
-                || normalized.contains("supported")
-                || normalized.contains("correct")
-                || normalized.contains("accurate")
-                || normalized.contains("acceptable")
-                || normalized.contains("matches the evidence")
-                || normalized.contains("matches the claim")
-                || normalized.contains("is consistent")
-                || normalized.contains("both correct")
-                || normalized.contains("有证据支持")
-                || normalized.contains("得到证据支持")
-                || normalized.contains("证据支持")
-                || normalized.contains("表述正确")
-                || normalized.contains("准确无误");
-        boolean describesDefect = normalized.contains("unsupported")
-                || normalized.contains("not supported")
-                || normalized.contains("does not")
-                || normalized.contains("doesn't")
-                || normalized.contains("not state")
-                || normalized.contains("not correct")
-                || normalized.contains("not accurate")
-                || normalized.contains("not acceptable")
-                || normalized.contains("incorrect")
-                || normalized.contains("contradict")
-                || normalized.contains("invent")
-                || normalized.contains("missing")
-                || normalized.contains("omit")
-                || normalized.contains("however")
-                || normalized.contains(" but ")
-                || normalized.contains("不支持")
-                || normalized.contains("不正确")
-                || normalized.contains("未说明")
-                || normalized.contains("未提及")
-                || normalized.contains("错误")
-                || normalized.contains("矛盾")
-                || normalized.contains("虚构")
-                || normalized.contains("遗漏")
-                || normalized.contains("但是");
-        if (describesDefect) {
-            return false;
-        }
-        return noDefectConclusion && !contrast;
     }
 
     private int estimateTokens(String value) {

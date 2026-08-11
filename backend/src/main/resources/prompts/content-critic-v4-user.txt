@@ -14,4 +14,8 @@
 
 First check objective coverage, then verify each claim only against its cited evidence IDs.
 
+For every item in issues, set defectConfirmed=true only when the item identifies a concrete defect. Never encode a
+supported claim, audit note, uncertainty, or no-defect conclusion as an issue. If no concrete defect exists, return an
+empty issues array. The application ignores entries whose defectConfirmed is false.
+
 {repair}

@@ -30,22 +30,34 @@ class VisualReaderCropPolicyTest {
     }
 
     @Test
-    void keeps_structured_references_but_rejects_a_text_only_rule_box() {
+    void leavesSemanticVisualUsefulnessToTheLocatorAndRejectsOnlyClaimConflict() {
         LocatedRegion scoreTable = region("Score reference table", "printed labels form a score table", 100, 100, 280, 180);
         LocatedRegion ruleBox = region("文字说明", "规则框里只有文字", 100, 100, 280, 180);
+        LocatedRegion contradicted = new LocatedRegion(
+                2,
+                "冲突区域",
+                "视觉模型明确标记该区域与被讲解主张冲突",
+                100,
+                100,
+                280,
+                180,
+                List.of(evidence),
+                List.of(1),
+                true);
 
         assertThat(policy.isUsefulPlayerVisual(scoreTable)).isTrue();
-        assertThat(policy.isUsefulPlayerVisual(ruleBox)).isFalse();
+        assertThat(policy.isUsefulPlayerVisual(ruleBox)).isTrue();
+        assertThat(policy.isUsefulPlayerVisual(contradicted)).isFalse();
     }
 
     @Test
-    void rejects_whole_pages_and_marks_unusable_persisted_score_strips_for_replacement() {
+    void rejectsWholePagesAndUsesOnlyGeometryToReplaceOversizedPersistedCrops() {
         LocatedRegion wholePage = region("完整页面", "图中有一张卡牌", 0, 0, 1_000, 1_000);
         VisualFocus narrowScoreExample = new VisualFocus(2, "计分示例", 100, 100, 300, 500);
         VisualFocus oversized = new VisualFocus(2, "组件布局", 0, 0, 800, 800);
 
         assertThat(policy.isCompactReaderCrop(wholePage)).isFalse();
-        assertThat(policy.needsTighterReaderCrop(narrowScoreExample)).isTrue();
+        assertThat(policy.needsTighterReaderCrop(narrowScoreExample)).isFalse();
         assertThat(policy.needsTighterReaderCrop(oversized)).isTrue();
     }
 

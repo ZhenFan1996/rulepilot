@@ -23,8 +23,10 @@ import com.rulepilot.assistant.NativeToolAgent.RunStatus;
 import com.rulepilot.assistant.NativeToolEvidenceHandles;
 import com.rulepilot.assistant.NativeToolModel;
 import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.adapter.out.model.FakeRuleAnswerModel;
@@ -253,8 +255,10 @@ class AnswerCitationContextRealRulebookEvaluationTest {
                 node.path("question").asText(), QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
                 List.of(new EvidenceInput(chunkId, "DIRECT_RULE_CLAUSE", node.path("heading").asText(),
-                        clause, page, page)));
-        assertThat(AnswerPermissionResolver.asksForPermission(request.question()))
+                        clause, page, page)),
+                Set.of(EvidenceNeed.DIRECT_RULE),
+                AnswerAid.PERMISSION);
+        assertThat(AnswerPermissionResolver.requiresPermission(request))
                 .as("permission intent for %s", caseId)
                 .isTrue();
         RuleEvidenceHit source = new RuleEvidenceHit(

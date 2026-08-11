@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.DecisionBranchRequest;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
@@ -12,6 +14,7 @@ import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.DecisionBranchBasis;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -37,14 +40,15 @@ class AnswerDecisionTableResolverTest {
     }
 
     @Test
-    void requiresTablesOnlyForExplicitBranchComparisonQuestions() {
-        assertThat(resolver.requiresDecisionTable(request("What happens if the supply is empty?", first))).isTrue();
-        assertThat(resolver.requiresDecisionTable(request("不同情况的结果分别是什么？", first))).isTrue();
+    void followsTheAcceptedAnswerAidInsteadOfInferringFromQuestionWording() {
+        assertThat(resolver.requiresDecisionTable(request("What does this icon mean?", first))).isTrue();
         assertThatThrownBy(() -> resolver.resolve(
                         request("What happens if the supply is empty?", first), draft(List.of())))
-                .hasMessageContaining("omitted a cited decision table");
-        assertThat(resolver.resolve(request("What does this icon mean?", first), draft(List.of()))).isEmpty();
-        assertThat(resolver.requiresDecisionTable(request("If this icon is active, can I move?", first))).isFalse();
+                .hasMessageContaining("required");
+
+        ModelRequest noAid = request(AnswerAid.NONE, "What happens in each case?", first);
+        assertThat(resolver.requiresDecisionTable(noAid)).isFalse();
+        assertThat(resolver.resolve(noAid, draft(List.of()))).isEmpty();
     }
 
     @Test
@@ -76,13 +80,19 @@ class AnswerDecisionTableResolverTest {
     }
 
     private ModelRequest request(String question, UUID... evidenceIds) {
+        return request(AnswerAid.DECISION_TABLE, question, evidenceIds);
+    }
+
+    private ModelRequest request(AnswerAid answerAid, String question, UUID... evidenceIds) {
         return new ModelRequest(
                 question,
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
                 java.util.Arrays.stream(evidenceIds)
                         .map(id -> new EvidenceInput(id, "RULE", "Branches", "Cited branch evidence.", 2, 2))
-                        .toList());
+                        .toList(),
+                Set.of(EvidenceNeed.CONDITION),
+                answerAid);
     }
 
     private ModelDraft draft(List<DecisionBranchRequest> branches) {

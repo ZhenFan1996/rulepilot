@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.rulepilot.assistant.PlayerLocale;
 import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerAid;
 import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -50,7 +53,9 @@ class AnswerCalculationResolverTest {
                 new AnswerContext(null, null, PlayerLocale.EN),
                 List.of(
                         evidence(citedId, "Each set of 3 scores 5 points."),
-                        evidence(uncitedId, "A bonus is worth 4 points.")));
+                        evidence(uncitedId, "A bonus is worth 4 points.")),
+                Set.of(EvidenceNeed.DIRECT_RULE),
+                AnswerAid.CALCULATION);
         assertThatThrownBy(() -> resolver.resolve(request, draft("floor(8 / 4) * 5")))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -79,7 +84,9 @@ class AnswerCalculationResolverTest {
                 question,
                 QuestionType.RULE_QUERY,
                 new AnswerContext(null, null, PlayerLocale.EN),
-                List.of(evidence(citedId, evidence)));
+                List.of(evidence(citedId, evidence)),
+                Set.of(EvidenceNeed.DIRECT_RULE),
+                AnswerAid.CALCULATION);
     }
 
     private EvidenceInput evidence(UUID id, String excerpt) {

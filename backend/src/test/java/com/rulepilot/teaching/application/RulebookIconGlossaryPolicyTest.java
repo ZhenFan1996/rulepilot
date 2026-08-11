@@ -132,7 +132,7 @@ class RulebookIconGlossaryPolicyTest {
     }
 
     @Test
-    void groupsAliasesOnlyWhenTheirIndependentVisualLabelsAgreeWithTheirSemanticKeys() {
+    void doesNotCollapseModelProposedAliasesByStrippingSemanticContainerWords() {
         IconOccurrence explained = iconWithVerifiedLabel(
                 "carrot",
                 "胡萝卜图标",
@@ -171,24 +171,18 @@ class RulebookIconGlossaryPolicyTest {
                 UUID.randomUUID(),
                 List.of(page(2, explained), page(7, repeated, mismatched)));
 
+        // The first rectangle is card-sized and therefore cannot be published as an icon crop. The remaining
+        // observations retain their structured identities; vocabulary such as "icon" is not stripped to invent an
+        // alias relationship.
         assertThat(projection.groups()).hasSize(2);
         assertThat(projection.groups().stream()
-                        .filter(group -> group.meaningStatus() == IconMeaningStatus.EXPLICIT)
-                        .findFirst())
-                .hasValueSatisfying(group -> {
-                    assertThat(group.occurrences()).singleElement()
-                            .extracting(RulebookIconGlossaryPolicy.OccurrenceView::pageNumber)
-                            .isEqualTo(7);
-                    assertThat(group.evidenceText()).isEqualTo("CARROT");
-                });
-        assertThat(projection.groups().stream()
                         .filter(group -> group.meaningStatus() == IconMeaningStatus.UNEXPLAINED)
-                        .findFirst())
-                .hasValueSatisfying(group -> assertThat(group.name()).isEqualTo("点数图标"));
+                        .map(RulebookIconGlossaryPolicy.IconGroup::name))
+                .containsExactlyInAnyOrder("胡萝卜图标", "点数图标");
     }
 
     @Test
-    void mergesCardContainedAliasesIntoOneHonestlyIdentifiedEntry() {
+    void keepsDistinctStructuredIdentitiesEvenWhenTheirVerifiedLabelsMatch() {
         IconOccurrence direct = iconWithVerifiedLabel(
                 "CARROT",
                 "胡萝卜",
@@ -216,11 +210,11 @@ class RulebookIconGlossaryPolicyTest {
                 UUID.randomUUID(), List.of(page(5, direct), page(7, insideCard)));
 
         assertThat(projection.conflictingGroupKeys()).isEmpty();
-        assertThat(projection.groups()).singleElement().satisfies(group -> {
+        assertThat(projection.groups()).hasSize(2).allSatisfy(group -> {
             assertThat(group.meaningStatus()).isEqualTo(IconMeaningStatus.IDENTIFIED);
             assertThat(group.explanation()).isNull();
             assertThat(group.evidenceText()).isEqualTo("CARROT");
-            assertThat(group.occurrences()).hasSize(2);
+            assertThat(group.occurrences()).hasSize(1);
         });
     }
 

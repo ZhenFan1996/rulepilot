@@ -46,7 +46,31 @@ public interface BoardGameRecommendationCatalog {
             Integer overallRank,
             BigDecimal bayesAverage,
             BigDecimal averageRating,
-            int usersRated) {}
+            int usersRated,
+            List<BggGameType> types) {
+        public Ranking {
+            types = types == null ? List.of() : List.copyOf(types);
+        }
+
+        public Ranking(
+                int bggId,
+                String sourceName,
+                Integer publicationYear,
+                Integer overallRank,
+                BigDecimal bayesAverage,
+                BigDecimal averageRating,
+                int usersRated) {
+            this(
+                    bggId,
+                    sourceName,
+                    publicationYear,
+                    overallRank,
+                    bayesAverage,
+                    averageRating,
+                    usersRated,
+                    List.of());
+        }
+    }
 
     record Details(
             String name,

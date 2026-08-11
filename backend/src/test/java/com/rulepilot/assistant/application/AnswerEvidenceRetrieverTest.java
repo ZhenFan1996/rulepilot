@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.rulepilot.assistant.ImmediateAuditedAgentInvocations;
 import com.rulepilot.assistant.QuestionUnderstanding.QuestionContext;
 import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceNeed;
 import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
 import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.QuestionType;
@@ -45,11 +46,12 @@ class AnswerEvidenceRetrieverTest {
         };
         AnswerEvidenceRetriever retriever = retriever((documentVersionId, query, options) -> List.of(source), facts, lookup);
 
+        UnderstoodQuestion question = question("How do I score after this action?");
         AnswerEvidenceRetriever.Result result = retriever.retrieve(
-                UUID.randomUUID(), question("How do I score after this action?"), context(), "alice");
+                UUID.randomUUID(), question, context(), "alice", visualPlan(question));
 
         assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
-        assertThat(result.evidence()).singleElement().satisfies(hit ->
+        assertThat(result.evidence()).anySatisfy(hit ->
                 assertThat(hit.evidence().excerpt()).contains("执行该行动后获得一分", "Visible facts", "marker"));
     }
 
@@ -83,7 +85,7 @@ class AnswerEvidenceRetrieverTest {
                 UUID.randomUUID(), question("比较 A-01 和 B#02 的功能。"), context(), "alice");
 
         assertThat(visualQueries).first().isEqualTo("A-01 B#02");
-        assertThat(result.evidence()).first().satisfies(hit ->
+        assertThat(result.evidence()).anySatisfy(hit ->
                 assertThat(hit.evidence().excerpt()).contains("A-01 grants movement", "B#02 grants energy"));
     }
 
@@ -120,7 +122,7 @@ class AnswerEvidenceRetrieverTest {
     }
 
     @Test
-    void anchorsAnOrdinaryQuestionOnTheCandidateThatContainsItsDistinctiveCondition() {
+    void preservesRetrieverOrderInsteadOfSemanticallyRerankingCandidateProse() {
         HybridEvidenceHit setup = hit(
                 "SETUP",
                 "Player setup",
@@ -141,8 +143,8 @@ class AnswerEvidenceRetrieverTest {
         AnswerEvidenceRetriever.Result result = retriever.retrieve(
                 UUID.randomUUID(), question("What happens when two players play the same number?"), context(), "alice");
 
-        assertThat(result.evidence()).first().satisfies(hit ->
-                assertThat(hit.evidence().heading()).isEqualTo("Resolving a bump"));
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().heading())
+                .containsExactly("Player setup", "Resolving a bump");
     }
 
     @Test
@@ -206,6 +208,13 @@ class AnswerEvidenceRetrieverTest {
 
     private QuestionContext context() {
         return new QuestionContext(versionId);
+    }
+
+    private AnswerQuestionPlan visualPlan(UnderstoodQuestion question) {
+        return new AnswerQuestionPlan(
+                List.of(new AnswerQuestionPlan.Subquestion(
+                        question.normalizedQuestion(), Set.of(EvidenceNeed.VISUAL_REFERENCE))),
+                true);
     }
 
     private HybridEvidenceHit evidence(String excerpt, double score) {

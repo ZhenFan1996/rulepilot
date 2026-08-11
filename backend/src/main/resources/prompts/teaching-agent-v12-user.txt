@@ -28,6 +28,9 @@ organization of steps. Do not omit a supported branch to fit a target duration o
 
 When visual_evidence.available is true, include a useful VISUAL step with a non-null visualFocus on an attached page.
 Otherwise teach directly from the supplied text evidence without discussing images or missing pages.
+In both cases, title and visualCaption must be non-empty, and visualCitationIds must contain at least one supplied
+evidence reference that directly supports the whole caption. Without page images, visualCaption describes a concise
+text-based rules aid; it is not empty and does not mention an image, attachment, page, or missing visual.
 
 Before returning the schema, silently check that a beginner can answer:
 1. What does this topic change or decide?

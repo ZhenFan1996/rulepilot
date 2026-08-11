@@ -227,7 +227,14 @@ class ResponsesApiBoardGameRecommendationWebResearchTest {
             assertThat(sent.path("reasoning").path("effort").asText()).isEqualTo("none");
             assertThat(sent.path("max_output_tokens").asInt()).isEqualTo(700);
             assertThat(sent.path("input").asText())
-                    .contains("Run exactly one broad web search", "requested locale", "Science Fiction", "THEMATIC")
+                    .contains(
+                            "Run exactly one broad web search",
+                            "one to six credible",
+                            "unique external relationship",
+                            "do not pad",
+                            "requested locale",
+                            "Science Fiction",
+                            "THEMATIC")
                     .doesNotContain("\"bggId\"");
             assertThat(body.get()).doesNotContain("科幻主题", "secret-test-key");
         } finally {

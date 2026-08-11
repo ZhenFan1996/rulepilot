@@ -2,7 +2,12 @@ package com.rulepilot.assistant.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.rulepilot.assistant.RuleAnswerModel;
+import com.rulepilot.assistant.PlayerLocale;
+import com.rulepilot.assistant.RuleAnswerModel.AnswerContext;
+import com.rulepilot.assistant.RuleAnswerModel.CalculationRequest;
+import com.rulepilot.assistant.RuleAnswerModel.EvidenceInput;
+import com.rulepilot.assistant.RuleAnswerModel.ModelDraft;
+import com.rulepilot.assistant.RuleAnswerModel.ModelRequest;
 import com.rulepilot.assistant.domain.QuestionType;
 import java.util.List;
 import java.util.UUID;
@@ -10,135 +15,65 @@ import org.junit.jupiter.api.Test;
 
 class AnswerDraftPublicationPolicyTest {
 
-    @Test
-    void preservesOnlyDecisiveEndgameEvidenceAndLabelsAStatedTableApplication() {
-        UUID resolutionId = UUID.randomUUID();
-        UUID peripheralId = UUID.randomUUID();
-        var request = request(
-                "I just reached the final round. When does the game end, how do we score, and who wins a tie?",
-                new RuleAnswerModel.EvidenceInput(
-                        resolutionId,
-                        "ENDGAME",
-                        "Ending the game",
-                        "When the final round ends, the game ends. Players score points for completed rows. "
-                                + "On a tie, the player with more coins wins.",
-                        8,
-                        9),
-                new RuleAnswerModel.EvidenceInput(
-                        peripheralId, "SETUP", "Setup", "Place the marker on the first space.", 2, 2));
-        var draft = draft(List.of(resolutionId, peripheralId));
-
-        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft);
-
-        assertThat(prepared.ready()).isTrue();
-        assertThat(prepared.draft().citationIds()).containsExactly(resolutionId);
-        assertThat(prepared.draft().answerBasis()).isEqualTo("GROUNDED_APPLICATION");
-    }
+    private final UUID citationId = UUID.randomUUID();
 
     @Test
-    void warnsWhenAConditionalProcedureAnswerOmitsItsDirectCitation() {
-        UUID procedureId = UUID.randomUUID();
-        UUID otherId = UUID.randomUUID();
-        var request = request(
-                "After I finish my turn, do I reveal and resolve an event card?",
-                new RuleAnswerModel.EvidenceInput(
-                        procedureId,
-                        "TURN",
-                        "End of turn",
-                        "After your turn, reveal and resolve one event card.",
-                        4,
-                        4),
-                new RuleAnswerModel.EvidenceInput(otherId, "ACTIONS", "Actions", "Choose one action.", 3, 3));
+    void preparesOnlyMechanicalPlayerFacingCleanup() {
+        ModelDraft draft = new ModelDraft(
+                true,
+                null,
+                "Allowed（，见证据 E1）。",
+                "The governing rule is cited by [E1].",
+                List.of(citationId),
+                List.of("Keep the semantic exception."),
+                "HIGH",
+                "model prose");
 
-        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(otherId)));
+        var preparation = AnswerDraftPublicationPolicy.prepare(request(), draft);
 
-        assertThat(prepared.ready()).isTrue();
-        assertThat(prepared.warnings()).singleElement().satisfies(warning ->
-                assertThat(warning.type()).isEqualTo(com.rulepilot.assistant.domain.AnswerWarning.Type.INDIRECT_CITATION));
+        assertThat(preparation.ready()).isTrue();
+        assertThat(preparation.warnings()).isEmpty();
+        assertThat(preparation.draft().answerBasis()).isEqualTo("DIRECT_RULE");
+        assertThat(preparation.draft().shortVerdict()).doesNotContain("E1", "（，");
+        assertThat(preparation.draft().explanation()).doesNotContain("[E1]");
+        assertThat(preparation.draft().exceptions()).containsExactly("Keep the semantic exception.");
     }
 
     @Test
-    void rejectsAnEndgameSummaryThatOmitsTheDirectEndgameResolution() {
-        UUID resolutionId = UUID.randomUUID();
-        UUID peripheralId = UUID.randomUUID();
-        var request = request(
-                "When does the game end, how do we score, and who wins a tie?",
-                new RuleAnswerModel.EvidenceInput(
-                        resolutionId,
-                        "ENDGAME",
-                        "Ending the game",
-                        "When the final round ends, the game ends. Players score points for completed rows. "
-                                + "On a tie, the player with more coins wins.",
-                        8,
-                        9),
-                new RuleAnswerModel.EvidenceInput(
-                        peripheralId, "SETUP", "Setup", "Place the marker on the first space.", 2, 2));
+    void assignsGroundedApplicationOnlyWhenAValidatedCalculationIsPresent() {
+        ModelDraft draft = new ModelDraft(
+                true,
+                null,
+                "10 points.",
+                "The application recomputes the total.",
+                List.of(citationId),
+                List.of(),
+                "HIGH",
+                "DIRECT_RULE",
+                List.of(new CalculationRequest("floor(8 / 3) * 5")));
 
-        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(peripheralId)));
-
-        assertThat(prepared.ready()).isFalse();
-        assertThat(prepared.failureMessage()).isEqualTo("回答没有引用游戏结束结算的直接规则依据。");
+        assertThat(AnswerDraftPublicationPolicy.prepare(request(), draft).draft().answerBasis())
+                .isEqualTo("GROUNDED_APPLICATION");
     }
 
     @Test
-    void warnsWhenAConditionalAnswerOmitsTheMostDirectCurrentDocumentEvidence() {
-        UUID procedureId = UUID.randomUUID();
-        UUID setupId = UUID.randomUUID();
-        var request = request(
-                "What happens when two players choose equal values?",
-                new RuleAnswerModel.EvidenceInput(
-                        procedureId,
-                        "ROUND_STRUCTURE",
-                        "Resolving equal choices",
-                        "Players who chose equal values follow the printed resolution procedure.",
-                        10,
-                        10),
-                new RuleAnswerModel.EvidenceInput(
-                        setupId, "SETUP", "Setup", "Each player receives numbered cards.", 4, 4));
-
-        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(setupId)));
-
-        assertThat(prepared.ready()).isTrue();
-        assertThat(prepared.warnings()).singleElement().satisfies(warning ->
-                assertThat(warning.type()).isEqualTo(com.rulepilot.assistant.domain.AnswerWarning.Type.INDIRECT_CITATION));
-    }
-
-    @Test
-    void addsTheReferencedLegendPageForAnAlreadyValidatedVisualMapping() {
-        UUID operationalId = UUID.randomUUID();
-        UUID legendId = UUID.randomUUID();
-        var request = request(
-                "What resource does this icon represent?",
-                new RuleAnswerModel.EvidenceInput(
-                        operationalId,
-                        "RULES",
-                        "Operation",
-                        "The operational icon is visually identical to the same icon labeled 'Energy token' on page 5.",
-                        2,
-                        2),
-                new RuleAnswerModel.EvidenceInput(
-                        legendId, "COMPONENTS", "Legend", "Energy token is listed in the components legend.", 5, 5));
-
-        var prepared = AnswerDraftPublicationPolicy.prepare(request, draft(List.of(operationalId)));
-
-        assertThat(prepared.ready()).isTrue();
-        assertThat(prepared.draft().citationIds()).containsExactly(operationalId, legendId);
-    }
-
-    private RuleAnswerModel.ModelRequest request(String question, RuleAnswerModel.EvidenceInput... evidence) {
-        return new RuleAnswerModel.ModelRequest(
-                question,
-                QuestionType.RULE_QUERY,
-                new RuleAnswerModel.AnswerContext(null, null, com.rulepilot.assistant.PlayerLocale.ZH_CN),
-                List.of(evidence));
-    }
-
-    private RuleAnswerModel.ModelDraft draft(List<UUID> citationIds) {
-        return new RuleAnswerModel.ModelDraft(
-                "Follow the cited procedure.",
-                "Use the cited rule for the stated situation.",
-                citationIds,
+    void compatibilityCitationHookDoesNotSemanticallyRewriteTheDraft() {
+        ModelDraft draft = new ModelDraft(
+                "The game ends at the cited boundary.",
+                "A nearby scoring rule remains part of the model draft.",
+                List.of(citationId),
                 List.of(),
                 "HIGH");
+
+        assertThat(AnswerDraftPublicationPolicy.removePeripheralEndgameCitations(request(), draft))
+                .isSameAs(draft);
+    }
+
+    private ModelRequest request() {
+        return new ModelRequest(
+                "What is the rule?",
+                QuestionType.RULE_QUERY,
+                new AnswerContext(null, null, PlayerLocale.EN),
+                List.of(new EvidenceInput(citationId, "RULE", "Rule", "Direct evidence.", 1, 1)));
     }
 }

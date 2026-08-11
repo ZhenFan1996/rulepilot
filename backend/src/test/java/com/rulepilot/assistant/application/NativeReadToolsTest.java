@@ -74,7 +74,7 @@ class NativeReadToolsTest {
     }
 
     @Test
-    void relationshipSearchUsesThreeBoundedQueriesAndLabelsCandidatesWithoutClaimingAuthority() {
+    void relationshipSearchUsesOneModelSelectedTopicWithoutClassifyingItsMeaning() {
         AssistantReadTools readTools = mock(AssistantReadTools.class);
         UUID documentVersionId = UUID.randomUUID();
         RuleEvidence ordinary = new RuleEvidence(
@@ -98,7 +98,7 @@ class NativeReadToolsTest {
 
         ArgumentCaptor<AssistantReadTools.SearchRuleEvidence> requests =
                 ArgumentCaptor.forClass(AssistantReadTools.SearchRuleEvidence.class);
-        verify(readTools, org.mockito.Mockito.times(3)).searchRuleEvidence(requests.capture());
+        verify(readTools).searchRuleEvidence(requests.capture());
         assertThat(requests.getAllValues())
                 .allSatisfy(request -> {
                     assertThat(request.documentVersionId()).isEqualTo(documentVersionId);
@@ -107,12 +107,12 @@ class NativeReadToolsTest {
                     assertThat(request.includePageImages()).isFalse();
                 });
         assertThat(result.code()).isEqualTo("RELATIONSHIP_CANDIDATES_FOUND");
-        assertThat(result.evidenceCount()).isEqualTo(3);
+        assertThat(result.evidenceCount()).isEqualTo(1);
         assertThat(result.data())
                 .containsEntry("relationshipClassificationAuthority", false)
                 .containsEntry("nextAction", "READ_EXACT_PAGES_AND_COMPARE_APPLICABILITY");
         assertThat(result.data().toString())
-                .contains("EXCEPTION", "REPLACEMENT")
+                .contains("Move one space.")
                 .contains("classificationAuthority=false", "evidenceMechanicalAuthority=true")
                 .doesNotContain(documentVersionId.toString());
     }

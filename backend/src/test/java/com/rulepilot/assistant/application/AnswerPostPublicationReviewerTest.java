@@ -111,7 +111,7 @@ class AnswerPostPublicationReviewerTest {
     }
 
     @Test
-    void rejectsAnUncorrectableCriticFailureWithoutAnotherModelCall() {
+    void attemptsOneBoundedCorrectionBeforeRejectingAMaterialCriticFailure() {
         UUID versionId = UUID.randomUUID();
         RuleEvidenceHit source = new RuleEvidenceHit(
                 UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
@@ -128,7 +128,7 @@ class AnswerPostPublicationReviewerTest {
                 new AnswerModelGateway(
                         request -> {
                             modelCalls.incrementAndGet();
-                            throw new AssertionError("an uncorrectable critique must not revise the answer");
+                            throw new IllegalStateException("correction unavailable");
                         },
                         unlimitedRateLimiter(),
                         immediateInvocations()),
@@ -155,7 +155,7 @@ class AnswerPostPublicationReviewerTest {
         assertThat(result.accepted()).isFalse();
         assertThat(result.failureStatus()).isEqualTo(AnswerStatus.INVALID_MODEL_OUTPUT);
         assertThat(result.failureMessage()).contains("一致性审查");
-        assertThat(modelCalls).hasValue(0);
+        assertThat(modelCalls).hasValue(1);
     }
 
     @Test
@@ -165,6 +165,7 @@ class AnswerPostPublicationReviewerTest {
                 UUID.randomUUID(), versionId, "ACTIONS", "Action timing", "Take the main action once.", 4, 4, 0.9);
         HybridEvidenceHit evidence = new HybridEvidenceHit(source, 0.1, 1, null, false);
         StructuredRuleAnswer answer = answer(versionId, source);
+        AtomicInteger modelCalls = new AtomicInteger();
         AnswerPostPublicationReviewer reviewer = new AnswerPostPublicationReviewer(
                 (request, risk) -> new GeneratedContentCritic.Review(
                         true,
@@ -175,7 +176,8 @@ class AnswerPostPublicationReviewerTest {
                                 "A minor exception may be worth mentioning."))),
                 new AnswerModelGateway(
                         request -> {
-                            throw new AssertionError("ordinary low-impact questions do not spend a correction call");
+                            modelCalls.incrementAndGet();
+                            throw new IllegalStateException("correction unavailable");
                         },
                         unlimitedRateLimiter(),
                         immediateInvocations()),
@@ -202,6 +204,7 @@ class AnswerPostPublicationReviewerTest {
         assertThat(result.answer().warnings())
                 .extracting(warning -> warning.type())
                 .containsExactly(com.rulepilot.assistant.domain.AnswerWarning.Type.REVIEW_UNRESOLVED);
+        assertThat(modelCalls).hasValue(1);
     }
 
     @Test

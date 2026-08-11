@@ -17,9 +17,12 @@ import java.util.stream.IntStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -34,14 +37,28 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
     private final FakeTeachingLessonModel fakeModel;
     private final VersionedAgentPrompts prompts;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
+    private final double temperature;
 
     public SpringAiTeachingLessonModel(
             RuntimeModelConfiguration models,
             FakeTeachingLessonModel fakeModel,
             VersionedAgentPrompts prompts) {
+        this(models, fakeModel, prompts, 0.2);
+    }
+
+    @Autowired
+    public SpringAiTeachingLessonModel(
+            RuntimeModelConfiguration models,
+            FakeTeachingLessonModel fakeModel,
+            VersionedAgentPrompts prompts,
+            @Value("${rulepilot.teaching.temperature:0.2}") double temperature) {
+        if (!Double.isFinite(temperature) || temperature < 0.0 || temperature > 2.0) {
+            throw new IllegalArgumentException("teaching model temperature must be between 0 and 2");
+        }
         this.models = models;
         this.fakeModel = fakeModel;
         this.prompts = prompts;
+        this.temperature = temperature;
     }
 
     @Override
@@ -110,7 +127,10 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
                 required by the original objective, inspect every original evidence item for direct support and repair the
                 citation before considering removal. Never pass review by silently deleting an objective-required action
                 that the supplied evidence can support. Correct every diagnosed problem while still satisfying the original
-                objective and output schema.
+                objective and output schema. Every revision must include a non-empty title, a non-empty visualCaption, and
+                at least one valid visualCitationId supporting the whole caption, even when no page image is attached. If a
+                caption field was diagnosed as missing, write a concise text-based rules-aid caption from the original
+                evidence and cite that evidence; never leave the field or its citation list empty.
                 """.formatted(toModelDraft(request, previousDraft), modelFeedback(request, feedback));
         RuntimeException firstFailure;
         try {
@@ -135,15 +155,18 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
         if (!providerOptions.isEmpty()) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
             options.model(models.modelNameFor(role, owner));
+            options.temperature(temperature);
             options.extraBody(providerOptions);
             if (usesQwen(role, owner)) {
-                options.temperature(0.0);
                 options.responseFormat(ResponseFormat.builder()
                         .type(ResponseFormat.Type.JSON_SCHEMA)
                         .jsonSchema(qwenTeachingSchema())
                         .build());
             }
             prompt = prompt.options(options);
+        } else {
+            prompt = prompt.options(ChatOptions.builder()
+                    .temperature(temperature));
         }
         ModelSectionDraft draft = prompt
                 .system(prompts.teachingRuntimeSystem())
@@ -214,6 +237,8 @@ public class SpringAiTeachingLessonModel implements TeachingLessonModel {
             ObjectNode schema = (ObjectNode) mapper.readTree(
                     new BeanOutputConverter<>(ModelSectionDraft.class).getJsonSchema());
             ObjectNode properties = (ObjectNode) schema.path("properties");
+            ((ObjectNode) properties.path("title")).put("minLength", 1);
+            ((ObjectNode) properties.path("visualCaption")).put("minLength", 1);
             ((ObjectNode) properties.path("visualCitationIds")).put("minItems", 1);
             ObjectNode steps = (ObjectNode) properties.path("steps");
             steps.put("minItems", 1);
