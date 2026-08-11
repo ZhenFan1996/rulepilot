@@ -152,6 +152,21 @@ test('production deployment reclaims only inactive releases and restores current
   assert.match(deploymentWorkflow, /"\$candidate_path" != "\$\{releases_root\}\/"\*/)
   assert.match(deploymentWorkflow, /rm -rf -- "\$candidate_path"/)
   assert.match(deploymentWorkflow, /Restoring API and worker from the current release after failed activation/)
-  assert.match(deploymentWorkflow, /\.yml up -d api worker/)
+  assert.match(deploymentWorkflow, /\.yml up -d --no-build api worker/)
+  assert.match(deploymentWorkflow, /Ensuring the current release remains available while the replacement image builds/)
+  assert.doesNotMatch(deploymentWorkflow, /\.yml stop worker api/)
+  assert.doesNotMatch(deploymentWorkflow, /docker builder prune --all/)
+  assert.doesNotMatch(deploymentWorkflow, /docker image prune --all/)
+  assert.match(deploymentWorkflow, /docker builder prune --force --filter "until=168h"/)
   assert.doesNotMatch(deploymentWorkflow, /docker volume (?:prune|rm)/)
+})
+
+test('production deployment keeps long SSH activation sessions alive', () => {
+  const activationStep = deploymentWorkflow.slice(
+    deploymentWorkflow.indexOf('- name: Activate release and verify production health'),
+    deploymentWorkflow.indexOf('- name: Verify public browser and API path'),
+  )
+  assert.match(activationStep, /-o ConnectTimeout=20/)
+  assert.match(activationStep, /-o ServerAliveInterval=30/)
+  assert.match(activationStep, /-o ServerAliveCountMax=20/)
 })

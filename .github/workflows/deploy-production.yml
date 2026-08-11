@@ -104,6 +104,9 @@ jobs:
           scp \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             -o StrictHostKeyChecking=yes \
             -P "$DEPLOY_SSH_PORT" \
             "$local_token_file" \
@@ -111,6 +114,9 @@ jobs:
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_SSH_PORT" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
@@ -205,6 +211,9 @@ jobs:
           scp \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             -o StrictHostKeyChecking=yes \
             -P "$DEPLOY_SSH_PORT" \
             "$RUNNER_TEMP/rulepilot-release.tar.gz" \
@@ -217,6 +226,9 @@ jobs:
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_SSH_PORT" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
@@ -269,7 +281,7 @@ jobs:
               (cd "$current_release" && docker compose --env-file .env \
                 -f infra/compose.yml \
                 -f infra/compose.deployment.yml \
-                -f infra/compose.production.yml up -d api worker) || \
+                -f infra/compose.production.yml up -d --no-build api worker) || \
                 echo "Automatic current-release service restoration failed." >&2
             fi
             exit "$status"
@@ -295,15 +307,13 @@ jobs:
             removed_releases=$((removed_releases + 1))
           done
           printf 'Reclaimed %d inactive release artifact(s); current release retained.\n' "$removed_releases"
-          echo "Reclaiming unused Docker build cache and images before activation."
-          docker builder prune --all --force
-          docker image prune --all --force
-          if [[ -d "${application_root}/current" ]]; then
-            cd "${application_root}/current"
+          if [[ -n "$current_release" && -d "$current_release" && -f "${current_release}/.env" ]]; then
+            echo "Ensuring the current release remains available while the replacement image builds."
+            cd "$current_release"
             docker compose --env-file .env \
               -f infra/compose.yml \
               -f infra/compose.deployment.yml \
-              -f infra/compose.production.yml stop worker api || true
+              -f infra/compose.production.yml up -d --no-build api worker
           fi
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
@@ -316,6 +326,11 @@ jobs:
           ln -sfn "${release_dir}" "${application_root}/current"
           rm -f "${archive}"
           printf 'Activated production release %s\n' "${release_id}"
+          echo "Reclaiming stale Docker build cache and dangling images after activation."
+          docker builder prune --force --filter "until=168h" || \
+            echo "Deferred Docker build-cache cleanup after successful activation." >&2
+          docker image prune --force || \
+            echo "Deferred dangling-image cleanup after successful activation." >&2
           REMOTE
 
       - name: Verify public browser and API path
@@ -522,6 +537,9 @@ jobs:
           ssh \
             -i "$HOME/.ssh/id_ed25519" \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
             -o StrictHostKeyChecking=yes \
             -p "$DEPLOY_SSH_PORT" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
