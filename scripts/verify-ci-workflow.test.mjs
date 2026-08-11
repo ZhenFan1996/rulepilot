@@ -7,6 +7,8 @@ const deploymentWorkflow = await readFile(
   new URL('../.github/workflows/deploy-production.yml', import.meta.url),
   'utf8',
 )
+const productionCompose = await readFile(new URL('../infra/compose.production.yml', import.meta.url), 'utf8')
+const productionScript = await readFile(new URL('./run-production.sh', import.meta.url), 'utf8')
 const playwrightConfig = await readFile(new URL('../frontend/playwright.config.ts', import.meta.url), 'utf8')
 const productionRecommendationWorkflow = await readFile(
   new URL('../.github/workflows/production-recommendation-journey.yml', import.meta.url),
@@ -169,4 +171,25 @@ test('production deployment keeps long SSH activation sessions alive', () => {
   assert.match(activationStep, /-o ConnectTimeout=20/)
   assert.match(activationStep, /-o ServerAliveInterval=30/)
   assert.match(activationStep, /-o ServerAliveCountMax=20/)
+})
+
+test('production deploys an immutable backend image built off-host', () => {
+  assert.match(deploymentWorkflow, /name: Prepare immutable release identity/)
+  assert.match(deploymentWorkflow, /name: Build immutable backend runtime image/)
+  assert.match(deploymentWorkflow, /docker build \\/)
+  assert.match(deploymentWorkflow, /--tag "\$backend_image"/)
+  assert.match(deploymentWorkflow, /docker save "\$backend_image" \| gzip -1/)
+  assert.match(deploymentWorkflow, /sha256sum "\$backend_image_archive" > "\$\{backend_image_archive\}\.sha256"/)
+  assert.match(deploymentWorkflow, /name: Upload immutable backend runtime image/)
+  assert.match(deploymentWorkflow, /gzip -dc "\$backend_image_archive" \| docker load/)
+  assert.match(deploymentWorkflow, /docker image inspect "\$backend_image" >\/dev\/null/)
+  assert.match(deploymentWorkflow, /RULEPILOT_BACKEND_IMAGE="\$backend_image" \\/)
+  assert.match(deploymentWorkflow, /RULEPILOT_PREBUILT_BACKEND_IMAGE=true \\/)
+  assert.match(deploymentWorkflow, /docker tag "\$backend_image" rulepilot-backend:local/)
+  assert.equal(
+    productionCompose.match(/image: \$\{RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local\}/g)?.length,
+    2,
+  )
+  assert.match(productionScript, /RULEPILOT_PREBUILT_BACKEND_IMAGE:-false/)
+  assert.match(productionScript, /compose up -d --no-build --no-deps api/)
 })

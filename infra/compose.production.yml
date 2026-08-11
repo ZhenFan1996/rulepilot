@@ -19,7 +19,7 @@ services:
     mem_limit: 192m
 
   api:
-    image: rulepilot-backend:local
+    image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}
     build:
       context: ../backend
       dockerfile: Dockerfile.runtime
@@ -72,7 +72,7 @@ services:
     mem_limit: 640m
 
   worker:
-    image: rulepilot-backend:local
+    image: ${RULEPILOT_BACKEND_IMAGE:-rulepilot-backend:local}
     # Reuse the API runtime image. Building both services concurrently against
     # the same image tag causes Docker to race while exporting the image.
     build: !reset null
