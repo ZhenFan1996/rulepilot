@@ -51,10 +51,33 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: Prepare immutable release identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "DEPLOY_RELEASE_ID=$(git rev-parse HEAD)-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+
       - name: Build immutable deployment artifacts
         run: |
           ./mvnw -q -DskipTests package
         working-directory: backend
+
+      - name: Build immutable backend runtime image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          backend_image="rulepilot-backend:${DEPLOY_RELEASE_ID}"
+          backend_image_archive="rulepilot-backend-${DEPLOY_RELEASE_ID}.tar.gz"
+          docker build \
+            --file backend/Dockerfile.runtime \
+            --tag "$backend_image" \
+            backend
+          docker image inspect "$backend_image" >/dev/null
+          docker save "$backend_image" | gzip -1 > "$RUNNER_TEMP/$backend_image_archive"
+          test -s "$RUNNER_TEMP/$backend_image_archive"
+          (cd "$RUNNER_TEMP" && sha256sum "$backend_image_archive" > "${backend_image_archive}.sha256")
+          sha256sum "$RUNNER_TEMP/$backend_image_archive"
 
       - name: Build frontend artifact
         run: |
@@ -193,8 +216,6 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "DEPLOY_RELEASE_ID=$(git rev-parse HEAD)-${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
           tar \
             --exclude=.git \
             --exclude=.env \
@@ -219,6 +240,23 @@ jobs:
             "$RUNNER_TEMP/rulepilot-release.tar.gz" \
             "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/rulepilot-${DEPLOY_RELEASE_ID}.tar.gz"
 
+      - name: Upload immutable backend runtime image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          backend_image_archive="rulepilot-backend-${DEPLOY_RELEASE_ID}.tar.gz"
+          scp \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -P "$DEPLOY_SSH_PORT" \
+            "$RUNNER_TEMP/$backend_image_archive" \
+            "$RUNNER_TEMP/${backend_image_archive}.sha256" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/"
+
       - name: Activate release and verify production health
         shell: bash
         run: |
@@ -237,6 +275,10 @@ jobs:
           application_root=$1
           release_id=$2
           archive="/tmp/rulepilot-${release_id}.tar.gz"
+          backend_image="rulepilot-backend:${release_id}"
+          backend_image_filename="rulepilot-backend-${release_id}.tar.gz"
+          backend_image_archive="/tmp/${backend_image_filename}"
+          backend_image_checksum="${backend_image_archive}.sha256"
           releases_root="${application_root}/releases"
           release_dir="${application_root}/releases/${release_id}"
           current_release=$(readlink -f "${application_root}/current" 2>/dev/null || true)
@@ -289,9 +331,15 @@ jobs:
           trap diagnose_failure ERR
 
           test -f "${application_root}/.env"
+          test -f "$archive"
+          test -f "$backend_image_archive"
+          test -f "$backend_image_checksum"
           deploy_sha=${release_id%%-*}
           find /tmp -maxdepth 1 -type f -name "rulepilot-${deploy_sha}-*.tar.gz" \
             ! -path "$archive" -delete
+          find /tmp -maxdepth 1 -type f -name "rulepilot-backend-${deploy_sha}-*.tar.gz*" \
+            ! -path "$backend_image_archive" \
+            ! -path "$backend_image_checksum" -delete
           install -d -m 0755 "$releases_root"
           removed_releases=0
           for candidate in "${releases_root}"/*; do
@@ -315,17 +363,33 @@ jobs:
               -f infra/compose.deployment.yml \
               -f infra/compose.production.yml up -d --no-build api worker
           fi
+          (cd /tmp && sha256sum --check "${backend_image_filename}.sha256")
+          gzip -dc "$backend_image_archive" | docker load
+          docker image inspect "$backend_image" >/dev/null
           install -d -m 0755 "${release_dir}"
           tar -xzf "${archive}" -C "${release_dir}"
           ln -s "${application_root}/.env" "${release_dir}/.env"
 
           cd "${release_dir}"
           sh scripts/run-production.sh config
-          make production-up
+          RULEPILOT_BACKEND_IMAGE="$backend_image" \
+            RULEPILOT_PREBUILT_BACKEND_IMAGE=true \
+            make production-up
 
+          docker tag "$backend_image" rulepilot-backend:local
           ln -sfn "${release_dir}" "${application_root}/current"
-          rm -f "${archive}"
+          rm -f "$archive" "$backend_image_archive" "$backend_image_checksum"
           printf 'Activated production release %s\n' "${release_id}"
+          docker image ls \
+            --filter 'reference=rulepilot-backend:*' \
+            --format '{{.Repository}}:{{.Tag}}' | while IFS= read -r candidate; do
+            [[ "$candidate" == "$backend_image" ]] && continue
+            [[ "$candidate" == "rulepilot-backend:local" ]] && continue
+            if [[ "$candidate" =~ ^rulepilot-backend:[0-9a-f]{40}-[0-9]+$ ]]; then
+              docker image rm "$candidate" || \
+                echo "Deferred removal of inactive backend image ${candidate}." >&2
+            fi
+          done
           echo "Reclaiming stale Docker build cache and dangling images after activation."
           docker builder prune --force --filter "until=168h" || \
             echo "Deferred Docker build-cache cleanup after successful activation." >&2

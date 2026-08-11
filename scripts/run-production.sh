@@ -75,7 +75,18 @@ case "${1:-config}" in
 		# player-facing traffic on the production host's small CPU and memory budget.
 		compose up -d --build --wait postgres redis rabbitmq minio
 		compose stop prometheus tempo grafana >/dev/null 2>&1 || true
-		compose up -d --build --no-deps api
+		case "${RULEPILOT_PREBUILT_BACKEND_IMAGE:-false}" in
+			true)
+				compose up -d --no-build --no-deps api
+				;;
+			false)
+				compose up -d --build --no-deps api
+				;;
+			*)
+				echo "RULEPILOT_PREBUILT_BACKEND_IMAGE must be true or false."
+				exit 1
+				;;
+		esac
 		wait_for_api
 		compose up -d --build --no-deps frontend gateway
 		wait_for_frontend
