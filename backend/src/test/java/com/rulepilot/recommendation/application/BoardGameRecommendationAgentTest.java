@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
@@ -1839,6 +1840,47 @@ class BoardGameRecommendationAgentTest {
         assertThat(response.harness().fallbackUsed()).isFalse();
         assertThat(response.harness().actions()).contains("UNAVAILABLE:MODEL_NOT_CONFIGURED");
         assertThat(catalog.calls).isZero();
+    }
+
+    @Test
+    void carriesTheAuthenticatedOwnerAcrossTheBoundedModelThread() {
+        AtomicReference<String> configuredOwner = new AtomicReference<>();
+        AtomicReference<String> invokedOwner = new AtomicReference<>();
+        BoardGameRecommendationModel ownerScoped = new BoardGameRecommendationModel() {
+            @Override
+            public boolean configured() {
+                throw new AssertionError("thread-local startup configuration must not be consulted");
+            }
+
+            @Override
+            public boolean configured(String ownerUsername) {
+                configuredOwner.set(ownerUsername);
+                return true;
+            }
+
+            @Override
+            public Turn next(Request request) {
+                throw new AssertionError("thread-local startup configuration must not be invoked");
+            }
+
+            @Override
+            public Turn next(Request request, String ownerUsername) {
+                invokedOwner.set(ownerUsername);
+                return action(
+                        "reply",
+                        BoardGameRecommendationAgent.REPLY_TOOL,
+                        "{\"message\":\"先聊聊你今天想玩什么。\",\"referencedBggIds\":[]}");
+            }
+        };
+
+        var response = agent(ownerScoped, new TrackingCatalog(), noResearch()).converse(
+                new ConversationRequest(RecommendationProfile.empty(), "你好"),
+                "zh-CN",
+                "alice");
+
+        assertThat(response.outcome()).isEqualTo(Outcome.CONVERSATION);
+        assertThat(configuredOwner).hasValue("alice");
+        assertThat(invokedOwner).hasValue("alice");
     }
 
     @Test

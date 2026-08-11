@@ -39,17 +39,20 @@ class RuntimeModelConfigurationTest {
                 "gemini",
                 "fake",
                 "qwen",
-                false);
+                false,
+                "");
         assertThat(configuration.supportsVision(RuntimeModelConfiguration.Role.TEACHING)).isFalse();
 
         RuntimeModelConfiguration.Snapshot configured = configuration.configure(
                 "player", "deepseek", "secret-value", "https://api.deepseek.com", "deepseek-v4-flash", false);
         configuration.configure("player", "gemini", "gemini-secret", "", "gemini-2.5-flash", true);
-        assertThatThrownBy(() -> configuration.assign("player", "deepseek", "deepseek", "deepseek", "fake"))
+        assertThatThrownBy(() -> configuration.assign(
+                        "player", "deepseek", "deepseek", "deepseek", "fake", "deepseek"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must support page images");
         RuntimeModelConfiguration.Snapshot assigned =
-                configuration.assign("player", "deepseek", "gemini", "deepseek", "deepseek");
+                configuration.assign(
+                        "player", "deepseek", "gemini", "deepseek", "deepseek", "fake");
 
         assertThat(configured.toString()).doesNotContain("secret-value");
         assertThat(assigned.assignments().teaching()).isEqualTo("deepseek");
@@ -104,7 +107,7 @@ class RuntimeModelConfigurationTest {
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, qwen, disabled),
                 "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
-                "spring-ai", "qwen", false);
+                "spring-ai", "qwen", false, "");
 
         assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.ANSWER)).isTrue();
         assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)).isEqualTo("qwen");
@@ -135,7 +138,8 @@ class RuntimeModelConfigurationTest {
                 "gemini",
                 "fake",
                 "qwen",
-                false);
+                false,
+                "");
 
         RuntimeModelConfiguration.Snapshot defaults = configuration.snapshot("player");
         RuntimeModelConfiguration.ProviderView qwen = defaults.providers().stream()
@@ -155,7 +159,7 @@ class RuntimeModelConfigurationTest {
                 "qwen3-vl-plus",
                 true);
         RuntimeModelConfiguration.Snapshot assigned =
-                configuration.assign("player", "qwen", "qwen", "qwen", "qwen");
+                configuration.assign("player", "qwen", "qwen", "qwen", "qwen", "qwen");
 
         assertThat(assigned.assignments().visual()).isEqualTo("qwen");
         assertThat(configuration.modelNameFor(RuntimeModelConfiguration.Role.VISUAL, "player"))
@@ -199,7 +203,7 @@ class RuntimeModelConfigurationTest {
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
                 "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
-                "fake", "qwen", false);
+                "fake", "qwen", false, "");
 
         RuntimeModelConfiguration.Snapshot configured = configuration.configure(
                 "player",
@@ -215,7 +219,8 @@ class RuntimeModelConfigurationTest {
                         .orElseThrow()
                         .visionCapable())
                 .isFalse();
-        assertThatThrownBy(() -> configuration.assign("player", "qwen", "qwen", "qwen", "qwen"))
+        assertThatThrownBy(() -> configuration.assign(
+                        "player", "qwen", "qwen", "qwen", "qwen", "qwen"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must support page images");
     }
@@ -235,7 +240,7 @@ class RuntimeModelConfigurationTest {
                         factory,
                         new ModelProviderProperties(disabled, disabled, disabled, prohibited, disabled),
                         "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
-                        "spring-ai", "qwen", false))
+                        "spring-ai", "qwen", false, ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("qwen-plus")
                 .hasMessageContaining("prohibited");
@@ -263,7 +268,7 @@ class RuntimeModelConfigurationTest {
                 factory,
                 new ModelProviderProperties(disabled, disabled, disabled, disabled, disabled),
                 "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
-                "fake", "qwen", false);
+                "fake", "qwen", false, "");
 
         for (String prohibited : java.util.List.of("qwen-plus", "QWEN-PLUS-US", "qwen-plus-2025-01-25")) {
             assertThatThrownBy(() -> configuration.configure(
@@ -289,5 +294,75 @@ class RuntimeModelConfigurationTest {
                     assertThat(provider.id()).isEqualTo("qwen");
                     assertThat(provider.model()).isEqualTo("qwen3.7-plus");
                 });
+    }
+
+    @Test
+    void namedAccountsNeverInheritStartupCredentialsOrAnotherAccountsClient() {
+        ChatModelFactory factory = mock(ChatModelFactory.class);
+        ChatModel startupModel = mock(ChatModel.class);
+        ChatModel aliceModel = mock(ChatModel.class);
+        Provider disabled = new Provider(false, "", "", "", false);
+        Provider startupQwen = new Provider(
+                true,
+                "startup-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-plus",
+                false);
+        when(factory.create(
+                        "qwen",
+                        "startup-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.7-plus"))
+                .thenReturn(startupModel);
+        when(factory.create(
+                        "qwen",
+                        "alice-secret",
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        "qwen3.7-plus"))
+                .thenReturn(aliceModel);
+        RuntimeModelConfiguration configuration = new RuntimeModelConfiguration(
+                factory,
+                new ModelProviderProperties(disabled, disabled, disabled, startupQwen, disabled),
+                "fake", "gemini", "fake", "gemini", "fake", "gemini", "fake", "gemini",
+                "spring-ai", "qwen", false, "service-user");
+
+        assertThat(configuration.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isEqualTo("qwen");
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION))
+                .isSameAs(startupModel);
+        assertThat(configuration.providerFor(
+                        RuntimeModelConfiguration.Role.RECOMMENDATION, "service-user"))
+                .isEqualTo("qwen");
+        assertThat(configuration.snapshot("service-user").managedStartupAccess()).isTrue();
+        assertThat(configuration.snapshot("alice").providers())
+                .allSatisfy(provider -> {
+                    assertThat(provider.configured()).isFalse();
+                    assertThat(provider.apiKeyConfigured()).isFalse();
+                });
+        assertThat(configuration.snapshot("bob").assignments().recommendation()).isEqualTo("fake");
+        assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
+                .isTrue();
+        assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION, "bob"))
+                .isTrue();
+
+        configuration.configure(
+                "alice",
+                "qwen",
+                "alice-secret",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-plus",
+                false);
+        configuration.assign("alice", "fake", "fake", "fake", "fake", "qwen");
+
+        assertThat(configuration.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, "alice"))
+                .isSameAs(aliceModel);
+        assertThat(configuration.snapshot("bob").providers())
+                .allSatisfy(provider -> assertThat(provider.configured()).isFalse());
+        assertThat(configuration.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION, "bob"))
+                .isTrue();
+        assertThatThrownBy(() -> configuration.modelFor(
+                        RuntimeModelConfiguration.Role.RECOMMENDATION, "bob"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not configured");
     }
 }

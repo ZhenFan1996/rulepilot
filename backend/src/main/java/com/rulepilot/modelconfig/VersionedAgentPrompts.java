@@ -28,6 +28,7 @@ public class VersionedAgentPrompts {
     private final String criticUser;
     private final String atomicCriticUser;
     private final String structuredOutputRepair;
+    private final String criticOutputRepair;
     private final String lessonLocalizationSystem;
     private final String lessonLocalizationUser;
 
@@ -147,6 +148,7 @@ public class VersionedAgentPrompts {
             @Value("classpath:prompts/content-critic-v4-user.txt") Resource criticUser,
             @Value("classpath:prompts/atomic-content-critic-v4-user.txt") Resource atomicCriticUser,
             @Value("classpath:prompts/structured-output-repair-v1.txt") Resource structuredOutputRepair,
+            @Value("classpath:prompts/content-critic-output-repair-v1.txt") Resource criticOutputRepair,
             @Value("classpath:prompts/lesson-localization-v2-system.txt") Resource lessonLocalizationSystem,
             @Value("classpath:prompts/lesson-localization-v1-user.txt") Resource lessonLocalizationUser)
             throws IOException {
@@ -302,6 +304,7 @@ public class VersionedAgentPrompts {
         this.criticUser = read(criticUser);
         this.atomicCriticUser = read(atomicCriticUser);
         this.structuredOutputRepair = read(structuredOutputRepair);
+        this.criticOutputRepair = read(criticOutputRepair);
         this.lessonLocalizationSystem = read(lessonLocalizationSystem);
         this.lessonLocalizationUser = read(lessonLocalizationUser);
     }
@@ -380,6 +383,10 @@ public class VersionedAgentPrompts {
 
     public String structuredOutputRepair() {
         return structuredOutputRepair;
+    }
+
+    public String criticOutputRepair() {
+        return criticOutputRepair;
     }
 
     public String lessonLocalizationSystem() {

@@ -133,7 +133,7 @@ final class AnswerVisualEvidenceEnricher {
                 source.documentVersionId(),
                 source.sectionType(),
                 source.heading(),
-                AnswerVisualFactPresentationPolicy.evidenceText(fact),
+                AnswerVisualFactPresentationPolicy.transcribedRuleEvidenceText(fact),
                 source.pageFrom(),
                 source.pageTo(),
                 Math.max(0.01, fact.score()));

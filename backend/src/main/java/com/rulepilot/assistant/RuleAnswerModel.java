@@ -14,10 +14,26 @@ public interface RuleAnswerModel {
         return "unspecified";
     }
 
+    default String providerId(String ownerUsername) {
+        return providerId();
+    }
+
     ModelDraft compose(ModelRequest request);
+
+    default ModelDraft compose(ModelRequest request, String ownerUsername) {
+        return compose(request);
+    }
 
     default ModelDraft revise(ModelRequest request, ModelDraft previousDraft, List<String> feedback) {
         return compose(request);
+    }
+
+    default ModelDraft revise(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            List<String> feedback,
+            String ownerUsername) {
+        return revise(request, previousDraft, feedback);
     }
 
     /**
@@ -28,6 +44,11 @@ public interface RuleAnswerModel {
         return List.of();
     }
 
+    default List<String> rewriteRetrievalQueries(
+            RetrievalQueryRequest request, String ownerUsername) {
+        return rewriteRetrievalQueries(request);
+    }
+
     /**
      * Selects a bounded semantic interpretation from application-defined choices. The result is untrusted dialogue
      * control data, never rule evidence; unsupported models preserve deterministic question understanding.
@@ -36,8 +57,17 @@ public interface RuleAnswerModel {
         return Optional.empty();
     }
 
+    default Optional<QuestionInterpretationDraft> interpretQuestion(
+            QuestionInterpretationRequest request, String ownerUsername) {
+        return interpretQuestion(request);
+    }
+
     default boolean supportsQuestionInterpretation() {
         return false;
+    }
+
+    default boolean supportsQuestionInterpretation(String ownerUsername) {
+        return supportsQuestionInterpretation();
     }
 
     record QuestionInterpretationRequest(

@@ -108,20 +108,37 @@ public class BoardGameRecommendationAgent {
     }
 
     public ConversationResponse converse(ConversationRequest input, String requestedLocale) {
-        return converse(input, requestedLocale, ignored -> {});
+        return converse(input, requestedLocale, null, ignored -> {});
     }
 
     public ConversationResponse converse(
             ConversationRequest input,
             String requestedLocale,
             Consumer<ProgressUpdate> progressListener) {
+        return converse(input, requestedLocale, null, progressListener);
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner) {
+        return converse(input, requestedLocale, modelConfigurationOwner, ignored -> {});
+    }
+
+    public ConversationResponse converse(
+            ConversationRequest input,
+            String requestedLocale,
+            String modelConfigurationOwner,
+            Consumer<ProgressUpdate> progressListener) {
         long startedAt = System.nanoTime();
         Consumer<ProgressStage> progress = stage -> emitProgress(progressListener, stage, startedAt);
         progress.accept(ProgressStage.UNDERSTANDING_REQUEST);
         ConversationRequest request = validate(input);
         String locale = simplifiedChineseLocale(requestedLocale) ? "zh-CN" : "en";
-        AgentState state = new AgentState(request, startedAt);
-        if (!model.configured()) return unavailable(state, locale, "MODEL_NOT_CONFIGURED");
+        AgentState state = new AgentState(request, startedAt, modelConfigurationOwner);
+        if (!model.configured(state.modelConfigurationOwner)) {
+            return unavailable(state, locale, "MODEL_NOT_CONFIGURED");
+        }
         interpretPreferences(request, state);
 
         List<String> preferenceEvidenceIds = preferenceEvidence(request).keySet().stream().toList();
@@ -142,7 +159,9 @@ public class BoardGameRecommendationAgent {
                 List<Message> turnMessages = messages;
                 turn = withinDeadline(
                         state,
-                        () -> model.next(new Request(turnMessages, currentActions, MAX_OUTPUT_TOKENS)));
+                        () -> model.next(
+                                new Request(turnMessages, currentActions, MAX_OUTPUT_TOKENS),
+                                state.modelConfigurationOwner));
             } catch (RunDeadlineExceeded exception) {
                 state.actions.add("RUN_DEADLINE_EXCEEDED");
                 return unavailable(state, locale, "RUN_DEADLINE_EXCEEDED");
@@ -550,7 +569,7 @@ public class BoardGameRecommendationAgent {
         if (proposed.isEmpty()) {
             return new PreferenceReviewGate(Set.of(), existingContextual, false, false);
         }
-        if (!model.preferenceReviewConfigured()) {
+        if (!model.preferenceReviewConfigured(state.modelConfigurationOwner)) {
             return PreferenceReviewGate.withoutReview();
         }
         if (state.modelCalls >= MAX_MODEL_CALLS) {
@@ -570,7 +589,9 @@ public class BoardGameRecommendationAgent {
             state.modelCalls++;
             var review = withinDeadline(
                     state,
-                    () -> model.reviewPreferences(new PreferenceReviewRequest(evidence, proposals)));
+                    () -> model.reviewPreferences(
+                            new PreferenceReviewRequest(evidence, proposals),
+                            state.modelConfigurationOwner));
             if (review.decisions().size() != proposals.size()) {
                 throw new IllegalStateException("preference review decision count does not match proposals");
             }
@@ -1166,7 +1187,8 @@ public class BoardGameRecommendationAgent {
     }
 
     private void interpretPreferences(ConversationRequest request, AgentState state) {
-        if (!model.preferenceInterpretationConfigured() || state.modelCalls >= MAX_MODEL_CALLS) return;
+        if (!model.preferenceInterpretationConfigured(state.modelConfigurationOwner)
+                || state.modelCalls >= MAX_MODEL_CALLS) return;
         Map<String, String> evidenceById = preferenceEvidence(request);
         if (evidenceById.isEmpty()) return;
         List<PreferenceEvidence> evidence = evidenceById.entrySet().stream()
@@ -1176,9 +1198,11 @@ public class BoardGameRecommendationAgent {
             state.modelCalls++;
             var interpretation = withinDeadline(
                     state,
-                    () -> model.interpretPreferences(new PreferenceInterpretationRequest(
-                            evidence,
-                            currentPreferences(state.profile))));
+                    () -> model.interpretPreferences(
+                            new PreferenceInterpretationRequest(
+                                    evidence,
+                                    currentPreferences(state.profile)),
+                            state.modelConfigurationOwner));
             List<InterpretedPreference> extracted = interpretation.preferences();
             List<BoardGameRecommendationModel.PreferenceDecision> reviewedDecisions = extracted.stream()
                     .map(InterpretedPreference::decision)
@@ -1188,7 +1212,8 @@ public class BoardGameRecommendationAgent {
                     .boxed()
                     .toList();
             if (!directIndexes.isEmpty()) {
-                if (!model.preferenceReviewConfigured() || state.modelCalls >= MAX_MODEL_CALLS) {
+                if (!model.preferenceReviewConfigured(state.modelConfigurationOwner)
+                        || state.modelCalls >= MAX_MODEL_CALLS) {
                     throw new IllegalStateException("preference interpretation review is unavailable");
                 }
                 List<PreferenceProposal> proposals = java.util.stream.IntStream.range(0, directIndexes.size())
@@ -1204,7 +1229,9 @@ public class BoardGameRecommendationAgent {
                 state.modelCalls++;
                 var review = withinDeadline(
                         state,
-                        () -> model.reviewPreferences(new PreferenceReviewRequest(evidence, proposals)));
+                        () -> model.reviewPreferences(
+                                new PreferenceReviewRequest(evidence, proposals),
+                                state.modelConfigurationOwner));
                 if (review.decisions().size() != directIndexes.size()) {
                     throw new IllegalStateException("preference interpretation review is incomplete");
                 }
@@ -2092,6 +2119,7 @@ public class BoardGameRecommendationAgent {
 
     private final class AgentState {
         private final long startedAtNanos;
+        private final String modelConfigurationOwner;
         private RecommendationProfile profile;
         private final Set<Integer> excludedIds;
         private final Set<Integer> previouslyShownIds = new LinkedHashSet<>();
@@ -2118,8 +2146,12 @@ public class BoardGameRecommendationAgent {
         private int webResearchCalls;
         private int sourceCount;
 
-        private AgentState(ConversationRequest request, long startedAtNanos) {
+        private AgentState(
+                ConversationRequest request, long startedAtNanos, String modelConfigurationOwner) {
             this.startedAtNanos = startedAtNanos;
+            this.modelConfigurationOwner = modelConfigurationOwner == null || modelConfigurationOwner.isBlank()
+                    ? null
+                    : modelConfigurationOwner.strip();
             profile = request.profile();
             excludedIds = new LinkedHashSet<>(request.excludedBggIds());
             previouslyShownIds.addAll(request.shownBggIds());

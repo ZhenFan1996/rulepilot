@@ -72,7 +72,7 @@ final class TeachingPublishedLessonReviewer {
         LessonReviewPlanner.LessonReviewBatch batch = LessonReviewPlanner.plan(plan, candidates, assistantRunId);
         GeneratedContentCritic.Review review;
         try {
-            review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT);
+            review = critic.review(batch.request(), ReviewRisk.HIGH_IMPACT, plan.createdBy());
         } catch (AgentExecutionStoppedException stopped) {
             candidates.forEach(candidate -> recordPublication(
                     assistantRunId,

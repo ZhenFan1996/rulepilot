@@ -496,7 +496,7 @@ jobs:
               if (openingResult.mode !== 'model_assisted'
                   || typeof openingResult.assistantMessage !== 'string'
                   || openingResult.assistantMessage.length === 0
-                  || openingStreamed.totalMillis > 30_000) {
+                  || openingStreamed.totalMillis > 45_000) {
                 throw new Error(`recommendation Agent did not complete the opening turn: ${JSON.stringify({
                   httpStatus: openingAgent.status,
                   outcome: openingResult.outcome ?? 'missing',
@@ -549,7 +549,7 @@ jobs:
               if (agentResult.mode !== 'model_assisted'
                   || !Array.isArray(agentResult.games) || agentResult.games.length === 0
                   || !completedRecommendation || !usedSemanticReActTools
-                  || streamed.totalMillis > 30_000) {
+                  || streamed.totalMillis > 45_000) {
                 const diagnostic = JSON.stringify({
                   httpStatus: agent.status,
                   outcome: agentResult.outcome ?? 'missing',

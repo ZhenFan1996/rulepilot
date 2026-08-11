@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 
 class AnswerVisualEvidenceEnricherTest {
 
+    private static final String VISUAL_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private final UUID documentVersionId = UUID.randomUUID();
 
     @Test
@@ -35,8 +37,29 @@ class AnswerVisualEvidenceEnricherTest {
         assertThat(enriched).containsExactly(source.chunkId());
         String enrichedExcerpt = evidence.get(source.chunkId()).evidence().excerpt();
         assertThat(enrichedExcerpt).contains("Gain one point", "The score marker advances one space.");
+        assertThat(enrichedExcerpt).startsWith("Visual page facts (literal observations only")
+                .doesNotContain("Visual-transcribed rule evidence");
         assertThat(enrichedExcerpt.indexOf("The score marker advances one space."))
                 .isLessThan(enrichedExcerpt.indexOf("Gain one point after the action."));
+    }
+
+    @Test
+    void turnsTheVisualLedgerIntoBoundedRuleTranscriptionOnlyWhenCanonicalTextIsUnavailable() {
+        RuleEvidenceHit placeholder = source(UUID.randomUUID(), 3, VISUAL_PLACEHOLDER);
+        Map<UUID, HybridEvidenceHit> evidence = new LinkedHashMap<>();
+        evidence.put(placeholder.chunkId(), new HybridEvidenceHit(placeholder, 0.2, 1, null, false));
+
+        enricher(List.of(placeholder)).enrich(
+                UUID.randomUUID(),
+                documentVersionId,
+                evidence,
+                Map.of(3, fact(3, "Unused pieces move to the common area after the player takes one type.")),
+                Set.of(3));
+
+        assertThat(evidence.get(placeholder.chunkId()).evidence().excerpt())
+                .startsWith("Visual-transcribed rule evidence")
+                .contains("Unused pieces move to the common area")
+                .doesNotContain(VISUAL_PLACEHOLDER, "Printed terms:");
     }
 
     @Test

@@ -36,8 +36,8 @@ class BggRecommendationAgentStreamControllerTest {
         BggRecommendationPresentation presentation = mock(BggRecommendationPresentation.class);
         when(presentation.localizeTaxonomy(List.of(), List.of(), "zh-CN"))
                 .thenReturn(new LocalizedTaxonomy(Map.of(), Map.of()));
-        when(agent.converse(any(), eq("zh-CN"), any())).thenAnswer(invocation -> {
-            Consumer<ProgressUpdate> progress = invocation.getArgument(2);
+        when(agent.converse(any(), eq("zh-CN"), eq("player"), any())).thenAnswer(invocation -> {
+            Consumer<ProgressUpdate> progress = invocation.getArgument(3);
             progress.accept(new ProgressUpdate(ProgressStage.SEARCHING_BGG_CATALOG, 18));
             return new ConversationResponse(
                     Outcome.NO_MATCH,
@@ -54,6 +54,7 @@ class BggRecommendationAgentStreamControllerTest {
         var mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
         var pending = mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream")
+                        .principal(() -> "player")
                         .queryParam("locale", "zh-CN")
                         .contentType(MediaType.APPLICATION_JSON)
                         .accept(MediaType.TEXT_EVENT_STREAM)

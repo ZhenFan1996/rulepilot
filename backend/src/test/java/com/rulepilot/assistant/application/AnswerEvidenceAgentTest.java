@@ -251,6 +251,9 @@ class AnswerEvidenceAgentTest {
                 "source-authored recommendations",
                 "victory",
                 "condition, scoring route, or legal action is not itself advice");
+        assertThat(captured.get().requiredToolsBeforeCompletion()).containsExactly("read_rule_pages");
+        assertThat(captured.get().maxIterations()).isEqualTo(5);
+        assertThat(captured.get().maxToolCalls()).isEqualTo(5);
         verify(permit).close();
     }
 

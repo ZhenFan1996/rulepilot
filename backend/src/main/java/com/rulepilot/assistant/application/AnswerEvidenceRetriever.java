@@ -113,6 +113,8 @@ final class AnswerEvidenceRetriever {
                         retrievalFailure.getClass().getSimpleName());
                 continue;
             }
+            boolean visualTranscriptionFallback = retrieved.isEmpty()
+                    || retrieved.stream().anyMatch(AnswerEvidencePolicy::isVisualPlaceholder);
             // The last intent is deliberately broad recall support. It may fill a genuine retrieval gap, but it
             // must never become the answer's primary anchor merely because it happens to rank a generic paragraph.
             boolean supplementaryIntent = intentIndex == intents.size() - 1;
@@ -128,7 +130,7 @@ final class AnswerEvidenceRetriever {
                     evidenceById.put(hit.evidence().chunkId(), hit);
                 }
             }
-            if (visualRequested || !directQuestionVisualFactPages.isEmpty()) try {
+            if (visualRequested || visualTranscriptionFallback || !directQuestionVisualFactPages.isEmpty()) try {
                 List<PageFactMatch> visualMatches = invocations.invoke(
                         assistantRunId,
                         ActivityType.TOOL,

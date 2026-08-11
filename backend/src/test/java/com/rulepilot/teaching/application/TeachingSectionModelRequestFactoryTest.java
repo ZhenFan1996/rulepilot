@@ -39,6 +39,7 @@ class TeachingSectionModelRequestFactoryTest {
                 true);
 
         assertThat(request.pageImages()).extracting(image -> image.pageNumber()).containsExactly(4);
+        assertThat(request.modelConfigurationOwner()).isEqualTo("player");
         assertThat(request.evidence()).singleElement().satisfies(source ->
                 assertThat(source.excerpt())
                         .contains("Visual presentation data only")

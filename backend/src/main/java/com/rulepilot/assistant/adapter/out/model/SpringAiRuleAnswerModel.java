@@ -16,6 +16,7 @@ import java.util.Optional;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -69,17 +70,27 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public String providerId() {
-        return models.providerFor(Role.ANSWER);
+        return providerId(null);
+    }
+
+    @Override
+    public String providerId(String ownerUsername) {
+        return providerFor(ownerUsername);
     }
 
     @Override
     public ModelDraft compose(ModelRequest request) {
-        if (models.usesFake(Role.ANSWER)) {
+        return compose(request, null);
+    }
+
+    @Override
+    public ModelDraft compose(ModelRequest request, String ownerUsername) {
+        if (usesFake(ownerUsername)) {
             return fakeModel.compose(request);
         }
         RuntimeException firstFailure;
         try {
-            return composeOnce(request, "");
+            return composeOnce(request, "", ownerUsername);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -87,7 +98,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             firstFailure = exception;
         }
         try {
-            return composeOnce(request, prompts.structuredOutputRepair());
+            return composeOnce(request, prompts.structuredOutputRepair(), ownerUsername);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -99,7 +110,16 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public ModelDraft revise(ModelRequest request, ModelDraft previousDraft, java.util.List<String> feedback) {
-        if (models.usesFake(Role.ANSWER)) {
+        return revise(request, previousDraft, feedback, null);
+    }
+
+    @Override
+    public ModelDraft revise(
+            ModelRequest request,
+            ModelDraft previousDraft,
+            java.util.List<String> feedback,
+            String ownerUsername) {
+        if (usesFake(ownerUsername)) {
             return fakeModel.revise(request, previousDraft, feedback);
         }
         String revisionInstruction = """
@@ -111,7 +131,7 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 """.formatted(previousDraft, feedback);
         RuntimeException firstFailure;
         try {
-            return composeOnce(request, revisionInstruction);
+            return composeOnce(request, revisionInstruction, ownerUsername);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -119,7 +139,10 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             firstFailure = exception;
         }
         try {
-            return composeOnce(request, revisionInstruction + "\n" + prompts.structuredOutputRepair());
+            return composeOnce(
+                    request,
+                    revisionInstruction + "\n" + prompts.structuredOutputRepair(),
+                    ownerUsername);
         } catch (RuntimeException exception) {
             if (isTimeout(exception)) {
                 throw new RuleAnswerModelTimeoutException("answer model timed out", exception);
@@ -131,16 +154,22 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public List<String> rewriteRetrievalQueries(RetrievalQueryRequest request) {
-        if (models.usesFake(Role.ANSWER)) {
+        return rewriteRetrievalQueries(request, null);
+    }
+
+    @Override
+    public List<String> rewriteRetrievalQueries(
+            RetrievalQueryRequest request, String ownerUsername) {
+        if (usesFake(ownerUsername)) {
             return List.of();
         }
         try {
-            ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
-            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
+            ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
+            if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
                 OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-                options.model(models.modelNameFor(Role.ANSWER));
+                options.model(modelNameFor(ownerUsername));
                 options.temperature(interpretationTemperature);
-                if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+                if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
                     options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
                 } else {
                     options.extraBody(Map.of("enable_thinking", false));
@@ -178,27 +207,39 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
 
     @Override
     public boolean supportsQuestionInterpretation() {
-        return !models.usesFake(Role.ANSWER);
+        return supportsQuestionInterpretation(null);
+    }
+
+    @Override
+    public boolean supportsQuestionInterpretation(String ownerUsername) {
+        return !usesFake(ownerUsername);
     }
 
     @Override
     public Optional<QuestionInterpretationDraft> interpretQuestion(QuestionInterpretationRequest request) {
-        if (models.usesFake(Role.ANSWER)) return Optional.empty();
+        return interpretQuestion(request, null);
+    }
+
+    @Override
+    public Optional<QuestionInterpretationDraft> interpretQuestion(
+            QuestionInterpretationRequest request, String ownerUsername) {
+        if (usesFake(ownerUsername)) return Optional.empty();
         try {
-            String content = interpretQuestionOnce(request, "");
+            String content = interpretQuestionOnce(request, "", ownerUsername);
             Optional<QuestionInterpretationDraft> interpretation = parseQuestionInterpretation(content);
             if (interpretation.isPresent()) return interpretation;
 
             LOGGER.warn(
                     "Answer question interpretation rejected; requesting one bounded contract repair: provider={}, status={}",
-                    providerId(),
+                    providerId(ownerUsername),
                     interpretationOutputStatus(content));
-            String repairedContent = interpretQuestionOnce(request, QUESTION_INTERPRETATION_REPAIR);
+            String repairedContent = interpretQuestionOnce(
+                    request, QUESTION_INTERPRETATION_REPAIR, ownerUsername);
             Optional<QuestionInterpretationDraft> repaired = parseQuestionInterpretation(repairedContent);
             if (repaired.isEmpty()) {
                 LOGGER.warn(
                         "Answer question interpretation repair rejected: provider={}, status={}",
-                        providerId(),
+                        providerId(ownerUsername),
                         interpretationOutputStatus(repairedContent));
             }
             return repaired;
@@ -208,20 +249,23 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
             }
             LOGGER.warn(
                     "Answer question interpretation failed: provider={}, failureType={}",
-                    providerId(),
+                    providerId(ownerUsername),
                     exception.getClass().getSimpleName());
             return Optional.empty();
         }
     }
 
-    private String interpretQuestionOnce(QuestionInterpretationRequest request, String repairInstruction) {
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
+    private String interpretQuestionOnce(
+            QuestionInterpretationRequest request,
+            String repairInstruction,
+            String ownerUsername) {
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
+        if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.model(models.modelNameFor(Role.ANSWER));
+            options.model(modelNameFor(ownerUsername));
             options.maxTokens(384);
             options.temperature(interpretationTemperature);
-            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
@@ -251,13 +295,14 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 .content();
     }
 
-    private ModelDraft composeOnce(ModelRequest request, String repairInstruction) {
-        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.ANSWER)).prompt();
-        if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER) || usesQwen()) {
+    private ModelDraft composeOnce(
+            ModelRequest request, String repairInstruction, String ownerUsername) {
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(modelFor(ownerUsername)).prompt();
+        if (usesDeepSeekNonThinkingGeneration(ownerUsername) || usesQwen(ownerUsername)) {
             OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
-            options.model(models.modelNameFor(Role.ANSWER));
+            options.model(modelNameFor(ownerUsername));
             options.temperature(answerTemperature);
-            if (models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)) {
+            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
                 options.extraBody(Map.of("thinking", Map.of("type", "disabled")));
             } else {
                 options.extraBody(Map.of("enable_thinking", false));
@@ -284,8 +329,38 @@ public class SpringAiRuleAnswerModel implements RuleAnswerModel {
                 .entity(ModelDraft.class);
     }
 
-    private boolean usesQwen() {
-        return "qwen".equals(models.providerFor(Role.ANSWER));
+    private boolean usesQwen(String ownerUsername) {
+        return "qwen".equals(providerFor(ownerUsername));
+    }
+
+    private ChatModel modelFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelFor(Role.ANSWER)
+                : models.modelFor(Role.ANSWER, ownerUsername);
+    }
+
+    private String providerFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.providerFor(Role.ANSWER)
+                : models.providerFor(Role.ANSWER, ownerUsername);
+    }
+
+    private String modelNameFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelNameFor(Role.ANSWER)
+                : models.modelNameFor(Role.ANSWER, ownerUsername);
+    }
+
+    private boolean usesFake(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesFake(Role.ANSWER)
+                : models.usesFake(Role.ANSWER, ownerUsername);
+    }
+
+    private boolean usesDeepSeekNonThinkingGeneration(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesDeepSeekNonThinkingGeneration(Role.ANSWER)
+                : models.usesDeepSeekNonThinkingGeneration(Role.ANSWER, ownerUsername);
     }
 
     private record RetrievalQueryDraft(List<String> queries) {}

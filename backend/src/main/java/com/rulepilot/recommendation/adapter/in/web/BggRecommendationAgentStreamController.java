@@ -4,6 +4,7 @@ import com.rulepilot.catalog.BggRecommendationPresentation;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent;
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.ProgressUpdate;
 import java.io.IOException;
+import java.security.Principal;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -43,14 +44,17 @@ public class BggRecommendationAgentStreamController {
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     SseEmitter converse(
             @RequestBody BggRecommendationAgentController.RecommendationConversationRequest request,
-            @RequestParam(defaultValue = "en") String locale) {
+            @RequestParam(defaultValue = "en") String locale,
+            Principal principal) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         AtomicBoolean open = new AtomicBoolean(true);
         emitter.onCompletion(() -> open.set(false));
         emitter.onTimeout(() -> open.set(false));
         emitter.onError(ignored -> open.set(false));
         try {
-            executor.execute(() -> runConversation(emitter, open, request, locale));
+            String modelConfigurationOwner = principal.getName();
+            executor.execute(() -> runConversation(
+                    emitter, open, request, locale, modelConfigurationOwner));
         } catch (RuntimeException exception) {
             sendError(emitter, open);
         }
@@ -61,11 +65,13 @@ public class BggRecommendationAgentStreamController {
             SseEmitter emitter,
             AtomicBoolean open,
             BggRecommendationAgentController.RecommendationConversationRequest request,
-            String locale) {
+            String locale,
+            String modelConfigurationOwner) {
         try {
             var response = agent.converse(
                     request.toCommand(),
                     locale,
+                    modelConfigurationOwner,
                     update -> sendProgress(emitter, open, update));
             if (!open.get()) return;
             emitter.send(SseEmitter.event()

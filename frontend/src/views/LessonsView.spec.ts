@@ -102,7 +102,9 @@ describe('LessonsView', () => {
   })
 
   it('shows a persisted preparation failure instead of an endlessly active guide', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+    let retried = false
+    let retryBody: unknown = null
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
       const path = String(input)
       if (path === '/api/v1/teaching-plans') return Response.json([])
       if (path === '/api/v1/documents/official-imports') return Response.json([{
@@ -111,7 +113,10 @@ describe('LessonsView', () => {
         teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'prep-1', teachingErrorCode: null,
         updatedAt: '2026-08-10T10:00:00Z',
       }])
-      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json(retried ? [{
+        id: 'prep-retry', subjectId: 'version-1', state: 'LESSON_PLANNING', lastErrorCode: null,
+        updatedAt: '2026-08-12T00:01:00Z',
+      }] : [])
       if (path === '/api/v1/assistant-runs/prep-1') return Response.json({
         run: {
           id: 'prep-1', subjectId: 'version-1', state: 'FAILED',
@@ -124,6 +129,12 @@ describe('LessonsView', () => {
       if (path === '/api/v1/games') return Response.json([{
         game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
       }])
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/document-versions/version-1/teaching-plans' && options?.method === 'POST') {
+        retryBody = JSON.parse(String(options.body))
+        retried = true
+        return Response.json({ assistantRunId: 'prep-retry', state: 'RECEIVED', reused: false }, { status: 202 })
+      }
       if (path.includes('/api/v1/assistant-runs/active?mode=TEACHING')) return Response.json([])
       if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
       return new Response(null, { status: 404 })
@@ -138,6 +149,17 @@ describe('LessonsView', () => {
     expect(pending.text()).toContain('花砖物语')
     expect(pending.text()).toContain('任务需要处理')
     expect(pending.find('.animate-pulse').exists()).toBe(false)
+    const retry = pending.findAll('button').find(button => button.text().includes('重新准备讲解'))
+    expect(retry).toBeDefined()
+
+    await retry!.trigger('click')
+    await flushPromises()
+
+    expect(retryBody).toEqual({ learningGoal: null })
+    const restarted = wrapper.get('[data-testid="pending-guide-journey"]')
+    expect(restarted.text()).toContain('正在建立讲解计划')
+    expect(restarted.text()).not.toContain('任务需要处理')
+    expect(restarted.find('.animate-pulse').exists()).toBe(true)
     wrapper.unmount()
   })
 

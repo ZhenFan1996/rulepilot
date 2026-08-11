@@ -100,7 +100,7 @@ test('production deployment enables and exercises the bounded recommendation Age
   assert.match(deploymentWorkflow, /\/api\/v1\/bgg\/recommendation-agent\/stream\?locale=zh-CN/)
   assert.match(deploymentWorkflow, /accept: 'text\/event-stream'/)
   assert.match(deploymentWorkflow, /firstProgressMillis > 20_000/)
-  assert.match(deploymentWorkflow, /totalMillis > 30_000/)
+  assert.match(deploymentWorkflow, /totalMillis > 45_000/)
   assert.match(deploymentWorkflow, /openingStreamed\.totalMillis/)
   assert.match(deploymentWorkflow, /streamed\.totalMillis/)
   assert.match(deploymentWorkflow, /BGG_RECOMMENDATION_AGENT_TIMEOUT=PT55S/)

@@ -13,6 +13,7 @@ import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.Rec
 import com.rulepilot.recommendation.application.BoardGameRecommendationAgent.RecommendedGame;
 import com.rulepilot.catalog.BoardGameRecommendationCatalog.Details;
 import java.math.BigDecimal;
+import java.security.Principal;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,8 +40,9 @@ public class BggRecommendationAgentController {
     @PostMapping("/api/v1/bgg/recommendation-agent")
     RecommendationConversationResponse converse(
             @RequestBody RecommendationConversationRequest request,
-            @RequestParam(defaultValue = "en") String locale) {
-        ConversationResponse response = agent.converse(request.toCommand(), locale);
+            @RequestParam(defaultValue = "en") String locale,
+            Principal principal) {
+        ConversationResponse response = agent.converse(request.toCommand(), locale, principal.getName());
         return present(response, locale, presentation);
     }
 

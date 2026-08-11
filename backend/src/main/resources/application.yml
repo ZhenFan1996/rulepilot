@@ -197,6 +197,7 @@ rulepilot:
     name: ${ANSWER_REGRESSION_NAME:external-answer-regressions}
   models:
     request-timeout: ${MODEL_REQUEST_TIMEOUT:PT2M}
+    startup-allowed-users: ${RULEPILOT_MODELS_STARTUP_ALLOWED_USERS:}
     openai:
       enabled: ${OPENAI_ENABLED:false}
       api-key: ${OPENAI_API_KEY:}

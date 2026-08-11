@@ -347,7 +347,7 @@ public class StructuredRuleAnswerService implements RuleAnswering {
         AnswerQuestionPlan questionPlan = AnswerQuestionPlan.fallback(deterministic);
         QuestionContext suppliedContext = context;
         LearningIntent plannedLearningIntent = context.learningIntent();
-        if (modelGateway.supportsQuestionInterpretation()) {
+        if (modelGateway.supportsQuestionInterpretation(username)) {
             try {
                 Optional<AnswerQuestionInterpretationPolicy.Interpretation> interpreted = modelGateway
                         .interpretQuestion(

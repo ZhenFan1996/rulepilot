@@ -68,26 +68,52 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
 
     @Override
     public boolean configured() {
-        return !models.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION);
+        return configured(null);
+    }
+
+    @Override
+    public boolean configured(String ownerUsername) {
+        return !usesFake(ownerUsername);
     }
 
     @Override
     public Turn next(Request request) {
-        return invoke(request, temperature, "react");
+        return next(request, null);
+    }
+
+    @Override
+    public Turn next(Request request, String ownerUsername) {
+        return invoke(request, temperature, "react", ownerUsername);
     }
 
     @Override
     public boolean preferenceReviewConfigured() {
-        return configured();
+        return preferenceReviewConfigured(null);
+    }
+
+    @Override
+    public boolean preferenceReviewConfigured(String ownerUsername) {
+        return configured(ownerUsername);
     }
 
     @Override
     public boolean preferenceInterpretationConfigured() {
-        return configured();
+        return preferenceInterpretationConfigured(null);
+    }
+
+    @Override
+    public boolean preferenceInterpretationConfigured(String ownerUsername) {
+        return configured(ownerUsername);
     }
 
     @Override
     public PreferenceInterpretation interpretPreferences(PreferenceInterpretationRequest request) {
+        return interpretPreferences(request, null);
+    }
+
+    @Override
+    public PreferenceInterpretation interpretPreferences(
+            PreferenceInterpretationRequest request, String ownerUsername) {
         String input;
         String evidenceIds;
         try {
@@ -130,7 +156,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         List.of(interpretation),
                         500),
                 0.0,
-                "preference-interpretation");
+                "preference-interpretation",
+                ownerUsername);
         if (turn.toolCalls().size() != 1
                 || !"interpret_preference_evidence".equals(turn.toolCalls().getFirst().name())) {
             throw new IllegalStateException("recommendation preference interpretation returned an invalid action");
@@ -188,6 +215,11 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
 
     @Override
     public PreferenceReview reviewPreferences(PreferenceReviewRequest request) {
+        return reviewPreferences(request, null);
+    }
+
+    @Override
+    public PreferenceReview reviewPreferences(PreferenceReviewRequest request, String ownerUsername) {
         String evidence;
         try {
             Map<String, Object> input = new LinkedHashMap<>();
@@ -226,7 +258,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                         List.of(review),
                         400),
                 0.0,
-                "preference-review");
+                "preference-review",
+                ownerUsername);
         if (turn.toolCalls().size() != 1
                 || !"review_preference_evidence".equals(turn.toolCalls().getFirst().name())) {
             throw new IllegalStateException("recommendation preference review returned an invalid action");
@@ -269,8 +302,9 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         }
     }
 
-    private Turn invoke(Request request, double requestTemperature, String operation) {
-        ChatModel model = models.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION);
+    private Turn invoke(
+            Request request, double requestTemperature, String operation, String ownerUsername) {
+        ChatModel model = modelFor(ownerUsername);
         List<ToolCallback> callbacks = request.tools().stream()
                 .map(DefinitionOnlyToolCallback::new)
                 .map(ToolCallback.class::cast)
@@ -279,12 +313,12 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         if (model.getDefaultOptions() instanceof OpenAiChatOptions defaults) {
             OpenAiChatOptions.Builder builder = defaults.mutate();
             builder.toolChoice("required");
-            if (models.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.RECOMMENDATION)) {
+            if (usesDeepSeekNonThinkingGeneration(ownerUsername)) {
                 // DeepSeek V4 enables thinking by default, but its thinking mode rejects
                 // tool_choice. Recommendation turns must select an application-owned action,
                 // so use the provider's explicit non-thinking request mode.
                 builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-            } else if ("qwen".equals(models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION))) {
+            } else if ("qwen".equals(providerFor(ownerUsername))) {
                 // Qwen rejects required tool choice while thinking is enabled. Recommendation turns
                 // must stay inside the application-owned action protocol, so deterministic native
                 // tool selection takes priority over provider-specific hidden thinking output.
@@ -312,7 +346,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
                 response,
                 (System.nanoTime() - startedAt) / 1_000_000,
                 requestTemperature,
-                operation);
+                operation,
+                ownerUsername);
         AssistantMessage output = response.getResult().getOutput();
         return new Turn(
                 output.getText(),
@@ -326,7 +361,8 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
             ChatResponse response,
             long elapsedMs,
             double requestTemperature,
-            String operation) {
+            String operation,
+            String ownerUsername) {
         int inputCharacters = request.messages().stream()
                         .mapToInt(message -> message.content().length())
                         .sum()
@@ -341,14 +377,45 @@ public class SpringAiBoardGameRecommendationModel implements BoardGameRecommenda
         LOGGER.info(
                 "Recommendation model usage: operation={}, provider={}, model={}, temperature={}, elapsedMs={}, inputCharacters={}, maxOutputTokens={}, promptTokens={}, completionTokens={}",
                 operation,
-                models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
-                models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION),
+                providerFor(ownerUsername),
+                modelNameFor(ownerUsername),
                 requestTemperature,
                 elapsedMs,
                 inputCharacters,
                 request.maxOutputTokens(),
                 usage == null || usage.getPromptTokens() == null ? 0 : usage.getPromptTokens(),
                 usage == null || usage.getCompletionTokens() == null ? 0 : usage.getCompletionTokens());
+    }
+
+    private ChatModel modelFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.modelFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
+    }
+
+    private String providerFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.providerFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
+    }
+
+    private String modelNameFor(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.modelNameFor(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
+    }
+
+    private boolean usesFake(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.usesFake(RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
+    }
+
+    private boolean usesDeepSeekNonThinkingGeneration(String ownerUsername) {
+        return ownerUsername == null || ownerUsername.isBlank()
+                ? models.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.RECOMMENDATION)
+                : models.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.RECOMMENDATION, ownerUsername);
     }
 
     private org.springframework.ai.chat.messages.Message message(BoardGameRecommendationModel.Message message) {

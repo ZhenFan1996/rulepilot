@@ -20,9 +20,14 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class AnswerEvidenceRetrieverTest {
 
+    private static final String VISUAL_PLACEHOLDER =
+            "This rulebook page is visual evidence. Text extraction was unavailable; inspect the rendered page image.";
     private final UUID versionId = UUID.randomUUID();
     private final UUID chunkId = UUID.randomUUID();
 
@@ -87,6 +92,59 @@ class AnswerEvidenceRetrieverTest {
         assertThat(visualQueries).first().isEqualTo("A-01 B#02");
         assertThat(result.evidence()).anySatisfy(hit ->
                 assertThat(hit.evidence().excerpt()).contains("A-01 grants movement", "B#02 grants energy"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("imageOnlyRuleQuestions")
+    void fallsBackToPageScopedVisualTranscriptionForDifferentImageOnlyRulebooks(
+            String playerQuestion,
+            String factualSummary) {
+        HybridEvidenceHit placeholder = hit("VISUAL", "Rendered rulebook page", VISUAL_PLACEHOLDER, 3, 0.2);
+        List<String> visualQueries = new ArrayList<>();
+        VisualRulebookPageFactSearch facts = (documentVersionId, query, limit) -> {
+            visualQueries.add(query);
+            return List.of(new VisualRulebookPageFactSearch.PageFactMatch(
+                    3, "Visible rule text", factualSummary, List.of("page fact"), 0.9));
+        };
+        RuleEvidenceLookup lookup = new RuleEvidenceLookup() {
+            @Override
+            public List<RuleEvidenceHit> findByChunkIds(UUID documentVersionId, Set<UUID> chunkIds) {
+                return List.of();
+            }
+
+            @Override
+            public List<RuleEvidenceHit> findByPageNumbers(UUID documentVersionId, Set<Integer> pageNumbers) {
+                return pageNumbers.contains(3) ? List.of(placeholder.evidence()) : List.of();
+            }
+        };
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(placeholder), facts, lookup);
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question(playerQuestion), context(), "alice");
+
+        assertThat(visualQueries).isNotEmpty();
+        assertThat(result.state()).isEqualTo(AnswerEvidenceRetriever.State.READY);
+        assertThat(result.evidence()).anySatisfy(hit -> assertThat(hit.evidence().excerpt())
+                .startsWith("Visual-transcribed rule evidence")
+                .contains(factualSummary)
+                .doesNotContain(VISUAL_PLACEHOLDER));
+    }
+
+    @Test
+    void keepsAnImageOnlyPageUnassertiveWhenNoMatchingVisualFactExists() {
+        HybridEvidenceHit placeholder = hit("VISUAL", "Rendered rulebook page", VISUAL_PLACEHOLDER, 8, 0.2);
+        AnswerEvidenceRetriever retriever = retriever(
+                (documentVersionId, query, options) -> List.of(placeholder),
+                VisualRulebookPageFactSearch.empty(),
+                (documentVersionId, chunkIds) -> List.of(placeholder.evidence()));
+
+        AnswerEvidenceRetriever.Result result = retriever.retrieve(
+                UUID.randomUUID(), question("What happens to unused pieces?"), context(), "alice");
+
+        assertThat(result.evidence()).extracting(hit -> hit.evidence().excerpt())
+                .contains(VISUAL_PLACEHOLDER)
+                .allSatisfy(excerpt -> assertThat(excerpt).doesNotContain("Visual-transcribed rule evidence"));
     }
 
     @Test
@@ -233,5 +291,15 @@ class AnswerEvidenceRetrieverTest {
                 1,
                 null,
                 false);
+    }
+
+    private static java.util.stream.Stream<Arguments> imageOnlyRuleQuestions() {
+        return java.util.stream.Stream.of(
+                Arguments.of(
+                        "Where do the unused pieces go after I take one kind?",
+                        "After one kind is taken, every unused piece moves to the shared area."),
+                Arguments.of(
+                        "我选完行动后，没打出的卡要怎么处理？",
+                        "行动结算后，未打出的卡全部面朝下放入弃牌区。"));
     }
 }

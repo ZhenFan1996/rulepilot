@@ -1,6 +1,7 @@
 package com.rulepilot.assistant.application;
 
 import com.rulepilot.retrieval.VisualRulebookPageFactSearch.PageFactMatch;
+import com.rulepilot.retrieval.VisualTranscribedRuleEvidence;
 import java.util.stream.Collectors;
 
 /** Presents stored visual observations without rewriting their natural-language meaning. */
@@ -11,6 +12,10 @@ final class AnswerVisualFactPresentationPolicy {
     static String evidenceText(PageFactMatch fact) {
         return "Visual page facts (literal observations only; verify rules against the cited page).\nVisible facts: "
                 + mechanicalSummary(fact.factualSummary());
+    }
+
+    static String transcribedRuleEvidenceText(PageFactMatch fact) {
+        return VisualTranscribedRuleEvidence.render(mechanicalSummary(fact.factualSummary()));
     }
 
     static String mechanicalSummary(String factualSummary) {

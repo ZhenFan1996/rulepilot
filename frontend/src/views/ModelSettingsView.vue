@@ -19,6 +19,7 @@ interface ProviderView {
 }
 
 interface Assignments {
+  recommendation: string
   teaching: string
   visual: string
   answer: string
@@ -30,6 +31,7 @@ interface ConfigurationSnapshot {
   assignments: Assignments
   revision: number
   volatileSecrets: boolean
+  managedStartupAccess: boolean
 }
 
 const { t } = useLocale()
@@ -58,6 +60,7 @@ const visualProvider = computed(() => snapshot.value?.providers.find(
 ))
 const qwenSelected = computed(() => selectedProvider.value === 'qwen')
 const roleDefinitions = computed(() => [
+  ['recommendation', t('models.role.recommendation')],
   ['teaching', t('models.role.teaching')],
   ['visual', t('models.role.visual')],
   ['answer', t('models.role.answer')],
@@ -191,6 +194,9 @@ onMounted(loadConfiguration)
       <template v-else>
         <div class="mt-8 border-l-2 border-copper/60 pl-4 text-sm leading-6 text-ink/60">
           {{ t('models.temporary') }}
+        </div>
+        <div v-if="snapshot.managedStartupAccess" class="mt-4 rounded-lg bg-indigo/5 px-4 py-3 text-sm leading-6 text-ink/65" role="status">
+          {{ t('models.managedStartupAccess') }}
         </div>
 
         <p v-if="message" class="mt-5 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" aria-live="polite">{{ message }}</p>

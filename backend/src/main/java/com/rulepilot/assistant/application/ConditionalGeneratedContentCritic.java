@@ -54,6 +54,11 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
 
     @Override
     public Review review(ReviewRequest request, ReviewRisk risk) {
+        return review(request, risk, null);
+    }
+
+    @Override
+    public Review review(ReviewRequest request, ReviewRisk risk, String ownerUsername) {
         validateRequest(request);
         if (!evaluationMode && risk != ReviewRisk.LOW_CONFIDENCE && risk != ReviewRisk.HIGH_IMPACT) {
             return new Review(false, List.of());
@@ -70,25 +75,29 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
             case POST_PUBLICATION_STRUCTURE -> "Published teaching lesson structure review completed";
             default -> "Generated content critique completed";
         };
-        List<Issue> candidates = critique(request, operation, successSummary);
+        List<Issue> candidates = critique(request, operation, successSummary, ownerUsername);
         if (candidates.isEmpty() || !requiresAtomicConfirmation(request.reviewMode())) {
             return new Review(true, candidates);
         }
-        return new Review(true, confirmCandidateIssues(request, candidates));
+        return new Review(true, confirmCandidateIssues(request, candidates, ownerUsername));
     }
 
     private boolean requiresAtomicConfirmation(ReviewMode mode) {
         return mode == ReviewMode.DISCOVERY || mode == ReviewMode.POST_PUBLICATION;
     }
 
-    private List<Issue> critique(ReviewRequest request, String operation, String successSummary) {
+    private List<Issue> critique(
+            ReviewRequest request,
+            String operation,
+            String successSummary,
+            String ownerUsername) {
         var draft = invocations.invoke(
                 request.assistantRunId(),
                 ActivityType.CRITIC,
                 operation,
                 estimateTokens(request.toString()),
                 successSummary,
-                () -> model.critique(request),
+                () -> model.critique(request, ownerUsername),
                 result -> estimateTokens(result.toString()));
         if (draft == null) {
             throw new IllegalArgumentException("critic output is invalid");
@@ -105,7 +114,8 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
                 .toList();
     }
 
-    private List<Issue> confirmCandidateIssues(ReviewRequest request, List<Issue> candidates) {
+    private List<Issue> confirmCandidateIssues(
+            ReviewRequest request, List<Issue> candidates, String ownerUsername) {
         Map<Integer, Set<IssueType>> candidateTypesByPosition = candidates.stream()
                 .collect(Collectors.groupingBy(
                         Issue::claimPosition,
@@ -140,7 +150,8 @@ public class ConditionalGeneratedContentCritic implements GeneratedContentCritic
         return critique(
                         confirmationRequest,
                         "confirmGeneratedClaims",
-                        "Candidate claim defects independently confirmed")
+                        "Candidate claim defects independently confirmed",
+                        ownerUsername)
                 .stream()
                 .filter(issue -> candidateTypesByPosition
                         .getOrDefault(issue.claimPosition(), Set.of())

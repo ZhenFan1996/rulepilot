@@ -578,10 +578,21 @@ class TeachingEvidenceAgentRealRulebookEvaluationTest {
         ChatModel chatModel = recordingChatModel(provider, Duration.ofSeconds(120), rawResponses);
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(chatModel);
+        when(configuration.modelFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(chatModel);
         when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.provider());
+        when(configuration.providerFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(provider.provider());
         when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(provider.model());
+        when(configuration.modelNameFor(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(provider.model());
         when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC)).thenReturn(false);
+        when(configuration.usesFake(RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
+                .thenReturn(false);
         when(configuration.usesDeepSeekNonThinkingGeneration(RuntimeModelConfiguration.Role.CRITIC))
+                .thenReturn("deepseek".equals(provider.provider()));
+        when(configuration.usesDeepSeekNonThinkingGeneration(
+                        RuntimeModelConfiguration.Role.CRITIC, "agent-evaluation"))
                 .thenReturn("deepseek".equals(provider.provider()));
         var model = new SpringAiContentCriticModel(configuration, new FakeContentCriticModel(), prompts());
         return new ConditionalGeneratedContentCritic(model, audited, true);

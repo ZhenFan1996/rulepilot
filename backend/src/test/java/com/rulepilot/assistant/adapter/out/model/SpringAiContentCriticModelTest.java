@@ -125,6 +125,45 @@ class SpringAiContentCriticModelTest {
     }
 
     @Test
+    void discardsANegativeVerdictEvenWhenTheProviderOmitsUnusedIssueFields() {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        VersionedAgentPrompts prompts = mock(VersionedAgentPrompts.class);
+        when(configuration.usesFake(Role.CRITIC)).thenReturn(false);
+        when(configuration.providerFor(Role.CRITIC)).thenReturn("deepseek");
+        when(configuration.modelNameFor(Role.CRITIC)).thenReturn("deepseek-chat");
+        when(configuration.modelFor(Role.CRITIC)).thenReturn(chatModel);
+        when(configuration.usesDeepSeekNonThinkingGeneration(Role.CRITIC)).thenReturn(true);
+        OpenAiChatOptions providerOptions = OpenAiChatOptions.builder()
+                .apiKey("test-key")
+                .baseUrl("https://provider.example/v1")
+                .model("deepseek-chat")
+                .build();
+        when(chatModel.getDefaultOptions()).thenReturn(providerOptions);
+        when(chatModel.getOptions()).thenReturn(providerOptions);
+        when(prompts.atomicCriticSystem()).thenReturn("Confirm only candidate defects.");
+        when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
+        when(prompts.structuredOutputRepair()).thenReturn("Return every required issue field or an empty issues list.");
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("{\"issues\":[{\"defectConfirmed\":false,\"claimPosition\":1,"
+                        + "\"evidenceIds\":[\"E1\"],\"summary\":\"The meanings align.\"}]}")))));
+        SpringAiContentCriticModel model = new SpringAiContentCriticModel(
+                configuration, new FakeContentCriticModel(), prompts);
+        UUID evidenceId = UUID.randomUUID();
+
+        var result = model.critique(new ReviewRequest(
+                UUID.randomUUID(),
+                ContentType.LESSON,
+                ReviewMode.ATOMIC_CONFIRMATION,
+                new TaskContext("Confirm one candidate.", "1=[UNSUPPORTED_CLAIM]", 1),
+                List.of(new Claim(1, "Claim.", List.of(evidenceId))),
+                List.of(new Evidence(evidenceId, "Evidence."))));
+
+        assertThat(result.issues()).isEmpty();
+        verify(chatModel).call(any(Prompt.class));
+    }
+
+    @Test
     void givesAnEmptyCriticResponseOneFinalBoundedSchemaRetry() {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
@@ -222,6 +261,8 @@ class SpringAiContentCriticModelTest {
         when(prompts.atomicCriticSystem()).thenReturn("Confirm only candidate defects.");
         when(prompts.atomicCriticUser()).thenReturn("Claims: {claims}\nEvidence: {evidence}\nRepair: {repair}");
         when(prompts.structuredOutputRepair()).thenReturn("Return every required issue field or an empty issues list.");
+        when(prompts.criticOutputRepair()).thenReturn(
+                "Return an empty issues array for no defect; every retained issue requires a type.");
         when(chatModel.call(any(Prompt.class)))
                 .thenReturn(new ChatResponse(List.of(new Generation(new AssistantMessage(
                         "{\"issues\":[{\"defectConfirmed\":true,\"claimPosition\":1,"
@@ -242,6 +283,11 @@ class SpringAiContentCriticModelTest {
 
         assertThat(result.issues()).isEmpty();
         verify(chatModel, times(2)).call(any(Prompt.class));
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(prompt.capture());
+        assertThat(prompt.getAllValues().getLast().getInstructions())
+                .extracting(message -> message.getText())
+                .anyMatch(text -> text.contains("every retained issue requires a type"));
     }
 
     @Test

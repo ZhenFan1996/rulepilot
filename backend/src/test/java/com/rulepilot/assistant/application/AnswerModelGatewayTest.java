@@ -16,6 +16,7 @@ import com.rulepilot.assistant.domain.QuestionType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
 import org.junit.jupiter.api.Test;
@@ -99,6 +100,44 @@ class AnswerModelGatewayTest {
                 "rewriteAnswerRetrievalQueries",
                 "Cross-language retrieval phrases prepared",
                 true));
+    }
+
+    @Test
+    void resolvesTheProviderAndAnswerCallFromTheExplicitOwnerOutsideRequestThreadState() {
+        AtomicReference<String> providerOwner = new AtomicReference<>();
+        AtomicReference<String> compositionOwner = new AtomicReference<>();
+        ModelDraft expected = draft("仅使用 Alice 的模型配置。");
+        RuleAnswerModel ownerScoped = new RuleAnswerModel() {
+            @Override
+            public String providerId() {
+                throw new AssertionError("thread-local startup provider must not be consulted");
+            }
+
+            @Override
+            public String providerId(String ownerUsername) {
+                providerOwner.set(ownerUsername);
+                return "alice-provider";
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request) {
+                throw new AssertionError("thread-local startup model must not be invoked");
+            }
+
+            @Override
+            public ModelDraft compose(ModelRequest request, String ownerUsername) {
+                compositionOwner.set(ownerUsername);
+                return expected;
+            }
+        };
+        RecordingRateLimiter limiter = new RecordingRateLimiter();
+        AnswerModelGateway gateway = new AnswerModelGateway(
+                ownerScoped, limiter, new RecordingInvocations());
+
+        assertThat(gateway.compose(runId, "alice", sessionId, request())).isEqualTo(expected);
+        assertThat(providerOwner).hasValue("alice");
+        assertThat(compositionOwner).hasValue("alice");
+        assertThat(limiter.requests).containsExactly(new PermitRequest("alice", sessionId, "alice-provider"));
     }
 
     private RuleAnswerModel model(ModelDraft composition, ModelDraft revision, List<String> rewrittenQueries) {

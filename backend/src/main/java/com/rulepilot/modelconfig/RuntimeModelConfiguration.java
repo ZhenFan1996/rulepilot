@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,6 +35,8 @@ public class RuntimeModelConfiguration {
 
     private final ChatModelFactory factory;
     private final State startupState;
+    private final State personalDefaultState;
+    private final Set<String> startupAllowedUsers;
     private final boolean deepSeekGenerationThinking;
     private final ConcurrentMap<String, AtomicReference<State>> userStates = new ConcurrentHashMap<>();
 
@@ -50,7 +53,8 @@ public class RuntimeModelConfiguration {
             @Value("${rulepilot.critic.model-provider:gemini}") String criticProvider,
             @Value("${rulepilot.bgg.recommendation-agent.provider:fake}") String recommendationAdapter,
             @Value("${rulepilot.bgg.recommendation-agent.model-provider:qwen}") String recommendationProvider,
-            @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking) {
+            @Value("${rulepilot.models.deepseek.generation-thinking:false}") boolean deepSeekGenerationThinking,
+            @Value("${rulepilot.models.startup-allowed-users:}") String startupAllowedUsers) {
         this.factory = factory;
         this.deepSeekGenerationThinking = deepSeekGenerationThinking;
         Map<String, ConfiguredProvider> providers = new LinkedHashMap<>();
@@ -69,6 +73,11 @@ public class RuntimeModelConfiguration {
                         assignment(criticAdapter, criticProvider, providers),
                         assignment(recommendationAdapter, recommendationProvider, providers)),
                 0);
+        this.personalDefaultState = new State(
+                Map.of(),
+                new Assignments("fake", "fake", "fake", "fake", "fake"),
+                0);
+        this.startupAllowedUsers = parseStartupAllowedUsers(startupAllowedUsers);
     }
 
     public ChatModel modelFor(Role role) {
@@ -181,7 +190,12 @@ public class RuntimeModelConfiguration {
     }
 
     public synchronized Snapshot assign(
-            String username, String teaching, String visual, String answer, String critic) {
+            String username,
+            String teaching,
+            String visual,
+            String answer,
+            String critic,
+            String recommendation) {
         AtomicReference<State> userState = userState(username);
         State current = userState.get();
         Assignments assignments = new Assignments(
@@ -189,9 +203,15 @@ public class RuntimeModelConfiguration {
                 selectableVisual(visual, current.providers()),
                 selectable(answer, current.providers()),
                 selectable(critic, current.providers()),
-                current.assignments().recommendation());
+                selectable(recommendation, current.providers()));
         userState.set(new State(current.providers(), assignments, current.revision() + 1));
         return snapshot(username);
+    }
+
+    public synchronized Snapshot assign(
+            String username, String teaching, String visual, String answer, String critic) {
+        String currentRecommendation = stateFor(username).assignments().recommendation();
+        return assign(username, teaching, visual, answer, critic, currentRecommendation);
     }
 
     public Snapshot snapshot(String username) {
@@ -207,7 +227,12 @@ public class RuntimeModelConfiguration {
                     configured != null,
                     configured == null ? defaultVisionCapable(id) : configured.visionCapable()));
         }
-        return new Snapshot(List.copyOf(providers), current.assignments(), current.revision(), true);
+        return new Snapshot(
+                List.copyOf(providers),
+                current.assignments(),
+                current.revision(),
+                true,
+                startupAllowedUsers.contains(required(username, "username", 160)));
     }
 
     private State currentState() {
@@ -219,8 +244,10 @@ public class RuntimeModelConfiguration {
     }
 
     private State stateFor(String username) {
-        AtomicReference<State> personal = userStates.get(required(username, "username", 160));
-        return personal == null ? startupState : personal.get();
+        String owner = required(username, "username", 160);
+        AtomicReference<State> personal = userStates.get(owner);
+        if (personal != null) return personal.get();
+        return startupAllowedUsers.contains(owner) ? startupState : personalDefaultState;
     }
 
     private State stateForOrStartup(String username) {
@@ -229,7 +256,17 @@ public class RuntimeModelConfiguration {
 
     private AtomicReference<State> userState(String username) {
         String owner = required(username, "username", 160);
-        return userStates.computeIfAbsent(owner, ignored -> new AtomicReference<>(startupState));
+        State initial = startupAllowedUsers.contains(owner) ? startupState : personalDefaultState;
+        return userStates.computeIfAbsent(owner, ignored -> new AtomicReference<>(initial));
+    }
+
+    private Set<String> parseStartupAllowedUsers(String value) {
+        if (value == null || value.isBlank()) return Set.of();
+        return java.util.Arrays.stream(value.split(","))
+                .map(String::strip)
+                .filter(candidate -> !candidate.isBlank())
+                .map(candidate -> required(candidate, "startup model account", 160))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private void addStartupProvider(Map<String, ConfiguredProvider> providers, String id, Provider properties) {
@@ -398,5 +435,10 @@ public class RuntimeModelConfiguration {
         }
     }
 
-    public record Snapshot(List<ProviderView> providers, Assignments assignments, long revision, boolean volatileSecrets) {}
+    public record Snapshot(
+            List<ProviderView> providers,
+            Assignments assignments,
+            long revision,
+            boolean volatileSecrets,
+            boolean managedStartupAccess) {}
 }

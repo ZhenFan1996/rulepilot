@@ -10,7 +10,7 @@ interface Session { username: string; roles: string[] }
 interface TeachingPlan { id: string; gameTitle: string; createdAt: string }
 interface ModelSnapshot {
   providers: Array<{ configured: boolean }>
-  assignments: { teaching: string; visual: string; answer: string; critic: string }
+  assignments: { recommendation: string; teaching: string; visual: string; answer: string; critic: string }
 }
 
 const { t } = useLocale()
@@ -84,7 +84,8 @@ onMounted(load)
 
         <section class="mt-8 rounded-xl border border-ink/10 bg-paper p-6">
           <h2 class="font-display text-2xl font-semibold">{{ t('account.assignments') }}</h2>
-          <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <dl class="mt-5 grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-5">
+            <div><dt class="text-ink/45">{{ t('account.recommendation') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.recommendation }}</dd></div>
             <div><dt class="text-ink/45">{{ t('account.teaching') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.teaching }}</dd></div>
             <div><dt class="text-ink/45">{{ t('account.visual') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.visual }}</dd></div>
             <div><dt class="text-ink/45">{{ t('account.answer') }}</dt><dd class="mt-1 font-semibold">{{ models?.assignments.answer }}</dd></div>
