@@ -45,11 +45,6 @@ public class IdentitySecurityConfiguration {
                         .requestMatchers(HttpMethod.GET, "/api/v1/bgg/games/*")
                         .permitAll()
                         .requestMatchers(
-                                HttpMethod.POST,
-                                "/api/v1/bgg/recommendation-agent",
-                                "/api/v1/bgg/recommendation-agent/stream")
-                        .permitAll()
-                        .requestMatchers(
                                 "/actuator/health",
                                 "/actuator/info",
                                 "/actuator/prometheus",

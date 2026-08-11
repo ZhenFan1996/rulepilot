@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 
 import com.rulepilot.RulePilotApplication;
 import org.junit.jupiter.api.Test;
@@ -50,7 +51,7 @@ class SecurityHeadersIntegrationTest {
     }
 
     @Test
-    void permitsAnonymousBggSelectionReadsButProtectsImports() throws Exception {
+    void permitsAnonymousBggSelectionReadsButProtectsAgentsAndImports() throws Exception {
         mockMvc.perform(get("/api/v1/bgg/games/42"))
                 .andExpect(status().isNotFound());
         mockMvc.perform(get("/api/v1/bgg/discovery"))
@@ -62,7 +63,11 @@ class SecurityHeadersIntegrationTest {
         mockMvc.perform(post("/api/v1/bgg/recommendation-agent"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/v1/bgg/recommendation-agent").with(csrf()))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent").with(user("player")).with(csrf()))
                 .andExpect(status().isNotFound());
+        mockMvc.perform(post("/api/v1/bgg/recommendation-agent/stream").with(csrf()))
+                .andExpect(status().isUnauthorized());
         mockMvc.perform(post("/api/v1/bgg/games/42/import"))
                 .andExpect(status().isForbidden());
         mockMvc.perform(post("/api/admin/bgg/ranked-catalog"))

@@ -397,6 +397,45 @@ jobs:
             echo "Deferred dangling-image cleanup after successful activation." >&2
           REMOTE
 
+      - name: Load protected production verification account
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          credentials=$(ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o StrictHostKeyChecking=yes \
+            -p "$DEPLOY_SSH_PORT" \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            'bash -s' -- "$DEPLOY_PATH" <<'REMOTE'
+          set -Eeuo pipefail
+          env_file="$1/current/.env"
+          read_value() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$env_file" | head -n 1)
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          printf '%s\n%s' \
+            "$(read_value RULEPILOT_USER_USERNAME)" \
+            "$(read_value RULEPILOT_USER_PASSWORD)"
+          REMOTE
+          )
+          mapfile -t credential_lines <<< "$credentials"
+          verify_username=${credential_lines[0]:-}
+          verify_password=${credential_lines[1]:-}
+          test -n "$verify_username"
+          test -n "$verify_password"
+          echo "::add-mask::$verify_username"
+          echo "::add-mask::$verify_password"
+          {
+            printf 'RULEPILOT_VERIFY_USERNAME=%s\n' "$verify_username"
+            printf 'RULEPILOT_VERIFY_PASSWORD=%s\n' "$verify_password"
+          } >> "$GITHUB_ENV"
+
       - name: Verify public browser and API path
         env:
           RULEPILOT_PUBLIC_URL: https://rulepilot.cn
@@ -433,7 +472,7 @@ jobs:
                   } else if (event === 'result') {
                     result = payload
                   } else if (event === 'error') {
-                    throw new Error(`recommendation stream failed: ${payload.message ?? 'unknown error'}`)
+                    throw new Error(`recommendation stream failed: ${payload.message ?? payload.code ?? 'unknown error'}`)
                   }
                 }
                 separator = buffer.match(/\r?\n\r?\n/)
@@ -467,6 +506,12 @@ jobs:
                 ? csrf.headers.getSetCookie()
                 : [csrf.headers.get('set-cookie')].filter(Boolean)
               const cookie = setCookies.map((value) => value.split(';', 1)[0]).join('; ')
+              const verifyUsername = process.env.RULEPILOT_VERIFY_USERNAME
+              const verifyPassword = process.env.RULEPILOT_VERIFY_PASSWORD
+              if (!verifyUsername || !verifyPassword) {
+                throw new Error('production verification account is unavailable')
+              }
+              const authorization = 'Basic ' + Buffer.from(`${verifyUsername}:${verifyPassword}`).toString('base64')
               const openingPrompt = '嗨，今晚五个人聚会，最近合作玩得有点腻，但我还没想清楚换什么方向。你会先怎么帮我挑？'
               const openingStartedAt = Date.now()
               const openingAgent = await fetch(
@@ -476,6 +521,7 @@ jobs:
                   headers: {
                     'content-type': 'application/json',
                     accept: 'text/event-stream',
+                    authorization,
                     [payload.headerName]: payload.token,
                     cookie,
                   },
@@ -514,6 +560,7 @@ jobs:
                   headers: {
                     'content-type': 'application/json',
                     accept: 'text/event-stream',
+                    authorization,
                     [payload.headerName]: payload.token,
                     cookie,
                   },
