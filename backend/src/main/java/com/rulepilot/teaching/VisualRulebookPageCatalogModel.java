@@ -4,6 +4,7 @@ import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Reads a small batch of rendered rulebook pages before lesson planning. Its output is a page-scoped retrieval aid,
@@ -27,6 +28,15 @@ public interface VisualRulebookPageCatalogModel {
      */
     default CatalogDraft summarizeForTeaching(CatalogRequest request) {
         return summarize(request);
+    }
+
+    /**
+     * Identifies the provider request that actually serves the lightweight Teaching-start pass. Implementations may
+     * use a lower-latency request-local model than the configured model while keeping the same provider credentials.
+     * The value is operational metadata only: it never changes evidence or lesson content.
+     */
+    default Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String modelConfigurationOwner) {
+        return Optional.empty();
     }
 
     /** Locates document-derived short item identifiers before their surrounding cells are read separately. */
@@ -146,6 +156,28 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);
+        }
+    }
+
+    record ModelExecutionIdentity(String provider, String model) {
+        public ModelExecutionIdentity {
+            provider = auditValue(provider, "provider", 40);
+            model = auditValue(model, "model", 200);
+        }
+
+        public String auditLabel() {
+            return provider + "/" + model;
+        }
+
+        private static String auditValue(String value, String label, int maxLength) {
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("visual model " + label + " is required");
+            }
+            String normalized = value.strip().replaceAll("\\s+", " ");
+            if (normalized.length() > maxLength) {
+                throw new IllegalArgumentException("visual model " + label + " is too long");
+            }
+            return normalized;
         }
     }
 

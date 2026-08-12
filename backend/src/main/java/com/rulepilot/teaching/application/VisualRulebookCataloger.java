@@ -354,9 +354,15 @@ class VisualRulebookCataloger {
                 assistantRunId,
                 operation,
                 Math.max(1, images.size() * 600),
-                "Teaching-start page facts interpreted",
+                teachingStartupSuccessSummary(owner),
                 () -> visualCatalog.summarizeForTeaching(request),
                 this::catalogOutputTokens);
+    }
+
+    private String teachingStartupSuccessSummary(String owner) {
+        return visualCatalog.teachingStartupExecutionIdentity(owner)
+                .map(identity -> "Teaching-start page facts interpreted via " + identity.auditLabel())
+                .orElse("Teaching-start page facts interpreted");
     }
 
     /**

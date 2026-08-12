@@ -22,6 +22,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
@@ -35,13 +36,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.google.genai.GoogleGenAiChatModel;
-import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,6 +57,8 @@ import org.springframework.util.MimeTypeUtils;
 public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPageCatalogModel {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String QWEN_BALANCED_VISUAL_MODEL = "qwen3.7-plus";
+    private static final String QWEN_FAST_VISUAL_MODEL = "qwen3.6-flash";
     private final RuntimeModelConfiguration models;
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
@@ -241,15 +243,24 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner));
     }
 
+    @Override
+    public Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String owner) {
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return Optional.empty();
+        }
+        String provider = models.providerFor(Role.VISUAL, owner);
+        String configuredModel = models.modelNameFor(Role.VISUAL, owner);
+        return Optional.of(new ModelExecutionIdentity(
+                provider, teachingStartupModelName(provider, configuredModel)));
+    }
+
     private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
         String provider = models.providerFor(Role.VISUAL, owner);
         if ("qwen".equals(provider)) {
             prompt = prompt.options(qwenJsonOptions(
-                    models.modelNameFor(Role.VISUAL, owner), Math.min(3_200, maxCompletionTokens)));
-        } else if ("gemini".equals(provider)) {
-            prompt = prompt.options(geminiTeachingStartupOptions(
-                    models.modelNameFor(Role.VISUAL, owner), Math.min(3_200, maxCompletionTokens)));
+                    teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)),
+                    Math.min(3_200, maxCompletionTokens)));
         }
         String content = prompt.system(teachingStartupPrompt)
                 .user(user -> {
@@ -622,32 +633,15 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
     }
 
-    static GoogleGenAiChatOptions.Builder geminiTeachingStartupOptions(String modelName, int maxTokens) {
-        GoogleGenAiChatOptions.Builder options = GoogleGenAiChatOptions.builder();
-        String normalizedModel = modelName == null
-                ? ""
-                : modelName.strip().toLowerCase(java.util.Locale.ROOT);
-        if (!normalizedModel.isBlank()) {
-            // Request-level Gemini builders otherwise carry their own Flash default and can silently replace a
-            // user's configured Pro or later-generation model when the options are merged into the prompt.
-            options.model(normalizedModel);
+    static String teachingStartupModelName(String provider, String configuredModel) {
+        if ("qwen".equalsIgnoreCase(provider)
+                && QWEN_BALANCED_VISUAL_MODEL.equalsIgnoreCase(configuredModel)) {
+            // Alibaba recommends the Flash sibling once a Qwen visual workflow is stable. This bounded fact-only
+            // request uses non-thinking structured output, both supported by qwen3.6-flash; the complete visual audit
+            // deliberately keeps the configured higher-quality model.
+            return QWEN_FAST_VISUAL_MODEL;
         }
-        // The stable Flash-Lite model is purpose-built for low-latency multimodal extraction. Keep this substitution
-        // local to the fact-only startup pass; the configured Flash model still owns complete visual interpretation.
-        if ("gemini-2.5-flash".equals(normalizedModel)) {
-            options.model(GoogleGenAiChatModel.ChatModel.GEMINI_2_5_FLASH_LIGHT);
-        }
-        options.temperature(0.0);
-        options.candidateCount(1);
-        options.maxOutputTokens(maxTokens);
-        options.responseMimeType(MimeTypeUtils.APPLICATION_JSON_VALUE);
-        // This pass transcribes visible page facts; it does not plan or reason about rules. Gemini 2.5 Flash can
-        // disable thinking completely, while later Gemini generations use a different thinking-level contract.
-        if (normalizedModel.startsWith("gemini-2.5-flash")) {
-            options.thinkingBudget(0);
-            options.includeThoughts(false);
-        }
-        return options;
+        return configuredModel;
     }
 
     private record CropBounds(int x, int y, int width, int height) {}
