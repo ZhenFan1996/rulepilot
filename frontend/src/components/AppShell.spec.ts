@@ -284,6 +284,187 @@ describe('AppShell', () => {
     wrapper.unmount()
   })
 
+  it('clears failed import preparation and keeps it dismissed after the server refreshes', async () => {
+    vi.useFakeTimers()
+    const updatedAt = new Date().toISOString()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/preparation-failed')) {
+        return response({ run: { id: 'preparation-failed', state: 'FAILED' } })
+      }
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-failed-preparation', title: '失败的官方讲解', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-import-failed', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-failed',
+        teachingErrorCode: null, updatedAt,
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-import-failed', title: 'official-rules.pdf' },
+        latestVersion: { id: 'version-import-failed', status: 'READY' },
+      }])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
+    expect(wrapper.text()).toContain('失败的官方讲解')
+    expect(wrapper.text()).toContain('讲解准备失败')
+
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    expect(wrapper.text()).not.toContain('失败的官方讲解')
+    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports')).toContain('import-failed-preparation')
+
+    await vi.advanceTimersByTimeAsync(15_000)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('失败的官方讲解')
+    wrapper.unmount()
+  })
+
+  it('does not pre-dismiss an active import preparation while clearing another failure', async () => {
+    vi.useFakeTimers()
+    let activePreparationReads = 0
+    const updatedAt = new Date().toISOString()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/preparation-active')) {
+        activePreparationReads += 1
+        return response({
+          run: {
+            id: 'preparation-active',
+            state: activePreparationReads === 1 ? 'LESSON_PLANNING' : 'FAILED',
+          },
+        })
+      }
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([{
+        id: 'import-active-preparation', title: '仍在准备的讲解', sourceDomain: 'publisher.example',
+        stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-active', errorCode: null,
+        teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-active',
+        teachingErrorCode: null, updatedAt,
+      }, {
+        id: 'import-download-failed', title: '下载失败的规则书', sourceDomain: 'publisher.example',
+        stage: 'FAILED', downloadedBytes: 0, totalBytes: null,
+        documentVersionId: null, errorCode: 'SOURCE_UNAVAILABLE',
+        teachingHandoffState: 'FAILED', teachingPreparationRunId: null,
+        teachingErrorCode: 'SOURCE_UNAVAILABLE', updatedAt,
+      }])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-active', title: 'active-rules.pdf' },
+        latestVersion: { id: 'version-active', status: 'READY' },
+      }])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
+    expect(wrapper.text()).toContain('仍在准备的讲解')
+    expect(wrapper.text()).toContain('下载失败的规则书')
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    expect(wrapper.text()).toContain('仍在准备的讲解')
+    expect(wrapper.text()).not.toContain('下载失败的规则书')
+    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports'))
+      .not.toContain('import-active-preparation')
+
+    await vi.advanceTimersByTimeAsync(4000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('仍在准备的讲解')
+    expect(wrapper.text()).toContain('讲解准备失败')
+    wrapper.unmount()
+  })
+
+  it('clears a failed uploaded document handoff and keeps it dismissed after remount', async () => {
+    const updatedAt = new Date().toISOString()
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([{
+        id: 'upload-handoff-failed-document', documentVersionId: 'version-upload-failed', title: '失败的上传讲解',
+        rulebookTitle: 'broken-rules.pdf', state: 'WAITING_FOR_DOCUMENT',
+        preparationRunId: null, errorCode: 'DOCUMENT_PROCESSING_FAILED', updatedAt,
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([{
+        document: { id: 'document-upload-failed', title: 'broken-rules.pdf' },
+        latestVersion: { id: 'version-upload-failed', status: 'FAILED' },
+      }])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const mountShell = () => mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] },
+    })
+    const wrapper = mountShell()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
+    expect(wrapper.text()).toContain('失败的上传讲解')
+    expect(wrapper.text()).toContain('规则书读取失败')
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    expect(wrapper.text()).not.toContain('失败的上传讲解')
+    expect(sessionStorage.getItem('rulepilot:dismissed-upload-teaching-handoffs'))
+      .toContain('upload-handoff-failed-document')
+    wrapper.unmount()
+
+    const remounted = mountShell()
+    await flushPromises()
+    await remounted.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
+    expect(remounted.text()).not.toContain('失败的上传讲解')
+    expect(remounted.text()).toContain('当前没有后台任务')
+    remounted.unmount()
+  })
+
+  it('clears a terminal upload handoff even when its deleted document is absent from the recent list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return response({ username: 'player' })
+      if (path.includes('/api/v1/assistant-runs/active')) return response([])
+      if (path.endsWith('/api/v1/documents/official-imports')) return response([])
+      if (path.endsWith('/api/v1/documents/upload-teaching-handoffs')) return response([{
+        id: 'orphaned-failed-handoff', documentVersionId: 'missing-version', title: '已删除规则书的失败任务',
+        rulebookTitle: 'removed-rules.pdf', state: 'WAITING_FOR_DOCUMENT',
+        preparationRunId: null, errorCode: 'DOCUMENT_PROCESSING_FAILED', updatedAt: new Date().toISOString(),
+      }])
+      if (path.endsWith('/api/v1/documents')) return response([])
+      return new Response(null, { status: 404 })
+    }))
+    const router = createAppShellRouter()
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppShell, {
+      slots: { default: '<p>页面内容</p>' }, global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="background-work-trigger-desktop"]').trigger('click')
+    expect(wrapper.text()).toContain('已删除规则书的失败任务')
+    expect(wrapper.text()).toContain('规则书读取失败')
+    await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
+    expect(wrapper.text()).not.toContain('已删除规则书的失败任务')
+    wrapper.unmount()
+  })
+
   it('discovers teaching launched in another tab while the signed-in shell is idle', async () => {
     vi.useFakeTimers()
     let activeReads = 0
@@ -357,6 +538,8 @@ describe('AppShell', () => {
     sessionStorage.setItem('rulepilot:active-teaching-runs', JSON.stringify([
       { runId: 'run-1', planId: 'plan-1', gameTitle: 'Private lesson' },
     ]))
+    sessionStorage.setItem('rulepilot:dismissed-official-imports', JSON.stringify(['private-import']))
+    sessionStorage.setItem('rulepilot:dismissed-upload-teaching-handoffs', JSON.stringify(['private-handoff']))
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)
       if (path.includes('/api/auth/session')) return response({ username: 'player' })
@@ -387,6 +570,8 @@ describe('AppShell', () => {
 
     expect(sessionCleared).toHaveBeenCalledOnce()
     expect(sessionStorage.getItem('rulepilot:active-teaching-runs')).toBeNull()
+    expect(sessionStorage.getItem('rulepilot:dismissed-official-imports')).toBeNull()
+    expect(sessionStorage.getItem('rulepilot:dismissed-upload-teaching-handoffs')).toBeNull()
     expect(wrapper.text()).not.toContain('player')
     window.removeEventListener(SESSION_CLEARED_EVENT, sessionCleared)
     wrapper.unmount()
