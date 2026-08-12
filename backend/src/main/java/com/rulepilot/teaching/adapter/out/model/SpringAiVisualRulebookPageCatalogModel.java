@@ -40,6 +40,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.google.genai.GoogleGenAiChatModel;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -623,14 +624,26 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     static GoogleGenAiChatOptions.Builder geminiTeachingStartupOptions(String modelName, int maxTokens) {
         GoogleGenAiChatOptions.Builder options = GoogleGenAiChatOptions.builder();
+        String normalizedModel = modelName == null
+                ? ""
+                : modelName.strip().toLowerCase(java.util.Locale.ROOT);
+        if (!normalizedModel.isBlank()) {
+            // Request-level Gemini builders otherwise carry their own Flash default and can silently replace a
+            // user's configured Pro or later-generation model when the options are merged into the prompt.
+            options.model(normalizedModel);
+        }
+        // The stable Flash-Lite model is purpose-built for low-latency multimodal extraction. Keep this substitution
+        // local to the fact-only startup pass; the configured Flash model still owns complete visual interpretation.
+        if ("gemini-2.5-flash".equals(normalizedModel)) {
+            options.model(GoogleGenAiChatModel.ChatModel.GEMINI_2_5_FLASH_LIGHT);
+        }
         options.temperature(0.0);
         options.candidateCount(1);
         options.maxOutputTokens(maxTokens);
         options.responseMimeType(MimeTypeUtils.APPLICATION_JSON_VALUE);
         // This pass transcribes visible page facts; it does not plan or reason about rules. Gemini 2.5 Flash can
         // disable thinking completely, while later Gemini generations use a different thinking-level contract.
-        if (modelName != null
-                && modelName.strip().toLowerCase(java.util.Locale.ROOT).startsWith("gemini-2.5-flash")) {
+        if (normalizedModel.startsWith("gemini-2.5-flash")) {
             options.thinkingBudget(0);
             options.includeThoughts(false);
         }
