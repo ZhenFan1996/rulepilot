@@ -13,6 +13,7 @@ describe('DocumentsView recoverable lesson handoff', () => {
     vi.useRealTimers()
     localStorage.clear()
     FakeEventSource.instances = []
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -300,6 +301,20 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(wrapper.text()).toContain('Photograph a page')
     expect(wrapper.text()).toContain('Add photographed pages')
     expect(wrapper.text()).not.toContain('现在拍一页')
+
+    const titleInput = wrapper.get('input[maxlength="160"]')
+    await titleInput.setValue('English draft')
+    expect(wrapper.get('[data-testid="rulebook-intake-unsaved"]').text()).toContain('Not submitted: title and document type')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    opener.element.focus()
+    await opener.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent)
+      .toContain('Discard this rulebook draft and leave?')
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('Keep preparing'))!.click()
+    await flushPromises()
+    await titleInput.setValue('')
     wrapper.unmount()
   })
 
@@ -337,6 +352,360 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(router.currentRoute.value.name).toBe('teach')
     expect(wrapper.text()).toContain('你可以离开这里，处理会在后台继续')
     expect(readPendingRulebookLessons(localStorage, 'player')).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('shows an in-memory intake draft, keeps it on cancel, and leaves only after explicit discard', async () => {
+    vi.stubGlobal('fetch', mockApplicationFetch(() => 'READY'))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'carefully_selected_rules.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('input[maxlength="160"]').setValue('仔细选好的规则书')
+    await wrapper.get('textarea[maxlength="500"]').setValue('先学会开局')
+
+    const status = wrapper.get('[data-testid="rulebook-intake-unsaved"]')
+    expect(status.text()).toContain('PDF“carefully_selected_rules.pdf”')
+    expect(status.text()).toContain('标题与资料类型')
+    expect(status.text()).toContain('讲解目标')
+    expect(status.text()).toContain('只保留在当前页面')
+    expect(localStorage.getItem('carefully_selected_rules.pdf')).toBeNull()
+    expect(sessionStorage.getItem('carefully_selected_rules.pdf')).toBeNull()
+
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    opener.element.focus()
+    await opener.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('放弃这次规则书草稿并离开')
+    expect(document.activeElement?.textContent).toContain('继续准备')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('继续准备'))!.click()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(document.activeElement).toBe(opener.element)
+    expect((wrapper.get('#rulebook-file').element as HTMLInputElement).files?.[0]?.name)
+      .toBe('carefully_selected_rules.pdf')
+    expect((wrapper.get('textarea[maxlength="500"]').element as HTMLTextAreaElement).value).toBe('先学会开局')
+
+    await opener.trigger('click')
+    await flushPromises()
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('放弃草稿并离开'))!.click()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/catalog')
+    wrapper.unmount()
+  })
+
+  it('protects browser unload only before the intake reaches a durable handoff', async () => {
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/api/v1/documents') && options?.method === 'POST') {
+        return response({ duplicate: false, version: { id: 'version-1', status: 'UPLOADED' } }, 201)
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+
+    const clean = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(clean)
+    expect(clean.defaultPrevented).toBe(false)
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'unload-protected.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    const dirty = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(dirty)
+    expect(dirty.defaultPrevented).toBe(true)
+
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    await flushPromises()
+    const handedOff = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(handedOff)
+    expect(handedOff.defaultPrevented).toBe(false)
+    wrapper.unmount()
+
+    const afterUnmount = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(afterUnmount)
+    expect(afterUnmount.defaultPrevented).toBe(false)
+  })
+
+  it('waits for upload acceptance before following a requested route', async () => {
+    let releaseUpload!: (value: Response) => void
+    const uploadResponse = new Promise<Response>((resolve) => { releaseUpload = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/api/v1/documents') && options?.method === 'POST') return uploadResponse
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'handoff.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    await wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('正在完成规则书交接')
+    expect([...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .every(button => button.disabled)).toBe(true)
+
+    releaseUpload(response({ duplicate: false, version: { id: 'version-1', status: 'UPLOADED' } }, 201))
+    await flushPromises()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/catalog')
+    expect(fetchMock.mock.calls.filter(([request]) => String(request).endsWith('/api/v1/documents'))).toHaveLength(2)
+  })
+
+  it('cancels navigation and retains the retryable upload draft when server acceptance fails', async () => {
+    let releaseUpload!: (value: Response) => void
+    const uploadResponse = new Promise<Response>((resolve) => { releaseUpload = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/api/v1/documents') && options?.method === 'POST') return uploadResponse
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'retry-me.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('form.tabletop-panel').trigger('submit')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    opener.element.focus()
+    await opener.trigger('click')
+    releaseUpload(new Response(null, { status: 503 }))
+    await flushPromises()
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).toContain('暂时无法处理规则书')
+    expect((wrapper.get('#rulebook-file').element as HTMLInputElement).files?.[0]?.name).toBe('retry-me.pdf')
+    expect(document.activeElement).toBe(opener.element)
+    wrapper.unmount()
+  })
+
+  it('follows the requested route immediately after an official import is durably accepted', async () => {
+    let releaseImport!: (value: Response) => void
+    const importResponse = new Promise<Response>((resolve) => { releaseImport = resolve })
+    const fetchMock = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined,
+      options => options?.method === 'POST' ? importResponse : new Response(null, { status: 404 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    await wrapper.get('input[type="url"]').setValue('https://publisher.example/accepted.pdf')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    await opener.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('正在完成规则书交接')
+
+    releaseImport(response({
+      id: 'import-job-accepted', title: 'Accepted rules', sourceDomain: 'publisher.example', stage: 'QUEUED',
+      downloadedBytes: 0, totalBytes: null, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
+    }, 202))
+    await flushPromises()
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/catalog')
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/official-imports/import-job-accepted')))
+      .toBe(false)
+  })
+
+  it('keeps a separate local draft when an official import succeeds during requested navigation', async () => {
+    let releaseImport!: (value: Response) => void
+    const importResponse = new Promise<Response>((resolve) => { releaseImport = resolve })
+    const fetchMock = mockApplicationFetch(
+      () => 'READY', 'COMPLETED', [], undefined, undefined,
+      options => options?.method === 'POST' ? importResponse : new Response(null, { status: 404 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const input = wrapper.get('#rulebook-file')
+    Object.defineProperty(input.element, 'files', {
+      configurable: true,
+      value: [new File(['%PDF-1.7'], 'separate-local.pdf', { type: 'application/pdf' })],
+    })
+    await input.trigger('change')
+    await wrapper.get('input[type="url"]').setValue('https://publisher.example/imported.pdf')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await wrapper.findAll('button').find(button => button.text() === '下载规则书并生成讲解')!.trigger('click')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    opener.element.focus()
+    await opener.trigger('click')
+
+    releaseImport(response({
+      id: 'import-job-with-local-draft', title: 'Imported rules', sourceDomain: 'publisher.example', stage: 'QUEUED',
+      downloadedBytes: 0, totalBytes: null, documentVersionId: null, duplicate: false, errorCode: null, reused: false,
+      teachingHandoffState: 'WAITING_FOR_DOCUMENT', teachingPreparationRunId: null, teachingErrorCode: null,
+    }, 202))
+    await flushPromises()
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(router.currentRoute.value.query.importJob).toBeUndefined()
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect((wrapper.get('#rulebook-file').element as HTMLInputElement).files?.[0]?.name).toBe('separate-local.pdf')
+    expect(document.activeElement).toBe(opener.element)
+
+    await opener.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('放弃这次规则书草稿并离开')
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('继续准备'))!.click()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="rulebook-intake-unsaved"]').text()).toContain('separate-local.pdf')
+    wrapper.unmount()
+  })
+
+  it('follows the requested route once a manual guide launch has a durable assistant run', async () => {
+    let releaseLaunch!: (value: Response) => void
+    const launchResponse = new Promise<Response>((resolve) => { releaseLaunch = resolve })
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/document-versions/version-1/teaching-plans') && options?.method === 'POST') {
+        return launchResponse
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    await wrapper.get('textarea[maxlength="500"]').setValue('重点讲清第一轮')
+    await wrapper.findAll('button').find(button => button.text() === '后台生成讲解')!.trigger('click')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    await opener.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('正在完成规则书交接')
+
+    releaseLaunch(response({ assistantRunId: 'accepted-run', state: 'RECEIVED', reused: false }, 202))
+    await flushPromises()
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/catalog')
+    expect(fetchMock.mock.calls.some(([request]) => String(request).includes('/assistant-runs/accepted-run'))).toBe(false)
+  })
+
+  it('keeps photographed-page object URLs on cancel and releases them on explicit discard', async () => {
+    const revokeObjectUrl = vi.fn()
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 900, height: 1200, close: vi.fn() })))
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:prepared-rulebook-page')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(revokeObjectUrl)
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '', fillRect: vi.fn(), drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(
+      new Blob(['prepared-photo'], { type: 'image/jpeg' }),
+    ))
+    vi.stubGlobal('fetch', mockApplicationFetch(() => 'READY'))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const gallery = wrapper.get('#rulebook-gallery')
+    Object.defineProperty(gallery.element, 'files', {
+      configurable: true,
+      value: [new File(['photo'], 'page-one.png', { type: 'image/png' })],
+    })
+    await gallery.trigger('change')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="rulebook-intake-unsaved"]').text()).toContain('1 页照片')
+
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    await opener.trigger('click')
+    await flushPromises()
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('继续准备'))!.click()
+    await flushPromises()
+    expect(revokeObjectUrl).not.toHaveBeenCalled()
+    expect(wrapper.find('img[src="blob:prepared-rulebook-page"]').exists()).toBe(true)
+
+    await opener.trigger('click')
+    await flushPromises()
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('放弃草稿并离开'))!.click()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/catalog')
+    expect(revokeObjectUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels a requested route after photo preparation and keeps the newly prepared page', async () => {
+    let releaseBitmap!: (value: { width: number; height: number; close: () => void }) => void
+    const bitmap = new Promise<{ width: number; height: number; close: () => void }>(resolve => {
+      releaseBitmap = resolve
+    })
+    vi.stubGlobal('createImageBitmap', vi.fn(() => bitmap))
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:prepared-after-navigation')
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      fillStyle: '', fillRect: vi.fn(), drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D)
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(
+      new Blob(['prepared-photo'], { type: 'image/jpeg' }),
+    ))
+    vi.stubGlobal('fetch', mockApplicationFetch(() => 'READY'))
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper, router } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    const gallery = wrapper.get('#rulebook-gallery')
+    Object.defineProperty(gallery.element, 'files', {
+      configurable: true,
+      value: [new File(['photo'], 'slow-page.png', { type: 'image/png' })],
+    })
+    await gallery.trigger('change')
+    const opener = wrapper.findAll('a').find(link => link.attributes('href') === '/catalog')!
+    opener.element.focus()
+    await opener.trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('正在完成规则书交接')
+
+    releaseBitmap({ width: 900, height: 1200, close: vi.fn() })
+    await flushPromises()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/teach')
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.get('[data-testid="rulebook-intake-unsaved"]').text()).toContain('1 页照片')
+    expect(wrapper.find('img[src="blob:prepared-after-navigation"]').exists()).toBe(true)
+    expect(document.activeElement).toBe(opener.element)
     wrapper.unmount()
   })
 

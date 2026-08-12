@@ -94,6 +94,14 @@ interface PhotographedPage {
   file: File
   previewUrl: string
 }
+interface RulebookIntakeSnapshot {
+  editionId: string
+  learningGoal: string
+  officialImportRightsConfirmed: boolean
+  officialSourceUrl: string
+  sourceType: string
+  title: string
+}
 
 class PreparationFailedError extends Error {}
 
@@ -125,6 +133,15 @@ const documentToDelete = ref<DocumentResponse | null>(null)
 const deleteError = ref('')
 const documentListHeading = ref<HTMLElement | null>(null)
 const restoreAfterDocumentDelete = ref(false)
+const rulebookFileInput = ref<HTMLInputElement | null>(null)
+const intakeReady = ref(false)
+const intakeBaseline = ref<RulebookIntakeSnapshot>({
+  editionId: '', learningGoal: '', officialImportRightsConfirmed: false,
+  officialSourceUrl: '', sourceType: 'BASE_RULEBOOK', title: '',
+})
+const launchingTeaching = ref(false)
+const navigationDialogOpen = ref(false)
+let resolvePendingNavigation: ((allow: boolean) => void) | null = null
 const deleteCopy = computed(() => locale.value === 'zh-CN' ? {
   title: '删除这本规则书？',
   description: (name: string) => `“${name}”及其本地页面图片和由它生成的讲解都会被删除，无法恢复。`,
@@ -133,6 +150,29 @@ const deleteCopy = computed(() => locale.value === 'zh-CN' ? {
   title: 'Delete this rulebook?',
   description: (name: string) => `“${name}”, its local page images, and the guides created from it will all be deleted. This cannot be undone.`,
   cancel: 'Keep rulebook', confirm: 'Delete rulebook', retry: 'Try deletion again',
+})
+const intakeDraftCopy = computed(() => locale.value === 'zh-CN' ? {
+  status: (areas: string) => `尚未提交：${areas}`,
+  memoryOnly: 'PDF、照片和这些输入只保留在当前页面；交给后台后才能安全离开。',
+  pdf: (name: string) => `PDF“${name}”`,
+  photos: (count: number) => `${count} 页照片`,
+  details: '标题与资料类型', source: '来源与授权', game: '关联游戏', goal: '讲解目标',
+  leaveTitle: '放弃这次规则书草稿并离开？',
+  leaveDescription: (areas: string) => `${areas}还没有交给 RulePilot。离开会清除当前页面中的文件、照片和输入，无法恢复；已在后台运行的其他任务不受影响。`,
+  pendingTitle: '正在完成规则书交接',
+  pendingDescription: '照片整理或服务器接收完成前暂时不能离开。接收成功且没有其他草稿时，会自动前往刚才选择的页面；失败会留在这里供你重试。',
+  stay: '继续准备', leave: '放弃草稿并离开', pending: '正在交接…',
+} : {
+  status: (areas: string) => `Not submitted: ${areas}`,
+  memoryOnly: 'The PDF, photos, and these inputs stay only on this page until they are handed to background work.',
+  pdf: (name: string) => `PDF “${name}”`,
+  photos: (count: number) => `${count} photographed pages`,
+  details: 'title and document type', source: 'source and permission', game: 'linked game', goal: 'teaching goal',
+  leaveTitle: 'Discard this rulebook draft and leave?',
+  leaveDescription: (areas: string) => `${areas} have not been handed to RulePilot. Leaving clears the files, photos, and inputs held on this page, and they cannot be recovered. Other background work is not affected.`,
+  pendingTitle: 'Finishing the rulebook handoff',
+  pendingDescription: 'You cannot leave until photo preparation or server acceptance finishes. If acceptance succeeds and no other draft remains, the page you chose opens automatically; a failure keeps you here to retry.',
+  stay: 'Keep preparing', leave: 'Discard draft and leave', pending: 'Finishing handoff…',
 })
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
@@ -217,6 +257,56 @@ const canImportOfficial = computed(() => Boolean(
   && !officialImportJob.value
   && !preparingVersionId.value,
 ))
+function currentIntakeSnapshot(): RulebookIntakeSnapshot {
+  return {
+    editionId: editionId.value,
+    learningGoal: learningGoal.value,
+    officialImportRightsConfirmed: officialImportRightsConfirmed.value,
+    officialSourceUrl: officialSourceUrl.value,
+    sourceType: sourceType.value,
+    title: title.value,
+  }
+}
+
+function resetIntakeBaseline() {
+  intakeBaseline.value = currentIntakeSnapshot()
+  intakeReady.value = true
+}
+
+const intakeDraftAreas = computed(() => {
+  if (!intakeReady.value) return []
+  const baseline = intakeBaseline.value
+  return [
+    ...(file.value ? [intakeDraftCopy.value.pdf(file.value.name)] : []),
+    ...(photographedPages.value.length ? [intakeDraftCopy.value.photos(photographedPages.value.length)] : []),
+    ...(title.value.trim() !== baseline.title.trim() || sourceType.value !== baseline.sourceType
+      ? [intakeDraftCopy.value.details] : []),
+    ...(officialSourceUrl.value.trim() !== baseline.officialSourceUrl.trim()
+      || officialImportRightsConfirmed.value !== baseline.officialImportRightsConfirmed
+      ? [intakeDraftCopy.value.source] : []),
+    ...(editionId.value !== baseline.editionId ? [intakeDraftCopy.value.game] : []),
+    ...(learningGoal.value.trim() !== baseline.learningGoal.trim() ? [intakeDraftCopy.value.goal] : []),
+  ]
+})
+const hasUnsavedIntake = computed(() => intakeDraftAreas.value.length > 0)
+const intakeMutationPending = computed(() => (
+  preparingPhotos.value || uploading.value || importingOfficial.value || launchingTeaching.value
+))
+const intakeControlsDisabled = computed(() => Boolean(
+  loading.value || intakeMutationPending.value || officialImportJob.value || preparingVersionId.value,
+))
+const protectsIntakeNavigation = computed(() => hasUnsavedIntake.value || intakeMutationPending.value)
+const navigationCopy = computed(() => intakeMutationPending.value ? {
+  title: intakeDraftCopy.value.pendingTitle,
+  description: intakeDraftCopy.value.pendingDescription,
+} : {
+  title: intakeDraftCopy.value.leaveTitle,
+  description: intakeDraftCopy.value.leaveDescription(
+    intakeDraftAreas.value.join(locale.value === 'zh-CN' ? '、' : ', ') || (
+      locale.value === 'zh-CN' ? '这次规则书草稿' : 'This rulebook draft'
+    ),
+  ),
+})
 const visualProvider = computed(() => modelConfiguration.value?.providers.find(
   (provider) => provider.id === modelConfiguration.value?.assignments.visual,
 ))
@@ -372,6 +462,7 @@ async function discoverOfficialRulebooks() {
 }
 
 function chooseRulebookCandidate(candidate: RulebookCandidate) {
+  if (intakeControlsDisabled.value) return
   if (candidate.acquisitionMode === 'SOURCE_PAGE') {
     window.open(candidate.url, '_blank', 'noopener,noreferrer')
     return
@@ -404,9 +495,11 @@ async function load() {
     await loadDocuments()
     await recoverOfficialImportFromRoute()
     if (!officialImportJob.value) await recoverPendingHandoff()
+    resetIntakeBaseline()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
+    if (!intakeReady.value) resetIntakeBaseline()
     loading.value = false
   }
 }
@@ -416,6 +509,11 @@ function selectFile(event: Event) {
   if (file.value) clearPhotographedPages()
   message.value = ''
   errorMessage.value = ''
+}
+
+function clearSelectedFile() {
+  file.value = null
+  if (rulebookFileInput.value) rulebookFileInput.value.value = ''
 }
 
 async function addPhotographedPages(event: Event) {
@@ -436,7 +534,7 @@ async function addPhotographedPages(event: Event) {
     const totalBytes = photographedPages.value.reduce((total, page) => total + page.file.size, 0)
       + prepared.reduce((total, page) => total + page.size, 0)
     if (totalBytes > 48 * 1024 * 1024) throw new Error(t('documents.capture.tooLarge'))
-    file.value = null
+    clearSelectedFile()
     photographedPages.value = [...photographedPages.value, ...prepared.map((photo) => ({
       id: `photo-${Date.now()}-${photographedPageSequence++}`,
       file: photo,
@@ -446,6 +544,7 @@ async function addPhotographedPages(event: Event) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.capture.unsupported')
   } finally {
     preparingPhotos.value = false
+    settlePendingNavigation(false)
   }
 }
 
@@ -489,6 +588,7 @@ async function preparePhotographedPage(photo: File): Promise<File> {
 }
 
 function removePhotographedPage(index: number) {
+  if (intakeControlsDisabled.value) return
   const page = photographedPages.value[index]
   if (!page) return
   URL.revokeObjectURL(page.previewUrl)
@@ -496,6 +596,7 @@ function removePhotographedPage(index: number) {
 }
 
 function movePhotographedPage(index: number, direction: -1 | 1) {
+  if (intakeControlsDisabled.value) return
   const destination = index + direction
   if (destination < 0 || destination >= photographedPages.value.length) return
   const pages = [...photographedPages.value]
@@ -510,6 +611,68 @@ function clearPhotographedPages() {
   photographedPages.value = []
 }
 
+function discardIntakeDraft() {
+  clearSelectedFile()
+  clearPhotographedPages()
+  const baseline = intakeBaseline.value
+  editionId.value = baseline.editionId
+  learningGoal.value = baseline.learningGoal
+  officialImportRightsConfirmed.value = baseline.officialImportRightsConfirmed
+  officialSourceUrl.value = baseline.officialSourceUrl
+  sourceType.value = baseline.sourceType
+  title.value = baseline.title
+  message.value = ''
+  errorMessage.value = ''
+}
+
+function takePendingNavigationResolution() {
+  const resolution = resolvePendingNavigation
+  resolvePendingNavigation = null
+  return resolution
+}
+
+function cancelPendingNavigation() {
+  if (intakeMutationPending.value) return
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(false)
+}
+
+function discardDraftAndLeave() {
+  if (intakeMutationPending.value) return
+  discardIntakeDraft()
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(true)
+}
+
+function settlePendingNavigation(mutationAccepted: boolean) {
+  if (!navigationDialogOpen.value || intakeMutationPending.value) return
+  if (!mutationAccepted) {
+    cancelPendingNavigation()
+    return
+  }
+  if (hasUnsavedIntake.value) {
+    cancelPendingNavigation()
+    return
+  }
+  navigationDialogOpen.value = false
+  takePendingNavigationResolution()?.(true)
+}
+
+function protectBrowserUnload(event: BeforeUnloadEvent) {
+  if (!protectsIntakeNavigation.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+const removeNavigationGuard = router.beforeEach((to, from) => {
+  if (to.path === from.path || !protectsIntakeNavigation.value) return true
+  if (navigationDialogOpen.value) takePendingNavigationResolution()?.(false)
+  navigationDialogOpen.value = true
+  return new Promise<boolean>((resolve) => {
+    resolvePendingNavigation = resolve
+  })
+})
+
 function titleFromFile(selected: File) {
   return selected.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || t('documents.titleFallback')
 }
@@ -523,6 +686,8 @@ function currentPreferences(versionId: string): PendingRulebookLesson {
 }
 
 async function startLesson(versionId: string, preferences = currentPreferences(versionId)) {
+  let accepted = false
+  launchingTeaching.value = true
   beginPreparation(versionId, 'RECEIVED')
   try {
     const csrf = await csrfToken()
@@ -535,9 +700,17 @@ async function startLesson(versionId: string, preferences = currentPreferences(v
     })
     if (!planResponse.ok) throw new Error(t('documents.error'))
     const launch = await planResponse.json() as TeachingPreparationLaunch
+    accepted = true
+    intakeBaseline.value = { ...intakeBaseline.value, learningGoal: learningGoal.value }
+    const leavingAfterAcceptance = navigationDialogOpen.value && !hasUnsavedIntake.value
+    launchingTeaching.value = false
+    settlePendingNavigation(true)
+    if (leavingAfterAcceptance) return
     await waitForTeachingPreparation(launch.assistantRunId, preferences, csrf)
   } finally {
     if (preparingVersionId.value === versionId) endPreparation()
+    launchingTeaching.value = false
+    settlePendingNavigation(accepted)
   }
 }
 
@@ -777,6 +950,7 @@ async function recoverPendingHandoff() {
 
 async function uploadRulebook() {
   if (!file.value && photographedPages.value.length === 0) return
+  let accepted = false
   uploading.value = true
   message.value = t('documents.uploading')
   errorMessage.value = ''
@@ -802,13 +976,23 @@ async function uploadRulebook() {
     })
     if (!response.ok) throw new Error(t('documents.error'))
     const result = await response.json() as { duplicate: boolean; version: { id: string; status: string } }
-    file.value = null
+    clearSelectedFile()
     clearPhotographedPages()
+    title.value = ''
+    officialSourceUrl.value = ''
+    officialImportRightsConfirmed.value = false
+    resetIntakeBaseline()
+    const leavingAfterAcceptance = navigationDialogOpen.value
+    accepted = true
+    uploading.value = false
+    settlePendingNavigation(true)
+    if (leavingAfterAcceptance) return
     await continueUploadedRulebook(result)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     uploading.value = false
+    settlePendingNavigation(accepted)
   }
 }
 
@@ -817,9 +1001,6 @@ async function continueUploadedRulebook(
   serverTeaching = true,
 ) {
   const pending = currentPreferences(result.version.id)
-  title.value = ''
-  officialSourceUrl.value = ''
-  officialImportRightsConfirmed.value = false
   await loadDocuments()
   if (result.version.status === 'READY') {
     if (username.value) forgetPendingRulebookLesson(localStorage, username.value, result.version.id)
@@ -847,6 +1028,7 @@ function titleFromOfficialSource() {
 
 async function importOfficialRulebook() {
   if (!canImportOfficial.value) return
+  let accepted = false
   importingOfficial.value = true
   message.value = t('documents.officialImport.downloading')
   errorMessage.value = ''
@@ -867,12 +1049,24 @@ async function importOfficialRulebook() {
     })
     if (!response.ok) throw new Error(t('documents.officialImport.error'))
     officialImportJob.value = await response.json() as OfficialRulebookImportJob
-    await router.replace({ query: { ...route.query, importJob: officialImportJob.value.id } })
-    void waitForOfficialImport(officialImportJob.value.id)
+    title.value = ''
+    officialSourceUrl.value = ''
+    officialImportRightsConfirmed.value = false
+    resetIntakeBaseline()
+    const navigationWasRequested = navigationDialogOpen.value
+    const leavingAfterAcceptance = navigationWasRequested && !hasUnsavedIntake.value
+    if (!navigationWasRequested) {
+      await router.replace({ query: { ...route.query, importJob: officialImportJob.value.id } })
+    }
+    accepted = true
+    importingOfficial.value = false
+    settlePendingNavigation(true)
+    if (!leavingAfterAcceptance) void waitForOfficialImport(officialImportJob.value.id)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('documents.officialImport.error')
   } finally {
     importingOfficial.value = false
+    settlePendingNavigation(accepted)
   }
 }
 
@@ -1022,10 +1216,14 @@ async function confirmDeleteRulebook() {
 
 onMounted(() => {
   disposed = false
+  window.addEventListener('beforeunload', protectBrowserUnload)
   void load()
 })
 onBeforeUnmount(() => {
   disposed = true
+  window.removeEventListener('beforeunload', protectBrowserUnload)
+  removeNavigationGuard()
+  takePendingNavigationResolution()?.(false)
   if (preparationClock) clearInterval(preparationClock)
   preparationClock = null
   clearPhotographedPages()
@@ -1093,27 +1291,31 @@ onBeforeUnmount(() => {
         </div>
 
         <form class="tabletop-panel player-board mt-8 p-5 text-left sm:p-7" @submit.prevent="uploadRulebook">
+          <div v-if="hasUnsavedIntake" data-testid="rulebook-intake-unsaved" class="mb-5 rounded-lg bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900" role="status">
+            <strong>{{ intakeDraftCopy.status(intakeDraftAreas.join(locale === 'zh-CN' ? '、' : ', ')) }}</strong>
+            <span class="mt-1 block text-xs leading-5">{{ intakeDraftCopy.memoryOnly }}</span>
+          </div>
           <p class="text-sm font-semibold text-ink/65">{{ t('documents.capture.label') }}</p>
           <div class="mt-3 grid gap-3 sm:grid-cols-3">
-            <label for="rulebook-file" class="group flex min-h-32 cursor-pointer flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition hover:border-copper/60 hover:bg-copper/5">
+            <label for="rulebook-file" class="group flex min-h-32 flex-col rounded-xl border border-dashed border-ink/25 bg-canvas p-4 transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/5'">
               <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14.5 2.75H6.75a2 2 0 0 0-2 2v14.5a2 2 0 0 0 2 2h10.5a2 2 0 0 0 2-2V8.75z" /><path d="M14 2.75v6h5.25M8 13h8M8 16.5h6" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.pdf.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ file?.name ?? t('documents.capture.pdf.detail') }}</span>
             </label>
-            <label for="rulebook-camera" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-copper/60 hover:bg-copper/[0.1]">
+            <label for="rulebook-camera" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-copper/60 hover:bg-copper/[0.1]'">
               <svg class="h-6 w-6 text-copper" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4.75 7.75h3l1.25-2h6l1.25 2h3a1.75 1.75 0 0 1 1.75 1.75v8.75A1.75 1.75 0 0 1 19.25 20H4.75A1.75 1.75 0 0 1 3 18.25V9.5a1.75 1.75 0 0 1 1.75-1.75Z" /><circle cx="12" cy="13.5" r="3.25" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.camera.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.camera.detail') }}</span>
             </label>
-            <label for="rulebook-gallery" class="flex min-h-32 cursor-pointer flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition hover:border-indigo/50 hover:bg-indigo/[0.1]">
+            <label for="rulebook-gallery" class="flex min-h-32 flex-col rounded-xl border border-ink/12 bg-paper p-4 text-ink transition" :class="intakeControlsDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:border-indigo/50 hover:bg-indigo/[0.1]'">
               <svg class="h-6 w-6 text-indigo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3.5" y="4" width="17" height="16" rx="2" /><circle cx="8.5" cy="9" r="1.25" /><path d="m5.5 17 4.3-4.3 3.1 3.1 2.1-2.1L18.5 17" /></svg>
               <span class="mt-auto font-display text-lg font-semibold">{{ t('documents.capture.gallery.title') }}</span>
               <span class="mt-1 text-sm leading-5 text-ink/45">{{ t('documents.capture.gallery.detail') }}</span>
             </label>
           </div>
-          <input id="rulebook-file" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
-          <input id="rulebook-camera" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
-          <input id="rulebook-gallery" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
+          <input id="rulebook-file" ref="rulebookFileInput" :disabled="intakeControlsDisabled" accept="application/pdf,.pdf" type="file" class="sr-only" @change="selectFile">
+          <input id="rulebook-camera" :disabled="intakeControlsDisabled" accept="image/*" capture="environment" type="file" class="sr-only" :aria-label="t('documents.capture.cameraAlt')" @change="addPhotographedPages">
+          <input id="rulebook-gallery" :disabled="intakeControlsDisabled" accept="image/*" multiple type="file" class="sr-only" :aria-label="t('documents.capture.galleryAlt')" @change="addPhotographedPages">
 
           <div v-if="photographedPages.length" class="mt-4 rounded-xl border border-ink/10 bg-canvas p-3 sm:p-4">
             <div class="flex flex-wrap items-baseline justify-between gap-2">
@@ -1126,9 +1328,9 @@ onBeforeUnmount(() => {
                 <div class="flex items-center justify-between gap-1 px-2 py-2">
                   <span class="text-xs font-semibold text-ink/60">{{ t('documents.capture.photoPage', { position: index + 1 }) }}</span>
                   <span class="flex gap-1">
-                    <button type="button" :disabled="index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
-                    <button type="button" :disabled="index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
-                    <button type="button" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
+                    <button type="button" :disabled="intakeControlsDisabled || index === 0" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveEarlier', { position: index + 1 })" @click="movePhotographedPage(index, -1)">←</button>
+                    <button type="button" :disabled="intakeControlsDisabled || index === photographedPages.length - 1" class="rounded px-1.5 py-0.5 text-sm text-ink/55 hover:bg-canvas disabled:opacity-25" :aria-label="t('documents.capture.moveLater', { position: index + 1 })" @click="movePhotographedPage(index, 1)">→</button>
+                    <button type="button" :disabled="intakeControlsDisabled" class="rounded px-1.5 py-0.5 text-sm text-red-700 hover:bg-red-50 disabled:opacity-25" :aria-label="t('documents.capture.remove', { position: index + 1 })" @click="removePhotographedPage(index)">×</button>
                   </span>
                 </div>
               </li>
@@ -1138,7 +1340,7 @@ onBeforeUnmount(() => {
           <p v-if="preparingPhotos" class="mt-4 rounded-lg bg-copper/8 px-4 py-3 text-sm text-copper" role="status">{{ t('documents.capture.preparing') }}</p>
 
           <label class="mt-4 block text-sm font-semibold">{{ t('documents.title.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-            <input v-model="title" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+            <input v-model="title" :disabled="intakeControlsDisabled" maxlength="160" :placeholder="t('documents.title.placeholder')" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
             <span v-if="photographedPages.length" class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.title.photoHint') }}</span>
           </label>
 
@@ -1146,21 +1348,21 @@ onBeforeUnmount(() => {
             <summary class="cursor-pointer text-sm font-semibold text-ink/55">{{ t('documents.advanced') }}</summary>
             <div class="mt-4 stack-y-lg">
               <label class="block text-sm font-semibold">{{ t('documents.source.label') }}
-                <input v-model="officialSourceUrl" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper">
+                <input v-model="officialSourceUrl" :disabled="intakeControlsDisabled" type="url" inputmode="url" maxlength="2000" placeholder="https://publisher.example.com/rulebook.pdf" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal outline-none focus:border-copper disabled:opacity-50">
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.source.hint') }}</span>
               </label>
               <div class="rounded-lg border border-indigo/15 bg-indigo/[0.035] p-4">
                 <p class="text-sm font-semibold">{{ t('documents.officialImport.title') }}</p>
                 <p class="mt-1 text-xs leading-5 text-ink/50">{{ t('documents.officialImport.detail') }}</p>
                 <label class="mt-3 flex items-start gap-3 text-sm leading-6 text-ink/65">
-                  <input v-model="officialImportRightsConfirmed" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
+                  <input v-model="officialImportRightsConfirmed" :disabled="intakeControlsDisabled" type="checkbox" class="mt-1 h-5 w-5 shrink-0 accent-indigo">
                   <span>{{ t('documents.officialImport.consent') }}</span>
                 </label>
                 <button type="button" :disabled="!canImportOfficial" class="mt-3 min-h-11 rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40" @click="importOfficialRulebook">{{ importingOfficial ? t('documents.officialImport.importing') : t('documents.officialImport.action') }}</button>
               </div>
 
               <label v-if="editionOptions.length" class="block text-sm font-semibold">{{ t('documents.game.label') }}
-                <select v-model="editionId" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal">
+                <select v-model="editionId" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal disabled:opacity-50">
                   <option value="">{{ t('documents.game.none') }}</option>
                   <option v-for="edition in editionOptions" :key="edition.id" :value="edition.id">{{ edition.label }}</option>
                 </select>
@@ -1173,12 +1375,12 @@ onBeforeUnmount(() => {
               </div>
 
               <label class="block text-sm font-semibold">{{ t('documents.learningGoal.label') }} <span class="font-normal text-ink/40">{{ t('documents.optional') }}</span>
-                <textarea v-model="learningGoal" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper" />
+                <textarea v-model="learningGoal" :disabled="intakeControlsDisabled" maxlength="500" rows="3" :placeholder="t('documents.learningGoal.placeholder')" class="mt-2 w-full resize-y rounded-lg border border-ink/15 bg-canvas px-4 py-3 font-normal leading-6 outline-none focus:border-copper disabled:opacity-50" />
                 <span class="mt-1 block text-xs font-normal leading-5 text-ink/45">{{ t('documents.learningGoal.hint') }}</span>
               </label>
 
               <label class="block text-sm font-semibold">{{ t('documents.sourceType') }}
-                <select v-model="sourceType" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5">
+                <select v-model="sourceType" :disabled="intakeControlsDisabled" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-3 py-2.5 disabled:opacity-50">
                   <option value="BASE_RULEBOOK">{{ t('documents.type.base') }}</option>
                   <option value="EXPANSION_RULEBOOK">{{ t('documents.type.expansion') }}</option>
                   <option value="OFFICIAL_FAQ">{{ t('documents.type.faq') }}</option>
@@ -1315,6 +1517,17 @@ onBeforeUnmount(() => {
         :restore-focus="documentDeleteRestoreTarget"
         @cancel="cancelDeleteRulebook"
         @confirm="confirmDeleteRulebook"
+      />
+      <DestructiveActionDialog
+        :open="navigationDialogOpen"
+        :pending="intakeMutationPending"
+        :title="navigationCopy.title"
+        :description="navigationCopy.description"
+        :cancel-label="intakeDraftCopy.stay"
+        :confirm-label="intakeDraftCopy.leave"
+        :pending-label="intakeDraftCopy.pending"
+        @cancel="cancelPendingNavigation"
+        @confirm="discardDraftAndLeave"
       />
     </div>
   </AppShell>
