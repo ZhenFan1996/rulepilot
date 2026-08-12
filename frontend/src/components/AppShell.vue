@@ -108,6 +108,8 @@ async function logout() {
   roles.value = []
   sessionStorage.removeItem('rulepilot:active-teaching-runs')
   sessionStorage.removeItem('rulepilot:completed-teaching-runs')
+  sessionStorage.removeItem('rulepilot:dismissed-official-imports')
+  sessionStorage.removeItem('rulepilot:dismissed-upload-teaching-handoffs')
   notifySessionCleared()
 }
 

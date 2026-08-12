@@ -149,12 +149,53 @@ function importStage(job: RulebookImportJob) {
   }[job.stage]
 }
 
-function importState(job: RulebookImportJob): WorkState {
-  if (job.stage === 'FAILED' || job.teachingHandoffState === 'FAILED') return 'failed'
+function importState(job: RulebookImportJob, documentFailed: boolean): WorkState {
+  if (job.stage === 'FAILED'
+    || job.teachingHandoffState === 'FAILED'
+    || job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED'
+    || documentFailed) return 'failed'
+  if (job.teachingHandoffState === 'LAUNCHED' && job.teachingPreparationRunId) return 'active'
   if (job.stage !== 'COMPLETED'
     || job.teachingHandoffState === 'WAITING_FOR_DOCUMENT'
     || job.teachingHandoffState === 'LAUNCHING') return 'active'
   return 'complete'
+}
+
+function officialImportFinished(job: RulebookImportJob) {
+  if (job.stage === 'FAILED'
+    || job.teachingHandoffState === 'FAILED'
+    || job.teachingErrorCode === 'DOCUMENT_PROCESSING_FAILED') return true
+  const runState = job.teachingPreparationRunId
+    ? preparationStates.value[job.teachingPreparationRunId]
+    : undefined
+  const document = job.documentVersionId
+    ? documents.value.find(entry => entry.latestVersion.id === job.documentVersionId)
+    : undefined
+  if (document?.latestVersion.status === 'FAILED') return true
+  if (job.teachingPreparationRunId || job.teachingHandoffState === 'LAUNCHED') {
+    return Boolean(runState && terminalTeachingStates.has(runState))
+  }
+  return job.stage === 'COMPLETED'
+    && !['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED')
+}
+
+function uploadedTeachingHandoffFailed(handoff: UploadedTeachingHandoff) {
+  const runState = handoff.preparationRunId
+    ? preparationStates.value[handoff.preparationRunId]
+    : undefined
+  const document = documents.value.find(entry => entry.latestVersion.id === handoff.documentVersionId)
+  return handoff.state === 'FAILED'
+    || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
+    || document?.latestVersion.status === 'FAILED'
+    || Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
+}
+
+function uploadedTeachingHandoffFinished(handoff: UploadedTeachingHandoff) {
+  const runState = handoff.preparationRunId
+    ? preparationStates.value[handoff.preparationRunId]
+    : undefined
+  return uploadedTeachingHandoffFailed(handoff)
+    || Boolean(runState && terminalTeachingStates.has(runState))
 }
 
 function preparationStage(state: string) {
@@ -215,7 +256,7 @@ const workItems = computed<WorkItem[]>(() => {
       return {
         id: `import:${job.id}`, kind: 'download', title: job.title,
         stage: documentFailed ? copy.value.rulebookFailed : importStage(job), detail,
-        state: documentFailed ? 'failed' : importState(job),
+        state: importState(job, documentFailed),
         progress, target: { name: 'teach', query: { importJob: job.id } }, updatedAt: job.updatedAt,
       }
     })
@@ -252,6 +293,7 @@ const workItems = computed<WorkItem[]>(() => {
     const runId = job.teachingPreparationRunId
     const runState = runId ? preparationStates.value[runId] : undefined
     if (!runId || !runState || runState === 'COMPLETED') return []
+    if (dismissedImportIds.value.has(job.id) && terminalTeachingStates.has(runState)) return []
     return [{
       id: `teaching-preparation:${runId}`,
       kind: 'lesson',
@@ -276,9 +318,7 @@ const workItems = computed<WorkItem[]>(() => {
       const documentStatus = document?.latestVersion.status ?? 'UPLOADED'
       const documentSnapshot = documentProgress.value[handoff.documentVersionId]
       const documentFailed = documentStatus === 'FAILED'
-      const failed = handoff.state === 'FAILED'
-        || documentFailed
-        || Boolean(runState && terminalTeachingStates.has(runState) && runState !== 'COMPLETED')
+      const failed = uploadedTeachingHandoffFailed(handoff)
       const stage = documentFailed || handoff.errorCode === 'DOCUMENT_PROCESSING_FAILED'
         ? copy.value.rulebookFailed
         : failed
@@ -382,15 +422,17 @@ async function refreshDocuments() {
   ]
     .filter((runId): runId is string => Boolean(runId)))
   const preparationSnapshots = await Promise.all([...recentPreparationRunIds].flatMap(runId => {
+    if (!runId || terminalTeachingStates.has(preparationStates.value[runId] ?? '')) return []
     return [responseJson<TeachingRunDetails>(`/api/v1/assistant-runs/${encodeURIComponent(runId)}`)
       .then(details => [runId, details.run.state] as const)
       .catch(() => preparationStates.value[runId]
         ? [runId, preparationStates.value[runId]] as const
         : null)]
   }))
-  preparationStates.value = Object.fromEntries(preparationSnapshots.filter(
-    (entry): entry is readonly [string, string] => entry !== null,
-  ))
+  preparationStates.value = Object.fromEntries([
+    ...Object.entries(preparationStates.value).filter(([runId]) => recentPreparationRunIds.has(runId)),
+    ...preparationSnapshots.filter((entry): entry is readonly [string, string] => entry !== null),
+  ])
   const active = documentList.filter(entry => !['READY', 'FAILED'].includes(entry.latestVersion.status))
   const snapshots = await Promise.all(active.map(async (entry) => {
     try {
@@ -421,17 +463,12 @@ function dismissFinished() {
   completedTeaching.value = []
   sessionStorage.removeItem(COMPLETED_TEACHING_KEY)
   const finishedImports = imports.value
-    .filter(job => job.stage === 'FAILED'
-      || job.teachingHandoffState === 'FAILED'
-      || job.stage === 'COMPLETED'
-        && !['WAITING_FOR_DOCUMENT', 'LAUNCHING'].includes(job.teachingHandoffState ?? 'NOT_REQUESTED'))
+    .filter(officialImportFinished)
     .map(job => job.id)
   dismissedImportIds.value = new Set([...dismissedImportIds.value, ...finishedImports])
   sessionStorage.setItem(DISMISSED_IMPORTS_KEY, JSON.stringify([...dismissedImportIds.value]))
   const finishedUploadHandoffs = uploadedTeachingHandoffs.value
-    .filter(handoff => handoff.state === 'FAILED'
-      || handoff.preparationRunId != null
-        && terminalTeachingStates.has(preparationStates.value[handoff.preparationRunId] ?? ''))
+    .filter(uploadedTeachingHandoffFinished)
     .map(handoff => handoff.id)
   dismissedUploadedHandoffIds.value = new Set([
     ...dismissedUploadedHandoffIds.value,
