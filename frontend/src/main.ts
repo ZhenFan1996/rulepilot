@@ -6,7 +6,8 @@ import { normalizeLocale, setLocale } from './lib/locale'
 import router from './router'
 import './styles/index.css'
 
-router.afterEach((to) => {
+router.afterEach((to, _from, failure) => {
+  if (failure) return
   if (typeof to.query.lang === 'string') setLocale(normalizeLocale(to.query.lang))
 })
 

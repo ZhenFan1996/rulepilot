@@ -72,4 +72,40 @@ describe('App session boundary', () => {
     await vi.waitFor(() => expect(document.title).toBe('My guides · RulePilot'))
     wrapper.unmount()
   })
+
+  it('does not steal focus when a guarded navigation is cancelled', async () => {
+    let allowNavigation = false
+    const HomeRoute = {
+      template: '<main id="main-content" tabindex="-1"><a id="catalog-link" href="/catalog">Catalog</a></main>',
+    }
+    const CatalogRoute = {
+      template: '<main id="main-content" tabindex="-1"><h1>Catalog</h1></main>',
+    }
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: HomeRoute },
+        { path: '/catalog', component: CatalogRoute },
+      ],
+    })
+    router.beforeEach(to => to.path === '/catalog' && !allowNavigation ? false : true)
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+    const opener = wrapper.get('#catalog-link').element as HTMLElement
+    opener.focus()
+
+    await router.push('/catalog')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/')
+    expect(document.activeElement).toBe(opener)
+
+    allowNavigation = true
+    await router.push('/catalog')
+    await flushPromises()
+    expect(document.activeElement?.id).toBe('main-content')
+    wrapper.unmount()
+  })
 })

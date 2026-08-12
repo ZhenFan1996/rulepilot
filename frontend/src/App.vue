@@ -20,7 +20,8 @@ function clearVisibleSessionState() {
 onMounted(async () => {
   window.addEventListener(SESSION_CLEARED_EVENT, clearVisibleSessionState)
   await router.isReady()
-  removeRouteFocusHook = router.afterEach(async (to, from) => {
+  removeRouteFocusHook = router.afterEach(async (to, from, failure) => {
+    if (failure) return
     if (!routeNeedsContentFocus(to, from)) return
     await nextTick()
     focusMainContent()
