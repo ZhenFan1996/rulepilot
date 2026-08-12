@@ -2,14 +2,30 @@ package com.rulepilot.teaching.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
+import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.catalog.CatalogEditionLookup;
+import com.rulepilot.document.DocumentPageImages;
+import com.rulepilot.document.DocumentProcessing;
 import com.rulepilot.document.DocumentProcessing.PageView;
+import com.rulepilot.document.DocumentVersionScopeLookup;
 import com.rulepilot.document.DocumentVersionScopeLookup.VersionScope;
 import com.rulepilot.teaching.TeachingOutlineModel.OutlineDraft;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.TopicDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
+import com.rulepilot.teaching.domain.TeachingPlan;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,6 +37,114 @@ import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 
 class TeachingPlanServiceTest {
+
+    @Test
+    void publishesACompleteProgressiveVisualPlanWithoutWaitingForTheLegacyOutlineModel() {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID editionId = UUID.randomUUID();
+        List<PageView> visualPages = IntStream.rangeClosed(1, 4)
+                .mapToObj(page -> new PageView(page, "", 0))
+                .toList();
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        AuditedAgentInvocations invocations = mock(AuditedAgentInvocations.class);
+        TeachingPlanRepository repository = mock(TeachingPlanRepository.class);
+        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, editionId, "READY", "alice", "example_rules_en.pdf")));
+        when(catalog.findEdition(editionId)).thenReturn(Optional.of(new CatalogEditionLookup.EditionReference(
+                editionId, UUID.randomUUID(), "Example Game", "First edition", "en", Set.of())));
+        when(documents.pages(documentVersionId)).thenReturn(visualPages);
+        when(visualCataloger.progressiveTeachingStart(
+                        documentVersionId, visualPages, "example_rules_en.pdf", "alice", null))
+                .thenReturn(Optional.of(progressiveStart()));
+        when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                pageImages,
+                scopes,
+                catalog,
+                visualCataloger,
+                outlines,
+                invocations,
+                new TeachingPlanFactory(),
+                repository,
+                publication);
+
+        TeachingPlan plan = service.create(documentVersionId, null, "alice", null);
+
+        assertThat(plan.gameTitle()).isEqualTo("Example Game");
+        assertThat(plan.sections()).extracting(section -> section.sourcePageNumbers().getFirst())
+                .containsExactly(3, 2, 4);
+        assertThat(plan.sections()).allMatch(section ->
+                section.topicKey().startsWith("progressive-visual-page-"));
+        verify(publication).publish(any(TeachingPlan.class), eq("Example Game"));
+        verifyNoInteractions(outlines, pageImages);
+    }
+
+    @Test
+    void keepsACustomLearningGoalOnTheLegacySemanticOutlinePath() {
+        UUID documentVersionId = UUID.randomUUID();
+        List<PageView> visualPages = List.of(new PageView(1, "", 0));
+        DocumentProcessing documents = mock(DocumentProcessing.class);
+        DocumentPageImages pageImages = mock(DocumentPageImages.class);
+        DocumentVersionScopeLookup scopes = mock(DocumentVersionScopeLookup.class);
+        CatalogEditionLookup catalog = mock(CatalogEditionLookup.class);
+        VisualRulebookCataloger visualCataloger = mock(VisualRulebookCataloger.class);
+        com.rulepilot.teaching.TeachingOutlineModel outlines =
+                mock(com.rulepilot.teaching.TeachingOutlineModel.class);
+        AuditedAgentInvocations invocations = mock(AuditedAgentInvocations.class);
+        TeachingPlanRepository repository = mock(TeachingPlanRepository.class);
+        TeachingPlanPublication publication = mock(TeachingPlanPublication.class);
+        String learningGoal = "先讲清楚容易混淆的行动。";
+        when(scopes.findVersion(documentVersionId)).thenReturn(Optional.of(new VersionScope(
+                documentVersionId, null, "READY", "alice", "Example Game")));
+        when(documents.pages(documentVersionId)).thenReturn(visualPages);
+        when(visualCataloger.catalogVisualPages(
+                        documentVersionId, visualPages, "Example Game", "alice", null))
+                .thenReturn(List.of(visualPage(
+                        1,
+                        "VISIBLE TERM",
+                        "A complete page-scoped factual observation supports the requested lesson.")));
+        when(pageImages.read(documentVersionId, Set.of(1))).thenReturn(List.of());
+        when(outlines.organize(any())).thenReturn(new OutlineDraft(
+                "Example Game",
+                "Follow the player's requested teaching emphasis.",
+                List.of(new TopicDraft(
+                        "custom-flow",
+                        "行动辨析",
+                        "按照用户目标解释本页可验证的行动。",
+                        true,
+                        true,
+                        List.of("VISIBLE TERM"),
+                        List.of("setup", "core_loop", "end", "scoring", "source_coverage"),
+                        List.of(1)))));
+        when(publication.publish(any(TeachingPlan.class), eq("Example Game")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        TeachingPlanService service = new TeachingPlanService(
+                documents,
+                pageImages,
+                scopes,
+                catalog,
+                visualCataloger,
+                outlines,
+                invocations,
+                new TeachingPlanFactory(),
+                repository,
+                publication);
+
+        TeachingPlan plan = service.create(documentVersionId, learningGoal, "alice", null);
+
+        assertThat(plan.learningGoal()).isEqualTo(learningGoal);
+        verify(visualCataloger, never()).progressiveTeachingStart(any(), any(), any(), any(), any());
+        verify(outlines).organize(any());
+    }
 
     @Test
     void planIdentityUsesTheBoundCatalogGameRatherThanThePdfFilename() {
@@ -223,6 +347,28 @@ class TeachingPlanServiceTest {
 
     private OutlineDraft outline(List<TopicDraft> topics) {
         return new OutlineDraft("Game", "Premise", topics);
+    }
+
+    private ProgressiveTeachingStartDraft progressiveStart() {
+        return new ProgressiveTeachingStartDraft(
+                List.of(
+                        new TeachingPageSketch(
+                                1, TeachingPageRole.NON_GAMEPLAY, "Example Game", List.of(), List.of()),
+                        new TeachingPageSketch(
+                                2, TeachingPageRole.GAMEPLAY_RULES, "Setup", List.of("market"), List.of("setup")),
+                        new TeachingPageSketch(
+                                3, TeachingPageRole.GAMEPLAY_RULES, "Turn", List.of("take cards"), List.of("core_loop")),
+                        new TeachingPageSketch(
+                                4,
+                                TeachingPageRole.GAMEPLAY_RULES,
+                                "Game end and scoring",
+                                List.of("game end", "score"),
+                                List.of("end", "scoring"))),
+                new PageSummary(
+                        3,
+                        "TAKE CARDS",
+                        "当前玩家从市场拿取可见卡牌，然后按照页面所示顺序结束本回合。",
+                        List.of("TAKE CARDS", "market")));
     }
 
     private TopicDraft topic(String key, List<String> tags, List<Integer> pages) {

@@ -176,6 +176,9 @@ rulepilot:
     # Full-page icon inventories are deliberately richer than crop localization responses and large VL models can
     # need more than 45 seconds on dense reference sheets. This deadline applies per immediately-started request.
     catalog-timeout: ${VISUAL_CATALOG_TIMEOUT:PT120S}
+    # The first cited-page selector is on the player-visible critical path. It falls back to the complete preparation
+    # contract at this shorter deadline; post-readable icon/spatial auditing keeps the longer catalog timeout above.
+    progressive-start-timeout: ${VISUAL_PROGRESSIVE_START_TIMEOUT:PT35S}
   game-session:
     context-retention: ${GAME_SESSION_CONTEXT_RETENTION:PT12H}
   answer:

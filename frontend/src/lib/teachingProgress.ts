@@ -69,6 +69,10 @@ export function teachingActivityText(
   const chapter = chapterForActivity(plan, activities, activity)
   const target = chapter ? `“${chapter.title}”` : locale === 'en' ? 'this part of the guide' : '当前内容'
   if (locale === 'en') {
+    if (activity.operation.startsWith('readRuleEvidencePages')) return `Opening the exact cited page for ${target}`
+    if (activity.operation.startsWith('readProgressiveVisualPages')) return `Starter guide ready; opening the remaining cited pages from the PDF`
+    if (activity.operation.startsWith('prefetchProgressiveVisualPages')) return `Starter guide ready; reading the remaining page facts in one background pass`
+    if (activity.operation.startsWith('inspectRequiredVisualPage')) return `Reading the exact cited page needed for ${target}`
     if (activity.operation.startsWith('searchRuleEvidence')) return `Finding rulebook support for ${target}`
     if (activity.operation.startsWith('composeTeachingSection')) return `Writing ${target} from the rulebook`
     if (activity.operation.startsWith('correctTeachingSection')) return `Correcting ${target} from the review notes`
@@ -86,6 +90,10 @@ export function teachingActivityText(
     }
     return 'Organising and reviewing the guide'
   }
+  if (activity.operation.startsWith('readRuleEvidencePages')) return `正在打开${target}绑定的规则书原页`
+  if (activity.operation.startsWith('readProgressiveVisualPages')) return '基础讲解已可读，正在打开 PDF 中其余引用页'
+  if (activity.operation.startsWith('prefetchProgressiveVisualPages')) return '基础讲解已可读，正在一次性读取后续页面要点'
+  if (activity.operation.startsWith('inspectRequiredVisualPage')) return `正在读取${target}所需的引用原页`
   if (activity.operation.startsWith('searchRuleEvidence')) return `正在为${target}查找规则依据`
   if (activity.operation.startsWith('composeTeachingSection')) {
     return `正在依据规则书编写${target}`

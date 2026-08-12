@@ -250,6 +250,27 @@ describe('DocumentsView recoverable lesson handoff', () => {
     await vi.runOnlyPendingTimersAsync()
   })
 
+  it('names the fast cited-page selection instead of implying that the whole PDF is being summarized', async () => {
+    vi.useFakeTimers()
+    rememberPendingRulebookLesson(localStorage, 'player', {
+      versionId: 'version-1',
+    })
+    const fetchMock = mockApplicationFetch(() => 'READY', 'LESSON_PLANNING', [{
+      sequence: 1, operation: 'selectProgressiveTeachingStart', outcome: 'RUNNING',
+    }])
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const { wrapper } = await mountDocuments()
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('正在从规则书中确认第一段可讲、可引用的玩法')
+    expect(wrapper.text()).not.toContain('页面要点已经读完')
+    wrapper.unmount()
+    await vi.runOnlyPendingTimersAsync()
+  })
+
   it('offers a PDF alongside camera and photo-library rulebook intake', async () => {
     const fetchMock = mockApplicationFetch(() => 'READY')
     vi.stubGlobal('fetch', fetchMock)

@@ -11,6 +11,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let planStarted = false
   let deleted = false
   let includeBlockingVisualCatalog = false
+  let progressiveVisualPreparation = false
   let slowFirstLessonSection = false
   let regressLessonStatus = false
   let insufficientLesson = false
@@ -78,7 +79,15 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
         },
         steps: [{ sequence: 1, fromState: 'RECEIVED', toState: 'LESSON_PLANNING', occurredAt: '2026-08-02T00:00:01Z' }],
         activities: [
-          {
+          ...(progressiveVisualPreparation ? [{
+            sequence: 1, type: 'MODEL', operation: 'selectProgressiveTeachingStart', outcome: 'SUCCEEDED',
+            latencyMs: 9000, estimatedInputTokens: 4800, estimatedOutputTokens: 500,
+            occurredAt: '2026-08-02T00:00:10Z',
+          }, {
+            sequence: 2, type: 'VALIDATION', operation: 'publishProgressiveVisualTeachingPlan', outcome: 'SUCCEEDED',
+            latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
+            occurredAt: '2026-08-02T00:00:11Z',
+          }] : [{
             sequence: 1, type: 'MODEL', operation: 'organizeTeachingOutline', outcome: 'SUCCEEDED',
             latencyMs: 11_000, estimatedInputTokens: 1200, estimatedOutputTokens: 300,
             occurredAt: '2026-08-02T00:00:11Z',
@@ -87,7 +96,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
             sequence: 2, type: 'VALIDATION', operation: 'deferSelectedVisualPageCatalog', outcome: 'SUCCEEDED',
             latencyMs: 0, estimatedInputTokens: 0, estimatedOutputTokens: 0,
             occurredAt: '2026-08-02T00:00:12Z',
-          },
+          }]),
           ...(includeBlockingVisualCatalog ? [{
             sequence: 3, type: 'MODEL', operation: 'inspectTeachingVisualBatch|1', outcome: 'SUCCEEDED',
             latencyMs: 19_000, estimatedInputTokens: 800, estimatedOutputTokens: 250,
@@ -291,6 +300,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
+    assert.match(result.stderr, /SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=20 backgroundPrefetchCalls=0 backgroundPrefetchLatencyMs=0/)
 
     answerHasCitations = false
     deleted = false
@@ -346,6 +356,8 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     deleted = false
     planStarted = false
     expectedQuestion = 'What may a player take on a turn?'
+    includeBlockingVisualCatalog = false
+    progressiveVisualPreparation = true
     const customVisualCatalog = await spawnResult(
       'bash',
       [resolve('scripts/smoke-production-ordinary-user.sh'),
@@ -357,10 +369,11 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
     assert.equal(customVisualCatalog.code, 0, customVisualCatalog.stderr)
+    progressiveVisualPreparation = false
     expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
     assert.doesNotMatch(customVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
-    assert.doesNotMatch(customVisualCatalog.stderr, /Visual-only rulebook preparation did not report lightweight teaching-page facts/)
-    assert.match(customVisualCatalog.stderr, /SMOKE_PERFORMANCE phase=preparation visualStartupCalls=1 visualStartupLatencyMs=19000 visualStartupMaxLatencyMs=19000/)
+    assert.doesNotMatch(customVisualCatalog.stderr, /Visual-only rulebook preparation did not report progressive cited-page selection/)
+    assert.match(customVisualCatalog.stderr, /SMOKE_PERFORMANCE phase=preparation progressiveStartCalls=1 progressiveStartLatencyMs=9000 legacyFullFactCalls=0/)
     assert.equal(deleted, true)
 
     visualRunEnabled = true
@@ -503,6 +516,7 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.match(productionCompose, /VISUAL_ENRICHMENT_BACKGROUND_CORE_POOL_SIZE: "1"/)
   assert.match(productionCompose, /VISUAL_ENRICHMENT_BACKGROUND_MAX_POOL_SIZE: "1"/)
   assert.match(productionCompose, /VISUAL_ENRICHMENT_BACKGROUND_QUEUE_CAPACITY: "3"/)
+  assert.match(productionCompose, /VISUAL_PROGRESSIVE_START_TIMEOUT: PT35S/)
   assert.doesNotMatch(candidates, /inputs\.ref/)
   assert.match(candidates, /ref: main/)
   assert.match(candidates, /Production is not running the checked-out main commit/)
