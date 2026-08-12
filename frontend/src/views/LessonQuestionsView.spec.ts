@@ -135,6 +135,11 @@ describe('LessonQuestionsView', () => {
       learningIntent: null,
       language: 'zh-CN',
     })
+
+    await wrapper.get('#lesson-question').setValue('这句尚未发送')
+    setLocale('en')
+    await flushPromises()
+    expect((wrapper.get('#lesson-question').element as HTMLTextAreaElement).value).toBe('这句尚未发送')
     wrapper.unmount()
   })
 
@@ -231,6 +236,14 @@ describe('LessonQuestionsView', () => {
     expect(wrapper.text()).not.toContain('Bob 的私有问题')
 
     await wrapper.findAll('button').find(button => button.text() === '清空本次答疑')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('刚才什么时候结算？')
+    expect(document.body.textContent).toContain('当前浏览器会话中的 1 条问答会被移除')
+    await Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === '清空答疑')!
+      .click()
+    await flushPromises()
 
     expect(wrapper.text()).not.toContain('刚才什么时候结算？')
     expect(sessionStorage.length).toBe(1)
@@ -254,6 +267,7 @@ async function mountQuestions(path: string) {
   await router.push(path)
   await router.isReady()
   const wrapper = mount(LessonQuestionsView, {
+    attachTo: document.body,
     global: {
       plugins: [router],
       stubs: {

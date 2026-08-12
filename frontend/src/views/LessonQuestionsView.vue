@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } fr
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
@@ -52,6 +53,9 @@ const online = ref(navigator.onLine)
 const cardOcrOpen = ref(false)
 const offlineKnowledge = ref<OfflineKnowledgeEntry[]>([])
 const answerThreadUsername = ref('')
+const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
+const resetDialogOpen = ref(false)
+const restoreAfterReset = ref(false)
 let latestWorkspaceLoad = 0
 let disposed = false
 
@@ -128,16 +132,36 @@ function rememberCurrentAnswerThread() {
   if (scope) rememberLessonAnswerThread(sessionStorage, scope, answerTurns.value)
 }
 
-function restoreCurrentAnswerThread() {
+function restoreCurrentAnswerThread(clearQuestion = true) {
   const scope = currentAnswerThreadScope()
-  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [])
+  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [], clearQuestion)
 }
 
-function clearCurrentAnswerThread() {
+function requestClearCurrentAnswerThread() {
+  if (answerLoading.value || rulingSaving.value || editingRuling.value) return
+  resetDialogOpen.value = true
+  restoreAfterReset.value = false
+}
+
+function cancelClearCurrentAnswerThread() {
+  resetDialogOpen.value = false
+  restoreAfterReset.value = false
+}
+
+function resetRestoreTarget() {
+  if (!restoreAfterReset.value) return null
+  restoreAfterReset.value = false
+  answerPanel.value?.focusQuestion?.()
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null
+}
+
+function confirmClearCurrentAnswerThread() {
   const scope = currentAnswerThreadScope()
   if (scope) forgetLessonAnswerThread(sessionStorage, scope)
-  resetConversation(true)
+  resetConversation(false)
   resetRuling()
+  restoreAfterReset.value = true
+  resetDialogOpen.value = false
 }
 
 function learningAnchorQuestion() {
@@ -279,7 +303,7 @@ onMounted(() => {
 
 watch(planId, () => { void loadWorkspace() })
 watch(locale, () => {
-  restoreCurrentAnswerThread()
+  restoreCurrentAnswerThread(false)
   resetRuling()
 })
 
@@ -343,6 +367,7 @@ onUnmounted(() => {
           </LessonGuideHero>
 
           <LessonAnswerPanel
+            ref="answerPanel"
             :question="question"
             :answer="answer"
             :answered-question="answeredQuestion"
@@ -355,6 +380,7 @@ onUnmounted(() => {
             :online="online"
             :ruling="ruling"
             :ruling-saving="rulingSaving"
+            :clear-thread-disabled="rulingSaving || editingRuling"
             :ruling-error="rulingError"
             :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling"
@@ -370,7 +396,7 @@ onUnmounted(() => {
             @request-help="requestLearningHelp"
             @open-card-ocr="cardOcrOpen = true"
             @voice-transcript="useVoiceTranscript"
-            @clear-thread="clearCurrentAnswerThread"
+            @clear-thread="requestClearCurrentAnswerThread"
             @confirm-ruling="confirmAnswer"
             @reload-ruling="reloadRuling"
             @save-ruling-revision="saveRulingRevision"
@@ -379,6 +405,14 @@ onUnmounted(() => {
       </div>
 
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
+      <ConversationResetDialog
+        kind="private-browser"
+        :open="resetDialogOpen"
+        :turn-count="answerTurns.length"
+        :restore-focus="resetRestoreTarget"
+        @cancel="cancelClearCurrentAnswerThread"
+        @confirm="confirmClearCurrentAnswerThread"
+      />
     </div>
   </AppShell>
 </template>

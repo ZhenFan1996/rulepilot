@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
@@ -38,6 +39,9 @@ const username = ref('')
 const online = ref(navigator.onLine)
 const answersOpen = ref(false)
 const cardOcrOpen = ref(false)
+const answerPanel = ref<{ focusQuestion?: () => void } | null>(null)
+const resetDialogOpen = ref(false)
+const restoreAfterReset = ref(false)
 const readerTop = ref<HTMLElement | null>(null)
 const answersDialog = ref<HTMLElement | null>(null)
 let loadSequence = 0
@@ -135,11 +139,31 @@ const {
   },
 })
 
-function clearThread() {
+function requestClearThread() {
+  if (answerLoading.value || rulingSaving.value || editingRuling.value) return
+  resetDialogOpen.value = true
+  restoreAfterReset.value = false
+}
+
+function cancelClearThread() {
+  resetDialogOpen.value = false
+  restoreAfterReset.value = false
+}
+
+function resetRestoreTarget() {
+  if (!restoreAfterReset.value) return null
+  restoreAfterReset.value = false
+  answerPanel.value?.focusQuestion?.()
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null
+}
+
+function confirmClearThread() {
   const scope = answerThreadScope()
   if (scope) forgetLessonAnswerThread(sessionStorage, scope)
-  resetConversation(true)
+  resetConversation(false)
   resetRuling()
+  restoreAfterReset.value = true
+  resetDialogOpen.value = false
 }
 
 async function loadRulebook() {
@@ -201,7 +225,7 @@ onMounted(() => {
 watch(versionId, () => { void loadRulebook() })
 watch(locale, () => {
   const scope = answerThreadScope()
-  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [])
+  restoreConversation(scope ? readLessonAnswerThread(sessionStorage, scope) : [], false)
   resetRuling()
 })
 onUnmounted(() => {
@@ -265,20 +289,29 @@ onUnmounted(() => {
             <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
           </div>
           <LessonAnswerPanel
+            ref="answerPanel"
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
             :active-learning-intent="activeLearningIntent" :answer-loading="answerLoading" :answer-error="answerError"
             :agent-trace="agentTrace" :answer-run-id="answerRunId" :online="online" :ruling="ruling"
-            :ruling-saving="rulingSaving" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
+            :ruling-saving="rulingSaving" :clear-thread-disabled="rulingSaving || editingRuling" :ruling-error="rulingError" :ruling-conflict="rulingConflict"
             :editing-ruling="editingRuling" :edited-verdict="editedVerdict" :edited-explanation="editedExplanation"
             @update:question="question = $event" @update:editing-ruling="editingRuling = $event"
             @update:edited-verdict="editedVerdict = $event" @update:edited-explanation="editedExplanation = $event"
             @ask="askQuestion" @cancel-answer="cancelAnswer" @request-help="requestLearningHelp"
-            @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="clearThread"
+            @open-card-ocr="cardOcrOpen = true" @voice-transcript="useVoiceTranscript" @clear-thread="requestClearThread"
             @confirm-ruling="confirmAnswer" @reload-ruling="reloadRuling" @save-ruling-revision="saveRulingRevision"
           />
         </aside>
       </div>
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
+      <ConversationResetDialog
+        kind="private-browser"
+        :open="resetDialogOpen"
+        :turn-count="answerTurns.length"
+        :restore-focus="resetRestoreTarget"
+        @cancel="cancelClearThread"
+        @confirm="confirmClearThread"
+      />
     </div>
   </AppShell>
 </template>

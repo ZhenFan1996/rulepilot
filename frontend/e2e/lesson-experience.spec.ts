@@ -132,3 +132,57 @@ test('keeps the tabletop guide and agent workspace usable on mobile', async ({ p
   )
   expect(hasHorizontalOverflow).toBe(false)
 })
+
+test('confirms browser-only Q&A reset and preserves the unsent question with stable focus', async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('rulepilot:public-answer-thread:account:player:plan-1:zh-CN', JSON.stringify([{
+      question: '上一轮什么时候结束？',
+      answer: {
+        answer: {
+          status: 'ANSWERED', shortVerdict: '完成当前行动后结束。', explanation: null,
+          citations: [], exceptions: [], confidence: 'HIGH', clarification: null, warnings: [],
+        },
+        visualAids: [], examples: [],
+      },
+    }]))
+  })
+  await mockSharedApis(page)
+  await page.route('**/api/public/lessons/plan-1?language=*', route => route.fulfill({
+    json: {
+      teachingPlanId: 'plan-1', documentVersionId: 'version-1', rulebookTitle: 'Lantern Relay Rules',
+      officialSourceUrl: null, gameCover: null,
+      lesson: { id: 'lesson-1', status: 'COMPLETE', sections },
+    },
+  }))
+  await page.route('**/api/public/lessons/plan-1/cover', route => route.fulfill({ status: 404 }))
+
+  await page.goto('/read/plan-1/questions')
+  await expect(page.getByText('上一轮什么时候结束？')).toBeVisible()
+  const question = page.locator('#public-question')
+  await question.fill('这句尚未发送')
+
+  const reset = page.getByRole('button', { name: '清空本次答疑' })
+  await reset.focus()
+  await reset.click()
+  const dialog = page.getByRole('alertdialog', { name: '清空这次公开答疑？' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '保留答疑' })).toBeFocused()
+  await expect(page.getByText('上一轮什么时候结束？')).toBeVisible()
+  await expect(dialog).toContainText('服务器没有可供恢复的副本')
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(reset).toBeFocused()
+  await expect(page.getByText('上一轮什么时候结束？')).toBeVisible()
+
+  await reset.click()
+  await page.getByRole('alertdialog', { name: '清空这次公开答疑？' })
+    .getByRole('button', { name: '清空答疑' })
+    .click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByText('上一轮什么时候结束？')).toHaveCount(0)
+  await expect(question).toHaveValue('这句尚未发送')
+  await expect(question).toBeFocused()
+  expect(await page.evaluate(() => sessionStorage.getItem('rulepilot:public-answer-thread:account:player:plan-1:zh-CN')))
+    .toBeNull()
+})

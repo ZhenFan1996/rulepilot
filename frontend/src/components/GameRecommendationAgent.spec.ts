@@ -4,6 +4,7 @@ import { defineComponent, type Component } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setLocale } from '@/lib/locale'
 import GameRecommendationAgent from './GameRecommendationAgent.vue'
 
 const baseProfile = { players: null, maxMinutes: null, maxWeight: null, type: 'all', interaction: 'any' }
@@ -20,6 +21,7 @@ describe('GameRecommendationAgent', () => {
 
   beforeEach(() => {
     localStorage.setItem('rulepilot:locale', 'zh-CN')
+    setLocale('zh-CN')
     sessionStorage.clear()
   })
   afterEach(() => {
@@ -27,6 +29,7 @@ describe('GameRecommendationAgent', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    setLocale('zh-CN')
   })
 
   async function mountAgent(stubs: Record<string, boolean | Component> = {}) {
@@ -291,6 +294,46 @@ describe('GameRecommendationAgent', () => {
 
     expect(wrapper.text()).toContain('你写下的条件还在')
     expect(wrapper.get('[role="alert"] button').text()).toBe('重试')
+  })
+
+  it('confirms reset, preserves unsent text, and does not silently clear on locale changes', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      return Response.json({
+        outcome: 'recommendations', mode: 'model_assisted', assistantMessage: '这款可以作为候选。',
+        profile: { ...baseProfile, players: 4 }, clarification: null, sourceCount: 179737,
+        candidatesEvaluated: 1, games: [{ game, matches: [], tradeoffs: [] }],
+      })
+    }))
+    const wrapper = await mountAgent()
+    await wrapper.get('textarea').setValue('想找自然主题的桌游')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('textarea').setValue('这句还没有发送')
+
+    setLocale('en')
+    await flushPromises()
+    expect(wrapper.text()).toContain('这款可以作为候选。')
+    expect(wrapper.text()).toContain('Wingspan')
+    expect(wrapper.get('textarea').element).toHaveProperty('value', '这句还没有发送')
+
+    const resetButton = wrapper.findAll('button').find(button => button.text() === 'Clear this conversation')!
+    await resetButton.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('server-side Q&A history')
+    expect(document.body.textContent).toContain('rulebook or guide work already running in the background will remain')
+    expect(wrapper.text()).toContain('这款可以作为候选。')
+
+    Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === 'Start over')!
+      .click()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('这款可以作为候选。')
+    expect(wrapper.text()).not.toContain('Wingspan')
+    expect(wrapper.get('textarea').element).toHaveProperty('value', '这句还没有发送')
+    expect(document.activeElement).toBe(wrapper.get('textarea').element)
+    expect(wrapper.findAll('button').some(button => button.text() === 'Clear this conversation')).toBe(false)
   })
 
   it('opens the rulebook handoff directly from a recommendation card', async () => {

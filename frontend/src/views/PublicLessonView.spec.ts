@@ -368,25 +368,35 @@ describe('PublicLessonView', () => {
     await router.push('/read/plan-1/questions')
     await router.isReady()
 
-    const alice = mount(PublicLessonView, { global: { plugins: [router] } })
+    const alice = mount(PublicLessonView, { attachTo: document.body, global: { plugins: [router] } })
     await flushPromises()
 
     expect(alice.text()).toContain('Alice 的问题')
     expect(alice.text()).not.toContain('Bob 的问题')
+    await alice.get('#public-question').setValue('尚未发送的问题')
     await alice.get('button[aria-label="清空本次答疑"]').trigger('click')
     await flushPromises()
+    expect(alice.text()).toContain('Alice 的问题')
+    expect(document.body.textContent).toContain('服务器没有可供恢复的副本')
+    await Array.from(document.body.querySelectorAll('button'))
+      .find(button => button.textContent === '清空答疑')!
+      .click()
+    await flushPromises()
     expect(alice.text()).not.toContain('Alice 的问题')
+    expect((alice.get('#public-question').element as HTMLTextAreaElement).value).toBe('尚未发送的问题')
+    expect(document.activeElement).toBe(alice.get('#public-question').element)
     expect(sessionStorage.getItem(aliceKey)).toBeNull()
     expect(sessionStorage.getItem(bobKey)).not.toBeNull()
 
     alice.unmount()
     username = 'bob'
     await router.push('/read/plan-1/questions')
-    const bob = mount(PublicLessonView, { global: { plugins: [router] } })
+    const bob = mount(PublicLessonView, { attachTo: document.body, global: { plugins: [router] } })
     await flushPromises()
 
     expect(bob.text()).toContain('Bob 的问题')
     expect(bob.text()).not.toContain('Alice 的问题')
+    bob.unmount()
   })
 
   it('switches a public guide and its question request to an available English localization', async () => {
@@ -460,6 +470,12 @@ describe('PublicLessonView', () => {
     const mediumConfidence = wrapper.get('[data-confidence="MEDIUM"]')
     expect(mediumConfidence.classes()).toContain('bg-amber-50')
     expect(mediumConfidence.classes()).not.toContain('bg-emerald-50')
+
+    await wrapper.get('#public-question').setValue('Keep this draft across languages')
+    await wrapper.findAll('button').find((button) => button.text() === '中文')!.trigger('click')
+    await flushPromises()
+    expect((wrapper.get('#public-question').element as HTMLTextAreaElement).value)
+      .toBe('Keep this draft across languages')
   })
 
   it('keeps the latest public guide when an earlier navigation resolves late', async () => {

@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import LessonChapterList from '@/components/LessonChapterList.vue'
 import LessonGuideHero from '@/components/LessonGuideHero.vue'
 import LessonModeNav from '@/components/LessonModeNav.vue'
@@ -100,6 +101,8 @@ const publicAnswerTurns = ref<PublicAnswerTurn[]>([])
 const publicAnswerLoading = ref(false)
 const publicAnswerError = ref('')
 const publicAnswerNotice = ref('')
+const publicResetDialogOpen = ref(false)
+const restorePublicQuestionAfterReset = ref(false)
 const readerScope = ref<string | null>(null)
 const readerScopeReady = ref(false)
 const coverUnavailable = ref(false)
@@ -182,15 +185,39 @@ function rememberPublicAnswerTurns() {
   }
 }
 
-function clearPublicAnswerTurns() {
+function requestClearPublicAnswerTurns() {
+  if (publicAnswerLoading.value || !publicAnswerTurns.value.length) return
+  restorePublicQuestionAfterReset.value = false
+  publicResetDialogOpen.value = true
+}
+
+function cancelClearPublicAnswerTurns() {
+  restorePublicQuestionAfterReset.value = false
+  publicResetDialogOpen.value = false
+}
+
+function publicResetRestoreTarget() {
+  if (!restorePublicQuestionAfterReset.value) return null
+  restorePublicQuestionAfterReset.value = false
+  const questionInput = document.getElementById('public-question')
+  questionInput?.focus({ preventScroll: true })
+  return questionInput
+}
+
+function confirmClearPublicAnswerTurns() {
   const storageKey = answerThreadStorageKey()
   publicAnswerTurns.value = []
-  if (!storageKey) return
-  try {
-    sessionStorage.removeItem(storageKey)
-  } catch {
-    // The visible thread was still cleared even if browser storage is unavailable.
+  publicAnswerError.value = ''
+  publicAnswerNotice.value = ''
+  if (storageKey) {
+    try {
+      sessionStorage.removeItem(storageKey)
+    } catch {
+      // The visible thread was still cleared even if browser storage is unavailable.
+    }
   }
+  restorePublicQuestionAfterReset.value = true
+  publicResetDialogOpen.value = false
 }
 
 function isPublicAnswerTurn(value: unknown): value is PublicAnswerTurn {
@@ -525,11 +552,13 @@ onMounted(() => {
   if (questionMode.value) void initializeReaderScope()
 })
 
-watch([locale, planId], () => {
+watch([locale, planId], ([, currentPlanId], [, previousPlanId]) => {
+  publicResetDialogOpen.value = false
+  restorePublicQuestionAfterReset.value = false
   abandonPublicAnswer()
   if (readerScopeReady.value) restorePublicAnswerTurns()
   else publicAnswerTurns.value = []
-  publicQuestion.value = ''
+  if (currentPlanId !== previousPlanId) publicQuestion.value = ''
   publicAnswerError.value = ''
   publicAnswerNotice.value = ''
   void load()
@@ -541,6 +570,8 @@ watch(questionMode, (questionsVisible) => {
     else void initializeReaderScope()
     return
   }
+  publicResetDialogOpen.value = false
+  restorePublicQuestionAfterReset.value = false
   abandonPublicAnswer()
 })
 
@@ -609,7 +640,7 @@ onUnmounted(() => abandonPublicAnswer())
         <section v-if="questionMode" class="tabletop-panel player-board mx-auto mt-6 max-w-4xl p-5 sm:p-7" :aria-label="t('public.question.title')">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <p class="rounded-full border border-ink/10 bg-canvas px-3 py-1.5 text-xs font-semibold text-ink/55">{{ t('public.question.noLogin') }}</p>
-            <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="clearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
+            <button v-if="publicAnswerTurns.length" type="button" :disabled="publicAnswerLoading" :aria-label="t('public.question.clear')" class="min-h-8 rounded-full border border-ink/15 bg-paper px-3 text-xs font-semibold text-ink/60 transition hover:border-copper/40 hover:text-copper disabled:cursor-not-allowed disabled:opacity-50" @click="requestClearPublicAnswerTurns">{{ t('public.question.clear') }}</button>
           </div>
           <p class="mt-3 text-xs leading-5 text-ink/45">{{ t('public.question.private') }}</p>
 
@@ -711,5 +742,13 @@ onUnmounted(() => abandonPublicAnswer())
         />
       </article>
     </div>
+    <ConversationResetDialog
+      kind="public-browser"
+      :open="publicResetDialogOpen"
+      :turn-count="publicAnswerTurns.length"
+      :restore-focus="publicResetRestoreTarget"
+      @cancel="cancelClearPublicAnswerTurns"
+      @confirm="confirmClearPublicAnswerTurns"
+    />
   </AppShell>
 </template>

@@ -65,6 +65,21 @@ describe('LessonAnswerPanel', () => {
     expect(wrapper.emitted('voiceTranscript')).toEqual([['语音问题']])
   })
 
+  it('disables thread reset while a ruling edit or save makes clearing unsafe', () => {
+    const wrapper = mount(LessonAnswerPanel, {
+      props: {
+        ...baseProps,
+        answer: answered,
+        answerTurns: [{ question: '什么时候结算？', answer: answered, learningIntent: null }],
+        clearThreadDisabled: true,
+      },
+      global: { stubs: { VoiceQuestionCapture: true } },
+    })
+
+    expect(wrapper.findAll('button').find(button => button.text() === '清空本次答疑')!.attributes('disabled'))
+      .toBeDefined()
+  })
+
   it('renders cited answers and forwards confirmed-ruling editing without owning the write', async () => {
     const wrapper = mount(LessonAnswerPanel, {
       props: {

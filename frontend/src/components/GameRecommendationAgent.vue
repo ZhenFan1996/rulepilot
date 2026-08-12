@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import ConversationResetDialog from '@/components/ConversationResetDialog.vue'
 import RecommendationGameCard from '@/components/RecommendationGameCard.vue'
 import RecommendationAnswerWorkspace from '@/components/RecommendationAnswerWorkspace.vue'
 import RecommendationGameDetailsDialog from '@/components/RecommendationGameDetailsDialog.vue'
@@ -120,9 +121,12 @@ const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'less
 const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
 const conversationRole = ref<'recommendation' | 'rule-qa'>('recommendation')
 const conversationScroller = ref<HTMLElement | null>(null)
+const recommendationInput = ref<HTMLTextAreaElement | null>(null)
 const journeyDialog = ref<HTMLElement | null>(null)
 const journeyDock = ref<HTMLButtonElement | null>(null)
 const returnToAnswerWorkspace = ref(false)
+const resetDialogOpen = ref(false)
+const restoreRecommendationInputAfterReset = ref(false)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
@@ -162,6 +166,16 @@ const answerWorkspaceReady = computed(() => Boolean(
   journeyStatus.value?.projection.canAskQuestions
     && journeyStatus.value.plan?.id
     && journeyStatus.value.importJob?.documentVersionId,
+))
+const canResetRecommendation = computed(() => Boolean(
+  messages.value.length > 1
+    || response.value
+    || profileLabels.value.length
+    || selectedGame.value
+    || detailsGame.value
+    || failed.value
+    || lastRequest.value
+    || knownGames.value.length,
 ))
 
 function toolLabelsFor(turnResponse?: RecommendationAgentResponse) {
@@ -383,11 +397,40 @@ function reset(preserveJourney = false) {
   }
 }
 
+function requestReset() {
+  if (loading.value || !canResetRecommendation.value) return
+  restoreRecommendationInputAfterReset.value = false
+  resetDialogOpen.value = true
+}
+
+function cancelReset() {
+  restoreRecommendationInputAfterReset.value = false
+  resetDialogOpen.value = false
+}
+
+function recommendationResetRestoreTarget() {
+  if (!restoreRecommendationInputAfterReset.value) return null
+  restoreRecommendationInputAfterReset.value = false
+  recommendationInput.value?.focus({ preventScroll: true })
+  return recommendationInput.value
+}
+
+function confirmReset() {
+  if (loading.value) return
+  reset()
+  restoreRecommendationInputAfterReset.value = true
+  resetDialogOpen.value = false
+}
+
 function confidenceLabel(confidence: 'low' | 'medium' | 'high') {
   return t(confidence)
 }
 
-watch(locale, () => reset(true))
+watch(locale, () => {
+  if (messages.value.length !== 1 || response.value || lastRequest.value || profileLabels.value.length) return
+  messages.value = [{ id: ++messageId, role: 'assistant', text: t('initial') }]
+  clarification.value = initialClarification()
+})
 watch(
   () => [messages.value.length, loading.value, loadingStage.value],
   () => { void scrollConversationToLatest() },
@@ -417,7 +460,7 @@ onBeforeUnmount(() => {
             <p class="mt-3 text-sm leading-6 text-white/72">{{ response.userModel.summary }}</p>
             <ul v-if="response.userModel.hypotheses.length" class="mt-3 stack-y-sm"><li v-for="hypothesis in response.userModel.hypotheses" :key="`${hypothesis.text}-${hypothesis.basedOn}`" class="text-xs leading-5 text-white/58"><span class="mr-2 font-semibold text-[#e8bd6a]">{{ confidenceLabel(hypothesis.confidence) }}</span>{{ hypothesis.text }}<span class="block text-white/38">{{ t('basedOn', { value: hypothesis.basedOn }) }}</span></li></ul>
           </details>
-          <button type="button" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white" @click="reset()">{{ t('reset') }}</button>
+          <button v-if="canResetRecommendation" type="button" :disabled="loading" class="mt-5 min-h-11 text-sm font-semibold text-white/55 underline decoration-light-soft underline-offset-4 hover:text-white disabled:cursor-not-allowed disabled:opacity-40" @click="requestReset">{{ t('reset') }}</button>
         </div>
 
         <div class="min-w-0 bg-paper text-ink">
@@ -453,7 +496,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="clarification?.options.length && !loading" class="border-t border-ink/8 px-4 py-4 sm:px-6"><div class="flex flex-wrap gap-2"><button v-for="option in clarification.options" :key="option.value" type="button" class="min-h-11 rounded-lg border border-ink/15 bg-ink/5 px-4 text-sm font-semibold text-ink/72 hover:border-copper/50" @click="choose(option)">{{ option.label }}</button></div></div>
             <div v-if="failed" class="mx-4 mb-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 sm:mx-6" role="alert"><p>{{ t('error') }}</p><button type="button" class="mt-2 min-h-11 font-semibold underline" @click="retry">{{ t('retry') }}</button></div>
-            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
+            <form class="flex gap-2 border-t border-ink/8 p-4 sm:p-5" @submit.prevent="submitMessage"><label for="recommendation-agent-message" class="sr-only">{{ t('inputLabel') }}</label><textarea id="recommendation-agent-message" ref="recommendationInput" v-model="draft" rows="2" maxlength="500" :placeholder="t('inputPlaceholder')" class="min-h-14 min-w-0 flex-1 resize-none rounded-xl border border-ink/15 bg-canvas px-4 py-3 text-sm leading-6 outline-none focus:border-felt" /><button type="submit" :disabled="loading || !draft.trim()" class="min-h-12 self-end rounded-xl bg-felt px-5 text-sm font-semibold text-white disabled:opacity-40">{{ t('send') }}</button></form>
           </div>
 
           <RecommendationAnswerWorkspace
@@ -509,6 +552,13 @@ onBeforeUnmount(() => {
       :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
       @ask-questions="switchToQuestions()"
+    />
+    <ConversationResetDialog
+      kind="recommendation"
+      :open="resetDialogOpen"
+      :restore-focus="recommendationResetRestoreTarget"
+      @cancel="cancelReset"
+      @confirm="confirmReset"
     />
   </section>
 </template>

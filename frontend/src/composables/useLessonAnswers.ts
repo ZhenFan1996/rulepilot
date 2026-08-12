@@ -193,8 +193,8 @@ export function useLessonAnswers(options: UseLessonAnswersOptions) {
     answerRunId.value = ''
   }
 
-  function restoreConversation(turns: AnswerTurn[]) {
-    resetConversation(true)
+  function restoreConversation(turns: AnswerTurn[], clearQuestion = true) {
+    resetConversation(clearQuestion)
     answerTurns.value = turns.slice(-ANSWER_HISTORY_LIMIT)
     const latest = answerTurns.value.at(-1)
     if (!latest) return

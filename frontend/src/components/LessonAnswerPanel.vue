@@ -30,10 +30,12 @@ const props = withDefaults(defineProps<{
   editingRuling: boolean
   editedVerdict: string
   editedExplanation: string
+  clearThreadDisabled?: boolean
   showHeader?: boolean
 }>(), {
   agentTrace: () => [],
   answerRunId: '',
+  clearThreadDisabled: false,
   showHeader: true,
 })
 
@@ -70,6 +72,9 @@ const currentAnswerTurn = computed(() => props.answer ? props.answerTurns.at(-1)
 const primaryCitation = computed(() => props.answer?.citations.at(0) ?? null)
 const additionalCitations = computed(() => props.answer?.citations.slice(1) ?? [])
 const questionInput = ref<HTMLTextAreaElement | null>(null)
+defineExpose({
+  focusQuestion: () => questionInput.value?.focus({ preventScroll: true }),
+})
 const resolvedQuestion = ref('')
 const answerResolved = computed(() => resolvedQuestion.value === props.answeredQuestion && !!props.answeredQuestion)
 const { t } = useLocale()
@@ -246,7 +251,7 @@ function warningMessage(warning: StructuredRuleAnswer['warnings'][number]) {
 
       <div v-if="answerTurns.length" class="mt-5 flex flex-wrap items-center justify-between gap-2">
         <p class="text-xs leading-5 text-ink/45">{{ t('lesson.answer.threadPrivacy') }}</p>
-        <button type="button" :disabled="answerLoading" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink/55 hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
+        <button type="button" :disabled="answerLoading || clearThreadDisabled" class="min-h-11 rounded-xl px-3 text-sm font-semibold text-ink/55 hover:bg-ink/5 disabled:opacity-40" @click="emit('clearThread')">{{ t('lesson.answer.clearThread') }}</button>
       </div>
 
       <ol v-if="previousAnswerTurns.length" class="mt-3 stack-y-md" :aria-label="t('lesson.answer.thread')">
