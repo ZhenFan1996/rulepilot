@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { SESSION_CLEARED_EVENT } from '@/lib/authSession'
+import ConnectivityStatus from '@/components/ConnectivityStatus.vue'
 import { preloadLocale, useLocale } from '@/lib/locale'
 import { focusMainContent, routeDocumentTitle, routeNeedsContentFocus } from '@/lib/routeExperience'
 
@@ -39,6 +40,9 @@ watch([() => route.meta.titleKey, locale], async ([, requestedLocale]) => {
 </script>
 
 <template>
-  <a href="#main-content" class="skip-to-content">{{ t('shell.skipToContent') }}</a>
-  <RouterView :key="sessionEpoch" />
+  <div class="app-root">
+    <ConnectivityStatus />
+    <a href="#main-content" class="skip-to-content">{{ t('shell.skipToContent') }}</a>
+    <RouterView :key="sessionEpoch" />
+  </div>
 </template>

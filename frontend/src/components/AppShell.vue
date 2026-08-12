@@ -123,7 +123,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="tabletop-app min-h-screen bg-canvas text-ink lg:pl-64">
-    <aside class="drawer-shelf fixed inset-y-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
+    <aside class="drawer-shelf app-fixed-top fixed bottom-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto border-r border-white/8 bg-ink-panel px-4 py-5 text-[#f5f0e8] lg:flex">
       <div class="drawer-shelf__ornament" aria-hidden="true">❦</div>
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')" class="relative mx-2 rounded-xl focus-visible:outline-offset-4">
         <ProductMark />
@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
       </div>
     </aside>
 
-    <header class="mobile-app-header sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
+    <header class="mobile-app-header app-sticky-top sticky z-30 flex h-16 items-center justify-between border-b border-ink/10 bg-paper/95 px-3 backdrop-blur lg:hidden">
       <RouterLink :to="{ name: 'home' }" :aria-label="t('shell.homeAria')"><ProductMark /></RouterLink>
       <div class="flex min-w-0 items-center gap-1.5">
         <RouterLink v-if="username" :to="{ name: 'account' }" class="max-w-16 truncate text-sm font-semibold text-ink/60 max-[480px]:hidden">{{ username }}</RouterLink>

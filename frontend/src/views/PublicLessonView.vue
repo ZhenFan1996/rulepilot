@@ -550,7 +550,7 @@ onUnmounted(() => abandonPublicAnswer())
 <template>
   <AppShell>
     <div class="min-h-screen bg-canvas text-ink">
-      <header class="sticky top-0 z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
+      <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-canvas/90 backdrop-blur">
         <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-5 py-3 sm:px-8">
           <RouterLink :to="{ name: 'public-library' }" class="text-sm font-semibold text-indigo">← {{ t('nav.library') }}</RouterLink>
           <LessonModeNav

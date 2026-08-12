@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   appScrollBehavior,
+  appStickyOffset,
   focusMainContent,
   routeDocumentTitle,
   routeNeedsContentFocus,
@@ -29,6 +30,18 @@ describe('route experience', () => {
     })
     expect(appScrollBehavior(route('/lessons'), route('/lessons'), null)).toBe(false)
     expect(appScrollBehavior(route('/lessons'), route('/'), null)).toEqual({ left: 0, top: 0 })
+  })
+
+  it('keeps hash targets below the shared header and a visible connectivity status', () => {
+    document.documentElement.style.setProperty('--app-top-inset', '64px')
+
+    expect(appStickyOffset()).toBe(144)
+    expect(appScrollBehavior(route('/lessons', '#ready'), route('/'), null)).toEqual({
+      el: '#ready',
+      top: 144,
+    })
+
+    document.documentElement.style.removeProperty('--app-top-inset')
   })
 
   it('focuses the shared main landmark only after the visible route changes', () => {

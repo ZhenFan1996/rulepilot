@@ -18,9 +18,16 @@ export function routeDocumentTitle(
 
 export const appScrollBehavior: RouterScrollBehavior = (to, from, savedPosition) => {
   if (savedPosition) return savedPosition
-  if (to.hash) return { el: to.hash, top: 80 }
+  if (to.hash) return { el: to.hash, top: appStickyOffset() }
   if (to.path === from.path) return false
   return { left: 0, top: 0 }
+}
+
+export function appStickyOffset(root: Document = document) {
+  const connectivityInset = Number.parseFloat(
+    getComputedStyle(root.documentElement).getPropertyValue('--app-top-inset'),
+  )
+  return 80 + (Number.isFinite(connectivityInset) ? connectivityInset : 0)
 }
 
 export function routeNeedsContentFocus(

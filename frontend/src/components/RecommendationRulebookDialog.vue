@@ -61,7 +61,7 @@ watch(() => [props.open, props.versionId] as const, ([open]) => {
 <template>
   <div v-if="open" class="fixed inset-0 z-50 overflow-y-auto bg-ink/45 backdrop-blur-[2px]" @click.self="emit('close')">
     <section class="mx-auto min-h-screen w-full max-w-[100rem] bg-[#ddd8cf] text-ink sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" role="dialog" aria-modal="true" :aria-label="copy.dialog">
-      <header class="sticky top-0 z-20 flex items-start justify-between gap-4 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
+      <header class="app-sticky-top sticky z-20 flex items-start justify-between gap-4 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
         <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><div class="mt-1 flex min-w-0 items-baseline gap-3"><h2 class="truncate font-display text-xl font-semibold sm:text-2xl">{{ title }}</h2><span v-if="pages.length" class="shrink-0 text-xs text-ink/45">{{ copy.pages(pages.length) }}</span></div><p class="mt-1 text-xs leading-5 text-ink/50">{{ copy.waiting }}</p></div>
         <button type="button" class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>

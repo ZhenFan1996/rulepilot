@@ -146,7 +146,7 @@ function stepKindLabel(kind: string) {
 
 <template>
   <div class="mt-7 xl:grid xl:grid-cols-[15rem_minmax(0,1fr)] xl:items-start xl:gap-12">
-    <nav data-testid="mobile-chapter-directory" class="player-board sticky top-16 z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
+    <nav data-testid="mobile-chapter-directory" class="player-board app-sticky-below-mobile-header sticky z-10 -mx-2 flex gap-2 overflow-x-auto border border-ink/10 bg-canvas/90 p-2 elevation-sm backdrop-blur xl:hidden" :aria-label="t('lesson.reader.chapterDirectory')">
       <a
         v-for="section in sections"
         :key="section.position"

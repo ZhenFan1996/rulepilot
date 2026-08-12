@@ -235,7 +235,7 @@ onUnmounted(() => {
 <template>
   <AppShell immersive>
     <div class="min-h-screen bg-ink-panel pb-36 text-panel-text">
-      <header class="sticky top-0 z-20 border-b border-white/10 bg-ink-panel/95 px-4 py-3 backdrop-blur">
+      <header class="app-sticky-top sticky z-20 border-b border-white/10 bg-ink-panel/95 px-4 py-3 backdrop-blur">
         <div class="mx-auto flex max-w-3xl items-center justify-between gap-3">
           <RouterLink :to="{ name: 'lesson', params: { planId } }" class="min-h-11 py-3 text-sm font-semibold text-amber-200">← 返回讲解</RouterLink>
           <div v-if="plan" class="min-w-0 text-right">
