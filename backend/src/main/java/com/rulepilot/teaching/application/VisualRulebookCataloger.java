@@ -348,9 +348,7 @@ class VisualRulebookCataloger {
             String rulebookTitle,
             UUID assistantRunId,
             String operation) {
-        List<PageImageInput> images = pageImages.read(documentVersionId, new LinkedHashSet<>(batch)).stream()
-                .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
-                .toList();
+        List<PageImageInput> images = readTeachingPageImages(documentVersionId, batch);
         var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
         return invokeModel(
                 assistantRunId,
@@ -359,6 +357,27 @@ class VisualRulebookCataloger {
                 "Teaching-start page facts interpreted",
                 () -> visualCatalog.summarizeForTeaching(request),
                 this::catalogOutputTokens);
+    }
+
+    /**
+     * A short-rulebook model request may contain more images than one bounded object-store read permits. Preserve the
+     * document adapter's five-page safety boundary, assemble the images in exact requested order, and let the existing
+     * missing-binding recovery handle an absent stored image independently.
+     */
+    private List<PageImageInput> readTeachingPageImages(UUID documentVersionId, List<Integer> requestedPages) {
+        List<PageImageInput> images = new ArrayList<>();
+        for (int start = 0; start < requestedPages.size(); start += DocumentPageImages.MAX_PAGES_PER_READ) {
+            List<Integer> chunk = requestedPages.subList(
+                    start, Math.min(start + DocumentPageImages.MAX_PAGES_PER_READ, requestedPages.size()));
+            Map<Integer, PageImage> available = pageImages.read(documentVersionId, new LinkedHashSet<>(chunk)).stream()
+                    .collect(Collectors.toMap(PageImage::pageNumber, image -> image, (first, ignored) -> first));
+            chunk.stream()
+                    .map(available::get)
+                    .filter(java.util.Objects::nonNull)
+                    .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
+                    .forEach(images::add);
+        }
+        return List.copyOf(images);
     }
 
     private List<PageFact> catalogPageFacts(
