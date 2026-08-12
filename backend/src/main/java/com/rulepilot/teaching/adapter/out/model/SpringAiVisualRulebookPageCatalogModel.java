@@ -40,6 +40,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.annotation.Value;
@@ -241,8 +242,12 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
 
     private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner) {
         ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
-        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+        String provider = models.providerFor(Role.VISUAL, owner);
+        if ("qwen".equals(provider)) {
             prompt = prompt.options(qwenJsonOptions(
+                    models.modelNameFor(Role.VISUAL, owner), Math.min(3_200, maxCompletionTokens)));
+        } else if ("gemini".equals(provider)) {
+            prompt = prompt.options(geminiTeachingStartupOptions(
                     models.modelNameFor(Role.VISUAL, owner), Math.min(3_200, maxCompletionTokens)));
         }
         String content = prompt.system(teachingStartupPrompt)
@@ -614,6 +619,22 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .maxTokens(maxTokens)
                 .extraBody(Map.of("enable_thinking", false))
                 .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build());
+    }
+
+    static GoogleGenAiChatOptions.Builder geminiTeachingStartupOptions(String modelName, int maxTokens) {
+        GoogleGenAiChatOptions.Builder options = GoogleGenAiChatOptions.builder();
+        options.temperature(0.0);
+        options.candidateCount(1);
+        options.maxOutputTokens(maxTokens);
+        options.responseMimeType(MimeTypeUtils.APPLICATION_JSON_VALUE);
+        // This pass transcribes visible page facts; it does not plan or reason about rules. Gemini 2.5 Flash can
+        // disable thinking completely, while later Gemini generations use a different thinking-level contract.
+        if (modelName != null
+                && modelName.strip().toLowerCase(java.util.Locale.ROOT).startsWith("gemini-2.5-flash")) {
+            options.thinkingBudget(0);
+            options.includeThoughts(false);
+        }
+        return options;
     }
 
     private record CropBounds(int x, int y, int width, int height) {}
