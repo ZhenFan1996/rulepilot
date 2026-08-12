@@ -1,7 +1,13 @@
 package com.rulepilot.teaching.adapter.out.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import com.rulepilot.modelconfig.RuntimeModelConfiguration;
+import com.rulepilot.modelconfig.RuntimeModelConfiguration.Role;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.CatalogRequest;
@@ -11,10 +17,21 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.google.genai.GoogleGenAiChatModel;
+import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.core.io.ClassPathResource;
 
 class SpringAiVisualRulebookPageCatalogModelTest {
@@ -149,6 +166,53 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void disablesGeminiThinkingOnTheActualTeachingStartupRequest() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        GoogleGenAiChatOptions defaults = GoogleGenAiChatOptions.builder()
+                .model(GoogleGenAiChatModel.ChatModel.GEMINI_2_5_FLASH)
+                .build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("gemini");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("gemini-2.5-flash");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"pages":[{"pageNumber":1,"printedTerms":"SETUP",
+                         "factualSummary":"Each player takes one card.","keywords":["setup"]}]}
+                        """)))));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+
+        model.summarizeForTeaching(new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
+
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        assertThat(prompt.getValue().getOptions()).isInstanceOf(GoogleGenAiChatOptions.class);
+        GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getThinkingBudget()).isZero();
+        assertThat(options.getIncludeThoughts()).isFalse();
+        assertThat(options.getCandidateCount()).isOne();
+        assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
+        assertThat(options.getResponseMimeType()).isEqualTo("application/json");
+        assertThat(options.getTemperature()).isZero();
+    }
+
+    @Test
+    void doesNotSendTheGemini25ThinkingBudgetToLaterModelGenerations() {
+        var options = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
+                        "gemini-3.5-flash", 3_200)
+                .build();
+
+        assertThat(options.getThinkingBudget()).isNull();
+        assertThat(options.getResponseMimeType()).isEqualTo("application/json");
+        assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
+    }
+
+    @Test
     void parsesQwenJsonContentWithoutDependingOnNativeStructuredOutput() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 ```json
@@ -161,6 +225,27 @@ class SpringAiVisualRulebookPageCatalogModelTest {
             assertThat(page.pageNumber()).isEqualTo(14);
             assertThat(page.factualSummary()).contains("胜利点");
         });
+    }
+
+    private SpringAiVisualRulebookPageCatalogModel model(RuntimeModelConfiguration configuration) throws IOException {
+        return new SpringAiVisualRulebookPageCatalogModel(
+                configuration,
+                new FakeVisualRulebookPageCatalogModel(),
+                new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
+                new ClassPathResource("prompts/visual-page-teaching-catalog-v1-system.txt"),
+                new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
+                new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
+                new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),
+                new ClassPathResource("prompts/visual-identifier-reference-match-v1-system.txt"),
+                4_800);
+    }
+
+    private byte[] png() throws IOException {
+        BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB);
+        try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            ImageIO.write(image, "png", output);
+            return output.toByteArray();
+        }
     }
 
     @Test
