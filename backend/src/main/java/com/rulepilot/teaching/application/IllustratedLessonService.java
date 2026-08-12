@@ -64,15 +64,72 @@ public class IllustratedLessonService {
     }
 
     public GenerationOutcome generate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
-        return Observation.createNotStarted("rulepilot.teaching.workflow", observations)
-                .contextualName("teaching-workflow")
-                .observe(() -> generateObserved(teachingPlanId, ownerUsername, run, GenerationTarget.ACTIVE));
+        return continueGeneration(startGeneration(teachingPlanId, ownerUsername, run));
     }
 
     public GenerationOutcome generateCandidate(UUID teachingPlanId, String ownerUsername, RunSnapshot run) {
         return Observation.createNotStarted("rulepilot.teaching.candidate.workflow", observations)
                 .contextualName("teaching-candidate-workflow")
                 .observe(() -> generateObserved(teachingPlanId, ownerUsername, run, GenerationTarget.CANDIDATE));
+    }
+
+    GenerationContinuation startGeneration(UUID teachingPlanId, String ownerUsername, RunSnapshot initialRun) {
+        return Observation.createNotStarted("rulepilot.teaching.startup", observations)
+                .contextualName("teaching-first-section")
+                .observe(() -> startGenerationObserved(teachingPlanId, ownerUsername, initialRun));
+    }
+
+    GenerationOutcome continueGeneration(GenerationContinuation continuation) {
+        if (continuation == null) throw new IllegalArgumentException("teaching continuation is required");
+        return Observation.createNotStarted("rulepilot.teaching.continuation", observations)
+                .contextualName("teaching-remaining-sections")
+                .observe(() -> continueGenerationObserved(continuation));
+    }
+
+    private GenerationContinuation startGenerationObserved(
+            UUID teachingPlanId,
+            String ownerUsername,
+            RunSnapshot initialRun) {
+        RunSnapshot run = initialRun;
+        try {
+            var plan = requireReadyPlan(teachingPlanId, ownerUsername);
+            run = advance(run, AssistantRunState.DOCUMENT_READINESS, "Rule document readiness is checked");
+            run = advance(run, AssistantRunState.LESSON_PLANNING, "Teaching plan is loaded");
+            run = advance(run, AssistantRunState.RETRIEVAL_PLANNING, "Required lesson evidence is planned");
+            run = advance(run, AssistantRunState.RETRIEVING, "Allow-listed rule search is running");
+            IllustratedLesson previousLesson = repository.findLatestByPlan(teachingPlanId).orElse(null);
+            var base = agent.startBase(
+                    plan,
+                    run.id(),
+                    previousLesson,
+                    progressPublisher::publish);
+            return new GenerationContinuation(run, base);
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
+            throw stopped;
+        } catch (RuntimeException exception) {
+            log.error("Teaching first-section workflow failed for plan {} and run {}", teachingPlanId, run.id(), exception);
+            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            throw exception;
+        }
+    }
+
+    private GenerationOutcome continueGenerationObserved(GenerationContinuation continuation) {
+        RunSnapshot run = continuation.run();
+        try {
+            IllustratedLesson lesson = agent.continueBase(
+                    continuation.base(),
+                    progressPublisher::publish);
+            run = advanceAfterWork(run, AssistantRunState.VERIFYING_EVIDENCE, "Lesson citations are scope checked");
+            return new GenerationOutcome(run, lesson.status());
+        } catch (AgentExecutionStoppedException stopped) {
+            failRun(run, "AGENT_" + stopped.reason().name(), "Teaching workflow stopped by execution budget", stopped);
+            throw stopped;
+        } catch (RuntimeException exception) {
+            log.error("Teaching continuation failed for run {}", run.id(), exception);
+            failRun(run, "TEACHING_WORKFLOW_FAILED", "Teaching workflow failed safely", exception);
+            throw exception;
+        }
     }
 
     private GenerationOutcome generateObserved(
@@ -133,6 +190,18 @@ public class IllustratedLessonService {
         }
     }
 
+    @Transactional
+    public void failContinuationScheduling(GenerationContinuation continuation) {
+        RunSnapshot run = continuation.run();
+        if (!run.state().terminal()) {
+            runs.fail(
+                    run.id(),
+                    run.revision(),
+                    "TEACHING_CONTINUATION_QUEUE_FULL",
+                    "The first cited section is readable but remaining teaching work could not be scheduled");
+        }
+    }
+
     private void failRun(RunSnapshot run, String errorCode, String summary, RuntimeException exception) {
         if (!run.state().terminal()) {
             try {
@@ -177,6 +246,18 @@ public class IllustratedLessonService {
     }
 
     public record GenerationOutcome(RunSnapshot run, LessonStatus lessonStatus) {}
+
+    record GenerationContinuation(
+            RunSnapshot run,
+            GroundedTeachingAgent.BaseLessonContinuation base) {
+        GenerationContinuation {
+            if (run == null || base == null) throw new IllegalArgumentException("teaching continuation is invalid");
+        }
+
+        boolean hasRemainingWork() {
+            return base.hasRemainingWork();
+        }
+    }
 
     private enum GenerationTarget {
         ACTIVE,

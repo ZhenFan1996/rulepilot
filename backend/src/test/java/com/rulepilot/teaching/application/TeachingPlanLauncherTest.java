@@ -60,7 +60,7 @@ class TeachingPlanLauncherTest {
         assertThat(launch.assistantRunId()).isEqualTo(received.id());
         assertThat(launch.state()).isEqualTo(AssistantRunState.RECEIVED);
         assertThat(launch.reused()).isFalse();
-        verify(lessons).launch(planId, "alice");
+        verify(lessons).launchImmediately(planId, "alice");
     }
 
     @Test
@@ -124,7 +124,7 @@ class TeachingPlanLauncherTest {
                         "Reading rulebook pages and organizing the lesson"))
                 .thenReturn(planning);
         when(plans.create(documentVersionId, null, "alice", received.id())).thenReturn(plan);
-        when(lessons.launch(planId, "alice"))
+        when(lessons.launchImmediately(planId, "alice"))
                 .thenThrow(new IllegalStateException("teaching queue unavailable"));
         when(runs.findOwned(received.id(), "alice")).thenReturn(Optional.of(details(planning)));
         var launcher = new TeachingPlanLauncher(plans, lessons, runs, new SyncTaskExecutor());
@@ -167,7 +167,7 @@ class TeachingPlanLauncherTest {
 
         verify(plans, never()).create(
                 documentVersionId, learningGoal, "alice", received.id());
-        verify(lessons).launch(planId, "alice");
+        verify(lessons).launchImmediately(planId, "alice");
     }
 
     @Test

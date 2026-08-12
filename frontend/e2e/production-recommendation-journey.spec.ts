@@ -30,6 +30,7 @@ interface ImportJob {
   sourceDomain?: string
   stage: 'QUEUED' | 'CONNECTING' | 'DOWNLOADING' | 'COMPRESSING' | 'VERIFYING_FILE' | 'SAVING' | 'COMPLETED' | 'FAILED'
   downloadedBytes: number
+  totalBytes: number | null
   documentVersionId: string | null
   duplicate: boolean
   errorCode: string | null
@@ -80,6 +81,24 @@ interface RunDetailsResponse {
   }
 }
 
+interface LessonMilestoneResponse {
+  id: string
+  status: 'COMPLETE' | 'DRAFT_READY' | 'INCOMPLETE'
+  sections: Array<{ evidenceStatus: 'SUPPORTED' | 'CITED_DRAFT' | 'INSUFFICIENT_EVIDENCE' }>
+}
+
+interface ImportMilestoneObservation {
+  job: ImportJob
+  pdfDownloadCompleteMs: number | null
+  documentReadyMs: number | null
+  teachingHandoffLaunchedMs: number | null
+}
+
+interface FirstCitedLessonObservation {
+  teachingPreparationStartedMs: number
+  firstCitedLessonMs: number
+}
+
 interface ProductionJourneyReport {
   generatedAt: string
   completed: boolean
@@ -113,6 +132,13 @@ interface ProductionJourneyReport {
   importDuplicate: boolean | null
   downloadedBytes: number | null
   importMs: number | null
+  pdfDownloadCompleteMs: number | null
+  documentReadyMs: number | null
+  teachingHandoffLaunchedMs: number | null
+  teachingPreparationStartedMs: number | null
+  firstCitedLessonMs: number | null
+  pdfDownloadToTeachingStartMs: number | null
+  pdfDownloadToFirstCitedLessonMs: number | null
   documentProgressStage: string | null
   documentProgressComplete: boolean | null
   teachingHandoffState: string | null
@@ -145,23 +171,107 @@ async function login(page: Page, username: string, password: string) {
   await expect(page).toHaveURL(/\/account$/)
 }
 
-async function waitForCompletedImport(request: APIRequestContext, jobId: string): Promise<ImportJob> {
+function observedDownloadComplete(job: ImportJob) {
+  if (job.downloadedBytes <= 0) return false
+  if (job.totalBytes !== null) return job.downloadedBytes >= job.totalBytes
+  return job.stage !== 'QUEUED' && job.stage !== 'CONNECTING' && job.stage !== 'DOWNLOADING'
+}
+
+async function waitForCompletedImport(
+  request: APIRequestContext,
+  jobId: string,
+  importStartedAt: number,
+): Promise<ImportMilestoneObservation> {
   const deadline = Date.now() + 8 * 60_000
   let latest: ImportJob | null = null
+  let pdfDownloadCompleteMs: number | null = null
+  let documentReadyMs: number | null = null
+  let teachingHandoffLaunchedMs: number | null = null
   while (Date.now() < deadline) {
     const response = await request.get(`/api/v1/documents/official-imports/${encodeURIComponent(jobId)}`)
     expect(response.ok(), `Import progress returned HTTP ${response.status()}`).toBe(true)
     latest = await response.json() as ImportJob
-    if (latest.stage === 'COMPLETED' && latest.teachingHandoffState === 'LAUNCHED') return latest
+    if (pdfDownloadCompleteMs === null && observedDownloadComplete(latest)) {
+      pdfDownloadCompleteMs = elapsed(importStartedAt)
+    }
+    if (latest.documentVersionId && documentReadyMs === null) {
+      const progressResponse = await request.get(
+        `/api/v1/document-versions/${encodeURIComponent(latest.documentVersionId)}/progress/snapshot`,
+      )
+      expect([200, 404], `Document progress returned HTTP ${progressResponse.status()}`)
+        .toContain(progressResponse.status())
+      if (progressResponse.ok()) {
+        const progress = await progressResponse.json() as DocumentProgressResponse
+        if (progress.stage === 'READY' && progress.complete) documentReadyMs = elapsed(importStartedAt)
+      }
+    }
+    if (teachingHandoffLaunchedMs === null && latest.teachingHandoffState === 'LAUNCHED') {
+      teachingHandoffLaunchedMs = elapsed(importStartedAt)
+    }
+    if (latest.stage === 'COMPLETED' && latest.teachingHandoffState === 'LAUNCHED') {
+      return { job: latest, pdfDownloadCompleteMs, documentReadyMs, teachingHandoffLaunchedMs }
+    }
     if (latest.teachingHandoffState === 'FAILED') {
       throw new Error(`Teaching handoff failed with ${latest.teachingErrorCode ?? 'UNKNOWN_TEACHING_HANDOFF_ERROR'}`)
     }
     if (latest.stage === 'FAILED') {
       throw new Error(`Official import failed with ${latest.errorCode ?? 'UNKNOWN_IMPORT_ERROR'}`)
     }
-    await new Promise(resolve => setTimeout(resolve, 1_250))
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
   throw new Error(`Official import did not complete; latest stage was ${latest?.stage ?? 'UNKNOWN'}`)
+}
+
+async function waitForFirstCitedLesson(
+  request: APIRequestContext,
+  versionId: string,
+  preparationRunId: string,
+  importStartedAt: number,
+): Promise<FirstCitedLessonObservation> {
+  const deadline = Date.now() + 20 * 60_000
+  let plan: TeachingPlanResponse | null = null
+  let teachingPreparationStartedMs: number | null = null
+  while (Date.now() < deadline) {
+    if (teachingPreparationStartedMs === null) {
+      const runResponse = await request.get(`/api/v1/assistant-runs/${encodeURIComponent(preparationRunId)}`)
+      expect([200, 404], `Teaching preparation returned HTTP ${runResponse.status()}`)
+        .toContain(runResponse.status())
+      if (runResponse.ok()) {
+        const details = await runResponse.json() as RunDetailsResponse
+        if (details.run.state !== 'RECEIVED') teachingPreparationStartedMs = elapsed(importStartedAt)
+        if (details.run.state === 'FAILED') {
+          throw new Error(`Teaching preparation failed with ${details.run.lastErrorCode ?? 'UNKNOWN_PREPARATION_ERROR'}`)
+        }
+      }
+    }
+    if (!plan) {
+      const planResponse = await request.get(
+        `/api/v1/document-versions/${encodeURIComponent(versionId)}/teaching-plans/latest`,
+      )
+      expect([200, 404], `Teaching plan returned HTTP ${planResponse.status()}`)
+        .toContain(planResponse.status())
+      if (planResponse.ok()) plan = await planResponse.json() as TeachingPlanResponse
+    }
+    if (plan) {
+      const lessonResponse = await request.get(
+        `/api/v1/teaching-plans/${encodeURIComponent(plan.id)}/illustrated-lessons/latest`,
+      )
+      expect([200, 404], `Illustrated lesson returned HTTP ${lessonResponse.status()}`)
+        .toContain(lessonResponse.status())
+      if (lessonResponse.ok()) {
+        const lesson = await lessonResponse.json() as LessonMilestoneResponse
+        if (lesson.sections.some(section =>
+          section.evidenceStatus === 'SUPPORTED' || section.evidenceStatus === 'CITED_DRAFT')) {
+          return {
+            teachingPreparationStartedMs: teachingPreparationStartedMs ?? elapsed(importStartedAt),
+            firstCitedLessonMs: elapsed(importStartedAt),
+          }
+        }
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  throw new Error('The first source-cited lesson section did not become readable')
 }
 
 async function retainReport(path: string, report: ProductionJourneyReport) {
@@ -228,6 +338,9 @@ test('recommendation becomes one readable, taught, and answerable production jou
     planGameTitleMatchesSelection: false, recommendationMs: null, detailsDialogOpenedAndClosed: false,
     discoveryMs: null, sourceDomain: null, sourceUrl: null, sourceMode: null, importRequestCount: 0,
     importReused: null, importDuplicate: null, downloadedBytes: null, importMs: null,
+    pdfDownloadCompleteMs: null, documentReadyMs: null, teachingHandoffLaunchedMs: null,
+    teachingPreparationStartedMs: null, firstCitedLessonMs: null,
+    pdfDownloadToTeachingStartMs: null, pdfDownloadToFirstCitedLessonMs: null,
     documentProgressStage: null, documentProgressComplete: null, teachingHandoffState: null,
     teachingPreparationState: null, teachingPreparationErrorCode: null,
     rulebookReadableMs: null, renderedRulebookPage: false, lessonReadableMs: null,
@@ -349,7 +462,8 @@ test('recommendation becomes one readable, taught, and answerable production jou
     expect(launchedJob.sourceDomain, 'The official import response changed the selected source domain')
       .toBe(gstoneCandidate!.sourceDomain)
 
-    const completedJob = await waitForCompletedImport(page.request, launchedJob.id)
+    const importObservation = await waitForCompletedImport(page.request, launchedJob.id, importStartedAt)
+    const completedJob = importObservation.job
     expect(completedJob.downloadedBytes).toBeGreaterThan(0)
     expect(completedJob.documentVersionId).not.toBeNull()
     expect(completedJob.teachingHandoffState).toBe('LAUNCHED')
@@ -360,6 +474,15 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.importDuplicate = completedJob.duplicate
     report.downloadedBytes = completedJob.downloadedBytes
     report.importMs = elapsed(importStartedAt)
+    report.pdfDownloadCompleteMs = importObservation.pdfDownloadCompleteMs
+    report.documentReadyMs = importObservation.documentReadyMs
+    report.teachingHandoffLaunchedMs = importObservation.teachingHandoffLaunchedMs
+    expect(report.pdfDownloadCompleteMs, 'The production probe did not observe PDF download completion')
+      .not.toBeNull()
+    expect(report.documentReadyMs, 'The production probe did not observe the document READY milestone')
+      .not.toBeNull()
+    expect(report.teachingHandoffLaunchedMs, 'The production probe did not observe teaching handoff launch')
+      .not.toBeNull()
     report.teachingHandoffState = completedJob.teachingHandoffState
     const progressResponse = await page.request.get(
       `/api/v1/document-versions/${encodeURIComponent(completedJob.documentVersionId!)}/progress/snapshot`,
@@ -377,6 +500,25 @@ test('recommendation becomes one readable, taught, and answerable production jou
     report.documentEditionMatchesSelection = importedDocument?.document.gameEditionId === boundGame.edition.id
     expect(report.documentEditionMatchesSelection,
       'The readable document was not persisted against the selected game edition').toBe(true)
+
+    const firstCitedLesson = await waitForFirstCitedLesson(
+      page.request,
+      completedJob.documentVersionId!,
+      completedJob.teachingPreparationRunId!,
+      importStartedAt,
+    )
+    report.teachingPreparationStartedMs = firstCitedLesson.teachingPreparationStartedMs
+    report.firstCitedLessonMs = firstCitedLesson.firstCitedLessonMs
+    if (report.pdfDownloadCompleteMs !== null) {
+      report.pdfDownloadToTeachingStartMs = Math.max(
+        0,
+        firstCitedLesson.teachingPreparationStartedMs - report.pdfDownloadCompleteMs,
+      )
+      report.pdfDownloadToFirstCitedLessonMs = Math.max(
+        0,
+        firstCitedLesson.firstCitedLessonMs - report.pdfDownloadCompleteMs,
+      )
+    }
 
     guidesPage = await page.context().newPage()
     guidesPage.on('pageerror', error => pageErrors.push(error))
