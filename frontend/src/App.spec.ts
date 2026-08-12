@@ -1,12 +1,18 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, onMounted } from 'vue'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { notifySessionCleared } from '@/lib/authSession'
+import { setLocale } from '@/lib/locale'
 import App from './App.vue'
 
 describe('App session boundary', () => {
+  afterEach(() => {
+    setLocale('zh-CN')
+    document.title = 'RulePilot'
+  })
+
   it('remounts the active route immediately after logout so private view state is discarded', async () => {
     const mounted = vi.fn()
     const PrivateRoute = defineComponent({
@@ -28,6 +34,42 @@ describe('App session boundary', () => {
     await wrapper.vm.$nextTick()
 
     expect(mounted).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('announces each route with a localized title and moves focus to new content', async () => {
+    const HomeRoute = {
+      template: '<main id="main-content" tabindex="-1"><h1>Home</h1></main>',
+    }
+    const GuidesRoute = {
+      template: '<main id="main-content" tabindex="-1"><h1>Guides</h1></main>',
+    }
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: HomeRoute, meta: { titleKey: 'route.title.home' } },
+        { path: '/lessons', component: GuidesRoute, meta: { titleKey: 'route.title.guides' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+
+    expect(document.title).toBe('首页 · RulePilot')
+    expect(wrapper.get('.skip-to-content').attributes('href')).toBe('#main-content')
+
+    await router.push('/lessons')
+    await flushPromises()
+
+    expect(document.title).toBe('我的讲解 · RulePilot')
+    expect(document.activeElement?.id).toBe('main-content')
+
+    setLocale('en')
+    await vi.waitFor(() => expect(document.title).toBe('My guides · RulePilot'))
     wrapper.unmount()
   })
 })

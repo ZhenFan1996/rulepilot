@@ -225,7 +225,7 @@ watch(locale, () => void loadCatalog(false))
 
 <template>
   <AppShell>
-    <main class="tabletop-page">
+    <div class="tabletop-page">
       <header class="grid gap-7 pb-8 xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-end">
         <div class="tabletop-heading">
           <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
@@ -313,6 +313,6 @@ watch(locale, () => void loadCatalog(false))
           <button v-if="games.length < total" type="button" :disabled="loading" class="min-h-12 min-w-48 rounded-xl border border-ink/15 bg-paper px-6 text-sm font-semibold elevation-sm disabled:opacity-50" @click="loadCatalog(true)">{{ loading ? t('loadingMore') : t('loadMore') }}</button>
         </nav>
       </section>
-    </main>
+    </div>
   </AppShell>
 </template>

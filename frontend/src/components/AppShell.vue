@@ -207,7 +207,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="min-h-screen pb-20 lg:pb-0">
+    <main id="main-content" tabindex="-1" class="app-main min-h-screen pb-20 lg:pb-0" :aria-label="t('shell.mainContent')">
       <aside v-if="loginReminderVisible" class="border-b border-copper/25 bg-copper/10 px-4 py-3 sm:px-8" role="status">
         <div class="mx-auto flex max-w-7xl items-start gap-3">
           <div class="min-w-0 flex-1">

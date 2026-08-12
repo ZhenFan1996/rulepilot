@@ -30,7 +30,7 @@ const t = (key: keyof typeof copy['zh-CN']) => copy[locale.value][key]
 
 <template>
   <AppShell>
-    <main class="tabletop-page">
+    <div class="tabletop-page">
       <header class="grid gap-7 pb-7 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-end">
         <div class="tabletop-heading">
           <p class="tabletop-kicker">{{ t('eyebrow') }}</p>
@@ -50,6 +50,6 @@ const t = (key: keyof typeof copy['zh-CN']) => copy[locale.value][key]
       </header>
 
       <GameRecommendationAgent />
-    </main>
+    </div>
   </AppShell>
 </template>

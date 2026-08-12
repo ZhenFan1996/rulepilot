@@ -54,7 +54,7 @@ async function login() {
 </script>
 
 <template>
-  <main class="grid min-h-screen place-items-center bg-canvas px-5 py-12 text-ink">
+  <main id="main-content" tabindex="-1" class="grid min-h-screen place-items-center bg-canvas px-5 py-12 text-ink">
     <section class="w-full max-w-md border border-ink/10 bg-paper p-7 sm:p-9">
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>

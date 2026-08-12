@@ -49,7 +49,7 @@ watch(() => route.query.runId, (value) => {
 <template>
   <AppShell>
     <div class="tabletop-page min-h-screen max-w-5xl text-ink">
-      <main class="mx-auto max-w-6xl">
+      <div class="mx-auto max-w-6xl">
         <header class="max-w-3xl">
           <p class="text-xs font-semibold uppercase tracking-[0.14em] text-copper">{{ t('agentAudit.eyebrow') }}</p>
           <h1 class="mt-2 font-display text-4xl font-semibold">{{ t('agentAudit.title') }}</h1>
@@ -83,7 +83,7 @@ watch(() => route.query.runId, (value) => {
             <ol class="mt-4 stack-y-sm text-sm"><li v-for="step in audit.steps" :key="step.sequence" class="rounded-xl bg-paper px-4 py-3"><span class="font-mono text-xs text-ink/45">#{{ step.sequence }}</span> <span class="font-semibold">{{ step.fromState }} → {{ step.toState }}</span><p class="mt-1 text-ink/60">{{ step.summary }}</p></li></ol>
           </section>
         </template>
-      </main>
+      </div>
     </div>
   </AppShell>
 </template>

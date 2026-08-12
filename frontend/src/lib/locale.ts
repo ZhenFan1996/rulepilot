@@ -41,7 +41,34 @@ const messages = {
     'shell.loginReminder.dismiss': '关闭登录提醒',
     'shell.homeAria': 'RulePilot 首页',
     'shell.primaryNav': '主要导航',
+    'shell.skipToContent': '跳到主要内容',
+    'shell.mainContent': '主要内容',
     'shell.backgroundWork': '后台任务',
+    'route.title.home': '首页',
+    'route.title.login': '登录',
+    'route.title.register': '注册',
+    'route.title.games': '我的游戏',
+    'route.title.manageGames': '管理游戏资料',
+    'route.title.game': '桌游资料',
+    'route.title.discover': '找桌游',
+    'route.title.browseGames': '浏览桌游',
+    'route.title.gameDetails': '桌游详情',
+    'route.title.addRulebook': '添加规则书',
+    'route.title.guides': '我的讲解',
+    'route.title.account': '我的账户',
+    'route.title.models': '模型设置',
+    'route.title.agentAudit': 'Agent 审计',
+    'route.title.guide': '桌游讲解',
+    'route.title.questions': '规则答疑',
+    'route.title.rulebook': '规则书',
+    'route.title.publicGuide': '公开讲解',
+    'route.title.library': '公开讲解库',
+    'route.title.notFound': '页面不存在',
+    'notFound.eyebrow': '这条路没有规则页',
+    'notFound.title': '没找到这个页面',
+    'notFound.description': '链接可能已经改变，或者地址少了一部分。你的游戏、规则书和讲解都没有被修改。',
+    'notFound.home': '回到首页',
+    'notFound.discover': '去找一款桌游',
     'media.play': '播放',
     'media.pause': '暂停',
     'narration.title': '本节解说稿',
@@ -1042,7 +1069,7 @@ const messages = {
   },
 } as const
 
-type TranslationKey = keyof typeof messages['zh-CN']
+export type TranslationKey = keyof typeof messages['zh-CN']
 type Variables = Record<string, string | number>
 
 function preferredLocale(): AppLocale {

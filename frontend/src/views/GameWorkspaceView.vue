@@ -103,7 +103,7 @@ onMounted(load)
 
 <template>
   <AppShell>
-    <main class="tabletop-page max-w-6xl">
+    <div class="tabletop-page max-w-6xl">
       <RouterLink :to="{ name: 'catalog' }" class="text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
       <div v-if="loading" class="mt-8 h-96 animate-pulse rounded-2xl bg-ink/8" aria-live="polite" />
@@ -167,6 +167,6 @@ onMounted(load)
           </div>
         </section>
       </template>
-    </main>
+    </div>
   </AppShell>
 </template>

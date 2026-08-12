@@ -1,18 +1,44 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { SESSION_CLEARED_EVENT } from '@/lib/authSession'
+import { preloadLocale, useLocale } from '@/lib/locale'
+import { focusMainContent, routeDocumentTitle, routeNeedsContentFocus } from '@/lib/routeExperience'
 
 const sessionEpoch = ref(0)
+const route = useRoute()
+const router = useRouter()
+const { locale, t } = useLocale()
+let removeRouteFocusHook: (() => void) | undefined
 
 function clearVisibleSessionState() {
   sessionEpoch.value += 1
 }
 
-onMounted(() => window.addEventListener(SESSION_CLEARED_EVENT, clearVisibleSessionState))
-onBeforeUnmount(() => window.removeEventListener(SESSION_CLEARED_EVENT, clearVisibleSessionState))
+onMounted(async () => {
+  window.addEventListener(SESSION_CLEARED_EVENT, clearVisibleSessionState)
+  await router.isReady()
+  removeRouteFocusHook = router.afterEach(async (to, from) => {
+    if (!routeNeedsContentFocus(to, from)) return
+    await nextTick()
+    focusMainContent()
+  })
+})
+onBeforeUnmount(() => {
+  window.removeEventListener(SESSION_CLEARED_EVENT, clearVisibleSessionState)
+  removeRouteFocusHook?.()
+})
+
+watch([() => route.meta.titleKey, locale], async ([, requestedLocale]) => {
+  await preloadLocale(requestedLocale)
+  if (locale.value !== requestedLocale) return
+  document.title = routeDocumentTitle(route, t)
+}, { immediate: true })
+
 </script>
 
 <template>
+  <a href="#main-content" class="skip-to-content">{{ t('shell.skipToContent') }}</a>
   <RouterView :key="sessionEpoch" />
 </template>

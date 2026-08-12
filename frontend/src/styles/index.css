@@ -92,6 +92,33 @@ body {
   outline-offset: 3px;
 }
 
+.skip-to-content {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 70;
+  min-height: 2.75rem;
+  translate: 0 calc(-100% - 1rem);
+  display: inline-flex;
+  align-items: center;
+  border: 2px solid var(--color-gold);
+  border-radius: 0.75rem;
+  padding-inline: 1rem;
+  color: var(--color-paper);
+  background: var(--color-ink-panel);
+  font-weight: 700;
+  box-shadow: 0 12px 30px -18px rgb(0 0 0 / 70%);
+  transition: translate 140ms ease;
+}
+
+.skip-to-content:focus {
+  translate: 0;
+}
+
+.app-main {
+  scroll-margin-top: 5rem;
+}
+
 button,
 a {
   -webkit-tap-highlight-color: transparent;

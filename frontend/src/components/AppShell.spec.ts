@@ -59,6 +59,12 @@ describe('AppShell', () => {
     })
     await flushPromises()
 
+    expect(wrapper.findAll('main')).toHaveLength(1)
+    expect(wrapper.get('main').attributes()).toMatchObject({
+      id: 'main-content',
+      tabindex: '-1',
+      'aria-label': '主要内容',
+    })
     const backgroundWorkTrigger = wrapper.get('[data-testid="background-work-trigger-desktop"]')
     expect(backgroundWorkTrigger.element.parentElement?.id).toBe('background-work-desktop-trigger')
     expect(backgroundWorkTrigger.classes()).not.toContain('fixed')

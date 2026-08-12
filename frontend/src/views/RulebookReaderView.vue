@@ -220,7 +220,7 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <main ref="readerTop" class="mx-auto grid max-w-[100rem] scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+      <div ref="readerTop" class="mx-auto grid max-w-[100rem] scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
         <p v-if="loading" class="col-span-full rounded-xl bg-paper p-8 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
         <section v-else-if="errorMessage" class="col-span-full rounded-xl border border-red-200 bg-paper p-8 text-center" role="alert">
           <p class="font-semibold">{{ errorMessage }}</p>
@@ -246,7 +246,7 @@ onUnmounted(() => {
             <p class="mx-auto mt-3 max-w-5xl text-center text-xs text-ink/50">{{ copy.page(selectedPage) }} · {{ copy.hint }}</p>
           </section>
         </template>
-      </main>
+      </div>
 
       <button v-if="!answersOpen && !loading && !errorMessage" type="button" class="fixed bottom-5 right-4 z-30 min-h-12 rounded-full bg-copper px-5 text-sm font-bold text-white shadow-xl sm:right-6" @click="answersOpen = true">{{ copy.answer }}</button>
 

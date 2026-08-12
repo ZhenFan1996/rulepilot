@@ -196,14 +196,14 @@ watch(() => [props.open, props.planId] as const, ([open]) => {
           </div>
         </header>
 
-        <main class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
+        <div class="mx-auto max-w-7xl px-4 py-5 sm:px-7 sm:py-7">
           <p v-if="loading" class="rounded-xl bg-paper p-10 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
           <section v-else-if="error || !plan || !lesson" class="rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
           <template v-else>
             <p class="rounded-xl border border-indigo/10 bg-indigo/5 px-4 py-3 text-xs leading-5 text-ink/55">{{ copy.source }}</p>
             <LessonChapterList :sections="lesson.sections" :id-prefix="`journey-lesson-${lesson.id}`" :page-image-url="pageImageUrl" :focused-page-image-url="focusedPageImageUrl" />
           </template>
-        </main>
+        </div>
       </section>
     </div>
   </Teleport>

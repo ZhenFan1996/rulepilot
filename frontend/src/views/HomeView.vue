@@ -75,7 +75,7 @@ watch(locale, load)
 
 <template>
   <AppShell>
-    <main class="tabletop-page home-page max-w-7xl">
+    <div class="tabletop-page home-page max-w-7xl">
       <section class="home-intro tabletop-illustrated-hero player-board" aria-labelledby="home-title">
         <div class="home-intro__copy">
           <p class="tabletop-kicker">{{ greeting }}</p>
@@ -188,7 +188,7 @@ watch(locale, load)
         <span class="home-coda__ornament" aria-hidden="true">❦</span>
         <p>{{ t('home.footer') }}</p>
       </footer>
-    </main>
+    </div>
   </AppShell>
 </template>
 

@@ -191,7 +191,7 @@ watch(locale, load)
 
 <template>
   <AppShell>
-    <main class="tabletop-page max-w-6xl">
+    <div class="tabletop-page max-w-6xl">
       <RouterLink to="/discover" class="inline-flex min-h-11 items-center text-sm font-semibold text-indigo">← {{ copy.back }}</RouterLink>
 
       <div v-if="loading" class="mt-8 animate-pulse rounded-2xl border border-ink/10 bg-paper p-6" :aria-label="copy.loading">
@@ -265,7 +265,7 @@ watch(locale, load)
         <p>{{ errorMessage }}</p>
         <button v-if="!game" type="button" class="mt-3 font-semibold underline" @click="load">{{ copy.retry }}</button>
       </div>
-    </main>
+    </div>
   </AppShell>
 </template>
 

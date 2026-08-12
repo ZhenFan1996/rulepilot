@@ -1000,7 +1000,7 @@ onBeforeUnmount(() => {
 
 <template>
   <AppShell>
-    <main class="tabletop-page max-w-6xl">
+    <div class="tabletop-page max-w-6xl">
       <section class="mx-auto max-w-5xl">
         <div class="tabletop-illustrated-hero player-board grid lg:grid-cols-[1.08fr_0.92fr]">
           <div class="relative min-h-64 overflow-hidden border-b border-ink/10 lg:min-h-full lg:border-b-0 lg:border-r" aria-hidden="true">
@@ -1264,6 +1264,6 @@ onBeforeUnmount(() => {
           </li>
         </ul>
       </section>
-    </main>
+    </div>
   </AppShell>
 </template>

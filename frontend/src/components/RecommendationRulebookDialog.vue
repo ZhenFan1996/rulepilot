@@ -66,7 +66,7 @@ watch(() => [props.open, props.versionId] as const, ([open]) => {
         <button type="button" class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>
 
-      <main ref="readerTop" class="grid scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
+      <div ref="readerTop" class="grid scroll-mt-20 gap-4 px-3 py-4 sm:px-6 lg:grid-cols-[12rem_minmax(0,1fr)]">
         <p v-if="loading" class="col-span-full rounded-xl bg-paper p-10 text-center text-sm text-ink/55" role="status">{{ copy.loading }}</p>
         <section v-else-if="error" class="col-span-full rounded-xl border border-red-200 bg-paper p-10 text-center" role="alert"><p>{{ copy.error }}</p><button type="button" class="mt-4 min-h-11 rounded-lg bg-indigo px-5 font-semibold text-white" @click="load">{{ copy.retry }}</button></section>
         <template v-else>
@@ -80,7 +80,7 @@ watch(() => [props.open, props.versionId] as const, ([open]) => {
             <p class="mt-3 text-center text-xs text-ink/50">{{ copy.page(selectedPage) }}</p>
           </section>
         </template>
-      </main>
+      </div>
     </section>
   </div>
 </template>

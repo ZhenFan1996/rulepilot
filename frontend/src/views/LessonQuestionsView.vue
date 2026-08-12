@@ -309,7 +309,7 @@ onUnmounted(() => {
       <p v-if="!online" class="bg-amber-100 px-5 py-3 text-center text-sm font-semibold text-amber-900" role="status">{{ t('questions.offline') }}</p>
       <LessonOfflineKnowledgePanel v-if="!online && offlineKnowledge.length" :entries="offlineKnowledge" />
 
-      <main class="tabletop-page max-w-4xl">
+      <div class="tabletop-page max-w-4xl">
         <div v-if="loading" aria-live="polite">
           <div class="h-4 w-32 animate-pulse rounded bg-ink/10" />
           <div class="mt-4 h-12 w-3/5 animate-pulse rounded bg-ink/10" />
@@ -376,7 +376,7 @@ onUnmounted(() => {
             @save-ruling-revision="saveRulingRevision"
           />
         </template>
-      </main>
+      </div>
 
       <CardOcrCapture v-if="cardOcrOpen" @close="cardOcrOpen = false" @recognized="useCardText" />
     </div>
