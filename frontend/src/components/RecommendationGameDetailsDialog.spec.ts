@@ -26,7 +26,7 @@ describe('RecommendationGameDetailsDialog', () => {
   it('shows source details immediately, then replaces them with localized details without leaving the page', async () => {
     let resolveLocalized!: (response: Response) => void
     const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL | Request, _options?: RequestInit) => {
       const path = String(input)
       if (path.includes('translate=false')) return Response.json({
         ...game,
@@ -70,5 +70,154 @@ describe('RecommendationGameDetailsDialog', () => {
       '/api/v1/bgg/games/266192?locale=zh-CN&translate=false',
       '/api/v1/bgg/games/266192?locale=zh-CN&translate=true',
     ])
+    expect(fetchMock.mock.calls.every(([, options]) => options?.signal instanceof AbortSignal)).toBe(true)
+  })
+
+  it('aborts a previous card request and never commits its delayed result', async () => {
+    let resolveOld!: (response: Response) => void
+    const oldResponse = new Promise<Response>(resolve => { resolveOld = resolve })
+    let oldSignal: AbortSignal | undefined
+    const nextGame = { ...game, bggId: 13, name: '璀璨宝石', originalName: 'Splendor', bggUrl: 'https://boardgamegeek.com/boardgame/13' }
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/266192')) {
+        oldSignal = options?.signal ?? undefined
+        return oldResponse
+      }
+      return Promise.resolve(Response.json({ ...nextGame, description: '收集宝石发展卡。', imageUrl: '' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    await wrapper.setProps({ game: nextGame })
+    await flushPromises()
+    expect(oldSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('收集宝石发展卡。')
+
+    resolveOld(Response.json({ ...game, description: '迟到的旧资料。', imageUrl: '' }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('收集宝石发展卡。')
+    expect(wrapper.text()).not.toContain('迟到的旧资料。')
+    await wrapper.findAll('button').find(button => button.text() === '选这款，继续找规则书')!.trigger('click')
+    expect(wrapper.emitted('select')?.[0]?.[0]).toEqual(nextGame)
+  })
+
+  it('cancels work on close and does not start localization from a delayed source response', async () => {
+    let resolveSource!: (response: Response) => void
+    const source = new Promise<Response>(resolve => { resolveSource = resolve })
+    let sourceSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((_input: string | URL | Request, options?: RequestInit) => {
+      sourceSignal = options?.signal ?? undefined
+      return source
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    await wrapper.setProps({ open: false })
+    expect(sourceSignal?.aborted).toBe(true)
+    resolveSource(Response.json({ ...game, description: '已经关闭。', imageUrl: '' }))
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('reopens with a new request generation that a delayed closed response cannot replace', async () => {
+    let resolveClosed!: (response: Response) => void
+    const closedResponse = new Promise<Response>(resolve => { resolveClosed = resolve })
+    let sourceRequests = 0
+    let closedSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('translate=false')) {
+        sourceRequests += 1
+        if (sourceRequests === 1) {
+          closedSignal = options?.signal ?? undefined
+          return closedResponse
+        }
+      }
+      return Promise.resolve(Response.json({ ...game, description: '重新打开后的资料。', imageUrl: '' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    await wrapper.setProps({ open: false })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    expect(closedSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('重新打开后的资料。')
+
+    resolveClosed(Response.json({ ...game, description: '关闭前的迟到资料。', imageUrl: '' }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('重新打开后的资料。')
+    expect(wrapper.text()).not.toContain('关闭前的迟到资料。')
+  })
+
+  it('aborts localization on locale change and keeps the new language response', async () => {
+    let resolveLocalized!: (response: Response) => void
+    const localized = new Promise<Response>(resolve => { resolveLocalized = resolve })
+    let localizedSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('locale=zh-CN') && path.includes('translate=true')) {
+        localizedSignal = options?.signal ?? undefined
+        return localized
+      }
+      if (path.includes('locale=en')) return Promise.resolve(Response.json({
+        ...game, name: 'Wingspan', originalName: 'Wingspan', description: 'Current English details.', imageUrl: '',
+      }))
+      return Promise.resolve(Response.json({ ...game, description: 'Source details.', imageUrl: '' }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    setLocale('en')
+    await flushPromises()
+    expect(localizedSignal?.aborted).toBe(true)
+    expect(wrapper.text()).toContain('Current English details.')
+
+    resolveLocalized(Response.json({ ...game, description: '迟到的中文资料。', imageUrl: '' }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('Current English details.')
+    expect(wrapper.text()).not.toContain('迟到的中文资料。')
+  })
+
+  it('rejects mismatched response identity instead of pairing it with the card selection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      ...game,
+      bggId: 13,
+      name: 'Wrong Game',
+      description: 'Wrong identity.',
+      imageUrl: '',
+    })))
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('暂时无法读取详细资料。')
+    expect(wrapper.text()).not.toContain('Wrong identity.')
+    expect(wrapper.findAll('button').some(button => button.text() === '选这款，继续找规则书')).toBe(false)
+  })
+
+  it('aborts a pending request when the dialog component unmounts', async () => {
+    let resolveSource!: (response: Response) => void
+    const source = new Promise<Response>(resolve => { resolveSource = resolve })
+    let signal: AbortSignal | undefined
+    const fetchMock = vi.fn((_input: string | URL | Request, options?: RequestInit) => {
+      signal = options?.signal ?? undefined
+      return source
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(RecommendationGameDetailsDialog, { props: { game, open: true } })
+    await flushPromises()
+
+    wrapper.unmount()
+    expect(signal?.aborted).toBe(true)
+    resolveSource(Response.json({ ...game, description: 'After unmount.', imageUrl: '' }))
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
