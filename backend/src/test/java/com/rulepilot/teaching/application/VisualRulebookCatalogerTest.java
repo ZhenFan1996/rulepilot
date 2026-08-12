@@ -756,6 +756,7 @@ class VisualRulebookCatalogerTest {
     void readsAShortRulebookInOneLightweightStartupBatchAndRetriesOnlyMissingBindings() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> batches = new java.util.ArrayList<>();
+        List<List<Integer>> imageReads = new java.util.ArrayList<>();
         AtomicInteger heavyCatalogCalls = new AtomicInteger();
         InMemoryFacts facts = new InMemoryFacts();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
@@ -781,9 +782,13 @@ class VisualRulebookCatalogerTest {
             }
         };
         VisualRulebookCataloger cataloger = cataloger(
-                (id, pages) -> pages.stream()
+                (id, pages) -> {
+                    assertThat(pages).hasSizeLessThanOrEqualTo(DocumentPageImages.MAX_PAGES_PER_READ);
+                    imageReads.add(List.copyOf(pages));
+                    return pages.stream()
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
-                        .toList(),
+                        .toList();
+                },
                 model,
                 facts);
 
@@ -795,6 +800,8 @@ class VisualRulebookCatalogerTest {
                 null);
 
         assertThat(batches).containsExactly(List.of(1, 2, 3, 4, 5, 6, 7, 8), List.of(5));
+        assertThat(imageReads)
+                .containsExactly(List.of(1, 2, 3, 4, 5), List.of(6, 7, 8), List.of(5));
         assertThat(heavyCatalogCalls).hasValue(0);
         assertThat(result).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
         assertThat(result).allSatisfy(input -> assertThat(input.text()).contains("Visible rule"));

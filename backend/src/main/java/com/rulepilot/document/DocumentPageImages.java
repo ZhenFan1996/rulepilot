@@ -6,6 +6,9 @@ import java.util.UUID;
 
 public interface DocumentPageImages {
 
+    /** Keeps one object-store read bounded while allowing callers to assemble a larger model request incrementally. */
+    int MAX_PAGES_PER_READ = 5;
+
     List<PageImage> read(UUID documentVersionId, Set<Integer> pageNumbers);
 
     record PageImage(int pageNumber, String mediaType, byte[] content, int width, int height) {
