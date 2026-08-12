@@ -30,7 +30,7 @@ public class TeachingPlanLauncher {
             TeachingPlanService plans,
             IllustratedLessonLauncher lessons,
             AssistantRuns runs,
-            @Qualifier("teachingGenerationExecutor") TaskExecutor executor) {
+            @Qualifier("teachingStartupExecutor") TaskExecutor executor) {
         this.plans = plans;
         this.lessons = lessons;
         this.runs = runs;
@@ -92,7 +92,9 @@ public class TeachingPlanLauncher {
                             learningGoal,
                             ownerUsername,
                             planningRun.id()));
-            lessons.launch(plan.id(), ownerUsername);
+            // Preparation already owns the startup lane. Generate and persist the first cited section here before
+            // handing the remaining chapters to the continuation lane, so old long-tail work cannot delay usefulness.
+            lessons.launchImmediately(plan.id(), ownerUsername);
             current = runs.advance(
                     current.id(), current.revision(), AssistantRunState.COMPLETED,
                     "Teaching plan is ready");

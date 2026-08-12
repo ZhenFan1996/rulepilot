@@ -693,6 +693,91 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void startBasePublishesExactlyOneCitedSectionBeforeContinuationWorkRuns() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger compositions = new AtomicInteger();
+        List<IllustratedLesson> publications = new ArrayList<>();
+        TeachingLessonModel model = request -> {
+            compositions.incrementAndGet();
+            return new SectionDraft(
+                    request.title(),
+                    VisualKind.REFERENCE_CARD,
+                    "按引用完成这一节。",
+                    List.of(chunkId),
+                    List.of(new StepDraft("照着做", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                12,
+                1);
+
+        var continuation = agent.startBase(
+                continuityPlan(versionId), UUID.randomUUID(), null, publications::add);
+
+        assertThat(compositions).hasValue(1);
+        assertThat(publications).singleElement().satisfies(first -> {
+            assertThat(first.sections()).singleElement().satisfies(section -> {
+                assertThat(section.position()).isEqualTo(1);
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.CITED_DRAFT);
+                assertThat(section.steps().getFirst().sourceChunkIds()).containsExactly(chunkId);
+            });
+        });
+
+        IllustratedLesson complete = agent.continueBase(continuation, publications::add);
+
+        assertThat(compositions).hasValue(3);
+        assertThat(complete.sections()).hasSize(3);
+    }
+
+    @Test
+    void startupContinuesPastInsufficientEvidenceUntilOneCitedSectionIsReadable() {
+        UUID versionId = UUID.randomUUID();
+        UUID chunkId = UUID.randomUUID();
+        AtomicInteger compositions = new AtomicInteger();
+        List<IllustratedLesson> publications = new ArrayList<>();
+        TeachingLessonModel model = request -> {
+            compositions.incrementAndGet();
+            return new SectionDraft(
+                    request.title(),
+                    VisualKind.REFERENCE_CARD,
+                    "按引用完成这一节。",
+                    List.of(chunkId),
+                    List.of(new StepDraft("照着做", TeachingMove.DO, "按引用完成这一节。", List.of(chunkId))));
+        };
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                request -> request.query().contains(TeachingSectionType.OBJECTIVE.name())
+                        ? List.of()
+                        : List.of(evidence(chunkId, versionId)),
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                12,
+                1);
+
+        var continuation = agent.startBase(
+                continuityPlan(versionId), UUID.randomUUID(), null, publications::add);
+
+        assertThat(compositions).hasValue(1);
+        assertThat(publications).hasSize(2);
+        assertThat(publications.getFirst().sections()).singleElement().satisfies(section ->
+                assertThat(section.evidenceStatus()).isEqualTo(EvidenceStatus.INSUFFICIENT_EVIDENCE));
+        assertThat(publications.getLast().sections().getLast().evidenceStatus())
+                .isEqualTo(EvidenceStatus.CITED_DRAFT);
+        assertThat(continuation.hasRemainingWork()).isTrue();
+
+        IllustratedLesson complete = agent.continueBase(continuation, publications::add);
+
+        assertThat(compositions).hasValue(2);
+        assertThat(complete.sections()).hasSize(3);
+    }
+
+    @Test
     void doesNotRewriteNaturalPunctuationWhenTheSemanticCriticAcceptsTheDraft() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();

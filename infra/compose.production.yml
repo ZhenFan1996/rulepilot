@@ -30,9 +30,13 @@ services:
       # ratio kept most of the 320 MiB maximum committed while idle and forced this 2 GiB host into swap.
       JAVA_TOOL_OPTIONS: -Xms96m -Xmx320m -Xss512k -XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=20
       # Model calls are network-bound. Two bounded runs prevent one player's preparation or lesson from making a
-      # second player wait minutes for the first section, while the fixed heap and short queue protect this host.
-      TEACHING_BACKGROUND_CORE_POOL_SIZE: "2"
-      TEACHING_BACKGROUND_MAX_POOL_SIZE: "2"
+      # second player wait minutes for the first section. One lane is reserved for outline + first cited section;
+      # one continuation lane finishes chapters and review, preserving the existing two-call host ceiling.
+      OUTBOX_PUBLISH_FIXED_DELAY: "500ms"
+      TEACHING_IMPORT_HANDOFF_FIXED_DELAY: "500ms"
+      TEACHING_STARTUP_QUEUE_CAPACITY: "3"
+      TEACHING_BACKGROUND_CORE_POOL_SIZE: "1"
+      TEACHING_BACKGROUND_MAX_POOL_SIZE: "1"
       TEACHING_BACKGROUND_QUEUE_CAPACITY: "3"
       # On a single-core host, one section at a time avoids three concurrent model responses retaining large
       # evidence contexts in the web process. The reader-facing API stays responsive while the complete lesson

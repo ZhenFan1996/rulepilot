@@ -5,6 +5,9 @@ import com.rulepilot.assistant.AssistantRunState;
 import com.rulepilot.assistant.AssistantRuns;
 import com.rulepilot.assistant.AssistantRuns.RunSnapshot;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -15,9 +18,12 @@ import org.springframework.stereotype.Service;
 @Profile("!test")
 public class IllustratedLessonLauncher {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(IllustratedLessonLauncher.class);
+
     private final IllustratedLessonService lessons;
     private final AssistantRuns runs;
-    private final TaskExecutor lessonExecutor;
+    private final TaskExecutor startupExecutor;
+    private final TaskExecutor continuationExecutor;
     private final TaskExecutor visualEnrichmentExecutor;
     private final VisualLessonEnrichmentService visuals;
 
@@ -25,12 +31,14 @@ public class IllustratedLessonLauncher {
     public IllustratedLessonLauncher(
             IllustratedLessonService lessons,
             AssistantRuns runs,
-            @Qualifier("teachingGenerationExecutor") TaskExecutor lessonExecutor,
+            @Qualifier("teachingStartupExecutor") TaskExecutor startupExecutor,
+            @Qualifier("teachingGenerationExecutor") TaskExecutor continuationExecutor,
             @Qualifier("visualEnrichmentExecutor") TaskExecutor visualEnrichmentExecutor,
             VisualLessonEnrichmentService visuals) {
         this.lessons = lessons;
         this.runs = runs;
-        this.lessonExecutor = lessonExecutor;
+        this.startupExecutor = startupExecutor;
+        this.continuationExecutor = continuationExecutor;
         this.visualEnrichmentExecutor = visualEnrichmentExecutor;
         this.visuals = visuals;
     }
@@ -39,7 +47,7 @@ public class IllustratedLessonLauncher {
             IllustratedLessonService lessons,
             AssistantRuns runs,
             TaskExecutor executor) {
-        this(lessons, runs, executor, executor, null);
+        this(lessons, runs, executor, executor, executor, null);
     }
 
     public IllustratedLessonLauncher(
@@ -47,7 +55,16 @@ public class IllustratedLessonLauncher {
             AssistantRuns runs,
             TaskExecutor executor,
             VisualLessonEnrichmentService visuals) {
-        this(lessons, runs, executor, executor, visuals);
+        this(lessons, runs, executor, executor, executor, visuals);
+    }
+
+    public IllustratedLessonLauncher(
+            IllustratedLessonService lessons,
+            AssistantRuns runs,
+            TaskExecutor lessonExecutor,
+            TaskExecutor visualEnrichmentExecutor,
+            VisualLessonEnrichmentService visuals) {
+        this(lessons, runs, lessonExecutor, lessonExecutor, visualEnrichmentExecutor, visuals);
     }
 
     public synchronized LessonLaunch launch(UUID teachingPlanId, String ownerUsername) {
@@ -60,21 +77,78 @@ public class IllustratedLessonLauncher {
         }
 
         RunSnapshot run = lessons.begin(teachingPlanId, ownerUsername);
+        AtomicBoolean taskStarted = new AtomicBoolean();
         try {
-            lessonExecutor.execute(() -> {
-                var outcome = lessons.generate(teachingPlanId, ownerUsername, run);
-                lessons.finish(outcome);
-                if (visuals != null
-                        && visuals.supportsVisualEvidence(ownerUsername)
-                        && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
-                    enrichLatest(teachingPlanId, ownerUsername);
-                }
+            startupExecutor.execute(() -> {
+                taskStarted.set(true);
+                startAndScheduleContinuation(teachingPlanId, ownerUsername, run);
             });
         } catch (RuntimeException schedulingFailure) {
-            lessons.failScheduling(run);
+            if (!taskStarted.get()) lessons.failScheduling(run);
             throw schedulingFailure;
         }
         return new LessonLaunch(run.id(), run.state(), false);
+    }
+
+    /** Runs on the dedicated startup lane already occupied by teaching-plan preparation. */
+    LessonLaunch launchImmediately(UUID teachingPlanId, String ownerUsername) {
+        RunSnapshot run;
+        synchronized (this) {
+            var existing = runs.findLatestOwned(AssistantRunMode.TEACHING, teachingPlanId, ownerUsername)
+                    .map(AssistantRuns.RunDetails::run)
+                    .filter(candidate -> !candidate.state().terminal());
+            if (existing.isPresent()) {
+                RunSnapshot active = existing.get();
+                return new LessonLaunch(active.id(), active.state(), true);
+            }
+            run = lessons.begin(teachingPlanId, ownerUsername);
+        }
+        startAndScheduleContinuation(teachingPlanId, ownerUsername, run);
+        return new LessonLaunch(run.id(), run.state(), false);
+    }
+
+    private void startAndScheduleContinuation(
+            UUID teachingPlanId,
+            String ownerUsername,
+            RunSnapshot run) {
+        var continuation = lessons.startGeneration(teachingPlanId, ownerUsername, run);
+        if (!continuation.hasRemainingWork()) {
+            finishContinuation(teachingPlanId, ownerUsername, continuation);
+            return;
+        }
+        AtomicBoolean taskStarted = new AtomicBoolean();
+        try {
+            continuationExecutor.execute(() -> {
+                taskStarted.set(true);
+                finishContinuation(teachingPlanId, ownerUsername, continuation);
+            });
+        } catch (RuntimeException schedulingFailure) {
+            if (taskStarted.get()) throw schedulingFailure;
+            try {
+                lessons.failContinuationScheduling(continuation);
+            } catch (RuntimeException trackingFailure) {
+                schedulingFailure.addSuppressed(trackingFailure);
+            }
+            // The first source-cited section is already durable. Keep preparation successful so the reader can open it;
+            // the failed Teaching run truthfully exposes the retry instead of hiding useful content.
+            LOGGER.warn(
+                    "Teaching continuation could not be scheduled after the first cited section for plan {}",
+                    teachingPlanId,
+                    schedulingFailure);
+        }
+    }
+
+    private void finishContinuation(
+            UUID teachingPlanId,
+            String ownerUsername,
+            IllustratedLessonService.GenerationContinuation continuation) {
+        var outcome = lessons.continueGeneration(continuation);
+        lessons.finish(outcome);
+        if (visuals != null
+                && visuals.supportsVisualEvidence(ownerUsername)
+                && outcome.lessonStatus() != com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus.INCOMPLETE) {
+            enrichLatest(teachingPlanId, ownerUsername);
+        }
     }
 
     public VisualLessonEnrichmentService.VisualEnrichmentLaunch enrichLatest(UUID teachingPlanId, String ownerUsername) {

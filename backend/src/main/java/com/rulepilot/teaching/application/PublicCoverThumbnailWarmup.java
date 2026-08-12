@@ -5,6 +5,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Component;
 /** Warms existing public covers with bounded parallelism after startup without borrowing lesson-generation capacity. */
 @Component
 @Profile("!test")
+@ConditionalOnProperty(name = "rulepilot.runtime.api-enabled", havingValue = "true", matchIfMissing = true)
 class PublicCoverThumbnailWarmup {
 
     private static final Logger log = LoggerFactory.getLogger(PublicCoverThumbnailWarmup.class);

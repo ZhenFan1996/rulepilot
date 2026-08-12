@@ -13,6 +13,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.TeachingLessonModel.PriorSectionContext;
 import com.rulepilot.teaching.domain.IllustratedLesson;
+import com.rulepilot.teaching.domain.IllustratedLesson.EvidenceStatus;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonSection;
 import com.rulepilot.teaching.domain.IllustratedLesson.LessonStatus;
 import com.rulepilot.teaching.domain.TeachingPlan;
@@ -233,6 +234,23 @@ public class GroundedTeachingAgent {
             UUID assistantRunId,
             IllustratedLesson previousLesson,
             Consumer<IllustratedLesson> progressPublisher) {
+        return continueBase(
+                startBase(plan, assistantRunId, previousLesson, progressPublisher),
+                progressPublisher);
+    }
+
+    /**
+     * Publishes through the first source-cited section before the longer remaining-section and review work is queued.
+     * An evidence-insufficient early topic is persisted truthfully, then startup advances in plan order until useful
+     * cited content exists or every topic is known to be insufficient.
+     * The returned continuation is process-local on purpose: an application restart fails the owning Assistant Run,
+     * while the already persisted first section remains readable and an explicit retry rebuilds from durable state.
+     */
+    BaseLessonContinuation startBase(
+            TeachingPlan plan,
+            UUID assistantRunId,
+            IllustratedLesson previousLesson,
+            Consumer<IllustratedLesson> progressPublisher) {
         if (progressPublisher == null) throw new IllegalArgumentException("lesson progress publisher is required");
         UUID lessonId = UUID.randomUUID();
         Instant createdAt = Instant.now();
@@ -240,19 +258,46 @@ public class GroundedTeachingAgent {
         int queriesPerTopic = baseQueryBudget(plan);
         List<LessonSection> sections = new ArrayList<>();
         List<TeachingSectionDraftCandidate> reviewCandidates = new ArrayList<>();
-        TeachingPlan.PlannedSection first = plan.sections().getFirst();
-        SectionOutcome firstOutcome = baseSection(
-                plan,
-                first,
-                List.of(),
-                reusable,
-                assistantRunId,
-                queriesPerTopic);
-        sections.add(firstOutcome.section());
-        if (firstOutcome.reviewCandidate() != null) reviewCandidates.add(firstOutcome.reviewCandidate());
-        publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+        for (TeachingPlan.PlannedSection planned : plan.sections()) {
+            SectionOutcome outcome = baseSection(
+                    plan,
+                    planned,
+                    lessonAssembly.continuityContext(sections),
+                    reusable,
+                    assistantRunId,
+                    queriesPerTopic);
+            sections.add(outcome.section());
+            if (outcome.reviewCandidate() != null) reviewCandidates.add(outcome.reviewCandidate());
+            publishProgress(progressPublisher, lessonId, plan, sections, createdAt);
+            if (outcome.section().evidenceStatus() != EvidenceStatus.INSUFFICIENT_EVIDENCE) break;
+        }
 
-        List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(1, plan.sections().size());
+        return new BaseLessonContinuation(
+                plan,
+                assistantRunId,
+                lessonId,
+                createdAt,
+                reusable,
+                queriesPerTopic,
+                sections,
+                reviewCandidates);
+    }
+
+    IllustratedLesson continueBase(
+            BaseLessonContinuation continuation,
+            Consumer<IllustratedLesson> progressPublisher) {
+        if (continuation == null || progressPublisher == null) {
+            throw new IllegalArgumentException("lesson continuation and progress publisher are required");
+        }
+        TeachingPlan plan = continuation.plan;
+        UUID assistantRunId = continuation.assistantRunId;
+        UUID lessonId = continuation.lessonId;
+        Instant createdAt = continuation.createdAt;
+        Map<String, LessonSection> reusable = continuation.reusableSections;
+        int queriesPerTopic = continuation.queriesPerTopic;
+        List<LessonSection> sections = continuation.sections;
+        List<TeachingSectionDraftCandidate> reviewCandidates = continuation.reviewCandidates;
+        List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(sections.size(), plan.sections().size());
         if (!remaining.isEmpty()) {
             List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
@@ -294,6 +339,40 @@ public class GroundedTeachingAgent {
                     () -> progressPublisher.accept(lesson(lessonId, plan, sections, createdAt)));
         }
         return lesson(lessonId, plan, sections, createdAt);
+    }
+
+    static final class BaseLessonContinuation {
+        private final TeachingPlan plan;
+        private final UUID assistantRunId;
+        private final UUID lessonId;
+        private final Instant createdAt;
+        private final Map<String, LessonSection> reusableSections;
+        private final int queriesPerTopic;
+        private final List<LessonSection> sections;
+        private final List<TeachingSectionDraftCandidate> reviewCandidates;
+
+        private BaseLessonContinuation(
+                TeachingPlan plan,
+                UUID assistantRunId,
+                UUID lessonId,
+                Instant createdAt,
+                Map<String, LessonSection> reusableSections,
+                int queriesPerTopic,
+                List<LessonSection> sections,
+                List<TeachingSectionDraftCandidate> reviewCandidates) {
+            this.plan = plan;
+            this.assistantRunId = assistantRunId;
+            this.lessonId = lessonId;
+            this.createdAt = createdAt;
+            this.reusableSections = reusableSections;
+            this.queriesPerTopic = queriesPerTopic;
+            this.sections = sections;
+            this.reviewCandidates = reviewCandidates;
+        }
+
+        boolean hasRemainingWork() {
+            return sections.size() < plan.sections().size() || !reviewCandidates.isEmpty();
+        }
     }
 
     private SectionOutcome baseSection(
