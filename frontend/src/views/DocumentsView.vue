@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { mergeDocumentProgress, type DocumentProcessingSnapshot } from '@/lib/documentProgress'
 import {
@@ -120,6 +121,19 @@ const uploading = ref(false)
 const importingOfficial = ref(false)
 const officialImportJob = ref<OfficialRulebookImportJob | null>(null)
 const deletingDocumentId = ref('')
+const documentToDelete = ref<DocumentResponse | null>(null)
+const deleteError = ref('')
+const documentListHeading = ref<HTMLElement | null>(null)
+const restoreAfterDocumentDelete = ref(false)
+const deleteCopy = computed(() => locale.value === 'zh-CN' ? {
+  title: '删除这本规则书？',
+  description: (name: string) => `“${name}”及其本地页面图片和由它生成的讲解都会被删除，无法恢复。`,
+  cancel: '保留规则书', confirm: '删除规则书', retry: '重新尝试删除',
+} : {
+  title: 'Delete this rulebook?',
+  description: (name: string) => `“${name}”, its local page images, and the guides created from it will all be deleted. This cannot be undone.`,
+  cancel: 'Keep rulebook', confirm: 'Delete rulebook', retry: 'Try deletion again',
+})
 const preparingVersionId = ref('')
 const preparationElapsedSeconds = ref(0)
 const processingVersionId = ref('')
@@ -957,27 +971,50 @@ function officialImportStage() {
   return officialImportCopy.value[job.stage]
 }
 
-async function deleteRulebook(entry: DocumentResponse) {
+function requestDeleteRulebook(entry: DocumentResponse) {
   if (deletingDocumentId.value || preparingVersionId.value) return
-  const confirmed = window.confirm(t('documents.delete.confirm', { title: entry.document.title }))
-  if (!confirmed) return
-  deletingDocumentId.value = entry.document.id
-  errorMessage.value = ''
+  documentToDelete.value = entry
+  deleteError.value = ''
+  restoreAfterDocumentDelete.value = false
+}
+
+function cancelDeleteRulebook() {
+  if (deletingDocumentId.value) return
+  documentToDelete.value = null
+  deleteError.value = ''
+  restoreAfterDocumentDelete.value = false
+}
+
+function documentDeleteRestoreTarget() {
+  if (!restoreAfterDocumentDelete.value) return null
+  restoreAfterDocumentDelete.value = false
+  return documentListHeading.value
+}
+
+async function confirmDeleteRulebook() {
+  const entry = documentToDelete.value
+  if (!entry || deletingDocumentId.value || preparingVersionId.value) return
+  const documentId = entry.document.id
+  const versionId = entry.latestVersion.id
+  deletingDocumentId.value = documentId
+  deleteError.value = ''
   try {
     const csrf = await csrfToken()
-    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(entry.document.id)}`, {
+    const response = await checkedFetch(`/api/v1/documents/${encodeURIComponent(documentId)}`, {
       method: 'DELETE', headers: { [csrf.headerName]: csrf.token },
     })
     if (!response.ok) throw new Error(t('documents.error'))
-    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, entry.latestVersion.id)
-    if (processingVersionId.value === entry.latestVersion.id) {
-      closeProgressConnection(entry.latestVersion.id)
+    documents.value = documents.value.filter(item => item.document.id !== documentId)
+    if (username.value) forgetPendingRulebookLesson(localStorage, username.value, versionId)
+    if (processingVersionId.value === versionId) {
+      closeProgressConnection(versionId)
       processingVersionId.value = ''
     }
-    await loadDocuments()
+    restoreAfterDocumentDelete.value = true
+    documentToDelete.value = null
     message.value = t('documents.deleted')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('documents.error')
+    deleteError.value = error instanceof Error ? error.message : t('documents.error')
   } finally {
     deletingDocumentId.value = ''
   }
@@ -1195,7 +1232,7 @@ onBeforeUnmount(() => {
       <section class="mt-14 border-t border-ink/10 pt-8">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <h2 class="font-display text-2xl font-semibold">{{ t('documents.list.title') }}</h2>
+            <h2 ref="documentListHeading" tabindex="-1" class="font-display text-2xl font-semibold outline-none">{{ t('documents.list.title') }}</h2>
             <p class="mt-1 text-sm text-ink/45">{{ t('documents.list.description') }}</p>
           </div>
           <RouterLink :to="{ name: 'catalog' }" class="shrink-0 text-sm font-semibold text-indigo">{{ t('documents.list.manage') }}</RouterLink>
@@ -1218,7 +1255,7 @@ onBeforeUnmount(() => {
                 <button v-if="entry.latestVersion.status === 'READY'" type="button" :disabled="bggSuggestionState(entry.document.id)?.status === 'loading' || Boolean(deletingDocumentId)" class="min-h-11 rounded-lg border border-indigo/20 px-4 py-2.5 text-sm font-semibold text-indigo hover:border-indigo/50 disabled:opacity-40" @click="loadBggSuggestions(entry.document.id)">{{ bggSuggestionState(entry.document.id)?.status === 'loading' ? t('documents.bgg.loading') : t('documents.bgg.open') }}</button>
                 <RouterLink v-if="entry.latestVersion.status === 'READY'" :to="{ name: 'rulebook-reader', params: { versionId: entry.latestVersion.id } }" class="inline-flex min-h-11 items-center rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ t('documents.read') }}</RouterLink>
                 <button v-if="entry.latestVersion.status === 'READY'" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg border border-ink/15 px-4 py-2.5 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="startLesson(entry.latestVersion.id).catch((error: unknown) => errorMessage = error instanceof Error ? error.message : t('documents.error'))">{{ t('documents.start') }}</button>
-                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
+                <button type="button" :disabled="Boolean(preparingVersionId) || Boolean(deletingDocumentId)" class="rounded-lg px-3 py-2.5 text-sm font-semibold text-ink/45 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeleteRulebook(entry)">{{ deletingDocumentId === entry.document.id ? t('documents.deleting') : t('documents.delete') }}</button>
               </div>
             </div>
             <div v-if="bggSuggestionState(entry.document.id)" class="mt-4 rounded-xl border border-indigo/15 bg-indigo/[0.035] p-4">
@@ -1264,6 +1301,21 @@ onBeforeUnmount(() => {
           </li>
         </ul>
       </section>
+
+      <DestructiveActionDialog
+        :open="Boolean(documentToDelete)"
+        :pending="Boolean(deletingDocumentId)"
+        :error="deleteError"
+        :title="deleteCopy.title"
+        :description="deleteCopy.description(documentToDelete?.document.title ?? t('documents.titleFallback'))"
+        :cancel-label="deleteCopy.cancel"
+        :confirm-label="deleteCopy.confirm"
+        :pending-label="t('documents.deleting')"
+        :retry-label="deleteCopy.retry"
+        :restore-focus="documentDeleteRestoreTarget"
+        @cancel="cancelDeleteRulebook"
+        @confirm="confirmDeleteRulebook"
+      />
     </div>
   </AppShell>
 </template>

@@ -603,9 +603,49 @@ describe('DocumentsView recoverable lesson handoff', () => {
     expect(failed.wrapper.text()).toContain('后台生成讲解')
     failed.wrapper.unmount()
   })
+
+  it('keeps a rulebook until the destructive dialog is confirmed and preserves it for a failed retry', async () => {
+    const applicationFetch = mockApplicationFetch(() => 'READY')
+    let deleteAttempts = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input).endsWith('/api/v1/documents/document-1') && options?.method === 'DELETE') {
+        deleteAttempts += 1
+        return new Response(null, { status: deleteAttempts === 1 ? 503 : 204 })
+      }
+      return applicationFetch(input, options)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const { wrapper } = await mountDocuments('/teach', true)
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '删除')!.trigger('click')
+    await flushPromises()
+    expect(deleteAttempts).toBe(0)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('测试规则书')
+    expect(document.activeElement?.textContent).toContain('保留规则书')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('删除规则书'))!.click()
+    await flushPromises()
+    expect(deleteAttempts).toBe(1)
+    expect(wrapper.text()).toContain('测试规则书')
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('暂时无法处理规则书')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试删除'))!.click()
+    await flushPromises()
+    await flushPromises()
+    expect(deleteAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).not.toContain('测试规则书')
+    expect(wrapper.text()).toContain('规则书和它生成的讲解已经删除')
+    expect(document.activeElement).toBe(wrapper.findAll('h2').find(heading => heading.text().includes('已上传的规则书'))!.element)
+    wrapper.unmount()
+  })
 })
 
-async function mountDocuments(path = '/teach') {
+async function mountDocuments(path = '/teach', attachToBody = false) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -624,6 +664,7 @@ async function mountDocuments(path = '/teach') {
   await router.isReady()
   return {
     wrapper: mount(DocumentsView, {
+      ...(attachToBody ? { attachTo: document.body } : {}),
       global: { plugins: [router], stubs: { BackgroundWorkCenter: true } },
     }),
     router,

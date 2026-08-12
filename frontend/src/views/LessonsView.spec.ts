@@ -408,7 +408,110 @@ describe('LessonsView', () => {
     expect(wrapper.text()).toContain('收起历史版本')
     wrapper.unmount()
   })
+
+  it('previews duplicate cleanup before confirmation and keeps the dialog retryable after failure', async () => {
+    let cleanupAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([
+        plan('plan-1', 'Root'), plan('plan-2', 'Root'),
+      ])
+      if (path === '/api/v1/teaching-plans/cleanup-preview') return Response.json({ duplicateCount: 1 })
+      if (path === '/api/v1/teaching-plans/cleanup-duplicates' && options?.method === 'POST') {
+        cleanupAttempts += 1
+        return cleanupAttempts === 1
+          ? new Response(null, { status: 503 })
+          : Response.json({ deletedCount: 1 })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/v1/documents/official-imports' || path === '/api/v1/documents/upload-teaching-handoffs'
+        || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION' || path === '/api/v1/documents'
+        || path === '/api/v1/games') return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text().includes('整理重复讲解'))!.trigger('click')
+    await flushPromises()
+    expect(cleanupAttempts).toBe(0)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('发现 1 份重复讲解')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('清理重复项'))!.click()
+    await flushPromises()
+    expect(cleanupAttempts).toBe(1)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('重复讲解暂时无法清理')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试清理'))!.click()
+    await flushPromises()
+    expect(cleanupAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).toContain('已清理 1 份重复讲解')
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
+
+  it('deletes one guide only after confirmation and leaves a failed target available for retry', async () => {
+    let deleteAttempts = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') return Response.json([plan('plan-1', 'Root')])
+      if (path === '/api/v1/teaching-plans/plan-1' && options?.method === 'DELETE') {
+        deleteAttempts += 1
+        return new Response(null, { status: deleteAttempts === 1 ? 503 : 204 })
+      }
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path.includes('/api/v1/assistant-runs/latest') || path.includes('/illustrated-lessons/latest')) return new Response(null, { status: 404 })
+      if (path === '/api/v1/documents/official-imports' || path === '/api/v1/documents/upload-teaching-handoffs'
+        || path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION' || path === '/api/v1/documents'
+        || path === '/api/v1/games') return Response.json([])
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '删除')!.trigger('click')
+    await flushPromises()
+    expect(deleteAttempts).toBe(0)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('Root')
+    expect(document.activeElement?.textContent).toContain('保留讲解')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('删除讲解'))!.click()
+    await flushPromises()
+    expect(deleteAttempts).toBe(1)
+    expect(wrapper.text()).toContain('Root')
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('讲解暂时无法删除')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试删除'))!.click()
+    await flushPromises()
+    expect(deleteAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).not.toContain('Root')
+    expect(wrapper.text()).toContain('讲解已删除')
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
 })
+
+function plan(id: string, gameTitle: string) {
+  return {
+    id, documentVersionId: `version-${id}`, gameTitle, premise: '', createdAt: '2026-08-13T00:00:00Z',
+    sections: [{ position: 1, required: true, topicKey: 'setup', title: '设置', visualEvidenceRecommended: false }],
+  }
+}
 
 function createMemoryRouter() {
   return createRouter({

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
+import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { hasReadableLesson, mergeLessonProgress, type LessonProgressSummary } from '@/lib/lessonProgressState'
 import { groupPlansForReading, playerFacingTitle } from '@/lib/lessonPresentation'
@@ -44,6 +45,9 @@ interface PlanProgress {
 
 interface CsrfResponse { headerName: string; token: string }
 type PlanFilter = 'READABLE' | 'PENDING' | 'ALL'
+type DestructiveAction =
+  | { kind: 'delete-plan'; plan: TeachingPlan }
+  | { kind: 'cleanup'; duplicateCount: number }
 
 const route = useRoute()
 const { locale, t } = useLocale()
@@ -61,6 +65,21 @@ const launchingPlanId = ref('')
 const deletingPlanId = ref('')
 const cleanupLoading = ref(false)
 const cleanupMessage = ref('')
+const destructiveAction = ref<DestructiveAction | null>(null)
+const destructiveError = ref('')
+const pageHeading = ref<HTMLElement | null>(null)
+const restoreAfterDestructiveSuccess = ref(false)
+const destructiveCopy = computed(() => locale.value === 'zh-CN' ? {
+  deleteTitle: '删除这份讲解？', deleteDescription: (title: string) => `“${title}”的这份讲解和仍在进行的生成任务将被删除。规则书会保留，你之后可以重新生成。`,
+  deleteCancel: '保留讲解', deleteConfirm: '删除讲解', deleteRetry: '重新尝试删除',
+  cleanupTitle: '清理重复讲解？', cleanupDescription: (count: number) => `发现 ${count} 份重复讲解。将保留内容最完整且最新的一份，删除其余重复项并停止它们仍在进行的任务。`,
+  cleanupCancel: '保留全部', cleanupConfirm: '清理重复项', cleanupRetry: '重新尝试清理',
+} : {
+  deleteTitle: 'Delete this guide?', deleteDescription: (title: string) => `The guide for “${title}” and any generation still running for it will be deleted. Its rulebook stays available, and you can generate another guide later.`,
+  deleteCancel: 'Keep guide', deleteConfirm: 'Delete guide', deleteRetry: 'Try deletion again',
+  cleanupTitle: 'Clean up duplicate guides?', cleanupDescription: (count: number) => `${count} duplicate guides were found. The newest, most complete copy will remain; the other duplicates and any work still running for them will be removed.`,
+  cleanupCancel: 'Keep all guides', cleanupConfirm: 'Clean up duplicates', cleanupRetry: 'Try cleanup again',
+})
 const retryingJourneyId = ref('')
 const journeyRetryErrors = ref<Record<string, string>>({})
 const showingAllVersions = ref(false)
@@ -496,11 +515,30 @@ async function retryPendingJourney(journey: (typeof pendingJourneys.value)[numbe
   }
 }
 
-async function deletePlan(plan: TeachingPlan) {
+function requestDeletePlan(plan: TeachingPlan) {
   if (deletingPlanId.value || cleanupLoading.value) return
-  if (!window.confirm(t('lessons.delete.confirm', { title: displayPlanTitle(plan) }))) return
+  destructiveAction.value = { kind: 'delete-plan', plan }
+  destructiveError.value = ''
+  restoreAfterDestructiveSuccess.value = false
+}
+
+function cancelDestructiveAction() {
+  if (deletingPlanId.value || cleanupLoading.value) return
+  destructiveAction.value = null
+  destructiveError.value = ''
+  restoreAfterDestructiveSuccess.value = false
+}
+
+function destructiveRestoreTarget() {
+  if (!restoreAfterDestructiveSuccess.value) return null
+  restoreAfterDestructiveSuccess.value = false
+  return pageHeading.value
+}
+
+async function confirmDeletePlan(plan: TeachingPlan) {
+  if (deletingPlanId.value || cleanupLoading.value) return
   deletingPlanId.value = plan.id
-  errorMessage.value = ''
+  destructiveError.value = ''
   try {
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
@@ -514,15 +552,17 @@ async function deletePlan(plan: TeachingPlan) {
     const nextProgress = { ...progress.value }
     delete nextProgress[plan.id]
     progress.value = nextProgress
+    restoreAfterDestructiveSuccess.value = true
+    destructiveAction.value = null
     cleanupMessage.value = t('lessons.delete.done')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.delete.failedShort')
+    destructiveError.value = error instanceof Error ? error.message : t('lessons.delete.failedShort')
   } finally {
     deletingPlanId.value = ''
   }
 }
 
-async function cleanDuplicates() {
+async function requestCleanDuplicates() {
   if (cleanupLoading.value || deletingPlanId.value) return
   cleanupLoading.value = true
   cleanupMessage.value = ''
@@ -535,7 +575,21 @@ async function cleanDuplicates() {
       cleanupMessage.value = t('lessons.cleanup.none')
       return
     }
-    if (!window.confirm(t('lessons.cleanup.confirm', { count: preview.duplicateCount }))) return
+    destructiveAction.value = { kind: 'cleanup', duplicateCount: preview.duplicateCount }
+    destructiveError.value = ''
+    restoreAfterDestructiveSuccess.value = false
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+async function confirmCleanDuplicates() {
+  if (cleanupLoading.value || deletingPlanId.value) return
+  cleanupLoading.value = true
+  destructiveError.value = ''
+  try {
     const csrfResponse = await checkedFetch('/api/auth/csrf')
     if (!csrfResponse.ok) throw new Error(t('lessons.error.secureSession'))
     const csrf = await csrfResponse.json() as CsrfResponse
@@ -545,12 +599,21 @@ async function cleanDuplicates() {
     if (!response.ok) throw new Error(t('lessons.cleanup.failed'))
     const result = await response.json() as { deletedCount: number }
     await loadPlans()
+    restoreAfterDestructiveSuccess.value = true
+    destructiveAction.value = null
     cleanupMessage.value = result.deletedCount ? t('lessons.cleanup.done', { count: result.deletedCount }) : t('lessons.cleanup.nothing')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
+    destructiveError.value = error instanceof Error ? error.message : t('lessons.cleanup.failedShort')
   } finally {
     cleanupLoading.value = false
   }
+}
+
+function confirmDestructiveAction() {
+  const action = destructiveAction.value
+  if (!action) return
+  if (action.kind === 'delete-plan') void confirmDeletePlan(action.plan)
+  else void confirmCleanDuplicates()
 }
 
 onMounted(() => {
@@ -572,11 +635,11 @@ onBeforeUnmount(() => {
       <p class="tabletop-kicker">{{ t('lessons.eyebrow') }}</p>
       <div class="mt-4 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <h1 class="font-display text-4xl font-semibold tracking-tight">{{ t('lessons.title') }}</h1>
+          <h1 ref="pageHeading" tabindex="-1" class="font-display text-4xl font-semibold tracking-tight outline-none">{{ t('lessons.title') }}</h1>
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button v-if="plans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="cleanDuplicates">{{ cleanupLoading ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
+          <button v-if="plans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
           <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
@@ -687,11 +750,28 @@ onBeforeUnmount(() => {
               <RouterLink v-if="hasReadableLesson(progress[plan.id]?.lesson)" :to="{ name: 'lesson', params: { planId: plan.id } }" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white">{{ progress[plan.id]?.lesson?.status === 'DRAFT_READY' ? t('lessons.action.readFull') : stateOf(plan.id) === 'GENERATING' ? t('lessons.action.readPublished') : stateOf(plan.id) === 'INCOMPLETE' ? t('lessons.action.readAndComplete') : t('lessons.action.open') }}</RouterLink>
               <button v-else-if="stateOf(plan.id) !== 'GENERATING'" :disabled="launchingPlanId === plan.id || Boolean(deletingPlanId)" class="rounded-lg bg-indigo px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40" @click="launch(plan.id)">{{ launchingPlanId === plan.id ? t('lessons.action.launching') : stateOf(plan.id) === 'FAILED' || stateOf(plan.id) === 'NEEDS_ATTENTION' ? t('lessons.action.regenerate') : t('lessons.action.generate') }}</button>
               <span v-else class="inline-flex items-center gap-2 text-sm font-semibold text-indigo"><span class="size-3 animate-spin rounded-full border-2 border-indigo/20 border-t-indigo" />{{ t('lessons.action.background') }}</span>
-              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="deletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
+              <button type="button" :disabled="Boolean(deletingPlanId) || cleanupLoading" class="min-h-10 rounded-lg px-2 text-sm font-semibold text-ink/40 hover:bg-red-50 hover:text-red-700 disabled:opacity-40" @click="requestDeletePlan(plan)">{{ deletingPlanId === plan.id ? t('lessons.action.deleting') : t('lessons.action.delete') }}</button>
             </div>
           </div>
         </li>
       </ol>
+
+      <DestructiveActionDialog
+        :open="Boolean(destructiveAction)"
+        :pending="Boolean(deletingPlanId) || cleanupLoading"
+        :error="destructiveError"
+        :title="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupTitle : destructiveCopy.deleteTitle"
+        :description="destructiveAction?.kind === 'cleanup'
+          ? destructiveCopy.cleanupDescription(destructiveAction.duplicateCount)
+          : destructiveCopy.deleteDescription(destructiveAction?.kind === 'delete-plan' ? displayPlanTitle(destructiveAction.plan) : '')"
+        :cancel-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupCancel : destructiveCopy.deleteCancel"
+        :confirm-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupConfirm : destructiveCopy.deleteConfirm"
+        :pending-label="destructiveAction?.kind === 'cleanup' ? t('lessons.cleanup.loading') : t('lessons.action.deleting')"
+        :retry-label="destructiveAction?.kind === 'cleanup' ? destructiveCopy.cleanupRetry : destructiveCopy.deleteRetry"
+        :restore-focus="destructiveRestoreTarget"
+        @cancel="cancelDestructiveAction"
+        @confirm="confirmDestructiveAction"
+      />
     </section>
   </AppShell>
 </template>

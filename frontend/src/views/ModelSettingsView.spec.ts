@@ -59,4 +59,72 @@ describe('ModelSettingsView', () => {
       .toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
     expect((wrapper.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
   })
+
+  it('requires explicit confirmation before disabling an unreadable saved key and retries in place after failure', async () => {
+    const configured = () => ({
+      providers: [
+        { id: 'gemini', configured: true, baseUrl: '', model: 'gemini-2.5-flash', apiKeyConfigured: true, visionCapable: true },
+      ],
+      assignments: { recommendation: 'gemini', teaching: 'gemini', visual: 'gemini', answer: 'gemini', critic: 'gemini' },
+      revision: 1,
+      volatileSecrets: true,
+      managedStartupAccess: false,
+    })
+    let disableAttempts = 0
+    const fetchMock = vi.fn(async (input: string | URL | Request, options?: RequestInit) => {
+      const path = String(input)
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'player', roles: ['USER'] })
+      if (path === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
+      if (path === '/api/v1/model-configuration/providers/gemini' && options?.method === 'DELETE') {
+        disableAttempts += 1
+        if (disableAttempts === 1) return Response.json({ detail: '暂时无法停用连接。' }, { status: 503 })
+        const next = configured()
+        next.providers[0]!.configured = false
+        next.providers[0]!.apiKeyConfigured = false
+        next.assignments = { recommendation: 'fake', teaching: 'fake', visual: 'fake', answer: 'fake', critic: 'fake' }
+        next.revision = 2
+        return Response.json(next)
+      }
+      if (path === '/api/v1/model-configuration') return Response.json(configured())
+      return new Response(null, { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: ModelSettingsView },
+        { path: '/login', name: 'login', component: { template: '<div />' } },
+        { path: '/account', name: 'account', component: { template: '<div />' } },
+        { path: '/catalog', name: 'catalog', component: { template: '<div />' } },
+        { path: '/teach', name: 'teach', component: { template: '<div />' } },
+        { path: '/lessons', name: 'lessons', component: { template: '<div />' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(ModelSettingsView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+
+    await wrapper.findAll('button').find(button => button.text() === '停用')!.trigger('click')
+    await flushPromises()
+    expect(disableAttempts).toBe(0)
+    const dialog = document.body.querySelector<HTMLElement>('[role="alertdialog"]')!
+    expect(dialog.textContent).toContain('API Key')
+    expect(document.activeElement?.textContent).toContain('保留连接')
+
+    ;[...dialog.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('停用连接'))!.click()
+    await flushPromises()
+    expect(disableAttempts).toBe(1)
+    expect(document.body.querySelector('[role="alertdialog"]')?.textContent).toContain('暂时无法停用连接')
+
+    ;[...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find(button => button.textContent?.includes('重新尝试停用'))!.click()
+    await flushPromises()
+    expect(disableAttempts).toBe(2)
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(wrapper.text()).toContain('Gemini 已停用')
+    expect(document.activeElement).toBe(wrapper.get('h1').element)
+    wrapper.unmount()
+  })
 })

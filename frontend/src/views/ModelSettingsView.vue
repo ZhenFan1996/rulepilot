@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import DestructiveActionDialog from '@/components/DestructiveActionDialog.vue'
 import { notifyLoginRequired } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
@@ -34,7 +35,7 @@ interface ConfigurationSnapshot {
   managedStartupAccess: boolean
 }
 
-const { t } = useLocale()
+const { locale, t } = useLocale()
 const snapshot = ref<ConfigurationSnapshot | null>(null)
 const selectedProvider = ref('gemini')
 const apiKey = ref('')
@@ -46,6 +47,19 @@ const savingProvider = ref(false)
 const savingAssignments = ref(false)
 const message = ref('')
 const errorMessage = ref('')
+const providerToDisable = ref('')
+const disableError = ref('')
+const pageHeading = ref<HTMLElement | null>(null)
+const restoreAfterDisable = ref(false)
+const disableCopy = computed(() => locale.value === 'zh-CN' ? {
+  title: (providerName: string) => `停用 ${providerName}？`,
+  description: '保存的 API Key 会从当前后端进程中移除，使用此连接的功能会切换到内置演示。密钥不会再次显示；如需恢复，必须重新输入。',
+  cancel: '保留连接', confirm: '停用连接', pending: '正在停用…', retry: '重新尝试停用',
+} : {
+  title: (providerName: string) => `Disable ${providerName}?`,
+  description: 'The saved API key will be removed from this backend process, and features using this connection will switch to the built-in demo. The key cannot be shown again; reconnecting requires entering it again.',
+  cancel: 'Keep connection', confirm: 'Disable connection', pending: 'Disabling…', retry: 'Try disabling again',
+})
 
 function providerLabel(id: string) {
   return id === 'compatible' ? t('models.provider.compatible') : ({ gemini: 'Gemini', openai: 'OpenAI', deepseek: 'DeepSeek', qwen: 'Qwen' }[id] ?? id)
@@ -144,15 +158,40 @@ async function saveProvider() {
   }
 }
 
-async function disableProvider() {
+function requestDisableProvider() {
+  if (savingProvider.value || !provider.value?.configured) return
+  providerToDisable.value = selectedProvider.value
+  disableError.value = ''
+  restoreAfterDisable.value = false
+}
+
+function cancelDisableProvider() {
+  if (savingProvider.value) return
+  providerToDisable.value = ''
+  disableError.value = ''
+  restoreAfterDisable.value = false
+}
+
+function disableRestoreTarget() {
+  if (!restoreAfterDisable.value) return null
+  restoreAfterDisable.value = false
+  return pageHeading.value
+}
+
+async function confirmDisableProvider() {
+  const target = providerToDisable.value
+  if (savingProvider.value || !target) return
   savingProvider.value = true
   message.value = ''
   errorMessage.value = ''
+  disableError.value = ''
   try {
-    await mutate(`/api/v1/model-configuration/providers/${selectedProvider.value}`, 'DELETE')
-    message.value = t('models.disabled', { provider: providerLabel(selectedProvider.value) })
+    await mutate(`/api/v1/model-configuration/providers/${target}`, 'DELETE')
+    message.value = t('models.disabled', { provider: providerLabel(target) })
+    restoreAfterDisable.value = true
+    providerToDisable.value = ''
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('models.error')
+    disableError.value = error instanceof Error ? error.message : t('models.error')
   } finally {
     savingProvider.value = false
   }
@@ -181,7 +220,7 @@ onMounted(loadConfiguration)
     <div class="tabletop-page max-w-6xl">
       <div class="max-w-3xl">
         <p class="text-sm font-medium text-copper">{{ t('models.eyebrow') }}</p>
-        <h1 class="mt-3 font-display text-4xl font-semibold tracking-tight">{{ t('models.title') }}</h1>
+        <h1 ref="pageHeading" tabindex="-1" class="mt-3 font-display text-4xl font-semibold tracking-tight outline-none">{{ t('models.title') }}</h1>
         <p class="mt-4 leading-7 text-ink/55">{{ t('models.description') }}</p>
       </div>
 
@@ -257,7 +296,7 @@ onMounted(loadConfiguration)
 
               <div class="flex flex-col gap-3 sm:flex-row">
                 <button :disabled="savingProvider" class="min-h-11 flex-1 rounded-lg bg-indigo px-5 py-3 font-semibold text-white disabled:opacity-50">{{ savingProvider ? t('models.saving') : t('models.saveConnection') }}</button>
-                <button v-if="provider?.configured" type="button" :disabled="savingProvider" class="min-h-11 rounded-lg border border-red-200 px-5 py-3 font-semibold text-red-700 disabled:opacity-50" @click="disableProvider">{{ t('models.disable') }}</button>
+                <button v-if="provider?.configured" type="button" :disabled="savingProvider" class="min-h-11 rounded-lg border border-red-200 px-5 py-3 font-semibold text-red-700 disabled:opacity-50" @click="requestDisableProvider">{{ t('models.disable') }}</button>
               </div>
             </form>
           </section>
@@ -288,5 +327,20 @@ onMounted(loadConfiguration)
         </div>
       </template>
     </div>
+
+    <DestructiveActionDialog
+      :open="Boolean(providerToDisable)"
+      :pending="savingProvider"
+      :error="disableError"
+      :title="disableCopy.title(providerLabel(providerToDisable))"
+      :description="disableCopy.description"
+      :cancel-label="disableCopy.cancel"
+      :confirm-label="disableCopy.confirm"
+      :pending-label="disableCopy.pending"
+      :retry-label="disableCopy.retry"
+      :restore-focus="disableRestoreTarget"
+      @cancel="cancelDisableProvider"
+      @confirm="confirmDisableProvider"
+    />
   </AppShell>
 </template>
