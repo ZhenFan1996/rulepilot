@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
@@ -12,25 +12,54 @@ interface CsrfResponse {
   token: string
 }
 
+type LoginFailure = 'invalid-credentials' | 'connection' | 'unavailable'
+
+class LoginRequestError extends Error {
+  constructor(readonly failure: LoginFailure) {
+    super(failure)
+  }
+}
+
 const router = useRouter()
 const route = useRoute()
 const { t } = useLocale()
 const username = ref('')
 const password = ref('')
 const isSubmitting = ref(false)
-const errorMessage = ref('')
+const failure = ref<LoginFailure | null>(null)
+const usernameInput = ref<HTMLInputElement | null>(null)
+const errorSummary = ref<HTMLElement | null>(null)
 const returnPath = computed(() => safeAuthReturnPath(route.query.redirect))
 const registerTarget = computed(() => returnPath.value
   ? { name: 'register', query: { redirect: returnPath.value } }
   : { name: 'register' })
+const invalidCredentials = computed(() => failure.value === 'invalid-credentials')
+const errorMessage = computed(() => failure.value ? ({
+  'invalid-credentials': t('auth.login.invalid'),
+  connection: t('auth.connection'),
+  unavailable: t('auth.unavailable'),
+} as const)[failure.value] : '')
+
+function clearFailure() {
+  failure.value = null
+}
+
+async function exposeFailure(nextFailure: LoginFailure) {
+  failure.value = nextFailure
+  await nextTick()
+  if (nextFailure === 'invalid-credentials') usernameInput.value?.focus()
+  else errorSummary.value?.focus()
+}
 
 async function login() {
+  if (isSubmitting.value) return
   isSubmitting.value = true
-  errorMessage.value = ''
+  failure.value = null
+  let nextFailure: LoginFailure | null = null
 
   try {
     const csrfResponse = await fetch('/api/auth/csrf', { credentials: 'include' })
-    if (!csrfResponse.ok) throw new Error(t('auth.connection'))
+    if (!csrfResponse.ok) throw new LoginRequestError('connection')
     const csrf = (await csrfResponse.json()) as CsrfResponse
 
     const body = new URLSearchParams({ username: username.value.trim().toLowerCase(), password: password.value })
@@ -44,15 +73,19 @@ async function login() {
       body,
     })
 
-    if (response.status === 401) throw new Error(t('auth.login.invalid'))
-    if (!response.ok) throw new Error(t('auth.unavailable'))
-
-    await router.replace(returnPath.value ?? { name: 'account' })
+    if (response.status === 401) throw new LoginRequestError('invalid-credentials')
+    if (!response.ok) throw new LoginRequestError('unavailable')
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : t('auth.login.failed')
+    nextFailure = error instanceof LoginRequestError ? error.failure : 'connection'
   } finally {
     isSubmitting.value = false
   }
+
+  if (nextFailure) {
+    await exposeFailure(nextFailure)
+    return
+  }
+  await router.replace(returnPath.value ?? { name: 'account' })
 }
 </script>
 
@@ -66,17 +99,17 @@ async function login() {
         {{ t('auth.login.return') }}
       </p>
 
-      <form class="mt-8 stack-y-xl" @submit.prevent="login">
+      <form class="mt-8 stack-y-xl" :aria-busy="isSubmitting" @submit.prevent="login">
         <label class="block text-sm font-semibold">
           {{ t('auth.username') }}
-          <input v-model="username" name="username" autocomplete="username" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
+          <input ref="usernameInput" v-model="username" name="username" autocomplete="username" required :disabled="isSubmitting" :aria-invalid="invalidCredentials ? 'true' : undefined" :aria-describedby="invalidCredentials ? 'auth-login-error' : undefined" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
         </label>
         <label class="block text-sm font-semibold">
           {{ t('auth.password') }}
-          <input v-model="password" name="password" type="password" autocomplete="current-password" required class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10">
+          <input v-model="password" name="password" type="password" autocomplete="current-password" required :disabled="isSubmitting" :aria-invalid="invalidCredentials ? 'true' : undefined" :aria-describedby="invalidCredentials ? 'auth-login-error' : undefined" class="mt-2 w-full rounded-lg border border-ink/15 bg-canvas px-4 py-3 outline-none transition focus:border-indigo focus:ring-4 focus:ring-indigo/10 disabled:opacity-50" @input="clearFailure">
         </label>
 
-        <p v-if="errorMessage" class="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{{ errorMessage }}</p>
+        <p v-if="errorMessage" id="auth-login-error" ref="errorSummary" tabindex="-1" class="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700 focus-visible:outline-offset-4" role="alert">{{ errorMessage }}</p>
 
         <button type="submit" :disabled="isSubmitting" class="w-full rounded-lg bg-indigo px-5 py-3.5 font-semibold text-white transition-colors hover:bg-indigo/90 disabled:cursor-not-allowed disabled:opacity-50">
           {{ isSubmitting ? t('auth.login.loading') : t('auth.login.submit') }}
