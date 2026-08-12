@@ -297,15 +297,18 @@ class VisualRulebookCatalogerTest {
 
         cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3), page(4), page(5), page(6), page(7)),
+                List.of(
+                        page(1), page(2), page(3), page(4), page(5),
+                        page(6), page(7), page(8), page(9), page(10)),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7)))
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)))
                 .extracting(PageFact::pageNumber)
-                .containsExactly(4, 5, 6, 7);
-        assertThat(requestedBatches).containsExactly(List.of(1, 2, 3), List.of(4, 5, 6), List.of(7));
+                .containsExactly(9, 10);
+        assertThat(requestedBatches)
+                .containsExactly(List.of(1, 2, 3, 4, 5, 6, 7, 8), List.of(9, 10));
     }
 
     @Test
@@ -750,7 +753,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void usesLightweightThreePageStartupBatchesAndRetriesOnlyMissingBindings() {
+    void readsAShortRulebookInOneLightweightStartupBatchAndRetriesOnlyMissingBindings() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> batches = new java.util.ArrayList<>();
         AtomicInteger heavyCatalogCalls = new AtomicInteger();
@@ -767,7 +770,8 @@ class VisualRulebookCatalogerTest {
                 List<Integer> requested = request.pages().stream().map(image -> image.pageNumber()).toList();
                 batches.add(requested);
                 return new CatalogDraft(request.pages().stream()
-                        .filter(image -> !requested.equals(List.of(1, 2, 3)) || image.pageNumber() != 2)
+                        .filter(image -> !requested.equals(List.of(1, 2, 3, 4, 5, 6, 7, 8))
+                                || image.pageNumber() != 5)
                         .map(image -> new PageSummary(
                                 image.pageNumber(),
                                 "PAGE " + image.pageNumber(),
@@ -785,16 +789,16 @@ class VisualRulebookCatalogerTest {
 
         List<PageInput> result = cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3), page(4)),
+                List.of(page(1), page(2), page(3), page(4), page(5), page(6), page(7), page(8)),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(batches).containsExactly(List.of(1, 2, 3), List.of(4), List.of(2));
+        assertThat(batches).containsExactly(List.of(1, 2, 3, 4, 5, 6, 7, 8), List.of(5));
         assertThat(heavyCatalogCalls).hasValue(0);
-        assertThat(result).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4);
+        assertThat(result).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
         assertThat(result).allSatisfy(input -> assertThat(input.text()).contains("Visible rule"));
-        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4))).allSatisfy(fact -> {
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8))).allSatisfy(fact -> {
             assertThat(fact.iconOccurrences()).isEmpty();
             assertThat(fact.iconInventoryComplete()).isFalse();
         });

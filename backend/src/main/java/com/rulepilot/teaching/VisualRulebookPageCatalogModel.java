@@ -11,6 +11,13 @@ import java.util.List;
  */
 public interface VisualRulebookPageCatalogModel {
 
+    /**
+     * A teaching-start request may cover a short rulebook in one provider round trip. The complete icon catalog
+     * remains page-scoped in the application layer, while this bounded ceiling prevents an unbounded PDF from
+     * exhausting the model context or response budget.
+     */
+    int MAX_PAGES_PER_REQUEST = 8;
+
     CatalogDraft summarize(CatalogRequest request);
 
     /**
@@ -100,7 +107,7 @@ public interface VisualRulebookPageCatalogModel {
         }
 
         public CatalogRequest {
-            if (pages == null || pages.isEmpty() || pages.size() > 4) {
+            if (pages == null || pages.isEmpty() || pages.size() > MAX_PAGES_PER_REQUEST) {
                 throw new IllegalArgumentException("visual page catalog request is invalid");
             }
             pages = List.copyOf(pages);
@@ -135,7 +142,7 @@ public interface VisualRulebookPageCatalogModel {
 
     record CatalogDraft(List<PageSummary> pages) {
         public CatalogDraft {
-            if (pages == null || pages.isEmpty() || pages.size() > 4) {
+            if (pages == null || pages.isEmpty() || pages.size() > MAX_PAGES_PER_REQUEST) {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);
