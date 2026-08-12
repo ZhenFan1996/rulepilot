@@ -21,6 +21,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellReque
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
@@ -34,6 +35,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -809,6 +811,58 @@ class VisualRulebookCatalogerTest {
             assertThat(fact.iconOccurrences()).isEmpty();
             assertThat(fact.iconInventoryComplete()).isFalse();
         });
+    }
+
+    @Test
+    void recordsTheActualTeachingStartupProviderAndRequestModelInTheRunActivity() {
+        UUID documentVersionId = UUID.randomUUID();
+        List<String> activitySummaries = new java.util.ArrayList<>();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("teaching startup must use its lightweight model operation");
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                return new CatalogDraft(List.of(new PageSummary(
+                        1, "TURN", "The active player takes one action.", List.of("turn"))));
+            }
+
+            @Override
+            public Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String owner) {
+                return Optional.of(new ModelExecutionIdentity("qwen", "qwen3.6-flash"));
+            }
+        };
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                activitySummaries.add(successSummary);
+                return invocation.get();
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> List.of(new DocumentPageImages.PageImage(
+                        1, "image/png", new byte[] {1}, 100, 120)),
+                model,
+                new InMemoryFacts(),
+                audit,
+                Duration.ofSeconds(2),
+                4,
+                1);
+
+        cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Example game", "owner", UUID.randomUUID());
+
+        assertThat(activitySummaries)
+                .containsExactly("Teaching-start page facts interpreted via qwen/qwen3.6-flash");
     }
 
     @Test

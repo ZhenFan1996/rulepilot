@@ -3,6 +3,7 @@ package com.rulepilot.teaching.adapter.out.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -30,8 +31,8 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.google.genai.GoogleGenAiChatModel;
-import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.core.io.ClassPathResource;
 
 class SpringAiVisualRulebookPageCatalogModelTest {
@@ -166,16 +167,14 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
-    void disablesGeminiThinkingOnTheActualTeachingStartupRequest() throws IOException {
+    void routesOnlyTheQwenTeachingStartupRequestToTheFastStructuredVisualModel() throws IOException {
         RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
         ChatModel chatModel = mock(ChatModel.class);
-        GoogleGenAiChatOptions defaults = GoogleGenAiChatOptions.builder()
-                .model(GoogleGenAiChatModel.ChatModel.GEMINI_2_5_FLASH)
-                .build();
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
         when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
         when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
-        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("gemini");
-        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("gemini-2.5-flash");
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
         when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
         when(chatModel.getDefaultOptions()).thenReturn(defaults);
         when(chatModel.getOptions()).thenReturn(defaults);
@@ -186,47 +185,41 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                         """)))));
         SpringAiVisualRulebookPageCatalogModel model = model(configuration);
 
-        model.summarizeForTeaching(new CatalogRequest(
-                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game"));
+        CatalogRequest request = new CatalogRequest(
+                List.of(new PageImageInput(1, "image/png", png())), "owner", "Example Game");
+        model.summarizeForTeaching(request);
 
         ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(prompt.capture());
-        assertThat(prompt.getValue().getOptions()).isInstanceOf(GoogleGenAiChatOptions.class);
-        GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) prompt.getValue().getOptions();
-        assertThat(options.getThinkingBudget()).isZero();
-        assertThat(options.getIncludeThoughts()).isFalse();
-        assertThat(options.getModel()).isEqualTo("gemini-2.5-flash-lite");
-        assertThat(options.getCandidateCount()).isOne();
-        assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
-        assertThat(options.getResponseMimeType()).isEqualTo("application/json");
+        assertThat(prompt.getValue().getOptions()).isInstanceOf(OpenAiChatOptions.class);
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
+        assertThat(options.getMaxTokens()).isEqualTo(3_200);
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+        assertThat(options.getResponseFormat().getType()).isEqualTo(Type.JSON_OBJECT);
         assertThat(options.getTemperature()).isZero();
+        assertThat(model.teachingStartupExecutionIdentity("owner")).hasValueSatisfying(identity -> {
+            assertThat(identity.provider()).isEqualTo("qwen");
+            assertThat(identity.model()).isEqualTo("qwen3.6-flash");
+        });
+
+        model.summarize(request);
+
+        ArgumentCaptor<Prompt> allPrompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel, times(2)).call(allPrompts.capture());
+        OpenAiChatOptions completeAuditOptions =
+                (OpenAiChatOptions) allPrompts.getAllValues().getLast().getOptions();
+        assertThat(completeAuditOptions.getModel()).isEqualTo("qwen3.7-plus");
     }
 
     @Test
-    void doesNotSendTheGemini25ThinkingBudgetToLaterModelGenerations() {
-        var options = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
-                        "gemini-3.5-flash", 3_200)
-                .build();
-
-        assertThat(options.getThinkingBudget()).isNull();
-        assertThat(options.getModel()).isEqualTo("gemini-3.5-flash");
-        assertThat(options.getResponseMimeType()).isEqualTo("application/json");
-        assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
-    }
-
-    @Test
-    void keepsAnExplicitFlashLiteSelectionInsteadOfOverridingOtherGeminiModels() {
-        var explicitLite = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
-                        "gemini-2.5-flash-lite", 3_200)
-                .build();
-        var pro = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
-                        "gemini-2.5-pro", 3_200)
-                .build();
-
-        assertThat(explicitLite.getModel()).isEqualTo("gemini-2.5-flash-lite");
-        assertThat(explicitLite.getThinkingBudget()).isZero();
-        assertThat(pro.getModel()).isEqualTo("gemini-2.5-pro");
-        assertThat(pro.getThinkingBudget()).isNull();
+    void preservesEveryExplicitNonTargetModelInsteadOfSilentlyReplacingIt() {
+        assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3.6-plus"))
+                .isEqualTo("qwen3.6-plus");
+        assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("qwen", "qwen3-vl-flash"))
+                .isEqualTo("qwen3-vl-flash");
+        assertThat(SpringAiVisualRulebookPageCatalogModel.teachingStartupModelName("gemini", "gemini-2.5-flash"))
+                .isEqualTo("gemini-2.5-flash");
     }
 
     @Test
