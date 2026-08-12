@@ -131,13 +131,15 @@ final class VisualRulebookCatalogPolicy {
     }
 
     /**
-     * The startup contract contains only bounded page facts, so three labeled images fit in one request without the
-     * large tail and truncation risk of the complete icon-inventory contract. Requests remain serial in production.
+     * The startup contract contains only bounded page facts, so a short rulebook can be read in one multi-image
+     * provider round trip. Longer documents remain bounded and independently retryable, while requests stay serial
+     * in production to respect the provider's effective concurrency limit.
      */
     static List<List<Integer>> teachingStartupBatches(List<Integer> pages) {
         java.util.ArrayList<List<Integer>> batches = new java.util.ArrayList<>();
-        for (int start = 0; start < pages.size(); start += 3) {
-            batches.add(List.copyOf(pages.subList(start, Math.min(start + 3, pages.size()))));
+        int batchSize = com.rulepilot.teaching.VisualRulebookPageCatalogModel.MAX_PAGES_PER_REQUEST;
+        for (int start = 0; start < pages.size(); start += batchSize) {
+            batches.add(List.copyOf(pages.subList(start, Math.min(start + batchSize, pages.size()))));
         }
         return List.copyOf(batches);
     }

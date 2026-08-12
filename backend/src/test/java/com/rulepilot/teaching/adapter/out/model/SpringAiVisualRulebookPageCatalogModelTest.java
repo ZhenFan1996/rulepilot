@@ -487,6 +487,27 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         assertThat(normalized.pages()).singleElement().extracting(PageSummary::pageNumber).isEqualTo(11);
     }
 
+    @Test
+    void boundsMultiImageCatalogRequestsAtOneShortRulebook() {
+        List<PageImageInput> eightPages = java.util.stream.IntStream.rangeClosed(1, 8)
+                .mapToObj(page -> new PageImageInput(page, "image/jpeg", new byte[] {(byte) page}))
+                .toList();
+
+        assertThat(new CatalogRequest(eightPages, "owner").pages()).hasSize(8);
+        assertThat(new CatalogDraft(eightPages.stream()
+                        .map(page -> new PageSummary(
+                                page.pageNumber(), "PAGE", "Visible fact.", List.of("page")))
+                        .toList()).pages())
+                .hasSize(8);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new CatalogRequest(
+                        java.util.stream.IntStream.rangeClosed(1, 9)
+                                .mapToObj(page -> new PageImageInput(page, "image/jpeg", new byte[] {(byte) page}))
+                                .toList(),
+                        "owner"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("catalog request is invalid");
+    }
+
     private static String jsonString(String value) {
         try {
             return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(value);

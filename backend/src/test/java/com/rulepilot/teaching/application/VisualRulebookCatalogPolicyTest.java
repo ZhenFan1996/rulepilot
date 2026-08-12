@@ -20,8 +20,8 @@ class VisualRulebookCatalogPolicyTest {
 
     @Test
     void boundsTeachingStartupBatchesWithoutDroppingSourcePages() {
-        assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of(2, 5, 7, 9, 11, 13, 17)))
-                .containsExactly(List.of(2, 5, 7), List.of(9, 11, 13), List.of(17));
+        assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of(2, 5, 7, 9, 11, 13, 17, 19, 23, 29)))
+                .containsExactly(List.of(2, 5, 7, 9, 11, 13, 17, 19), List.of(23, 29));
         assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of())).isEmpty();
     }
 
