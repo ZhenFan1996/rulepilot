@@ -152,7 +152,7 @@ class VisualRulebookCataloger {
         Set<Integer> requiredFacts = new LinkedHashSet<>(missingPages);
         List<PageFact> fresh = requiredFacts.isEmpty()
                 ? List.of()
-                : catalogPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId, false);
+                : catalogTeachingPageFacts(documentVersionId, requiredFacts, rulebookTitle, owner, assistantRunId);
         if (!cached.isEmpty() && !requiredFacts.isEmpty() && assistantRunId != null) {
             invocations.record(
                     assistantRunId,
@@ -208,7 +208,7 @@ class VisualRulebookCataloger {
         try {
             fresh = missing.isEmpty()
                     ? List.of()
-                    : catalogPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId, false);
+                    : catalogTeachingPageFacts(documentVersionId, missing, rulebookTitle, owner, assistantRunId);
         } catch (RuntimeException visualFailure) {
             log.warn(
                     "Sparse-page visual coverage probe skipped for document {} pages {}",
@@ -225,6 +225,140 @@ class VisualRulebookCataloger {
                     fresh.stream().map(PageFact::pageNumber).toList());
         }
         return VisualRulebookCatalogPolicy.mergeFreshFacts(cached, fresh);
+    }
+
+    /**
+     * Builds the minimum durable, page-bound evidence ledger needed by outline and lesson composition. It avoids the
+     * complete icon inventory, rectangle localization, crop review, dense-cell rereads, and tile audit performed by
+     * {@link #catalogAllIconPages}; those enrichments can proceed after the lesson is already readable.
+     */
+    private List<PageFact> catalogTeachingPageFacts(
+            UUID documentVersionId,
+            Set<Integer> pageNumbers,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId) {
+        List<Integer> orderedPages = pageNumbers.stream().sorted().toList();
+        List<List<Integer>> batches = VisualRulebookCatalogPolicy.teachingStartupBatches(orderedPages);
+        if (batches.isEmpty()) throw new IllegalArgumentException("rulebook has no pages to catalog for teaching");
+        Set<Integer> timedOutPages = new LinkedHashSet<>();
+        List<Integer> missingPages = inspectTeachingBatches(
+                documentVersionId,
+                batches,
+                owner,
+                rulebookTitle,
+                assistantRunId,
+                index -> "inspectTeachingVisualBatch|" + (index + 1),
+                timedOutPages);
+        List<Integer> retryPages = missingPages.stream()
+                .filter(page -> !timedOutPages.contains(page))
+                .distinct()
+                .toList();
+        if (!retryPages.isEmpty()) {
+            List<List<Integer>> retryBatches = retryPages.stream().map(List::of).toList();
+            inspectTeachingBatches(
+                    documentVersionId,
+                    retryBatches,
+                    owner,
+                    rulebookTitle,
+                    assistantRunId,
+                    index -> "inspectTeachingVisualRetry|" + retryPages.get(index),
+                    new LinkedHashSet<>());
+        }
+        return visualFacts.find(documentVersionId, pageNumbers).stream()
+                .filter(fact -> fact.schemaVersion() == PageFact.CURRENT_SCHEMA_VERSION)
+                .toList();
+    }
+
+    private List<Integer> inspectTeachingBatches(
+            UUID documentVersionId,
+            List<List<Integer>> batches,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            IntFunction<String> operationForIndex,
+            Set<Integer> timedOutPages) {
+        List<Integer> missingPages = new ArrayList<>();
+        int parallelism = Math.min(visualRequestParallelism, batches.size());
+        for (int windowStart = 0; windowStart < batches.size(); windowStart += parallelism) {
+            int windowEnd = Math.min(windowStart + parallelism, batches.size());
+            ExecutorService executor = Executors.newFixedThreadPool(windowEnd - windowStart);
+            try {
+                List<Future<VisualRulebookPageCatalogModel.CatalogDraft>> futures = new ArrayList<>();
+                for (int index = windowStart; index < windowEnd; index++) {
+                    int batchIndex = index;
+                    futures.add(executor.submit(() -> catalogTeachingBatch(
+                            documentVersionId,
+                            batches.get(batchIndex),
+                            owner,
+                            rulebookTitle,
+                            assistantRunId,
+                            operationForIndex.apply(batchIndex))));
+                }
+                for (int offset = 0; offset < futures.size(); offset++) {
+                    int batchIndex = windowStart + offset;
+                    List<Integer> batch = batches.get(batchIndex);
+                    try {
+                        var draft = awaitCatalog(futures.get(offset), visualCatalogTimeout);
+                        Map<Integer, Long> returnedCounts = draft.pages().stream().collect(Collectors.groupingBy(
+                                VisualRulebookPageCatalogModel.PageSummary::pageNumber,
+                                Collectors.counting()));
+                        List<VisualRulebookPageCatalogModel.PageSummary> completed = draft.pages().stream()
+                                .filter(summary -> batch.contains(summary.pageNumber()))
+                                .filter(summary -> returnedCounts.get(summary.pageNumber()) == 1)
+                                .map(VisualRulebookCatalogPolicy::teachingStartupFact)
+                                .sorted(java.util.Comparator.comparingInt(
+                                        summary -> batch.indexOf(summary.pageNumber())))
+                                .toList();
+                        persistCompletedFacts(documentVersionId, completed);
+                        Set<Integer> completedPages = completed.stream()
+                                .map(VisualRulebookPageCatalogModel.PageSummary::pageNumber)
+                                .collect(Collectors.toSet());
+                        batch.stream().filter(page -> !completedPages.contains(page)).forEach(missingPages::add);
+                    } catch (RuntimeException failedBatch) {
+                        if (catalogTimedOut(failedBatch)) {
+                            timedOutPages.addAll(batch);
+                            if (assistantRunId != null) {
+                                invocations.stopRunning(
+                                        assistantRunId,
+                                        operationForIndex.apply(batchIndex),
+                                        ActivityOutcome.FAILED,
+                                        "Teaching visual batch timed out; retaining completed page facts");
+                            }
+                        }
+                        log.warn(
+                                "Teaching-start visual interpretation skipped failed batch {} for document {}",
+                                batch,
+                                documentVersionId,
+                                failedBatch);
+                        missingPages.addAll(batch);
+                    }
+                }
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+        return missingPages;
+    }
+
+    private VisualRulebookPageCatalogModel.CatalogDraft catalogTeachingBatch(
+            UUID documentVersionId,
+            List<Integer> batch,
+            String owner,
+            String rulebookTitle,
+            UUID assistantRunId,
+            String operation) {
+        List<PageImageInput> images = pageImages.read(documentVersionId, new LinkedHashSet<>(batch)).stream()
+                .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
+                .toList();
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
+        return invokeModel(
+                assistantRunId,
+                operation,
+                Math.max(1, images.size() * 600),
+                "Teaching-start page facts interpreted",
+                () -> visualCatalog.summarizeForTeaching(request),
+                this::catalogOutputTokens);
     }
 
     private List<PageFact> catalogPageFacts(

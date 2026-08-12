@@ -20,6 +20,21 @@ import org.springframework.core.io.ClassPathResource;
 class SpringAiVisualRulebookPageCatalogModelTest {
 
     @Test
+    void teachingStartupPromptKeepsEvidenceAtomicAndDefersVisualEnrichment() throws IOException {
+        String prompt = new ClassPathResource("prompts/visual-page-teaching-catalog-v1-system.txt")
+                .getContentAsString(StandardCharsets.UTF_8)
+                .replaceAll("\\s+", " ");
+
+        assertThat(prompt).contains(
+                "Inspect only the supplied page images",
+                "Do not use prior knowledge of the named game",
+                "preserve the visible subject, action, condition, quantity, timing, order",
+                "state its visible non-gameplay role",
+                "Do not inventory icons, propose rectangles or coordinates",
+                "Those tasks belong to a later enrichment pass");
+    }
+
+    @Test
     void identifierCellPromptRequiresExactCrossPageArtworkAndPreservesRewardTiming() throws IOException {
         String prompt = new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt")
                 .getContentAsString(StandardCharsets.UTF_8);
@@ -397,6 +412,79 @@ class SpringAiVisualRulebookPageCatalogModelTest {
 
         assertThat(normalized.pages()).extracting(PageSummary::pageNumber).containsExactly(7, 14);
         assertThat(normalized.pages().getLast().printedTerms()).isEqualTo("KODORA");
+    }
+
+    @Test
+    void keepsOnlyExactUniqueBindingsFromAPartialMultiPageTeachingResponse() {
+        CatalogRequest request = new CatalogRequest(
+                List.of(
+                        new PageImageInput(2, "image/jpeg", new byte[] {1}),
+                        new PageImageInput(5, "image/jpeg", new byte[] {2}),
+                        new PageImageInput(9, "image/jpeg", new byte[] {3})),
+                "owner");
+        CatalogDraft draft = new CatalogDraft(List.of(
+                new PageSummary(
+                        2,
+                        "SETUP",
+                        "Visible setup rule.",
+                        List.of("setup"),
+                        List.of(new com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor(
+                                "diagram", "setup", "Setup diagram.", 10, 10, 100, 100)),
+                        List.of(new com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence(
+                                "token",
+                                "标记",
+                                "A compact circle.",
+                                "",
+                                "",
+                                com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus.UNEXPLAINED,
+                                10,
+                                10,
+                                20,
+                                20)),
+                        true),
+                new PageSummary(9, "SCORING", "Visible scoring rule.", List.of("scoring"))));
+
+        CatalogDraft normalized =
+                SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft);
+
+        assertThat(normalized.pages()).extracting(PageSummary::pageNumber).containsExactly(2, 9);
+        assertThat(normalized.pages()).allSatisfy(page -> {
+            assertThat(page.visualAnchors()).isEmpty();
+            assertThat(page.iconOccurrences()).isEmpty();
+            assertThat(page.iconInventoryComplete()).isFalse();
+        });
+    }
+
+    @Test
+    void neverGuessesUnknownOrDuplicateBindingsAcrossTeachingPageImages() {
+        CatalogRequest request = new CatalogRequest(
+                List.of(
+                        new PageImageInput(2, "image/jpeg", new byte[] {1}),
+                        new PageImageInput(5, "image/jpeg", new byte[] {2}),
+                        new PageImageInput(9, "image/jpeg", new byte[] {3})),
+                "owner");
+        CatalogDraft draft = new CatalogDraft(List.of(
+                new PageSummary(2, "FIRST", "First candidate.", List.of("first")),
+                new PageSummary(2, "DUPLICATE", "Duplicate candidate.", List.of("duplicate")),
+                new PageSummary(259, "UNKNOWN", "Unknown binding.", List.of("unknown"))));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no safely bound supplied page");
+    }
+
+    @Test
+    void repairsTheOnlyBindingDuringASinglePageTeachingRetry() {
+        CatalogRequest request = new CatalogRequest(
+                List.of(new PageImageInput(11, "image/jpeg", new byte[] {1})), "owner");
+        CatalogDraft draft = new CatalogDraft(List.of(
+                new PageSummary(111, "TURN", "Visible turn rule.", List.of("turn"))));
+
+        CatalogDraft normalized =
+                SpringAiVisualRulebookPageCatalogModel.normalizeTeachingPageBindings(request, draft);
+
+        assertThat(normalized.pages()).singleElement().extracting(PageSummary::pageNumber).isEqualTo(11);
     }
 
     private static String jsonString(String value) {

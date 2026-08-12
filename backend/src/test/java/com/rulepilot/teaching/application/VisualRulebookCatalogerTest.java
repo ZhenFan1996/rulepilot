@@ -84,7 +84,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void retriesOnlyTheFailedPageWhenItsInitialVisualRequestFails() {
+    void retriesIndividualPagesWhenAnEntireStartupBatchFails() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
         AtomicInteger calls = new AtomicInteger();
@@ -212,7 +212,7 @@ class VisualRulebookCatalogerTest {
 
         cataloger.catalogVisualPages(documentVersionId, List.of(page(1), page(2), page(3)), "Example game", "owner", null);
 
-        assertThat(requestedBatches).containsExactly(List.of(2), List.of(3));
+        assertThat(requestedBatches).containsExactly(List.of(2, 3));
         assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
                 .extracting(PageFact::pageNumber)
                 .containsExactly(1, 2, 3);
@@ -260,20 +260,20 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void aTimedOutProviderCallDoesNotConsumeTheTimeoutOfQueuedPages() {
+    void aTimedOutProviderBatchDoesNotConsumeTheTimeoutOfLaterBatches() {
         UUID documentVersionId = UUID.randomUUID();
         InMemoryFacts facts = new InMemoryFacts();
-        Map<Integer, AtomicInteger> callsByPage = new java.util.concurrent.ConcurrentHashMap<>();
+        List<List<Integer>> requestedBatches = new java.util.concurrent.CopyOnWriteArrayList<>();
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> pages.stream()
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
                         .toList(),
                 request -> {
-                    int pageNumber = request.pages().getFirst().pageNumber();
-                    int call = callsByPage
-                            .computeIfAbsent(pageNumber, ignored -> new AtomicInteger())
-                            .incrementAndGet();
-                    if (pageNumber == 1 && call == 1) {
+                    List<Integer> requested = request.pages().stream()
+                            .map(image -> image.pageNumber())
+                            .toList();
+                    requestedBatches.add(requested);
+                    if (requested.getFirst() == 1) {
                         long deadline = System.nanoTime() + Duration.ofMillis(150).toNanos();
                         while (System.nanoTime() < deadline) {
                             try {
@@ -283,12 +283,13 @@ class VisualRulebookCatalogerTest {
                             }
                         }
                     }
-                    return new VisualRulebookPageCatalogModel.CatalogDraft(List.of(
-                            new VisualRulebookPageCatalogModel.PageSummary(
-                                    pageNumber,
-                                    "PAGE " + pageNumber,
-                                    "Visible rule " + pageNumber,
-                                    List.of("page " + pageNumber))));
+                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
+                            .map(image -> new VisualRulebookPageCatalogModel.PageSummary(
+                                    image.pageNumber(),
+                                    "PAGE " + image.pageNumber(),
+                                    "Visible rule " + image.pageNumber(),
+                                    List.of("page " + image.pageNumber())))
+                            .toList());
                 },
                 facts,
                 1,
@@ -296,17 +297,15 @@ class VisualRulebookCatalogerTest {
 
         cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3)),
+                List.of(page(1), page(2), page(3), page(4), page(5), page(6), page(7)),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3)))
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7)))
                 .extracting(PageFact::pageNumber)
-                .containsExactly(2, 3);
-        assertThat(callsByPage.get(1)).hasValue(1);
-        assertThat(callsByPage.get(2)).hasValue(1);
-        assertThat(callsByPage.get(3)).hasValue(1);
+                .containsExactly(4, 5, 6, 7);
+        assertThat(requestedBatches).containsExactly(List.of(1, 2, 3), List.of(4, 5, 6), List.of(7));
     }
 
     @Test
@@ -751,30 +750,54 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void catalogsEachPhotographedPageIndependently() {
+    void usesLightweightThreePageStartupBatchesAndRetriesOnlyMissingBindings() {
         UUID documentVersionId = UUID.randomUUID();
         List<List<Integer>> batches = new java.util.ArrayList<>();
+        AtomicInteger heavyCatalogCalls = new AtomicInteger();
+        InMemoryFacts facts = new InMemoryFacts();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                heavyCatalogCalls.incrementAndGet();
+                throw new AssertionError("teaching startup must not run the complete icon catalog");
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                List<Integer> requested = request.pages().stream().map(image -> image.pageNumber()).toList();
+                batches.add(requested);
+                return new CatalogDraft(request.pages().stream()
+                        .filter(image -> !requested.equals(List.of(1, 2, 3)) || image.pageNumber() != 2)
+                        .map(image -> new PageSummary(
+                                image.pageNumber(),
+                                "PAGE " + image.pageNumber(),
+                                "Visible rule " + image.pageNumber(),
+                                List.of("page " + image.pageNumber())))
+                        .toList());
+            }
+        };
         VisualRulebookCataloger cataloger = cataloger(
                 (id, pages) -> pages.stream()
                         .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
                         .toList(),
-                request -> {
-                    batches.add(request.pages().stream().map(page -> page.pageNumber()).toList());
-                    return new VisualRulebookPageCatalogModel.CatalogDraft(request.pages().stream()
-                            .map(page -> new VisualRulebookPageCatalogModel.PageSummary(
-                                    page.pageNumber(), "PAGE", "Visible rule", List.of("page")))
-                            .toList());
-                },
-                new InMemoryFacts());
+                model,
+                facts);
 
-        cataloger.catalogVisualPages(
+        List<PageInput> result = cataloger.catalogVisualPages(
                 documentVersionId,
-                List.of(page(1), page(2), page(3), page(4), page(5)),
+                List.of(page(1), page(2), page(3), page(4)),
                 "Example game",
                 "owner",
                 null);
 
-        assertThat(batches).containsExactly(List.of(1), List.of(2), List.of(3), List.of(4), List.of(5));
+        assertThat(batches).containsExactly(List.of(1, 2, 3), List.of(4), List.of(2));
+        assertThat(heavyCatalogCalls).hasValue(0);
+        assertThat(result).extracting(PageInput::pageNumber).containsExactly(1, 2, 3, 4);
+        assertThat(result).allSatisfy(input -> assertThat(input.text()).contains("Visible rule"));
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4))).allSatisfy(fact -> {
+            assertThat(fact.iconOccurrences()).isEmpty();
+            assertThat(fact.iconInventoryComplete()).isFalse();
+        });
     }
 
     @Test
@@ -821,7 +844,7 @@ class VisualRulebookCatalogerTest {
     }
 
     @Test
-    void rereadsDenseIdentifierCatalogsAsIndependentlyBoundCells() throws IOException {
+    void defersDenseIdentifierCellRereadsUntilTheCompleteVisualCatalog() throws IOException {
         UUID documentVersionId = UUID.randomUUID();
         byte[] pageContent = renderedPage();
         VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
@@ -857,10 +880,15 @@ class VisualRulebookCatalogerTest {
                 model,
                 new InMemoryFacts());
 
-        List<PageInput> result = cataloger.catalogVisualPages(
+        List<PageInput> startup = cataloger.catalogVisualPages(
+                documentVersionId, List.of(page(1)), "Fictional reference", "owner", null);
+        List<PageFact> result = cataloger.catalogAllIconPages(
                 documentVersionId, List.of(page(1)), "Fictional reference", "owner", null);
 
-        assertThat(result).singleElement().satisfies(input -> assertThat(input.text())
+        assertThat(startup).singleElement().satisfies(input -> assertThat(input.text())
+                .contains("A dense reference catalog is visible.")
+                .doesNotContain("A-01：可见效果。"));
+        assertThat(result).singleElement().satisfies(fact -> assertThat(fact.factualSummary())
                 .contains("A-01：可见效果。", "A-02：可见效果。", "B#03：可见效果。", "B#04：可见效果。"));
     }
 

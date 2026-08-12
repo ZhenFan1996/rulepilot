@@ -9,6 +9,7 @@ Usage: RULEPILOT_SMOKE_PASSWORD=... smoke-production-ordinary-user.sh \
   [--expected-title TITLE] [--uploaded-title TITLE] [--official-source-url URL] \
   [--preparation-mode text|visual] [--navigation-mode all|api] \
   [--visual-expectation any|required|forbidden] \
+  [--question SOURCE-GROUNDED-QUESTION] \
   [--navigation-file FILE] [--result-file FILE]
 
 Runs the authenticated upload -> processing -> teaching plan -> illustrated lesson
@@ -26,6 +27,7 @@ official_source_url=
 preparation_mode=text
 navigation_mode=all
 visual_expectation=any
+question="How many victory points is each lit dock worth during final scoring?"
 navigation_file=
 result_file=
 
@@ -69,6 +71,10 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--visual-expectation)
 			visual_expectation=${2:-}
+			shift 2
+			;;
+		--question)
+			question=${2:-}
 			shift 2
 			;;
 		--navigation-file)
@@ -117,6 +123,10 @@ if [ "$navigation_mode" != all ] && [ "$navigation_mode" != api ]; then
 fi
 if [ "$visual_expectation" != any ] && [ "$visual_expectation" != required ] && [ "$visual_expectation" != forbidden ]; then
 	echo "--visual-expectation must be any, required, or forbidden" >&2
+	exit 2
+fi
+if [ -z "$question" ] || [ "${#question}" -gt 500 ]; then
+	echo "--question must contain 1-500 characters" >&2
 	exit 2
 fi
 if [ -z "${RULEPILOT_SMOKE_PASSWORD:-}" ]; then
@@ -222,13 +232,20 @@ log_run_timing() {
 verify_preparation_critical_path() {
 	local response=$1
 	if [ "$preparation_mode" = visual ]; then
-		if ! jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
+		if ! jq -e '.activities[]? | select(.operation | startswith("inspectTeachingVisualBatch"))' \
 			>/dev/null <<<"$response"; then
-			echo "SMOKE_WARNING Visual-only rulebook preparation did not report visual catalog work" >&2
+			echo "SMOKE_WARNING Visual-only rulebook preparation did not report lightweight teaching-page facts" >&2
 		fi
+		jq -r '
+            [.activities[]?
+             | select((.operation | startswith("inspectTeachingVisualBatch"))
+                 or (.operation | startswith("inspectTeachingVisualRetry")))] as $calls
+            | "SMOKE_PERFORMANCE phase=preparation visualStartupCalls=\($calls | length) visualStartupLatencyMs=\([$calls[].latencyMs // 0] | add // 0) visualStartupMaxLatencyMs=\([$calls[].latencyMs // 0] | max // 0)"
+        ' <<<"$response" >&2
 		return
 	fi
-	if jq -e '.activities[]? | select(.operation | startswith("inspectRulebookVisualBatch"))' \
+	if jq -e '.activities[]? | select((.operation | startswith("inspectTeachingVisualBatch"))
+            or (.operation | startswith("inspectRulebookVisualBatch")))' \
 		>/dev/null <<<"$response"; then
 		echo "SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan" >&2
 	fi
@@ -587,7 +604,7 @@ if ! jq -e --arg expected "$expected_title" '
 	def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ | $"; "");
 	(.document.title | normalized) == ($expected | normalized)
 ' >/dev/null <<<"$document_response"; then
-	echo "Expected the source-grounded title Lantern Relay, got: $actual_title (plan: $plan_title)" >&2
+	echo "Expected the source-grounded title $expected_title, got: $actual_title (plan: $plan_title)" >&2
 	exit 1
 fi
 log_stage "title-verified"
@@ -629,11 +646,12 @@ log_stage "visual-expectation-verified expectation=$visual_expectation visualSte
 log_stage "lesson-verified"
 
 refresh_csrf
+answer_payload=$(jq -cn --arg question "$question" '{question: $question, language: "en"}')
 answer_response=$(curl --fail-with-body --silent --show-error \
 	--cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
 	--request POST --header "Content-Type: application/json" \
 	--header "$csrf_header: $csrf_token" \
-	--data '{"question":"How many victory points is each lit dock worth during final scoring?","language":"en"}' \
+	--data "$answer_payload" \
 	"$base_url/api/v1/document-versions/$version_id/answers")
 answer_run_id=$(jq -er '.assistantRunId' <<<"$answer_response")
 answer_status=$(jq -er '.answer.status' <<<"$answer_response")

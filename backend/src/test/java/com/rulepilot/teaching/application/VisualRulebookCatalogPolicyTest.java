@@ -19,6 +19,32 @@ class VisualRulebookCatalogPolicyTest {
     }
 
     @Test
+    void boundsTeachingStartupBatchesWithoutDroppingSourcePages() {
+        assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of(2, 5, 7, 9, 11, 13, 17)))
+                .containsExactly(List.of(2, 5, 7), List.of(9, 11, 13), List.of(17));
+        assertThat(VisualRulebookCatalogPolicy.teachingStartupBatches(List.of())).isEmpty();
+    }
+
+    @Test
+    void teachingStartupFactsCanNeverClaimIconOrSpatialCompleteness() {
+        PageSummary overreachingModelOutput = new PageSummary(
+                4,
+                "TURN",
+                "A visible turn rule.",
+                List.of("turn"),
+                List.of(new VisualAnchor("diagram", "turn", "Turn diagram.", 10, 10, 100, 100)),
+                List.of(icon("action", "行动")),
+                true);
+
+        PageSummary bounded = VisualRulebookCatalogPolicy.teachingStartupFact(overreachingModelOutput);
+
+        assertThat(bounded.factualSummary()).isEqualTo("A visible turn rule.");
+        assertThat(bounded.visualAnchors()).isEmpty();
+        assertThat(bounded.iconOccurrences()).isEmpty();
+        assertThat(bounded.iconInventoryComplete()).isFalse();
+    }
+
+    @Test
     void requestsTileAuditFromStructuredDensitySignalsWithoutClassifyingPageVocabulary() {
         PageSummary scoringReference = summary(
                 new VisualAnchor("table", "Scoring reference", "A structured reference.", 100, 100, 300, 300));

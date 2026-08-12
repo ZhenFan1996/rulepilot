@@ -131,6 +131,31 @@ final class VisualRulebookCatalogPolicy {
     }
 
     /**
+     * The startup contract contains only bounded page facts, so three labeled images fit in one request without the
+     * large tail and truncation risk of the complete icon-inventory contract. Requests remain serial in production.
+     */
+    static List<List<Integer>> teachingStartupBatches(List<Integer> pages) {
+        java.util.ArrayList<List<Integer>> batches = new java.util.ArrayList<>();
+        for (int start = 0; start < pages.size(); start += 3) {
+            batches.add(List.copyOf(pages.subList(start, Math.min(start + 3, pages.size()))));
+        }
+        return List.copyOf(batches);
+    }
+
+    /** Model output cannot promote the bounded Teaching ledger into a completed icon or spatial audit. */
+    static com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary teachingStartupFact(
+            com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary summary) {
+        return new com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                List.of(),
+                List.of(),
+                false);
+    }
+
+    /**
      * Audit an icon-bearing page at higher visual resolution when the full-page pass is empty despite an icon-bearing
      * anchor, or when a label-dense page contains multiple proposed symbols. The latter catches overconfident partial
      * inventories without relying on a particular game's vocabulary.
