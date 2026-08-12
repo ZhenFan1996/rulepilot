@@ -195,6 +195,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
         GoogleGenAiChatOptions options = (GoogleGenAiChatOptions) prompt.getValue().getOptions();
         assertThat(options.getThinkingBudget()).isZero();
         assertThat(options.getIncludeThoughts()).isFalse();
+        assertThat(options.getModel()).isEqualTo("gemini-2.5-flash-lite");
         assertThat(options.getCandidateCount()).isOne();
         assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
         assertThat(options.getResponseMimeType()).isEqualTo("application/json");
@@ -208,8 +209,24 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 .build();
 
         assertThat(options.getThinkingBudget()).isNull();
+        assertThat(options.getModel()).isEqualTo("gemini-3.5-flash");
         assertThat(options.getResponseMimeType()).isEqualTo("application/json");
         assertThat(options.getMaxOutputTokens()).isEqualTo(3_200);
+    }
+
+    @Test
+    void keepsAnExplicitFlashLiteSelectionInsteadOfOverridingOtherGeminiModels() {
+        var explicitLite = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
+                        "gemini-2.5-flash-lite", 3_200)
+                .build();
+        var pro = SpringAiVisualRulebookPageCatalogModel.geminiTeachingStartupOptions(
+                        "gemini-2.5-pro", 3_200)
+                .build();
+
+        assertThat(explicitLite.getModel()).isEqualTo("gemini-2.5-flash-lite");
+        assertThat(explicitLite.getThinkingBudget()).isZero();
+        assertThat(pro.getModel()).isEqualTo("gemini-2.5-pro");
+        assertThat(pro.getThinkingBudget()).isNull();
     }
 
     @Test
