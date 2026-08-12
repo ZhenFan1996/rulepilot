@@ -2,6 +2,22 @@ name: Production ordinary-user smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      rulebook_url:
+        description: Optional HTTPS publisher PDF; blank generates the unique CC0 text fixture
+        required: false
+        default: ''
+        type: string
+      rulebook_title:
+        description: Exact source-grounded title when rulebook_url is supplied
+        required: false
+        default: ''
+        type: string
+      question:
+        description: Source-grounded question when rulebook_url is supplied
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +40,9 @@ jobs:
       DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT || '22' }}
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      RULEBOOK_URL: ${{ inputs.rulebook_url }}
+      RULEBOOK_TITLE: ${{ inputs.rulebook_title }}
+      RULEBOOK_QUESTION: ${{ inputs.question }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -53,11 +72,31 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cp examples/lantern-relay-rules.txt "$RUNNER_TEMP/lantern-relay-smoke.txt"
-          printf '\nSMOKE RUN %s\n' "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/lantern-relay-smoke.txt"
-          node scripts/generate-demo-pdf.mjs \
-            "$RUNNER_TEMP/lantern-relay-smoke.txt" \
-            "$RUNNER_TEMP/Lantern_Relay_rulebook_EN_v4_12pages.pdf"
+          if [[ -z "$RULEBOOK_URL" ]]; then
+            [[ -z "$RULEBOOK_TITLE" && -z "$RULEBOOK_QUESTION" ]] || {
+              echo "rulebook_title and question require rulebook_url" >&2
+              exit 2
+            }
+            cp examples/lantern-relay-rules.txt "$RUNNER_TEMP/lantern-relay-smoke.txt"
+            printf '\nSMOKE RUN %s\n' "$GITHUB_RUN_ID" >> "$RUNNER_TEMP/lantern-relay-smoke.txt"
+            node scripts/generate-demo-pdf.mjs \
+              "$RUNNER_TEMP/lantern-relay-smoke.txt" \
+              "$RUNNER_TEMP/rulebook.pdf"
+            printf '%s\n' text > "$RUNNER_TEMP/preparation-mode"
+          else
+            [[ "$RULEBOOK_URL" == https://* ]] || { echo "rulebook_url must use HTTPS" >&2; exit 2; }
+            [[ -n "$RULEBOOK_TITLE" && -n "$RULEBOOK_QUESTION" ]] || {
+              echo "rulebook_title and question are required for a publisher PDF" >&2
+              exit 2
+            }
+            curl --proto '=https' --location --fail --silent --show-error --max-filesize 26214400 \
+              "$RULEBOOK_URL" --output "$RUNNER_TEMP/rulebook.pdf"
+            [[ "$(head -c 5 "$RUNNER_TEMP/rulebook.pdf")" == '%PDF-' ]] || {
+              echo "Publisher response was not a PDF" >&2
+              exit 1
+            }
+            printf '%s\n' visual > "$RUNNER_TEMP/preparation-mode"
+          fi
 
       - name: Open an authenticated production tunnel and replay the journey
         shell: bash
@@ -117,7 +156,35 @@ jobs:
             sleep 1
           done
 
+          artifact_dir="$GITHUB_WORKSPACE/.artifacts/production-ordinary-user-smoke"
+          mkdir -p "$artifact_dir"
+          smoke_args=(
+            --base-url http://127.0.0.1:18080
+            --pdf "$RUNNER_TEMP/rulebook.pdf"
+            --result-file "$artifact_dir/result.json"
+          )
+          preparation_mode=$(<"$RUNNER_TEMP/preparation-mode")
+          if [[ "$preparation_mode" == visual ]]; then
+            smoke_args+=(
+              --expected-title "${RULEBOOK_TITLE,,}"
+              --uploaded-title "$RULEBOOK_TITLE"
+              --official-source-url "$RULEBOOK_URL"
+              --preparation-mode visual
+              --visual-expectation required
+              --navigation-mode api
+              --question "$RULEBOOK_QUESTION"
+            )
+          fi
           RULEPILOT_SMOKE_PASSWORD="$player_password" \
-            bash scripts/smoke-production-ordinary-user.sh \
-              --base-url http://127.0.0.1:18080 \
-              --pdf "$RUNNER_TEMP/Lantern_Relay_rulebook_EN_v4_12pages.pdf"
+            bash scripts/smoke-production-ordinary-user.sh "${smoke_args[@]}" \
+              > "$artifact_dir/summary.json" 2> "$artifact_dir/diagnostics.log"
+          chmod -R go-rwx "$artifact_dir"
+
+      - name: Upload private diagnostic output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-ordinary-user-smoke-${{ github.run_id }}
+          path: .artifacts/production-ordinary-user-smoke
+          if-no-files-found: warn
+          retention-days: 1

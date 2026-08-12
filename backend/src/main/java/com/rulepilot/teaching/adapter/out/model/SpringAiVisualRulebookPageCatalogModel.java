@@ -59,6 +59,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final FakeVisualRulebookPageCatalogModel fake;
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String systemPrompt;
+    private final String teachingStartupPrompt;
     private final String iconLocalizationPrompt;
     private final String iconCropReviewPrompt;
     private final String identifierCellPrompt;
@@ -69,6 +70,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             RuntimeModelConfiguration models,
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
+            @Value("classpath:prompts/visual-page-teaching-catalog-v1-system.txt") Resource teachingStartupPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
             @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
             @Value("classpath:prompts/visual-identifier-cell-v1-system.txt") Resource identifierCellPrompt,
@@ -78,11 +80,13 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         this.models = models;
         this.fake = fake;
         this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        this.teachingStartupPrompt = teachingStartupPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.identifierCellPrompt = identifierCellPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.identifierReferenceMatchPrompt = identifierReferenceMatchPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
-        if (this.systemPrompt.isBlank() || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()
+        if (this.systemPrompt.isBlank() || this.teachingStartupPrompt.isBlank()
+                || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()
                 || this.identifierCellPrompt.isBlank() || this.identifierReferenceMatchPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
         }
@@ -224,6 +228,47 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             failure.addSuppressed(firstFailure);
             throw failure;
         }
+    }
+
+    @Override
+    public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
+            return fake.summarizeForTeaching(request);
+        }
+        return normalizeTeachingPageBindings(request, summarizeTeachingOnce(request, owner));
+    }
+
+    private CatalogDraft summarizeTeachingOnce(CatalogRequest request, String owner) {
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(models.providerFor(Role.VISUAL, owner))) {
+            prompt = prompt.options(qwenJsonOptions(
+                    models.modelNameFor(Role.VISUAL, owner), Math.min(3_200, maxCompletionTokens)));
+        }
+        String content = prompt.system(teachingStartupPrompt)
+                .user(user -> {
+                    user.text("""
+                                    Supplied PDF page numbers: {pageNumbers}
+                                    Rulebook title: {rulebookTitle}
+                                    Attachment mapping: {attachmentOrder}
+                                    Return a JSON object with a pages array. Every returned item must contain only
+                                    pageNumber, printedTerms, factualSummary, and keywords. Keep every fact bound to
+                                    the exact attached page on which it is visibly supported.
+                                    """)
+                            .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
+                            .param("rulebookTitle", request.rulebookTitle() == null
+                                    ? "not supplied; use only what is visible on each page"
+                                    : request.rulebookTitle())
+                            .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
+                                    .mapToObj(index -> "image " + (index + 1) + " = PDF page "
+                                            + request.pages().get(index).pageNumber())
+                                    .collect(java.util.stream.Collectors.joining("; ")));
+                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                            MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
+                })
+                .call()
+                .content();
+        return parseCatalog(content);
     }
 
     private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
@@ -861,6 +906,45 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         return new CatalogDraft(normalized.stream()
                 .sorted(java.util.Comparator.comparingInt(PageSummary::pageNumber))
                 .toList());
+    }
+
+    /**
+     * Multi-page startup responses are deliberately partial-tolerant: exact, unique page bindings are retained and
+     * the application retries only absent pages. Unknown or duplicate bindings are never guessed across multiple
+     * images. A one-image retry may safely repair its sole returned page number because no cross-page binding exists.
+     */
+    static CatalogDraft normalizeTeachingPageBindings(CatalogRequest request, CatalogDraft draft) {
+        if (draft == null) throw new IllegalArgumentException("visual teaching catalog model returned no draft");
+        List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
+        if (requestedOrder.size() == 1 && draft.pages().size() == 1) {
+            return new CatalogDraft(List.of(withoutVisualEnrichment(
+                    rebound(draft.pages().getFirst(), requestedOrder.getFirst()))));
+        }
+        Set<Integer> requested = Set.copyOf(requestedOrder);
+        Map<Integer, Long> returnedCounts = draft.pages().stream().collect(Collectors.groupingBy(
+                PageSummary::pageNumber, Collectors.counting()));
+        List<PageSummary> accepted = draft.pages().stream()
+                .filter(summary -> requested.contains(summary.pageNumber()))
+                .filter(summary -> returnedCounts.get(summary.pageNumber()) == 1)
+                .map(SpringAiVisualRulebookPageCatalogModel::withoutVisualEnrichment)
+                .sorted(java.util.Comparator.comparingInt(summary -> requestedOrder.indexOf(summary.pageNumber())))
+                .toList();
+        if (accepted.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "visual teaching catalog returned no safely bound supplied page; requested=" + requested);
+        }
+        return new CatalogDraft(accepted);
+    }
+
+    private static PageSummary withoutVisualEnrichment(PageSummary summary) {
+        return new PageSummary(
+                summary.pageNumber(),
+                summary.printedTerms(),
+                summary.factualSummary(),
+                summary.keywords(),
+                List.of(),
+                List.of(),
+                false);
     }
 
     private static PageSummary rebound(PageSummary summary, int pageNumber) {

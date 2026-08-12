@@ -19,6 +19,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
   let visualRunEnabled = false
   let visualRunReads = 0
   let answerHasCitations = true
+  let expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
   const server = createServer(async (request, response) => {
     const body = await readBody(request)
     calls.push({ method: request.method, url: request.url, body })
@@ -88,7 +89,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
             occurredAt: '2026-08-02T00:00:12Z',
           },
           ...(includeBlockingVisualCatalog ? [{
-            sequence: 3, type: 'MODEL', operation: 'inspectRulebookVisualBatch|1', outcome: 'SUCCEEDED',
+            sequence: 3, type: 'MODEL', operation: 'inspectTeachingVisualBatch|1', outcome: 'SUCCEEDED',
             latencyMs: 19_000, estimatedInputTokens: 800, estimatedOutputTokens: 250,
             occurredAt: '2026-08-02T00:00:12Z',
           }] : []),
@@ -189,7 +190,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     if (request.method === 'POST'
       && request.url === '/api/v1/document-versions/22222222-2222-2222-2222-222222222222/answers') {
       assert.deepEqual(JSON.parse(body.toString()), {
-        question: 'How many victory points is each lit dock worth during final scoring?',
+        question: expectedQuestion,
         language: 'en',
       })
       return json(response, 200, {
@@ -286,7 +287,7 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
     assert.match(result.stderr, /SMOKE_STAGE cleanup-completed/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=organizeTeachingOutline .*latencyMs=11000/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=deferSelectedVisualPageCatalog .*outcome=SUCCEEDED/)
-    assert.doesNotMatch(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=inspectRulebookVisualBatch/)
+    assert.doesNotMatch(result.stderr, /SMOKE_TIMING phase=preparation kind=activity .*operation=inspectTeachingVisualBatch/)
     assert.match(result.stderr, /SMOKE_TIMING phase=preparation kind=budget usedModelCalls=1 usedToolCalls=0 usedTokens=1500/)
     assert.match(result.stderr, /SMOKE_TIMING phase=lesson kind=activity .*operation=composeLessonSection .*latencyMs=6500/)
     assert.match(result.stderr, /SMOKE_PERFORMANCE phase=lesson firstSectionSeconds=7 totalSeconds=7 usedModelCalls=1 modelCallLimit=5 correctionCalls=0/)
@@ -344,18 +345,22 @@ test('replays the ordinary-user upload journey and cleans up the synthetic docum
 
     deleted = false
     planStarted = false
-    const expectedVisualCatalog = await spawnResult(
+    expectedQuestion = 'What may a player take on a turn?'
+    const customVisualCatalog = await spawnResult(
       'bash',
       [resolve('scripts/smoke-production-ordinary-user.sh'),
         '--base-url', `http://127.0.0.1:${address.port}`,
         '--pdf', pdf,
         '--preparation-mode', 'visual',
+        '--question', expectedQuestion,
         '--timeout-seconds', '10'],
       { ...process.env, RULEPILOT_SMOKE_PASSWORD: 'smoke-password' },
     )
-    assert.equal(expectedVisualCatalog.code, 0, expectedVisualCatalog.stderr)
-    assert.doesNotMatch(expectedVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
-    assert.doesNotMatch(expectedVisualCatalog.stderr, /Visual-only rulebook preparation did not report visual catalog work/)
+    assert.equal(customVisualCatalog.code, 0, customVisualCatalog.stderr)
+    expectedQuestion = 'How many victory points is each lit dock worth during final scoring?'
+    assert.doesNotMatch(customVisualCatalog.stderr, /Text-rulebook preparation performed visual catalog work/)
+    assert.doesNotMatch(customVisualCatalog.stderr, /Visual-only rulebook preparation did not report lightweight teaching-page facts/)
+    assert.match(customVisualCatalog.stderr, /SMOKE_PERFORMANCE phase=preparation visualStartupCalls=1 visualStartupLatencyMs=19000 visualStartupMaxLatencyMs=19000/)
     assert.equal(deleted, true)
 
     visualRunEnabled = true
@@ -464,6 +469,9 @@ test('production workflows never execute an operator-supplied Git ref with produ
   assert.doesNotMatch(smoke, /inputs\.ref/)
   assert.match(smoke, /ref: main/)
   assert.match(smoke, /Production is not running the checked-out main commit/)
+  assert.match(smoke, /--preparation-mode visual/)
+  assert.match(smoke, /--question "\$RULEBOOK_QUESTION"/)
+  assert.match(smoke, /production-ordinary-user-smoke-\$\{\{ github\.run_id \}\}/)
   assert.doesNotMatch(realRulebooks, /inputs\.ref/)
   assert.match(realRulebooks, /ref: main/)
   assert.match(realRulebooks, /Production is not running the checked-out main commit/)

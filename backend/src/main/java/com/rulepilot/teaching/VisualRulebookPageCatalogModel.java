@@ -13,6 +13,15 @@ public interface VisualRulebookPageCatalogModel {
 
     CatalogDraft summarize(CatalogRequest request);
 
+    /**
+     * Reads only the page-scoped rule facts needed to start an evidence-bound lesson. Implementations should avoid
+     * icon inventories, spatial localization, and dense-cell audits here; those slower enrichments run after the
+     * first readable lesson section. The default keeps non-vision test adapters source-compatible.
+     */
+    default CatalogDraft summarizeForTeaching(CatalogRequest request) {
+        return summarize(request);
+    }
+
     /** Locates document-derived short item identifiers before their surrounding cells are read separately. */
     default IdentifierLocalizationDraft locateIdentifiers(IdentifierLocalizationRequest request) {
         return new IdentifierLocalizationDraft(List.of());
