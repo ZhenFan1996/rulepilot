@@ -15,6 +15,7 @@ import type {
   RecommendationProgressStage,
   RecommendationProfile,
 } from '@/components/gameRecommendationTypes'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { streamGameRecommendation } from '@/lib/gameRecommendationStream'
 import { useLocale } from '@/lib/locale'
 
@@ -119,10 +120,20 @@ const openSurface = ref<'none' | 'game-details' | 'journey' | 'rulebook' | 'less
 const journeyStatus = ref<RecommendationJourneyStatus | null>(null)
 const conversationRole = ref<'recommendation' | 'rule-qa'>('recommendation')
 const conversationScroller = ref<HTMLElement | null>(null)
+const journeyDialog = ref<HTMLElement | null>(null)
+const journeyDock = ref<HTMLButtonElement | null>(null)
+const returnToAnswerWorkspace = ref(false)
 let messageId = 1
 let csrf: { headerName: string; token: string } | null = null
 let loadingClock: ReturnType<typeof setInterval> | null = null
 let activeRequest: AbortController | null = null
+
+useModalFocus({
+  dialog: journeyDialog,
+  open: () => openSurface.value === 'journey',
+  requestClose: () => { openSurface.value = 'none' },
+  restoreFocus: journeyReturnTarget,
+})
 
 const loadingMessage = computed(() => {
   const message = loadingCopy[locale.value][loadingStage.value]
@@ -311,12 +322,24 @@ function openLesson(value: RecommendationJourneyStatus) {
   if (value.plan?.id) openSurface.value = 'lesson'
 }
 
+function journeyReturnTarget() {
+  if (!returnToAnswerWorkspace.value) return null
+  returnToAnswerWorkspace.value = false
+  return document.querySelector<HTMLElement>('[data-testid="recommendation-answer-workspace"]')
+}
+
+function journeySurfaceReturnTarget() {
+  return journeyReturnTarget() ?? journeyDock.value
+}
+
 function switchToQuestions(value?: RecommendationJourneyStatus) {
+  returnToAnswerWorkspace.value = false
   if (value) journeyStatus.value = value
   if (!answerWorkspaceReady.value) {
     if (selectedGame.value) openSurface.value = 'journey'
     return
   }
+  returnToAnswerWorkspace.value = true
   conversationRole.value = 'rule-qa'
   openSurface.value = 'none'
 }
@@ -446,7 +469,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <button v-if="selectedGame && openSurface !== 'journey'" data-testid="player-journey-dock" type="button" class="mt-4 flex min-h-16 w-full items-center gap-3 rounded-2xl border border-copper/25 bg-paper px-4 py-3 text-left elevation-sm hover:border-copper/45" @click="openSurface = 'journey'">
+    <button v-if="selectedGame && openSurface !== 'journey'" ref="journeyDock" data-testid="player-journey-dock" type="button" class="mt-4 flex min-h-16 w-full items-center gap-3 rounded-2xl border border-copper/25 bg-paper px-4 py-3 text-left elevation-sm hover:border-copper/45" @click="openSurface = 'journey'">
       <span class="grid size-9 shrink-0 place-items-center rounded-full bg-copper/10 font-mono text-xs font-bold text-copper">{{ journeyStatus?.projection.progress ?? 5 }}%</span>
       <span class="min-w-0 flex-1 text-sm font-semibold text-ink">{{ compactJourneyText }}</span>
       <span class="shrink-0 text-sm font-semibold text-indigo underline">{{ t('journeyOpen') }}</span>
@@ -454,7 +477,7 @@ onBeforeUnmount(() => {
 
     <Teleport to="body">
       <div v-if="selectedGame" v-show="openSurface === 'journey'" data-testid="player-journey-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="openSurface = 'none'">
-        <div class="mx-auto w-full max-w-3xl" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
+        <div ref="journeyDialog" tabindex="-1" class="mx-auto w-full max-w-3xl outline-none" role="dialog" aria-modal="true" :aria-label="t('journeyDialog')">
           <RecommendationRulebookHandoff
             :key="selectedGame.bggId"
             :game="selectedGame"
@@ -476,12 +499,14 @@ onBeforeUnmount(() => {
       :open="openSurface === 'rulebook'"
       :version-id="journeyStatus.importJob.documentVersionId"
       :title="selectedGame.name"
+      :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
     />
     <RecommendationLessonDialog
       v-if="journeyStatus?.plan?.id"
       :open="openSurface === 'lesson'"
       :plan-id="journeyStatus.plan.id"
+      :restore-focus="journeySurfaceReturnTarget"
       @close="openSurface = 'none'"
       @ask-questions="switchToQuestions()"
     />

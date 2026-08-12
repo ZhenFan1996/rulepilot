@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import LessonChapterList from '@/components/LessonChapterList.vue'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { acceptProgressiveLesson, teachingRunIsActive } from '@/lib/liveLesson'
 import { useLocale } from '@/lib/locale'
 import { mergeTeachingRunProgress, teachingActivityText, type TeachingRunProgress } from '@/lib/teachingProgress'
@@ -51,7 +52,11 @@ interface IllustratedLesson {
   sections: LessonSection[]
 }
 
-const props = defineProps<{ open: boolean; planId: string }>()
+const props = defineProps<{
+  open: boolean
+  planId: string
+  restoreFocus?: () => HTMLElement | null
+}>()
 const emit = defineEmits<{ close: []; 'ask-questions': [] }>()
 const { locale } = useLocale()
 const plan = ref<TeachingPlan | null>(null)
@@ -60,8 +65,16 @@ const run = ref<TeachingRunProgress | null>(null)
 const loading = ref(false)
 const error = ref(false)
 const refreshWarning = ref(false)
+const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
 let timer: ReturnType<typeof setTimeout> | null = null
+
+useModalFocus({
+  dialog,
+  open: () => props.open,
+  requestClose: () => emit('close'),
+  restoreFocus: props.restoreFocus,
+})
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '生成讲解阅读器', close: '关闭讲解', eyebrow: '规则书讲解', loading: '正在打开已生成的讲解…', error: '讲解暂时无法打开。', retry: '重试',
@@ -182,11 +195,11 @@ watch(() => [props.open, props.planId] as const, ([open]) => {
 <template>
   <Teleport to="body">
     <div v-if="open" data-testid="recommendation-lesson-backdrop" class="fixed inset-0 z-[100] overflow-y-auto bg-ink/45 backdrop-blur-[2px]" @click.self="emit('close')">
-      <section data-testid="recommendation-lesson-surface" class="relative isolate mx-auto min-h-screen w-full max-w-[100rem] text-ink sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" style="background-color: var(--color-canvas); opacity: 1" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+      <section ref="dialog" data-testid="recommendation-lesson-surface" tabindex="-1" class="relative isolate mx-auto min-h-screen w-full max-w-[100rem] text-ink outline-none sm:my-5 sm:min-h-0 sm:overflow-hidden sm:rounded-3xl sm:border sm:border-gold/25 sm:shadow-2xl" style="background-color: var(--color-canvas); opacity: 1" role="dialog" aria-modal="true" :aria-label="copy.dialog">
         <header class="app-sticky-top sticky z-20 border-b border-ink/10 bg-paper/95 px-4 py-4 backdrop-blur sm:px-6">
           <div class="flex items-start justify-between gap-4">
             <div class="min-w-0"><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 truncate font-display text-2xl font-semibold">{{ plan?.gameTitle ?? copy.dialog }}</h2><p v-if="plan?.premise" class="mt-1 max-w-3xl text-xs leading-5 text-ink/50">{{ plan.premise }}</p></div>
-            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
+            <div class="flex shrink-0 items-center gap-2"><button v-if="lesson" type="button" class="min-h-11 rounded-lg bg-indigo px-4 text-sm font-semibold text-white" @click="emit('ask-questions')">{{ copy.ask }}</button><button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button></div>
           </div>
           <div v-if="plan && lesson" class="mt-3">
             <div class="flex items-center justify-between gap-3 text-xs"><p class="font-semibold" :class="active || !run ? 'text-indigo' : 'text-emerald-700'" role="status">{{ statusText }}</p><span class="font-mono font-semibold text-ink/50">{{ lesson.sections.length }} / {{ plan.sections.length }}</span></div>

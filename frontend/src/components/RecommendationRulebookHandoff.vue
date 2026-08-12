@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
         <h3 class="mt-1 font-display text-xl font-semibold">{{ copy.title }}</h3>
         <p v-if="game.nameLocalized" class="mt-1 text-xs text-ink/45">{{ game.originalName }}</p>
       </div>
-      <button type="button" class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+      <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 shrink-0 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
     </div>
 
     <div class="p-4 sm:p-5">

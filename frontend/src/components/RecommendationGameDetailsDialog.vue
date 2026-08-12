@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import type { RecommendationGame } from '@/components/gameRecommendationTypes'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { useLocale } from '@/lib/locale'
 
 interface BggEditionImage {
@@ -53,7 +54,10 @@ const details = ref<BggGameDetails | null>(null)
 const loading = ref(false)
 const translating = ref(false)
 const error = ref(false)
+const dialog = ref<HTMLElement | null>(null)
 let requestSequence = 0
+
+useModalFocus({ dialog, open: () => props.open, requestClose: () => emit('close') })
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   dialog: '桌游详细资料', close: '关闭桌游资料', eyebrow: 'BGG 桌游资料', loading: '正在读取详细资料…', error: '暂时无法读取详细资料。', retry: '重试',
@@ -161,10 +165,10 @@ watch(() => [props.open, props.game.bggId, locale.value] as const, ([open]) => {
 
 <template>
   <div v-if="open" class="fixed inset-0 z-50 overflow-y-auto bg-ink/40 px-3 py-6 backdrop-blur-[2px] sm:px-6" @click.self="emit('close')">
-    <section class="mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-gold/25 bg-canvas shadow-2xl" role="dialog" aria-modal="true" :aria-label="copy.dialog">
+    <section ref="dialog" tabindex="-1" class="mx-auto w-full max-w-5xl overflow-hidden rounded-3xl border border-gold/25 bg-canvas shadow-2xl outline-none" role="dialog" aria-modal="true" :aria-label="copy.dialog">
       <header class="app-sticky-top sticky z-10 flex items-start justify-between border-b border-ink/10 bg-paper/95 px-5 py-4 backdrop-blur sm:px-7">
         <div><p class="tabletop-kicker">{{ copy.eyebrow }}</p><h2 class="mt-1 font-display text-2xl font-semibold">{{ details?.name ?? game.name }}</h2></div>
-        <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
+        <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="emit('close')">×</button>
       </header>
 
       <div v-if="loading" class="grid min-h-96 place-items-center p-8 text-sm text-ink/50" role="status">{{ copy.loading }}</div>

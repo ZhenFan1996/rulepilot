@@ -54,6 +54,7 @@ describe('AppShell', () => {
     await router.push('/')
     await router.isReady()
     const wrapper = mount(AppShell, {
+      attachTo: document.body,
       slots: { default: '<p>页面内容</p>' },
       global: { plugins: [router] },
     })
@@ -70,6 +71,7 @@ describe('AppShell', () => {
     expect(backgroundWorkTrigger.classes()).not.toContain('fixed')
     expect(wrapper.get('[data-testid="background-work-trigger-mobile"]').element.closest('header')).not.toBeNull()
     await backgroundWorkTrigger.trigger('click')
+    await flushPromises()
     expect(wrapper.text()).toContain('星际探索')
     expect(wrapper.text()).toContain('可以继续浏览')
     expect(wrapper.text()).toContain('公开讲解')
@@ -77,6 +79,8 @@ describe('AppShell', () => {
     expect(backgroundWorkTrigger.text()).toContain('1')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('中文')
     expect(wrapper.get('header [aria-label="切换语言"]').text()).toContain('EN')
+    expect(document.activeElement).toBe(wrapper.get('button[aria-label="关闭后台任务"]').element)
+    expect(document.body.style.overflow).toBe('hidden')
 
     vi.advanceTimersByTime(4000)
     await flushPromises()
@@ -87,6 +91,10 @@ describe('AppShell', () => {
 
     await wrapper.findAll('button').find(button => button.text() === '清除已结束任务')!.trigger('click')
     expect(wrapper.text()).not.toContain('星际探索')
+    document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }))
+    await flushPromises()
+    expect(document.activeElement).toBe(backgroundWorkTrigger.element)
+    expect(document.body.style.overflow).toBe('')
     wrapper.unmount()
   })
 

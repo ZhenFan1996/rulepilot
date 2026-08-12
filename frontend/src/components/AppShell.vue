@@ -30,7 +30,7 @@ const isDark = computed(() => appearance.value === 'dark')
 const username = ref('')
 const roles = ref<string[]>([])
 const loginReminderVisible = ref(false)
-const backgroundWorkCenter = ref<{ openCenter: () => void } | null>(null)
+const backgroundWorkCenter = ref<{ openCenter: (trigger?: HTMLElement | null) => void } | null>(null)
 const backgroundActiveCount = ref(0)
 const backgroundFinishedCount = ref(0)
 
@@ -94,8 +94,8 @@ function updateBackgroundWorkStatus(activeCount: number, finishedCount: number) 
   backgroundFinishedCount.value = finishedCount
 }
 
-function openBackgroundWork() {
-  backgroundWorkCenter.value?.openCenter()
+function openBackgroundWork(event: MouseEvent) {
+  backgroundWorkCenter.value?.openCenter(event.currentTarget as HTMLElement)
 }
 
 async function logout() {

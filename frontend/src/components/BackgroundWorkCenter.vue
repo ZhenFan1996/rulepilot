@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
+import { useModalFocus } from '@/composables/useModalFocus'
 import {
   parseBackgroundTeachingItems,
   reconcileBackgroundTeaching,
@@ -16,6 +17,9 @@ const props = defineProps<{ username: string }>()
 const emit = defineEmits<{
   status: [activeCount: number, finishedCount: number]
 }>()
+
+const dialog = ref<HTMLElement | null>(null)
+const requestedRestoreTarget = ref<HTMLElement | null>(null)
 
 interface TeachingPlanSummary { id: string; gameTitle: string }
 interface ActiveTeachingRun { id: string; subjectId: string; state: string; updatedAt: string }
@@ -91,6 +95,13 @@ const DISMISSED_UPLOAD_HANDOFFS_KEY = 'rulepilot:dismissed-upload-teaching-hando
 const terminalTeachingStates = new Set(['COMPLETED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED', 'FAILED'])
 let timer: ReturnType<typeof setTimeout> | undefined
 let disposed = false
+
+useModalFocus({
+  dialog,
+  open,
+  requestClose: () => { open.value = false },
+  restoreFocus: () => requestedRestoreTarget.value,
+})
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   trigger: '后台任务', title: '后台任务', close: '关闭后台任务', empty: '当前没有后台任务。',
@@ -497,7 +508,8 @@ function handleTeachingLaunched(event: Event) {
   void refresh()
 }
 
-function openCenter() {
+function openCenter(trigger?: HTMLElement | null) {
+  requestedRestoreTarget.value = trigger ?? null
   open.value = true
 }
 
@@ -537,14 +549,14 @@ onBeforeUnmount(() => {
 <template>
   <div>
     <div v-if="open" class="fixed inset-0 z-50 bg-ink/35 backdrop-blur-[2px]" @click.self="open = false">
-      <aside class="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-gold/25 bg-canvas elevation-lg-ink" role="dialog" aria-modal="true" :aria-label="copy.title">
+      <aside ref="dialog" tabindex="-1" class="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-gold/25 bg-canvas outline-none elevation-lg-ink" role="dialog" aria-modal="true" :aria-label="copy.title">
         <header class="flex items-start justify-between border-b border-ink/10 bg-paper px-5 py-5">
           <div>
             <p class="tabletop-kicker">RulePilot</p>
             <h2 class="mt-1 font-display text-2xl font-semibold">{{ copy.title }}</h2>
             <p class="mt-1 text-sm leading-6 text-ink/55">{{ copy.safe }}</p>
           </div>
-          <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="open = false">×</button>
+          <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/45 hover:bg-ink/5" :aria-label="copy.close" @click="open = false">×</button>
         </header>
 
         <div class="flex-1 overflow-y-auto px-4 py-5 sm:px-5">

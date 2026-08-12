@@ -40,7 +40,7 @@ describe('GameRecommendationAgent', () => {
     })
     await router.push('/')
     await router.isReady()
-    const wrapper = mount(GameRecommendationAgent, { global: { plugins: [router], stubs } })
+    const wrapper = mount(GameRecommendationAgent, { attachTo: document.body, global: { plugins: [router], stubs } })
     mountedAgents.push(wrapper)
     return wrapper
   }
@@ -318,7 +318,9 @@ describe('GameRecommendationAgent', () => {
     await wrapper.get('textarea').setValue('想找自然主题的桌游')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
-    await wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!.trigger('click')
+    const selectButton = wrapper.findAll('button').find(button => button.text() === '选这款，找规则书')!
+    selectButton.element.focus()
+    await selectButton.trigger('click')
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bgg/games/266192/import', expect.objectContaining({ method: 'POST' }))
@@ -327,9 +329,13 @@ describe('GameRecommendationAgent', () => {
     expect(document.body.querySelector('[data-testid="player-journey-surface"]')?.getAttribute('style'))
       .toContain('opacity: 1')
 
-    document.body.querySelector<HTMLButtonElement>('button[aria-label="关闭小窗"]')!.click()
+    const journeyClose = document.body.querySelector<HTMLButtonElement>('button[aria-label="关闭小窗"]')!
+    expect(document.activeElement).toBe(journeyClose)
+    journeyClose.click()
     await flushPromises()
-    expect(wrapper.get('[data-testid="player-journey-dock"]').text()).toContain('展翅翱翔')
+    const journeyDock = wrapper.get('[data-testid="player-journey-dock"]')
+    expect(journeyDock.text()).toContain('展翅翱翔')
+    expect(document.activeElement).toBe(selectButton.element)
     const bindingCallsBeforeReopen = fetchMock.mock.calls
       .filter(([input]) => String(input) === '/api/v1/bgg/games/266192/import').length
     await wrapper.get('[data-testid="player-journey-dock"]').trigger('click')
@@ -372,7 +378,7 @@ describe('GameRecommendationAgent', () => {
         editionId: { type: String, required: true },
         gameTitle: { type: String, required: true },
       },
-      template: '<div data-testid="answer-workspace-stub">{{ gameTitle }} · {{ documentVersionId }} · {{ planId }}</div>',
+      template: '<div data-testid="recommendation-answer-workspace" tabindex="-1"><div data-testid="answer-workspace-stub">{{ gameTitle }} · {{ documentVersionId }} · {{ planId }}</div></div>',
     })
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/auth/csrf') return Response.json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' })
@@ -399,6 +405,7 @@ describe('GameRecommendationAgent', () => {
     expect(wrapper.get('[data-testid="recommendation-conversation"]').isVisible()).toBe(false)
     expect(wrapper.get('[data-testid="agent-role-switcher"]').text()).toContain('继续推荐')
     expect(wrapper.get('[data-testid="agent-role-switcher"]').text()).toContain('规则答疑')
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="recommendation-answer-workspace"]').element)
 
     const recommendationButton = wrapper.findAll('[data-testid="agent-role-switcher"] button').find(button => button.text() === '继续推荐')!
     await recommendationButton.trigger('click')

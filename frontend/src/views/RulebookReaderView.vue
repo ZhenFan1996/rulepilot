@@ -7,6 +7,7 @@ import LessonAnswerPanel from '@/components/LessonAnswerPanel.vue'
 import { useConfirmedRuling } from '@/composables/useConfirmedRuling'
 import { useLessonAnswers, type CsrfResponse } from '@/composables/useLessonAnswers'
 import { useLessonQuestionInput } from '@/composables/useLessonQuestionInput'
+import { useModalFocus } from '@/composables/useModalFocus'
 import { notifyLoginRequired } from '@/lib/authSession'
 import {
   forgetLessonAnswerThread,
@@ -38,8 +39,15 @@ const online = ref(navigator.onLine)
 const answersOpen = ref(false)
 const cardOcrOpen = ref(false)
 const readerTop = ref<HTMLElement | null>(null)
+const answersDialog = ref<HTMLElement | null>(null)
 let loadSequence = 0
 let disposed = false
+
+useModalFocus({
+  dialog: answersDialog,
+  open: answersOpen,
+  requestClose: () => { answersOpen.value = false },
+})
 
 const copy = computed(() => locale.value === 'zh-CN' ? {
   back: '返回规则书', eyebrow: '原规则书', pages: `${pages.value.length} 页`, page: (value: number) => `第 ${value} 页`,
@@ -251,10 +259,10 @@ onUnmounted(() => {
       <button v-if="!answersOpen && !loading && !errorMessage" type="button" class="fixed bottom-5 right-4 z-30 min-h-12 rounded-full bg-copper px-5 text-sm font-bold text-white shadow-xl sm:right-6" @click="answersOpen = true">{{ copy.answer }}</button>
 
       <div v-if="answersOpen" class="fixed inset-0 z-50 bg-ink/40 backdrop-blur-[2px]" @click.self="answersOpen = false">
-        <aside class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl sm:p-6" role="dialog" aria-modal="true" :aria-label="copy.answer">
+        <aside ref="answersDialog" tabindex="-1" class="absolute inset-y-0 right-0 w-full max-w-2xl overflow-y-auto border-l border-ink/10 bg-canvas p-4 shadow-2xl outline-none sm:p-6" role="dialog" aria-modal="true" :aria-label="copy.answer">
           <div class="app-sticky-top sticky z-10 flex items-center justify-between border-b border-ink/10 bg-canvas/95 pb-3 backdrop-blur">
             <div><p class="font-semibold">{{ copy.answer }}</p><p class="mt-1 text-xs text-ink/45">{{ copy.hint }}</p></div>
-            <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
+            <button type="button" data-modal-initial-focus class="grid min-h-11 min-w-11 place-items-center rounded-lg text-2xl text-ink/50 hover:bg-ink/5" :aria-label="copy.close" @click="answersOpen = false">×</button>
           </div>
           <LessonAnswerPanel
             :question="question" :answer="answer" :answered-question="answeredQuestion" :answer-turns="answerTurns"
