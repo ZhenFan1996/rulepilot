@@ -63,6 +63,10 @@ public class TeachingEvidenceAgent implements TeachingEvidenceRefiner {
             TeachingPlan.PlannedSection planned,
             UUID assistantRunId,
             TeachingSectionEvidenceRetriever.Result deterministic) {
+        // A progressive visual plan has already read and verified its exact source page directly. Asking the native
+        // evidence agent to interpret the model-authored chapter objective would add no canonical evidence and can
+        // only extend the first-section critical path.
+        if (ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) return deterministic;
         if (!TeachingEvidenceRefinementPolicy.requiresRefinement(planned, deterministic)) return deterministic;
         var scope = scopes.create(plan.createdBy(), plan.documentVersionId(), assistantRunId);
         if (scope.isEmpty()) return deterministic;

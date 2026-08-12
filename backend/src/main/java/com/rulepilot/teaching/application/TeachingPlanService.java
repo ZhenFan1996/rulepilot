@@ -90,6 +90,32 @@ public class TeachingPlanService {
         var documentPages = documents.pages(documentVersionId);
         boolean visualOnly = documentPages.stream().allMatch(page -> page.text() == null || page.text().isBlank());
         boolean textRulebookVisualCatalogAvailable = !visualOnly && visualCataloger.available(createdBy);
+        if (visualOnly && (learningGoal == null || learningGoal.isBlank())) {
+            var progressive = visualCataloger.progressiveTeachingStart(
+                    documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId);
+            if (progressive.isPresent()) {
+                var outline = ProgressiveVisualTeachingPlanPolicy.outline(
+                        playerGameTitle, documentPages, progressive.orElseThrow());
+                plans.validate(outline);
+                validateVisualPageBindings(outline, documentPages);
+                if (catalogGameTitle.isPresent()) {
+                    outline = withGameTitle(catalogGameTitle.orElseThrow(), outline);
+                }
+                if (assistantRunId != null) {
+                    invocations.record(
+                            assistantRunId,
+                            ActivityType.VALIDATION,
+                            "publishProgressiveVisualTeachingPlan",
+                            ActivityOutcome.SUCCEEDED,
+                            "A complete source-bound plan is ready; only the first cited page was transcribed before publication");
+                }
+                return publication.publish(plans.create(
+                        documentVersionId,
+                        learningGoal,
+                        createdBy,
+                        outline), outline.gameTitle());
+            }
+        }
         var pages = visualOnly
                 ? visualCataloger.catalogVisualPages(
                         documentVersionId, documentPages, scope.documentTitle(), createdBy, assistantRunId)

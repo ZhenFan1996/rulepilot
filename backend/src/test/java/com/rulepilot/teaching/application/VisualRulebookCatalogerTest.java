@@ -23,6 +23,9 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocalizat
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierLocation;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
@@ -38,6 +41,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.function.ToIntFunction;
@@ -45,6 +50,242 @@ import javax.imageio.ImageIO;
 import org.junit.jupiter.api.Test;
 
 class VisualRulebookCatalogerTest {
+
+    @Test
+    void progressiveStartReadsEightPagesAsFivePlusThreeAndPersistsOnlyTheSelectedPage() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        List<List<Integer>> storageReads = new java.util.ArrayList<>();
+        List<String> operations = new java.util.ArrayList<>();
+        List<String> summaries = new java.util.ArrayList<>();
+        AtomicInteger modelCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("progressive startup must not run the complete visual catalog");
+            }
+
+            @Override
+            public boolean supportsProgressiveTeachingStart(String owner) {
+                return true;
+            }
+
+            @Override
+            public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+                modelCalls.incrementAndGet();
+                assertThat(request.pages()).extracting(image -> image.pageNumber())
+                        .containsExactly(1, 2, 3, 4, 5, 6, 7, 8);
+                return Optional.of(progressiveStart(4));
+            }
+
+            @Override
+            public Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String owner) {
+                return Optional.of(new ModelExecutionIdentity("qwen", "qwen3.6-flash"));
+            }
+        };
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                operations.add(operation);
+                summaries.add(successSummary);
+                return invocation.get();
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> {
+                    storageReads.add(List.copyOf(pages));
+                    return pages.stream()
+                            .map(page -> new DocumentPageImages.PageImage(
+                                    page, "image/png", new byte[] {(byte) (int) page}, 100, 120))
+                            .toList();
+                },
+                model,
+                facts,
+                audit,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1);
+
+        var start = cataloger.progressiveTeachingStart(
+                documentVersionId,
+                java.util.stream.IntStream.rangeClosed(1, 8).mapToObj(VisualRulebookCatalogerTest::page).toList(),
+                "Example game",
+                "owner",
+                UUID.randomUUID());
+
+        assertThat(start).isPresent();
+        assertThat(storageReads).containsExactly(List.of(1, 2, 3, 4, 5), List.of(6, 7, 8));
+        assertThat(modelCalls).hasValue(1);
+        assertThat(operations).containsExactly("selectProgressiveTeachingStart");
+        assertThat(summaries).containsExactly("First cited-page candidate selected via qwen/qwen3.6-flash");
+        assertThat(facts.find(documentVersionId, Set.of(1, 2, 3, 4, 5, 6, 7, 8)))
+                .singleElement()
+                .satisfies(fact -> {
+                    assertThat(fact.pageNumber()).isEqualTo(4);
+                    assertThat(fact.factualSummary()).contains("补满市场");
+                    assertThat(fact.iconInventoryComplete()).isFalse();
+                });
+    }
+
+    @Test
+    void rejectsAnInvalidProgressiveStartWithoutPersistingGuessedFacts() {
+        UUID documentVersionId = UUID.randomUUID();
+        InMemoryFacts facts = new InMemoryFacts();
+        List<String> rejectedOperations = new java.util.ArrayList<>();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("fallback belongs to the existing complete preparation path");
+            }
+
+            @Override
+            public boolean supportsProgressiveTeachingStart(String owner) {
+                return true;
+            }
+
+            @Override
+            public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+                return Optional.of(new ProgressiveTeachingStartDraft(
+                        List.of(
+                                new TeachingPageSketch(
+                                        1, TeachingPageRole.GAMEPLAY_RULES, "Setup", List.of("market"), List.of("setup")),
+                                new TeachingPageSketch(
+                                        2, TeachingPageRole.GAMEPLAY_RULES, "Turn", List.of("take"), List.of("core_loop"))),
+                        new PageSummary(2, "take", "当前玩家必须执行一个可见动作。", List.of("take", "turn"))));
+            }
+        };
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                return invocation.get();
+            }
+
+            @Override
+            public void record(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome outcome,
+                    String summary) {
+                rejectedOperations.add(operation + ":" + outcome);
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                model,
+                facts,
+                audit,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
+                4,
+                1);
+
+        var result = cataloger.progressiveTeachingStart(
+                documentVersionId,
+                List.of(page(1), page(2)),
+                "Example game",
+                "owner",
+                UUID.randomUUID());
+
+        assertThat(result).isEmpty();
+        assertThat(facts.find(documentVersionId, Set.of(1, 2))).isEmpty();
+        assertThat(rejectedOperations).containsExactly("fallbackFromProgressiveTeachingStart:REJECTED");
+    }
+
+    @Test
+    void timesOutProgressiveStartSettlesItsRunningActivityAndInterruptsItsWorker() throws InterruptedException {
+        UUID documentVersionId = UUID.randomUUID();
+        UUID assistantRunId = UUID.randomUUID();
+        CountDownLatch workerStarted = new CountDownLatch(1);
+        CountDownLatch workerInterrupted = new CountDownLatch(1);
+        List<String> stoppedOperations = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VisualRulebookPageCatalogModel model = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("fallback belongs to the existing complete preparation path");
+            }
+
+            @Override
+            public boolean supportsProgressiveTeachingStart(String owner) {
+                return true;
+            }
+
+            @Override
+            public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+                workerStarted.countDown();
+                try {
+                    Thread.sleep(Duration.ofSeconds(2));
+                } catch (InterruptedException interrupted) {
+                    workerInterrupted.countDown();
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("provider request interrupted", interrupted);
+                }
+                return Optional.of(progressiveStart(4));
+            }
+        };
+        AuditedAgentInvocations audit = new AuditedAgentInvocations() {
+            @Override
+            public <T> T invoke(
+                    UUID runId,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityType type,
+                    String operation,
+                    int estimatedInputTokens,
+                    String successSummary,
+                    Supplier<T> invocation,
+                    ToIntFunction<T> outputTokenEstimator) {
+                return invocation.get();
+            }
+
+            @Override
+            public void stopRunning(
+                    UUID runId,
+                    String operation,
+                    com.rulepilot.assistant.AgentExecutionControl.ActivityOutcome outcome,
+                    String summary) {
+                stoppedOperations.add(operation + ":" + outcome);
+            }
+        };
+        VisualRulebookCataloger cataloger = new VisualRulebookCataloger(
+                (id, pages) -> pages.stream()
+                        .map(page -> new DocumentPageImages.PageImage(page, "image/png", new byte[] {1}, 100, 120))
+                        .toList(),
+                model,
+                new InMemoryFacts(),
+                audit,
+                Duration.ofSeconds(2),
+                Duration.ofMillis(40),
+                4,
+                1);
+
+        var result = cataloger.progressiveTeachingStart(
+                documentVersionId,
+                java.util.stream.IntStream.rangeClosed(1, 8).mapToObj(VisualRulebookCatalogerTest::page).toList(),
+                "Example game",
+                "owner",
+                assistantRunId);
+
+        assertThat(workerStarted.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(workerInterrupted.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(result).isEmpty();
+        assertThat(stoppedOperations).containsExactly("selectProgressiveTeachingStart:FAILED");
+    }
 
     @Test
     void retainsCompletedPageFactsWhenALaterVisualBatchFails() {
@@ -855,6 +1096,7 @@ class VisualRulebookCatalogerTest {
                 new InMemoryFacts(),
                 audit,
                 Duration.ofSeconds(2),
+                Duration.ofSeconds(2),
                 4,
                 1);
 
@@ -996,12 +1238,31 @@ class VisualRulebookCatalogerTest {
                     }
                 },
                 timeout,
+                timeout,
                 4,
                 visualRequestParallelism);
     }
 
     private static PageView page(int pageNumber) {
         return new PageView(pageNumber, "", 0);
+    }
+
+    private static ProgressiveTeachingStartDraft progressiveStart(int selectedPage) {
+        return new ProgressiveTeachingStartDraft(
+                List.of(
+                        new TeachingPageSketch(1, TeachingPageRole.NON_GAMEPLAY, "Example game", List.of(), List.of()),
+                        new TeachingPageSketch(2, TeachingPageRole.GAMEPLAY_RULES, "Setup", List.of("market"), List.of("setup")),
+                        new TeachingPageSketch(3, TeachingPageRole.GAMEPLAY_RULES, "Turn", List.of("take cards"), List.of("core_loop")),
+                        new TeachingPageSketch(4, TeachingPageRole.GAMEPLAY_RULES, "Refill", List.of("refill"), List.of("source_coverage")),
+                        new TeachingPageSketch(5, TeachingPageRole.UNCERTAIN, "", List.of(), List.of()),
+                        new TeachingPageSketch(6, TeachingPageRole.GAMEPLAY_RULES, "Game end", List.of("end"), List.of("end")),
+                        new TeachingPageSketch(7, TeachingPageRole.GAMEPLAY_RULES, "Scoring", List.of("score"), List.of("scoring")),
+                        new TeachingPageSketch(8, TeachingPageRole.NON_GAMEPLAY, "Credits", List.of(), List.of())),
+                new PageSummary(
+                        selectedPage,
+                        "REFILL MARKET",
+                        "回合结束后，当前玩家按照页面所示顺序补满市场。",
+                        List.of("REFILL MARKET", "refill")));
     }
 
     private static byte[] renderedPage() throws IOException {

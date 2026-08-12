@@ -5,6 +5,7 @@ import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
 import com.rulepilot.teaching.VisualRulebookPageFacts.VisualAnchor;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Reads a small batch of rendered rulebook pages before lesson planning. Its output is a page-scoped retrieval aid,
@@ -28,6 +29,19 @@ public interface VisualRulebookPageCatalogModel {
      */
     default CatalogDraft summarizeForTeaching(CatalogRequest request) {
         return summarize(request);
+    }
+
+    /**
+     * Selects one source page that can safely support the first cited lesson section while returning only a compact
+     * structural sketch for every other supplied page. This is an optional fast path: implementations that cannot
+     * provide exact structured page bindings leave the existing complete Teaching catalog unchanged.
+     */
+    default Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+        return Optional.empty();
+    }
+
+    default boolean supportsProgressiveTeachingStart(String modelConfigurationOwner) {
+        return false;
     }
 
     /**
@@ -156,6 +170,77 @@ public interface VisualRulebookPageCatalogModel {
                 throw new IllegalArgumentException("visual page catalog draft is invalid");
             }
             pages = List.copyOf(pages);
+        }
+    }
+
+    enum TeachingPageRole {
+        GAMEPLAY_RULES,
+        NON_GAMEPLAY,
+        UNCERTAIN
+    }
+
+    /**
+     * A compact page-role ledger used only to build an immutable source-bound plan. Coverage tags express teaching
+     * obligations visible on a page; they are not themselves rule claims and never replace the page evidence.
+     */
+    record TeachingPageSketch(
+            int pageNumber,
+            TeachingPageRole role,
+            String visibleHeading,
+            List<String> visibleTerms,
+            List<String> coverageTags) {
+
+        private static final Set<String> ALLOWED_COVERAGE_TAGS =
+                Set.of("setup", "core_loop", "end", "scoring", "source_coverage");
+
+        public TeachingPageSketch {
+            if (pageNumber < 1 || role == null
+                    || (visibleHeading != null && visibleHeading.length() > 160)
+                    || visibleTerms == null || visibleTerms.size() > 4
+                    || visibleTerms.stream().anyMatch(term -> term == null || term.isBlank() || term.length() > 120)
+                    || coverageTags == null || coverageTags.size() > ALLOWED_COVERAGE_TAGS.size()
+                    || coverageTags.stream().anyMatch(tag -> tag == null || !ALLOWED_COVERAGE_TAGS.contains(tag))) {
+                throw new IllegalArgumentException("visual teaching page sketch is invalid");
+            }
+            visibleHeading = visibleHeading == null ? "" : visibleHeading.strip();
+            visibleTerms = visibleTerms.stream().map(String::strip).distinct().toList();
+            coverageTags = coverageTags.stream().distinct().toList();
+            if (role != TeachingPageRole.GAMEPLAY_RULES && !coverageTags.isEmpty()) {
+                throw new IllegalArgumentException("non-gameplay visual pages cannot claim teaching coverage");
+            }
+            if (role == TeachingPageRole.GAMEPLAY_RULES && coverageTags.isEmpty()) {
+                throw new IllegalArgumentException("gameplay visual pages need a bounded teaching role");
+            }
+        }
+    }
+
+    /**
+     * The selected page carries the only detailed factual ledger on the startup path. Remaining page facts are read
+     * on the continuation lane after this page has produced a durable cited section.
+     */
+    record ProgressiveTeachingStartDraft(
+            List<TeachingPageSketch> pages,
+            PageSummary selectedPageFacts) {
+
+        public ProgressiveTeachingStartDraft {
+            if (pages == null || pages.isEmpty() || pages.size() > MAX_PAGES_PER_REQUEST
+                    || selectedPageFacts == null) {
+                throw new IllegalArgumentException("progressive visual teaching start is invalid");
+            }
+            pages = List.copyOf(pages);
+            Set<Integer> pageNumbers = pages.stream()
+                    .map(TeachingPageSketch::pageNumber)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            if (pageNumbers.size() != pages.size() || !pageNumbers.contains(selectedPageFacts.pageNumber())) {
+                throw new IllegalArgumentException("progressive visual teaching start page bindings are invalid");
+            }
+            TeachingPageSketch selected = pages.stream()
+                    .filter(page -> page.pageNumber() == selectedPageFacts.pageNumber())
+                    .findFirst()
+                    .orElseThrow();
+            if (selected.role() != TeachingPageRole.GAMEPLAY_RULES) {
+                throw new IllegalArgumentException("progressive visual teaching start selected a non-gameplay page");
+            }
         }
     }
 

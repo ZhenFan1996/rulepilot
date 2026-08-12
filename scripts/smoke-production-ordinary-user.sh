@@ -232,19 +232,20 @@ log_run_timing() {
 verify_preparation_critical_path() {
 	local response=$1
 	if [ "$preparation_mode" = visual ]; then
-		if ! jq -e '.activities[]? | select(.operation | startswith("inspectTeachingVisualBatch"))' \
+		if ! jq -e '.activities[]? | select(.operation == "selectProgressiveTeachingStart" and .outcome == "SUCCEEDED")' \
 			>/dev/null <<<"$response"; then
-			echo "SMOKE_WARNING Visual-only rulebook preparation did not report lightweight teaching-page facts" >&2
+			echo "SMOKE_WARNING Visual-only rulebook preparation did not report progressive cited-page selection" >&2
 		fi
 		jq -r '
-            [.activities[]?
-             | select((.operation | startswith("inspectTeachingVisualBatch"))
-                 or (.operation | startswith("inspectTeachingVisualRetry")))] as $calls
-            | "SMOKE_PERFORMANCE phase=preparation visualStartupCalls=\($calls | length) visualStartupLatencyMs=\([$calls[].latencyMs // 0] | add // 0) visualStartupMaxLatencyMs=\([$calls[].latencyMs // 0] | max // 0)"
+            [.activities[]? | select(.operation == "selectProgressiveTeachingStart")] as $starts
+            | [.activities[]? | select((.operation | startswith("inspectTeachingVisualBatch"))
+                or (.operation | startswith("inspectTeachingVisualRetry")))] as $legacy
+            | "SMOKE_PERFORMANCE phase=preparation progressiveStartCalls=\($starts | length) progressiveStartLatencyMs=\([$starts[].latencyMs // 0] | add // 0) legacyFullFactCalls=\($legacy | length)"
         ' <<<"$response" >&2
 		return
 	fi
-	if jq -e '.activities[]? | select((.operation | startswith("inspectTeachingVisualBatch"))
+	if jq -e '.activities[]? | select((.operation == "selectProgressiveTeachingStart")
+            or (.operation | startswith("inspectTeachingVisualBatch"))
             or (.operation | startswith("inspectRulebookVisualBatch")))' \
 		>/dev/null <<<"$response"; then
 		echo "SMOKE_WARNING Text-rulebook preparation performed visual catalog work before publishing the plan" >&2
@@ -295,6 +296,24 @@ verify_lesson_critical_path() {
 	if [ "$correction_calls" -gt 2 ]; then
 		echo "SMOKE_WARNING Post-publication lesson corrections exceeded the target" >&2
 	fi
+}
+
+report_preparation_start_to_first_section() {
+	local preparation=$1
+	local lesson=$2
+	jq -nr \
+		--argjson preparation "$preparation" \
+		--argjson lesson "$lesson" '
+        def epoch: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+        ($preparation.run.createdAt | epoch) as $preparationStarted
+        | ([$lesson.activities[]?
+            | select(.operation | startswith("publishTeachingSection|"))
+            | select(.outcome == "SUCCEEDED")
+            | .occurredAt | epoch] | min) as $firstPublished
+        | [$lesson.activities[]?
+            | select(.operation | startswith("prefetchProgressiveVisualPages"))] as $prefetch
+        | "SMOKE_PERFORMANCE phase=preparation-start-to-first-cited-section seconds=\($firstPublished - $preparationStarted) backgroundPrefetchCalls=\($prefetch | length) backgroundPrefetchLatencyMs=\([$prefetch[].latencyMs // 0] | add // 0)"
+    ' >&2
 }
 
 refresh_csrf() {
@@ -620,6 +639,7 @@ lesson_result=$(wait_for_run "$lesson_run_id" "Illustrated lesson" "$plan_id")
 lesson_state=$(jq -er '.run.state' <<<"$lesson_result")
 log_run_timing "lesson" "$lesson_result"
 verify_lesson_critical_path "$lesson_result" "$plan_section_count"
+report_preparation_start_to_first_section "$preparation_result" "$lesson_result"
 log_stage "lesson-generation-completed"
 
 wait_for_visual_enrichment "$plan_id"

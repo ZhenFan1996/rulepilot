@@ -65,6 +65,24 @@ describe('teaching progress', () => {
     expect(teachingRemainingTimeText(plan, run('run-1', []), Date.parse('2026-07-21T00:02:00Z'), 'en'))
       .toContain('After the first chapter is ready')
   })
+
+  it('explains that remaining visual pages are read only after the starter chapter is ready', () => {
+    const activities = [
+      activity(1, 'readRuleEvidencePages|1', 'SUCCEEDED'),
+      activity(2, 'publishTeachingSection|1', 'SUCCEEDED', 'Teaching section published: CITED_BASE_SECTION_PUBLISHED'),
+      activity(3, 'readProgressiveVisualPages|2|1', 'SUCCEEDED'),
+      activity(4, 'prefetchProgressiveVisualPages|2', 'RUNNING'),
+    ]
+
+    expect(teachingActivityText(plan, activities, activities[0]))
+      .toBe('正在打开“完成开局设置”绑定的规则书原页')
+    expect(teachingActivityText(plan, activities, activities[2]))
+      .toContain('基础讲解已可读')
+    expect(teachingActivityText(plan, activities, activities[3]))
+      .toBe('基础讲解已可读，正在一次性读取后续页面要点')
+    expect(teachingActivityText(plan, activities, activities[3], 'en'))
+      .toContain('Starter guide ready')
+  })
 })
 
 function run(id: string, activities: TeachingActivity[]): TeachingRunProgress {

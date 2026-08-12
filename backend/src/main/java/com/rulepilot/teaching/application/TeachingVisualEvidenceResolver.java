@@ -3,6 +3,7 @@ package com.rulepilot.teaching.application;
 import com.rulepilot.assistant.AssistantReadTools;
 import com.rulepilot.assistant.AssistantReadTools.RuleEvidence;
 import com.rulepilot.assistant.AgentExecutionControl.ActivityType;
+import com.rulepilot.assistant.AgentExecutionStoppedException;
 import com.rulepilot.assistant.AuditedAgentInvocations;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
@@ -47,7 +48,8 @@ final class TeachingVisualEvidenceResolver {
             List<RuleEvidence> retrieved,
             UUID assistantRunId) {
         boolean visualPlaceholder = TeachingVisualEvidenceSelector.hasVisualPageEvidence(retrieved);
-        if (!visualPlaceholder || planned.sourcePageNumbers().isEmpty()) return retrieved;
+        boolean progressiveSourceBinding = ProgressiveVisualTeachingPlanPolicy.isProgressive(plan);
+        if ((!visualPlaceholder && !progressiveSourceBinding) || planned.sourcePageNumbers().isEmpty()) return retrieved;
         try {
             List<RuleEvidence> pageEvidence = invocations.invoke(
                     assistantRunId,
@@ -70,10 +72,115 @@ final class TeachingVisualEvidenceResolver {
                 }
                 return enrichRequiredPageFacts(plan, planned, pageEvidence, enriched, assistantRunId);
             }
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
         } catch (RuntimeException failure) {
             log.warn("Visual page-bound evidence read failed for topic {}: {}", planned.topicKey(), failure.getMessage());
         }
         return retrieved;
+    }
+
+    void prefetchRemaining(
+            TeachingPlan plan,
+            int completedSections,
+            UUID assistantRunId) {
+        if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
+                || completedSections < 1
+                || completedSections >= plan.sections().size()
+                || !visualCatalog.available(plan.createdBy())) {
+            return;
+        }
+        LinkedHashSet<Integer> requested = plan.sections().subList(completedSections, plan.sections().size()).stream()
+                .flatMap(section -> section.sourcePageNumbers().stream())
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        visualFacts.find(plan.documentVersionId(), requested).stream()
+                .filter(fact -> fact.schemaVersion() == VisualRulebookPageFacts.PageFact.CURRENT_SCHEMA_VERSION)
+                .map(VisualRulebookPageFacts.PageFact::pageNumber)
+                .forEach(requested::remove);
+        if (requested.isEmpty()) return;
+        try {
+            Map<Integer, AssistantReadTools.RulePageImage> images = readProgressivePageImages(
+                    plan, requested, completedSections + 1, assistantRunId);
+            if (images.isEmpty()) return;
+            List<PageImageInput> pageInputs = requested.stream()
+                    .map(images::get)
+                    .filter(java.util.Objects::nonNull)
+                    .limit(VisualRulebookPageCatalogModel.MAX_PAGES_PER_REQUEST)
+                    .map(image -> new PageImageInput(image.pageNumber(), image.mediaType(), image.content()))
+                    .toList();
+            if (pageInputs.isEmpty()) return;
+            var request = new VisualRulebookPageCatalogModel.CatalogRequest(
+                    pageInputs, plan.createdBy(), plan.gameTitle());
+            var catalog = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.MODEL,
+                    "prefetchProgressiveVisualPages|" + (completedSections + 1),
+                    pageInputs.size() * 600,
+                    progressivePrefetchSummary(plan.createdBy(), pageInputs.size()),
+                    () -> visualCatalog.summarizeForTeaching(request),
+                    result -> estimateTokens(result.toString()));
+            List<VisualRulebookPageFacts.PageFact> interpreted = catalog.pages().stream()
+                    .filter(summary -> requested.contains(summary.pageNumber()))
+                    .map(VisualRulebookCatalogPolicy::teachingStartupFact)
+                    .map(VisualRulebookCatalogPolicy::toPageFact)
+                    .toList();
+            if (!interpreted.isEmpty()) {
+                visualFacts.merge(plan.documentVersionId(), interpreted);
+                log.info(
+                        "Progressive Teaching continuation stored visual facts for document {} pages {}",
+                        plan.documentVersionId(),
+                        interpreted.stream().map(VisualRulebookPageFacts.PageFact::pageNumber).toList());
+            }
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException failure) {
+            log.warn(
+                    "Progressive Teaching visual prefetch failed for plan {}; section-level recovery remains available",
+                    plan.id(),
+                    failure);
+        }
+    }
+
+    private Map<Integer, AssistantReadTools.RulePageImage> readProgressivePageImages(
+            TeachingPlan plan,
+            LinkedHashSet<Integer> requested,
+            int firstRemainingPosition,
+            UUID assistantRunId) {
+        List<Integer> ordered = List.copyOf(requested);
+        Map<Integer, AssistantReadTools.RulePageImage> images = new LinkedHashMap<>();
+        for (int start = 0; start < ordered.size(); start += 5) {
+            int batchNumber = start / 5 + 1;
+            Set<Integer> batch = new LinkedHashSet<>(ordered.subList(start, Math.min(start + 5, ordered.size())));
+            List<RuleEvidence> evidence = invocations.invoke(
+                    assistantRunId,
+                    ActivityType.TOOL,
+                    "readProgressiveVisualPages|" + firstRemainingPosition + "|" + batchNumber,
+                    batch.size(),
+                    "Remaining source-bound rulebook page images retrieved",
+                    () -> tools.readRuleEvidencePages(plan.documentVersionId(), batch, true),
+                    this::evidenceTokens);
+            evidence.stream()
+                    .flatMap(source -> source.pageImages().stream())
+                    .filter(image -> batch.contains(image.pageNumber()))
+                    .forEach(image -> images.putIfAbsent(image.pageNumber(), image));
+        }
+        return images;
+    }
+
+    private String progressivePrefetchSummary(String owner, int pageCount) {
+        return visualCatalog.teachingStartupExecutionIdentity(owner)
+                .map(identity -> "Remaining " + pageCount + " Teaching page fact(s) interpreted via "
+                        + identity.auditLabel())
+                .orElse("Remaining " + pageCount + " Teaching page fact(s) interpreted");
+    }
+
+    private String requiredPageInterpretationSummary(TeachingPlan plan) {
+        if (!ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
+            return "Required visual rulebook page interpreted for grounded teaching";
+        }
+        return visualCatalog.teachingStartupExecutionIdentity(plan.createdBy())
+                .map(identity -> "Required Teaching page fact interpreted via " + identity.auditLabel())
+                .orElse("Required Teaching page fact interpreted");
     }
 
     private List<RuleEvidence> enrichRequiredPageFacts(
@@ -99,8 +206,10 @@ final class TeachingVisualEvidenceResolver {
                         ActivityType.MODEL,
                         "inspectRequiredVisualPage|" + planned.position() + "|" + image.pageNumber(),
                         800,
-                        "Required visual rulebook page interpreted for grounded teaching",
-                        () -> visualCatalog.summarize(request),
+                        requiredPageInterpretationSummary(plan),
+                        () -> ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)
+                                ? visualCatalog.summarizeForTeaching(request)
+                                : visualCatalog.summarize(request),
                         result -> estimateTokens(result.toString()));
                 interpreted.addAll(catalog.pages().stream()
                         .map(summary -> new VisualRulebookPageFacts.PageFact(
@@ -110,6 +219,8 @@ final class TeachingVisualEvidenceResolver {
                                 summary.keywords(),
                                 summary.visualAnchors()))
                         .toList());
+            } catch (AgentExecutionStoppedException stopped) {
+                throw stopped;
             } catch (RuntimeException failure) {
                 log.warn(
                         "Required visual page interpretation failed for topic {} page {}: {}",

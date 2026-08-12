@@ -299,6 +299,9 @@ public class GroundedTeachingAgent {
         List<TeachingSectionDraftCandidate> reviewCandidates = continuation.reviewCandidates;
         List<TeachingPlan.PlannedSection> remaining = plan.sections().subList(sections.size(), plan.sections().size());
         if (!remaining.isEmpty()) {
+            // The first section is already durable before this method runs. A progressive visual plan can therefore
+            // fill the remaining page-fact ledger now without extending the player's wait for first useful content.
+            evidenceRetriever.prefetchRemainingVisualFacts(plan, sections.size(), assistantRunId);
             List<PriorSectionContext> sharedContext = lessonAssembly.continuityContext(sections);
             Map<Integer, SectionOutcome> completed = new LinkedHashMap<>();
             int providerParallelism = Math.max(1, model.maxConcurrentSectionRequests(plan.createdBy()));

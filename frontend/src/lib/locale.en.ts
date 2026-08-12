@@ -843,6 +843,7 @@ export default {
     'documents.titleFallback': 'Rulebook',
     'documents.prepare.visualBatch': 'Looking at components, icons, and examples in page group {batch}.',
     'documents.prepare.visual': 'Looking at components, icons, and examples on the page.',
+    'documents.prepare.progressiveStart': 'Finding the first gameplay rule that can be taught with a direct citation.',
     'documents.prepare.outline': 'The page essentials are ready; now arranging the teaching order.',
     'documents.prepare.received': 'Got it. Starting the guide now.',
     'documents.prepare.readiness': 'Checking the rulebook pages and images.',

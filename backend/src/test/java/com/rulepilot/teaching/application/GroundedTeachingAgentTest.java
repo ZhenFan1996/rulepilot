@@ -735,6 +735,159 @@ class GroundedTeachingAgentTest {
     }
 
     @Test
+    void prefetchesRemainingProgressiveVisualFactsOnlyAfterTheFirstCitedSectionIsPublished() {
+        UUID versionId = UUID.randomUUID();
+        UUID firstChunkId = UUID.randomUUID();
+        UUID secondChunkId = UUID.randomUUID();
+        List<String> events = new ArrayList<>();
+        Map<Integer, VisualRulebookPageFacts.PageFact> storedFacts = new java.util.LinkedHashMap<>();
+        storedFacts.put(2, new VisualRulebookPageFacts.PageFact(
+                2,
+                "TAKE TWO CARDS",
+                "当前玩家从同一列拿取两张可见卡牌，然后结束本回合。",
+                List.of("TAKE TWO CARDS", "turn")));
+        VisualRulebookPageFacts facts = new VisualRulebookPageFacts() {
+            @Override
+            public void replace(UUID documentVersionId, List<PageFact> pages) {
+                storedFacts.clear();
+                pages.forEach(page -> storedFacts.put(page.pageNumber(), page));
+            }
+
+            @Override
+            public void merge(UUID documentVersionId, List<PageFact> pages) {
+                pages.forEach(page -> storedFacts.put(page.pageNumber(), page));
+            }
+
+            @Override
+            public List<PageFact> find(UUID documentVersionId, java.util.Set<Integer> pages) {
+                return pages.stream().map(storedFacts::get).filter(java.util.Objects::nonNull).toList();
+            }
+        };
+        AssistantReadTools tools = new AssistantReadTools() {
+            @Override
+            public List<RuleEvidence> searchRuleEvidence(SearchRuleEvidence request) {
+                throw new AssertionError("a source-bound progressive plan must not depend on keyword search");
+            }
+
+            @Override
+            public List<RuleEvidence> readRuleEvidencePages(
+                    UUID documentVersionId, java.util.Set<Integer> pages, boolean includePageImages) {
+                assertThat(documentVersionId).isEqualTo(versionId);
+                assertThat(includePageImages).isTrue();
+                if (pages.equals(java.util.Set.of(2))) {
+                    events.add("read-first-page");
+                    return List.of(visualPageEvidence(firstChunkId, versionId, 2));
+                }
+                assertThat(pages).containsExactly(3);
+                assertThat(events).contains("published-1");
+                events.add("read-remaining-pages");
+                return List.of(visualPageEvidence(secondChunkId, versionId, 3));
+            }
+        };
+        AtomicInteger prefetchCalls = new AtomicInteger();
+        VisualRulebookPageCatalogModel catalog = new VisualRulebookPageCatalogModel() {
+            @Override
+            public CatalogDraft summarize(CatalogRequest request) {
+                throw new AssertionError("progressive continuation must keep the lightweight Teaching contract");
+            }
+
+            @Override
+            public CatalogDraft summarizeForTeaching(CatalogRequest request) {
+                prefetchCalls.incrementAndGet();
+                assertThat(events).contains("published-1");
+                assertThat(request.pages())
+                        .extracting(com.rulepilot.teaching.TeachingOutlineModel.PageImageInput::pageNumber)
+                        .containsExactly(3);
+                events.add("prefetched-remaining-facts");
+                return new CatalogDraft(List.of(new PageSummary(
+                        3,
+                        "GAME END; SCORE",
+                        "牌库耗尽且市场无法补满时游戏结束；玩家按自己卡牌上可见的计分条件结算分数。",
+                        List.of("GAME END", "SCORE"))));
+            }
+
+            @Override
+            public boolean available(String modelConfigurationOwner) {
+                return true;
+            }
+        };
+        TeachingLessonModel model = request -> {
+            int page = request.evidence().getFirst().pageFrom();
+            assertThat(request.evidence().getFirst().excerpt())
+                    .contains("Visual-transcribed rule evidence")
+                    .doesNotContain(TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER);
+            events.add("composed-" + page);
+            return oneStepDraft(
+                    request.evidence().getFirst().chunkId(),
+                    page == 2 ? "从同一列拿取两张可见卡牌。" : "牌库和市场无法补满时，进入结算。" );
+        };
+        TeachingPlan plan = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Progressive game",
+                "Start from one exact page, then continue from the remaining bound pages.",
+                List.of(
+                        new PlannedSection(
+                                1,
+                                "progressive-visual-page-rules-2",
+                                "拿取卡牌",
+                                "仅讲解第 2 页直接支持的拿取规则。",
+                                true,
+                                true,
+                                List.of("TAKE TWO CARDS"),
+                                List.of("setup", "core_loop"),
+                                List.of(2)),
+                        new PlannedSection(
+                                2,
+                                "progressive-visual-page-rules-3",
+                                "结束与计分",
+                                "仅讲解第 3 页直接支持的结束和计分规则。",
+                                true,
+                                true,
+                                List.of("GAME END", "SCORE"),
+                                List.of("end", "scoring", "source_coverage"),
+                                List.of(3))),
+                "player",
+                Instant.now());
+        GroundedTeachingAgent agent = new GroundedTeachingAgent(
+                tools,
+                model,
+                new PolicyEvidenceVerifier(),
+                acceptedCritic(),
+                new ImmediateAuditedAgentInvocations(),
+                facts,
+                catalog,
+                12,
+                1);
+
+        var continuation = agent.startBase(plan, UUID.randomUUID(), null, lesson -> {
+            events.add("published-" + lesson.sections().size());
+        });
+
+        assertThat(events).containsExactly("read-first-page", "composed-2", "published-1");
+        assertThat(prefetchCalls).hasValue(0);
+        assertThat(storedFacts.keySet()).containsExactly(2);
+
+        IllustratedLesson lesson = agent.continueBase(continuation, snapshot -> {
+            events.add("published-" + snapshot.sections().size());
+        });
+
+        assertThat(events.subList(0, 8)).containsExactly(
+                "read-first-page",
+                "composed-2",
+                "published-1",
+                "read-remaining-pages",
+                "prefetched-remaining-facts",
+                "read-remaining-pages",
+                "composed-3",
+                "published-2");
+        assertThat(prefetchCalls).hasValue(1);
+        assertThat(storedFacts.keySet()).containsExactly(2, 3);
+        assertThat(lesson.sections()).extracting(LessonSection::evidenceStatus)
+                .containsOnly(EvidenceStatus.SUPPORTED);
+    }
+
+    @Test
     void startupContinuesPastInsufficientEvidenceUntilOneCitedSectionIsReadable() {
         UUID versionId = UUID.randomUUID();
         UUID chunkId = UUID.randomUUID();
@@ -3062,6 +3215,19 @@ class GroundedTeachingAgentTest {
                 "Place the board in the center of the table.",
                 2,
                 3);
+    }
+
+    private RuleEvidence visualPageEvidence(UUID chunkId, UUID versionId, int pageNumber) {
+        return new RuleEvidence(
+                chunkId,
+                versionId,
+                "GENERAL",
+                "Visual rulebook page " + pageNumber,
+                TeachingVisualEvidenceSelector.VISUAL_PAGE_PLACEHOLDER,
+                pageNumber,
+                pageNumber,
+                List.of(new RulePageImage(
+                        pageNumber, "image/jpeg", new byte[] {(byte) pageNumber}, 1_086, 1_511)));
     }
 
     private RuleEvidence sectionEvidence(TeachingSectionType type, String excerpt, UUID versionId) {

@@ -18,6 +18,7 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellInput
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierCellVerificationRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IdentifierReferencePage;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.PageSummary;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -223,6 +224,89 @@ class SpringAiVisualRulebookPageCatalogModelTest {
     }
 
     @Test
+    void progressiveTeachingStartUsesQwenFlashAndKeepsExactPageRolesSeparateFromSelectedFacts() throws IOException {
+        RuntimeModelConfiguration configuration = mock(RuntimeModelConfiguration.class);
+        ChatModel chatModel = mock(ChatModel.class);
+        OpenAiChatOptions defaults = OpenAiChatOptions.builder().model("qwen3.7-plus").build();
+        when(configuration.usesFake(Role.VISUAL, "owner")).thenReturn(false);
+        when(configuration.supportsVision(Role.VISUAL, "owner")).thenReturn(true);
+        when(configuration.providerFor(Role.VISUAL, "owner")).thenReturn("qwen");
+        when(configuration.modelNameFor(Role.VISUAL, "owner")).thenReturn("qwen3.7-plus");
+        when(configuration.modelFor(Role.VISUAL, "owner")).thenReturn(chatModel);
+        when(chatModel.getDefaultOptions()).thenReturn(defaults);
+        when(chatModel.getOptions()).thenReturn(defaults);
+        when(chatModel.call(any(Prompt.class))).thenReturn(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("""
+                        {"pageSketches":[
+                          {"pageNumber":1,"role":"NON_GAMEPLAY","visibleHeading":"Point Salad",
+                           "visibleTerms":[],"coverageTags":[]},
+                          {"pageNumber":2,"role":"GAMEPLAY_RULES","visibleHeading":"Setup",
+                           "visibleTerms":["market","veggie cards"],"coverageTags":["setup"]},
+                          {"pageNumber":3,"role":"GAMEPLAY_RULES","visibleHeading":"Turn",
+                           "visibleTerms":["take cards","refill"],
+                           "coverageTags":["core_loop","end","scoring"]}],
+                         "selectedPageFacts":{"pageNumber":3,"printedTerms":["take cards","refill"],
+                           "factualSummary":["当前玩家拿取可见卡牌，然后补满市场。"],
+                           "keywords":["take cards","refill"]}}
+                        """)))));
+        SpringAiVisualRulebookPageCatalogModel model = model(configuration);
+        CatalogRequest request = new CatalogRequest(
+                List.of(
+                        new PageImageInput(1, "image/png", png()),
+                        new PageImageInput(2, "image/png", png()),
+                        new PageImageInput(3, "image/png", png())),
+                "owner",
+                "Point Salad");
+
+        var result = model.selectProgressiveTeachingStart(request).orElseThrow();
+
+        assertThat(result.pages()).extracting(page -> page.pageNumber()).containsExactly(1, 2, 3);
+        assertThat(result.pages()).extracting(page -> page.role())
+                .containsExactly(TeachingPageRole.NON_GAMEPLAY, TeachingPageRole.GAMEPLAY_RULES,
+                        TeachingPageRole.GAMEPLAY_RULES);
+        assertThat(result.selectedPageFacts()).satisfies(facts -> {
+            assertThat(facts.pageNumber()).isEqualTo(3);
+            assertThat(facts.factualSummary()).contains("补满市场");
+            assertThat(facts.visualAnchors()).isEmpty();
+        });
+        ArgumentCaptor<Prompt> prompt = ArgumentCaptor.forClass(Prompt.class);
+        verify(chatModel).call(prompt.capture());
+        OpenAiChatOptions options = (OpenAiChatOptions) prompt.getValue().getOptions();
+        assertThat(options.getModel()).isEqualTo("qwen3.6-flash");
+        assertThat(options.getMaxTokens()).isEqualTo(1_600);
+        assertThat(options.getExtraBody()).containsEntry("enable_thinking", false);
+        assertThat(prompt.getValue().getInstructions().stream()
+                        .map(message -> message.getText().replaceAll("\\s+", " "))
+                        .toList())
+                .anySatisfy(text -> assertThat(text).contains(
+                        "Select one page that contains a directly readable gameplay rule",
+                        "Do not use prior knowledge",
+                        "Do not inventory icons"));
+    }
+
+    @Test
+    void progressiveTeachingStartRejectsMissingOrDuplicateBindingsWithoutRebindingAcrossImages() {
+        CatalogRequest request = new CatalogRequest(
+                List.of(
+                        new PageImageInput(2, "image/png", new byte[] {1}),
+                        new PageImageInput(5, "image/png", new byte[] {2})),
+                "owner");
+        var incomplete = SpringAiVisualRulebookPageCatalogModel.parseProgressiveTeachingStart("""
+                {"pageSketches":[
+                  {"pageNumber":2,"role":"GAMEPLAY_RULES","visibleHeading":"A",
+                   "visibleTerms":["alpha"],"coverageTags":["setup","core_loop","end","scoring"]}],
+                 "selectedPageFacts":{"pageNumber":2,"printedTerms":"alpha",
+                  "factualSummary":"当前玩家必须执行一个可见动作。","keywords":["alpha","rule"]}}
+                """);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        SpringAiVisualRulebookPageCatalogModel.normalizeProgressiveTeachingStartBindings(
+                                request, incomplete))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("every supplied page exactly");
+    }
+
+    @Test
     void parsesQwenJsonContentWithoutDependingOnNativeStructuredOutput() {
         var draft = SpringAiVisualRulebookPageCatalogModel.parseCatalog("""
                 ```json
@@ -243,6 +327,7 @@ class SpringAiVisualRulebookPageCatalogModelTest {
                 new FakeVisualRulebookPageCatalogModel(),
                 new ClassPathResource("prompts/visual-page-catalog-v2-icon-inventory-system.txt"),
                 new ClassPathResource("prompts/visual-page-teaching-catalog-v1-system.txt"),
+                new ClassPathResource("prompts/visual-page-progressive-teaching-start-v1-system.txt"),
                 new ClassPathResource("prompts/visual-icon-localization-v2-system.txt"),
                 new ClassPathResource("prompts/visual-icon-crop-review-v4-system.txt"),
                 new ClassPathResource("prompts/visual-identifier-cell-v1-system.txt"),

@@ -128,6 +128,46 @@ class TeachingEvidenceAgentTest {
     }
 
     @Test
+    void keepsProgressivePageEvidenceOutOfTheNativeRefinementLoop() {
+        AtomicInteger nativeCalls = new AtomicInteger();
+        NativeToolAgent nativeAgent = request -> {
+            nativeCalls.incrementAndGet();
+            throw new AssertionError("an exact progressive page read must not need semantic evidence refinement");
+        };
+        NativeToolScopes scopes = mock(NativeToolScopes.class);
+        TeachingEvidenceAgent agent = new TeachingEvidenceAgent(
+                nativeAgent, scopes, tools(List.of()), new PolicyEvidenceVerifier());
+        TeachingPlan progressive = new TeachingPlan(
+                UUID.randomUUID(),
+                versionId,
+                "Test game",
+                "Teach one exact page.",
+                List.of(new PlannedSection(
+                        1,
+                        "progressive-visual-page-rules-2",
+                        "Turn",
+                        "Explain only the rule visibly supported on page 2.",
+                        true,
+                        true,
+                        List.of("turn"),
+                        List.of("setup", "core_loop", "end", "scoring"),
+                        List.of(2))),
+                "player",
+                Instant.now());
+        var deterministic = verified(1, evidence(UUID.randomUUID(), 2, "Exact page transcription."));
+
+        var result = agent.refine(
+                progressive, progressive.sections().getFirst(), runId, deterministic);
+
+        assertThat(result).isSameAs(deterministic);
+        assertThat(nativeCalls).hasValue(0);
+        verify(scopes, never()).create(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void preservesVerifiedEvidenceAndCountsSpentCallsWhenTheLoopFallsBack() {
         RuleEvidence initial = evidence(UUID.randomUUID(), 2, "Place the shared board.");
         NativeToolAgent nativeAgent = request -> new RunResult(

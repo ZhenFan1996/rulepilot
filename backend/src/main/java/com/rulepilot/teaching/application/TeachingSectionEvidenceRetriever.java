@@ -47,6 +47,11 @@ final class TeachingSectionEvidenceRetriever {
             UUID assistantRunId,
             int queryBudget,
             boolean bindVisualPageEvidence) {
+        if (bindVisualPageEvidence && ProgressiveVisualTeachingPlanPolicy.isProgressive(plan)) {
+            List<RuleEvidence> evidence = visualEvidenceResolver.resolve(
+                    plan, planned, List.of(), assistantRunId);
+            return verifiedResult(plan, evidence, 1);
+        }
         Map<UUID, RuleEvidence> evidenceById = new LinkedHashMap<>();
         List<List<RuleEvidence>> evidenceByIntent = new ArrayList<>();
         boolean conflictingEvidence = false;
@@ -83,15 +88,24 @@ final class TeachingSectionEvidenceRetriever {
         if (bindVisualPageEvidence) {
             evidence = visualEvidenceResolver.resolve(plan, planned, evidence, assistantRunId);
         }
-        if (evidence.isEmpty()) {
-            return new Result(List.of(), toolCalls, State.EMPTY);
-        }
+        return verifiedResult(plan, evidence, toolCalls);
+    }
+
+    private Result verifiedResult(TeachingPlan plan, List<RuleEvidence> evidence, int toolCalls) {
+        if (evidence.isEmpty()) return new Result(List.of(), toolCalls, State.EMPTY);
         boolean verified = evidenceVerifier.verify(new VerificationRequest(
                         plan.documentVersionId(), evidence.stream().map(this::toVerifierEvidence).toList(), List.of()))
                 .verified();
         return verified
                 ? new Result(evidence, toolCalls, State.VERIFIED)
                 : new Result(List.of(), toolCalls, State.INVALID);
+    }
+
+    void prefetchRemainingVisualFacts(
+            TeachingPlan plan,
+            int completedSections,
+            UUID assistantRunId) {
+        visualEvidenceResolver.prefetchRemaining(plan, completedSections, assistantRunId);
     }
 
     private List<RuleEvidence> retrieve(UUID documentVersionId, String topicKey, String query) {

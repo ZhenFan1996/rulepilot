@@ -851,6 +851,7 @@ const messages = {
     'documents.titleFallback': '规则书',
     'documents.prepare.visualBatch': '正在识别第 {batch} 组页面里的组件、图标和示例。',
     'documents.prepare.visual': '正在识别页面里的组件、图标和示例。',
+    'documents.prepare.progressiveStart': '正在从规则书中确认第一段可讲、可引用的玩法。',
     'documents.prepare.outline': '页面要点已经读完，正在安排讲解顺序。',
     'documents.prepare.received': '已经收到，马上开始整理讲解。',
     'documents.prepare.readiness': '正在确认规则书页面和图片。',

@@ -23,6 +23,9 @@ import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropDecision;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewDraft;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.IconCropReviewRequest;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ModelExecutionIdentity;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageRole;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.TeachingPageSketch;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconMeaningStatus;
 import com.rulepilot.teaching.VisualRulebookPageFacts.IconOccurrence;
@@ -64,6 +67,7 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     private final TeachingOutlineImagePreparer images = new TeachingOutlineImagePreparer();
     private final String systemPrompt;
     private final String teachingStartupPrompt;
+    private final String progressiveTeachingStartPrompt;
     private final String iconLocalizationPrompt;
     private final String iconCropReviewPrompt;
     private final String identifierCellPrompt;
@@ -75,6 +79,8 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
             FakeVisualRulebookPageCatalogModel fake,
             @Value("classpath:prompts/visual-page-catalog-v2-icon-inventory-system.txt") Resource systemPrompt,
             @Value("classpath:prompts/visual-page-teaching-catalog-v1-system.txt") Resource teachingStartupPrompt,
+            @Value("classpath:prompts/visual-page-progressive-teaching-start-v1-system.txt")
+                    Resource progressiveTeachingStartPrompt,
             @Value("classpath:prompts/visual-icon-localization-v2-system.txt") Resource iconLocalizationPrompt,
             @Value("classpath:prompts/visual-icon-crop-review-v4-system.txt") Resource iconCropReviewPrompt,
             @Value("classpath:prompts/visual-identifier-cell-v1-system.txt") Resource identifierCellPrompt,
@@ -85,11 +91,14 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         this.fake = fake;
         this.systemPrompt = systemPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.teachingStartupPrompt = teachingStartupPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
+        this.progressiveTeachingStartPrompt =
+                progressiveTeachingStartPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconLocalizationPrompt = iconLocalizationPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.iconCropReviewPrompt = iconCropReviewPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.identifierCellPrompt = identifierCellPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         this.identifierReferenceMatchPrompt = identifierReferenceMatchPrompt.getContentAsString(StandardCharsets.UTF_8).strip();
         if (this.systemPrompt.isBlank() || this.teachingStartupPrompt.isBlank()
+                || this.progressiveTeachingStartPrompt.isBlank()
                 || this.iconLocalizationPrompt.isBlank() || this.iconCropReviewPrompt.isBlank()
                 || this.identifierCellPrompt.isBlank() || this.identifierReferenceMatchPrompt.isBlank()) {
             throw new IllegalArgumentException("visual page catalog prompts must not be blank");
@@ -244,6 +253,22 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
     }
 
     @Override
+    public boolean supportsProgressiveTeachingStart(String owner) {
+        return !models.usesFake(Role.VISUAL, owner)
+                && models.supportsVision(Role.VISUAL, owner)
+                && "qwen".equals(models.providerFor(Role.VISUAL, owner))
+                && QWEN_BALANCED_VISUAL_MODEL.equalsIgnoreCase(models.modelNameFor(Role.VISUAL, owner));
+    }
+
+    @Override
+    public Optional<ProgressiveTeachingStartDraft> selectProgressiveTeachingStart(CatalogRequest request) {
+        String owner = request.modelConfigurationOwner();
+        if (!supportsProgressiveTeachingStart(owner)) return Optional.empty();
+        return Optional.of(normalizeProgressiveTeachingStartBindings(
+                request, progressiveTeachingStartOnce(request, owner)));
+    }
+
+    @Override
     public Optional<ModelExecutionIdentity> teachingStartupExecutionIdentity(String owner) {
         if (models.usesFake(Role.VISUAL, owner) || !models.supportsVision(Role.VISUAL, owner)) {
             return Optional.empty();
@@ -286,6 +311,38 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
                 .call()
                 .content();
         return parseCatalog(content);
+    }
+
+    private ProgressiveTeachingStartDraft progressiveTeachingStartOnce(CatalogRequest request, String owner) {
+        String provider = models.providerFor(Role.VISUAL, owner);
+        ChatClient.ChatClientRequestSpec prompt = ChatClient.create(models.modelFor(Role.VISUAL, owner)).prompt();
+        if ("qwen".equals(provider)) {
+            prompt = prompt.options(qwenJsonOptions(
+                    teachingStartupModelName(provider, models.modelNameFor(Role.VISUAL, owner)),
+                    Math.min(1_600, maxCompletionTokens)));
+        }
+        String content = prompt.system(progressiveTeachingStartPrompt)
+                .user(user -> {
+                    user.text("""
+                                    Supplied PDF page numbers: {pageNumbers}
+                                    Rulebook title: {rulebookTitle}
+                                    Attachment mapping: {attachmentOrder}
+                                    Follow the system contract exactly and return JSON only.
+                                    """)
+                            .param("pageNumbers", request.pages().stream().map(PageImageInput::pageNumber).toList())
+                            .param("rulebookTitle", request.rulebookTitle() == null
+                                    ? "not supplied; use only what is visible on each page"
+                                    : request.rulebookTitle())
+                            .param("attachmentOrder", java.util.stream.IntStream.range(0, request.pages().size())
+                                    .mapToObj(index -> "image " + (index + 1) + " = PDF page "
+                                            + request.pages().get(index).pageNumber())
+                                    .collect(java.util.stream.Collectors.joining("; ")));
+                    request.pages().stream().map(images::prepare).forEach(page -> user.media(
+                            MimeTypeUtils.parseMimeType(page.mediaType()), new ByteArrayResource(page.content())));
+                })
+                .call()
+                .content();
+        return parseProgressiveTeachingStart(content);
     }
 
     private CatalogDraft summarizeOnce(CatalogRequest request, String owner, String correction) {
@@ -679,6 +736,77 @@ public class SpringAiVisualRulebookPageCatalogModel implements VisualRulebookPag
         } catch (JsonProcessingException invalidJson) {
             throw new IllegalArgumentException("visual page catalog model returned invalid JSON", invalidJson);
         }
+    }
+
+    static ProgressiveTeachingStartDraft parseProgressiveTeachingStart(String content) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("progressive visual teaching model returned no content");
+        }
+        String json = content.strip();
+        if (json.startsWith("```")) {
+            int firstLineEnd = json.indexOf('\n');
+            int closingFence = json.lastIndexOf("```");
+            if (firstLineEnd < 0 || closingFence <= firstLineEnd) {
+                throw new IllegalArgumentException("progressive visual teaching returned malformed JSON fencing");
+            }
+            json = json.substring(firstLineEnd + 1, closingFence).strip();
+        }
+        try {
+            JsonNode root = JSON.readTree(json);
+            JsonNode pageSketches = root.path("pageSketches");
+            JsonNode selected = root.path("selectedPageFacts");
+            if (!pageSketches.isArray() || pageSketches.isEmpty() || !selected.isObject()) {
+                throw new IllegalArgumentException("progressive visual teaching JSON is incomplete");
+            }
+            List<TeachingPageSketch> sketches = new java.util.ArrayList<>();
+            for (JsonNode page : pageSketches) {
+                TeachingPageRole role;
+                try {
+                    role = TeachingPageRole.valueOf(page.path("role").asText());
+                } catch (IllegalArgumentException invalidRole) {
+                    throw new IllegalArgumentException("progressive visual teaching returned an unknown page role");
+                }
+                sketches.add(new TeachingPageSketch(
+                        page.path("pageNumber").asInt(),
+                        role,
+                        bounded(joinedText(page.get("visibleHeading"), " "), 160),
+                        boundedStrings(page.get("visibleTerms"), 4, 120),
+                        boundedStrings(page.get("coverageTags"), 5, 40)));
+            }
+            return new ProgressiveTeachingStartDraft(
+                    sketches,
+                    new PageSummary(
+                            selected.path("pageNumber").asInt(),
+                            bounded(joinedText(selected.get("printedTerms"), "; "), 1_600),
+                            bounded(joinedText(selected.get("factualSummary"), "\n"), 4_000),
+                            boundedStrings(selected.get("keywords"), 16, 120)));
+        } catch (JsonProcessingException invalidJson) {
+            throw new IllegalArgumentException("progressive visual teaching returned invalid JSON", invalidJson);
+        }
+    }
+
+    static ProgressiveTeachingStartDraft normalizeProgressiveTeachingStartBindings(
+            CatalogRequest request,
+            ProgressiveTeachingStartDraft draft) {
+        if (draft == null) throw new IllegalArgumentException("progressive visual teaching model returned no draft");
+        List<Integer> requestedOrder = request.pages().stream().map(PageImageInput::pageNumber).toList();
+        List<Integer> returnedOrder = draft.pages().stream().map(TeachingPageSketch::pageNumber).toList();
+        if (returnedOrder.size() != requestedOrder.size()
+                || Set.copyOf(returnedOrder).size() != returnedOrder.size()
+                || !Set.copyOf(returnedOrder).equals(Set.copyOf(requestedOrder))) {
+            throw new IllegalArgumentException("progressive visual teaching did not bind every supplied page exactly");
+        }
+        if (!Set.copyOf(requestedOrder).contains(draft.selectedPageFacts().pageNumber())) {
+            throw new IllegalArgumentException("progressive visual teaching selected an unknown supplied page");
+        }
+        List<TeachingPageSketch> ordered = requestedOrder.stream()
+                .map(pageNumber -> draft.pages().stream()
+                        .filter(page -> page.pageNumber() == pageNumber)
+                        .findFirst()
+                        .orElseThrow())
+                .toList();
+        return new ProgressiveTeachingStartDraft(
+                ordered, withoutVisualEnrichment(draft.selectedPageFacts()));
     }
 
     static IdentifierLocalizationDraft parseIdentifierLocations(String content) {

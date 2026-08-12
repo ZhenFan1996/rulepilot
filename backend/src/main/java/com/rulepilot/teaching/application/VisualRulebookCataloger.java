@@ -11,6 +11,7 @@ import com.rulepilot.teaching.TeachingOutlineModel;
 import com.rulepilot.teaching.TeachingOutlineModel.PageImageInput;
 import com.rulepilot.teaching.TeachingOutlineModel.PageInput;
 import com.rulepilot.teaching.VisualRulebookPageCatalogModel;
+import com.rulepilot.teaching.VisualRulebookPageCatalogModel.ProgressiveTeachingStartDraft;
 import com.rulepilot.teaching.VisualRulebookPageFacts;
 import com.rulepilot.teaching.VisualRulebookPageFacts.PageFact;
 import java.time.Duration;
@@ -55,6 +56,7 @@ class VisualRulebookCataloger {
     private final VisualRulebookPageFacts visualFacts;
     private final AuditedAgentInvocations invocations;
     private final Duration visualCatalogTimeout;
+    private final Duration progressiveStartTimeout;
     private final int visualCoverageProbePages;
     private final int visualRequestParallelism;
 
@@ -64,6 +66,7 @@ class VisualRulebookCataloger {
             VisualRulebookPageFacts visualFacts,
             AuditedAgentInvocations invocations,
             @Value("${rulepilot.visual.catalog-timeout:PT45S}") Duration visualCatalogTimeout,
+            @Value("${rulepilot.visual.progressive-start-timeout:PT35S}") Duration progressiveStartTimeout,
             @Value("${rulepilot.visual.coverage-probe-pages:4}") int visualCoverageProbePages,
             @Value("${rulepilot.visual.request-parallelism:1}") int visualRequestParallelism) {
         this.pageImages = pageImages;
@@ -73,6 +76,9 @@ class VisualRulebookCataloger {
         if (visualCatalogTimeout == null || visualCatalogTimeout.isZero() || visualCatalogTimeout.isNegative()) {
             throw new IllegalArgumentException("visual catalog timeout must be positive");
         }
+        if (progressiveStartTimeout == null || progressiveStartTimeout.isZero() || progressiveStartTimeout.isNegative()) {
+            throw new IllegalArgumentException("progressive visual Teaching start timeout must be positive");
+        }
         if (visualCoverageProbePages < 1 || visualCoverageProbePages > VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES) {
             throw new IllegalArgumentException("visual coverage probe pages must be between one and "
                     + VisualOutlineEvidencePolicy.MAX_INTERPRETED_VISUAL_PAGES);
@@ -81,12 +87,79 @@ class VisualRulebookCataloger {
             throw new IllegalArgumentException("visual request parallelism must be between one and four");
         }
         this.visualCatalogTimeout = visualCatalogTimeout;
+        this.progressiveStartTimeout = progressiveStartTimeout;
         this.visualCoverageProbePages = visualCoverageProbePages;
         this.visualRequestParallelism = visualRequestParallelism;
     }
 
     boolean available(String owner) {
         return visualCatalog.available(owner);
+    }
+
+    Optional<ProgressiveTeachingStartDraft> progressiveTeachingStart(
+            UUID documentVersionId,
+            List<DocumentProcessing.PageView> documentPages,
+            String rulebookTitle,
+            String owner,
+            UUID assistantRunId) {
+        if (documentPages.isEmpty()
+                || documentPages.size() > VisualRulebookPageCatalogModel.MAX_PAGES_PER_REQUEST
+                || !visualCatalog.supportsProgressiveTeachingStart(owner)) {
+            return Optional.empty();
+        }
+        List<Integer> requestedPages = documentPages.stream()
+                .map(DocumentProcessing.PageView::pageNumber)
+                .toList();
+        List<PageImageInput> images = readTeachingPageImages(documentVersionId, requestedPages);
+        if (images.size() != requestedPages.size()) return Optional.empty();
+        var request = new VisualRulebookPageCatalogModel.CatalogRequest(images, owner, rulebookTitle);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<ProgressiveTeachingStartDraft> modelCall = executor.submit(() -> invokeModel(
+                    assistantRunId,
+                    "selectProgressiveTeachingStart",
+                    Math.max(1, images.size() * 600),
+                    progressiveTeachingStartSuccessSummary(owner),
+                    () -> visualCatalog.selectProgressiveTeachingStart(request)
+                            .orElseThrow(() -> new IllegalStateException("progressive visual teaching is unavailable")),
+                    this::progressiveTeachingStartOutputTokens));
+            ProgressiveTeachingStartDraft start;
+            try {
+                start = awaitProgressiveTeachingStart(modelCall, progressiveStartTimeout);
+            } finally {
+                modelCall.cancel(true);
+            }
+            ProgressiveVisualTeachingPlanPolicy.validate(documentPages, start);
+            persistCompletedFacts(
+                    documentVersionId,
+                    List.of(VisualRulebookCatalogPolicy.teachingStartupFact(start.selectedPageFacts())));
+            return Optional.of(start);
+        } catch (AgentExecutionStoppedException stopped) {
+            throw stopped;
+        } catch (RuntimeException invalidStart) {
+            if (catalogTimedOut(invalidStart) && assistantRunId != null) {
+                invocations.stopRunning(
+                        assistantRunId,
+                        "selectProgressiveTeachingStart",
+                        ActivityOutcome.FAILED,
+                        "Progressive visual Teaching start timed out; retaining complete preparation");
+            }
+            log.warn(
+                    "Progressive visual Teaching start was rejected for document {}; retaining complete preparation path",
+                    documentVersionId,
+                    invalidStart);
+            if (assistantRunId != null) {
+                invocations.record(
+                        assistantRunId,
+                        ActivityType.VALIDATION,
+                        "fallbackFromProgressiveTeachingStart",
+                        ActivityOutcome.REJECTED,
+                        "Progressive visual start was invalid; complete page-fact preparation was retained");
+            }
+            return Optional.empty();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     /**
@@ -363,6 +436,12 @@ class VisualRulebookCataloger {
         return visualCatalog.teachingStartupExecutionIdentity(owner)
                 .map(identity -> "Teaching-start page facts interpreted via " + identity.auditLabel())
                 .orElse("Teaching-start page facts interpreted");
+    }
+
+    private String progressiveTeachingStartSuccessSummary(String owner) {
+        return visualCatalog.teachingStartupExecutionIdentity(owner)
+                .map(identity -> "First cited-page candidate selected via " + identity.auditLabel())
+                .orElse("First cited-page candidate selected from the supplied rulebook pages");
     }
 
     /**
@@ -1135,6 +1214,26 @@ class VisualRulebookCataloger {
         }
     }
 
+    static ProgressiveTeachingStartDraft awaitProgressiveTeachingStart(
+            Future<ProgressiveTeachingStartDraft> future, Duration timeout) {
+        try {
+            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException slowProvider) {
+            future.cancel(true);
+            throw new IllegalStateException(
+                    "progressive visual teaching start timed out after " + timeout.toSeconds() + " seconds",
+                    slowProvider);
+        } catch (InterruptedException interrupted) {
+            future.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("progressive visual teaching start was interrupted", interrupted);
+        } catch (ExecutionException failed) {
+            if (failed.getCause() instanceof AgentExecutionStoppedException stopped) throw stopped;
+            if (failed.getCause() instanceof RuntimeException runtime) throw runtime;
+            throw new IllegalStateException("progressive visual teaching start failed", failed.getCause());
+        }
+    }
+
     private static boolean catalogTimedOut(RuntimeException failure) {
         return failure.getCause() instanceof TimeoutException;
     }
@@ -1168,6 +1267,18 @@ class VisualRulebookCataloger {
                                         + icon.explanation().length()
                                         + icon.evidenceText().length())
                                 .sum())
+                .sum();
+        return Math.max(1, characters / 4);
+    }
+
+    private int progressiveTeachingStartOutputTokens(ProgressiveTeachingStartDraft start) {
+        int characters = start.selectedPageFacts().printedTerms().length()
+                + start.selectedPageFacts().factualSummary().length()
+                + start.selectedPageFacts().keywords().stream().mapToInt(String::length).sum();
+        characters += start.pages().stream()
+                .mapToInt(page -> page.visibleHeading().length()
+                        + page.visibleTerms().stream().mapToInt(String::length).sum()
+                        + page.coverageTags().stream().mapToInt(String::length).sum())
                 .sum();
         return Math.max(1, characters / 4);
     }
