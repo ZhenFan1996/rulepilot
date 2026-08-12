@@ -1,20 +1,26 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import { safeAuthReturnPath } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
 interface CsrfResponse { headerName: string; token: string }
 
 const router = useRouter()
+const route = useRoute()
 const { t } = useLocale()
 const username = ref('')
 const password = ref('')
 const confirmation = ref('')
 const isSubmitting = ref(false)
 const errorMessage = ref('')
+const returnPath = computed(() => safeAuthReturnPath(route.query.redirect))
+const loginTarget = computed(() => returnPath.value
+  ? { name: 'login', query: { redirect: returnPath.value } }
+  : { name: 'login' })
 
 async function register() {
   errorMessage.value = ''
@@ -45,7 +51,7 @@ async function register() {
       body,
     })
     if (!loginResponse.ok) throw new Error(t('auth.register.created'))
-    await router.push({ name: 'account' })
+    await router.replace(returnPath.value ?? { name: 'account' })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('auth.register.failed')
   } finally {
@@ -60,6 +66,9 @@ async function register() {
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.register.title') }}</h1>
       <p class="mt-3 leading-7 text-ink/55">{{ t('auth.register.description') }}</p>
+      <p v-if="returnPath" data-testid="auth-return-context" class="mt-3 rounded-lg bg-indigo/7 px-4 py-3 text-sm leading-6 text-indigo">
+        {{ t('auth.register.return') }}
+      </p>
 
       <form class="mt-8 stack-y-xl" @submit.prevent="register">
         <label class="block text-sm font-semibold">{{ t('auth.username') }}
@@ -82,7 +91,7 @@ async function register() {
 
       <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-ink/55">
         {{ t('auth.register.existing') }}
-        <RouterLink :to="{ name: 'login' }" class="font-semibold text-indigo">{{ t('auth.register.signIn') }}</RouterLink>
+        <RouterLink replace :to="loginTarget" class="font-semibold text-indigo">{{ t('auth.register.signIn') }}</RouterLink>
       </p>
     </section>
   </main>

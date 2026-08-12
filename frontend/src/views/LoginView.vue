@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ProductMark from '@/components/ProductMark.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useLocale } from '@/lib/locale'
-import { safeLoginReturnPath } from '@/lib/authSession'
+import { safeAuthReturnPath } from '@/lib/authSession'
 
 interface CsrfResponse {
   headerName: string
@@ -19,6 +19,10 @@ const username = ref('')
 const password = ref('')
 const isSubmitting = ref(false)
 const errorMessage = ref('')
+const returnPath = computed(() => safeAuthReturnPath(route.query.redirect))
+const registerTarget = computed(() => returnPath.value
+  ? { name: 'register', query: { redirect: returnPath.value } }
+  : { name: 'register' })
 
 async function login() {
   isSubmitting.value = true
@@ -43,8 +47,7 @@ async function login() {
     if (response.status === 401) throw new Error(t('auth.login.invalid'))
     if (!response.ok) throw new Error(t('auth.unavailable'))
 
-    const returnPath = safeLoginReturnPath(route.query.redirect)
-    await router.push(returnPath ?? { name: 'account' })
+    await router.replace(returnPath.value ?? { name: 'account' })
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : t('auth.login.failed')
   } finally {
@@ -59,6 +62,9 @@ async function login() {
       <div class="flex items-center justify-between gap-4"><RouterLink :to="{ name: 'home' }" aria-label="RulePilot"><ProductMark /></RouterLink><LanguageSwitcher /></div>
       <h1 class="mt-10 font-display text-4xl font-semibold tracking-tight">{{ t('auth.login.title') }}</h1>
       <p class="mt-3 leading-7 text-ink/55">{{ t('auth.login.description') }}</p>
+      <p v-if="returnPath" data-testid="auth-return-context" class="mt-3 rounded-lg bg-indigo/7 px-4 py-3 text-sm leading-6 text-indigo">
+        {{ t('auth.login.return') }}
+      </p>
 
       <form class="mt-8 stack-y-xl" @submit.prevent="login">
         <label class="block text-sm font-semibold">
@@ -79,7 +85,7 @@ async function login() {
 
       <p class="mt-7 border-t border-ink/10 pt-6 text-center text-sm text-ink/55">
         {{ t('auth.login.first') }}
-        <RouterLink :to="{ name: 'register' }" class="font-semibold text-indigo">{{ t('auth.login.create') }}</RouterLink>
+        <RouterLink replace :to="registerTarget" class="font-semibold text-indigo">{{ t('auth.login.create') }}</RouterLink>
       </p>
     </section>
   </main>
