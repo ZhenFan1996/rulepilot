@@ -65,6 +65,89 @@ describe('LessonsView', () => {
     wrapper.unmount()
   })
 
+  it('keeps observing a new plan while preparation is still starting its first readable chapter', async () => {
+    vi.useFakeTimers()
+    let planReads = 0
+    let runReads = 0
+    let lessonReads = 0
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const path = String(input)
+      if (path === '/api/v1/teaching-plans') {
+        planReads += 1
+        return Response.json(planReads === 1 ? [] : [{
+          id: 'plan-1', documentVersionId: 'version-1', gameTitle: '花砖物语', premise: '先认识目标。',
+          createdAt: '2026-08-10T10:01:00Z', sections: [{
+            position: 1, required: true, topicKey: 'goal', title: '游戏目标', visualEvidenceRecommended: false,
+          }],
+        }])
+      }
+      if (path === '/api/v1/documents/official-imports') return Response.json([{
+        id: 'import-1', title: '花砖物语', stage: 'COMPLETED', downloadedBytes: 4096, totalBytes: 4096,
+        documentVersionId: 'version-1', errorCode: null, teachingHandoffState: 'LAUNCHED',
+        teachingPreparationRunId: 'prep-1', teachingErrorCode: null, updatedAt: '2026-08-10T10:00:00Z',
+      }])
+      if (path === '/api/v1/assistant-runs/active?mode=TEACHING_PREPARATION') return Response.json([{
+        id: 'prep-1', subjectId: 'version-1', state: 'LESSON_PLANNING', lastErrorCode: null,
+        updatedAt: '2026-08-10T10:01:00Z',
+      }])
+      if (path === '/api/v1/documents') return Response.json([{
+        document: { gameEditionId: 'edition-1', title: 'azul.pdf' },
+        latestVersion: { id: 'version-1', status: 'READY' },
+      }])
+      if (path === '/api/v1/games') return Response.json([{
+        game: { name: '花砖物语' }, editions: [{ id: 'edition-1' }],
+      }])
+      if (path.includes('/api/v1/assistant-runs/latest')) {
+        runReads += 1
+        if (runReads === 1) return new Response(null, { status: 404 })
+        return Response.json({
+          run: {
+            id: 'run-1', subjectId: 'plan-1', state: 'LESSON_COMPOSITION', createdAt: '2026-08-10T10:01:00Z',
+            updatedAt: '2026-08-10T10:01:02Z', completedAt: null, lastErrorCode: null,
+          },
+          budget: { usedModelCalls: 1, maxModelCalls: 12 },
+          activities: [{
+            sequence: 1, type: 'VALIDATION', operation: 'publishTeachingSection|1',
+            summary: 'CITED_BASE_SECTION_PUBLISHED', outcome: 'SUCCEEDED', latencyMs: 12,
+            occurredAt: '2026-08-10T10:01:02Z',
+          }],
+        })
+      }
+      if (path.includes('/illustrated-lessons/latest')) {
+        lessonReads += 1
+        if (lessonReads === 1) return new Response(null, { status: 404 })
+        return Response.json({
+          id: 'lesson-1', teachingPlanId: 'plan-1', status: 'DRAFT_READY',
+          sections: [{ evidenceStatus: 'CITED_DRAFT' }],
+        })
+      }
+      if (path.includes('/api/auth/session')) return Response.json({ username: 'alice', roles: ['USER'] })
+      return new Response(null, { status: 404 })
+    }))
+    const router = createMemoryRouter()
+    await router.push('/lessons')
+    await router.isReady()
+    const wrapper = mount(LessonsView, { global: { plugins: [router], stubs: { BackgroundWorkCenter: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="pending-guide-journey"]').text()).toContain('正在建立讲解计划')
+    expect(runReads).toBe(1)
+    expect(wrapper.text()).not.toContain('立即阅读完整讲解')
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+    expect(runReads).toBe(2)
+    expect(lessonReads).toBe(2)
+    expect(wrapper.find('[data-testid="pending-guide-journey"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('可读，核对中')
+    expect(wrapper.text()).toContain('立即阅读完整讲解')
+    wrapper.unmount()
+  })
+
   it('shows a persisted local-upload handoff before the browser page can start teaching', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)

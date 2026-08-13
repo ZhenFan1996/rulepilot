@@ -134,7 +134,10 @@ async function mockPublicDiscovery(
 ) {
   let teachingPoll = 0
   let lessonPoll = 0
+  let planReads = 0
   let journeyImported = false
+  let planPublished = !holdPreparation
+  let firstLessonPublished = !holdPreparation
   await page.route('**/api/auth/session', route => authenticated
     ? route.fulfill({ json: { username: 'player', roles: ['USER'] } })
     : route.fulfill({ status: 401 }))
@@ -145,7 +148,7 @@ async function mockPublicDiscovery(
     if (mode === 'TEACHING_PREPARATION' && holdPreparation) {
       return route.fulfill({ json: [assistantRun('preparation-run-1', 'LESSON_PLANNING', 1).run] })
     }
-    if (mode === 'TEACHING' && !holdPreparation) {
+    if (mode === 'TEACHING' && firstLessonPublished) {
       return route.fulfill({ json: [assistantRun('teaching-run-1', 'LESSON_COMPOSITION', 2).run] })
     }
     return route.fulfill({ json: [] })
@@ -289,9 +292,12 @@ async function mockPublicDiscovery(
     editions: [{ id: 'edition-1', gameId: 'game-1', name: 'BGG 基础版', language: 'und', publicationYear: 2024 }],
     expansions: [],
   }] }))
-  await page.route('**/api/v1/teaching-plans', route => route.fulfill({ json: journeyImported && !holdPreparation ? [{
-    ...teachingPlan, createdAt: '2026-08-10T08:00:01Z',
-  }] : [] }))
+  await page.route('**/api/v1/teaching-plans', route => {
+    planReads += 1
+    return route.fulfill({ json: journeyImported && planPublished ? [{
+      ...teachingPlan, createdAt: '2026-08-10T08:00:01Z',
+    }] : [] })
+  })
   await page.route('**/api/v1/model-configuration', route => route.fulfill({ json: {
     providers: [{ id: 'qwen', configured: true, visionCapable: true }],
     assignments: { teaching: 'qwen', visual: 'qwen' },
@@ -319,6 +325,7 @@ async function mockPublicDiscovery(
   await page.route('**/api/v1/assistant-runs/latest?*', route => {
     const url = route.request().url()
     if (url.includes('mode=QUESTION_ANSWER')) return route.fulfill({ status: 404 })
+    if (!firstLessonPublished) return route.fulfill({ status: 404 })
     teachingPoll += 1
     const completed = teachingPoll >= 3
     return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
@@ -329,6 +336,7 @@ async function mockPublicDiscovery(
     return route.fulfill({ json: assistantRun('teaching-run-1', completed ? 'COMPLETED' : 'RUNNING', teachingPoll) })
   })
   await page.route('**/api/v1/teaching-plans/plan-1/illustrated-lessons/latest', route => {
+    if (!firstLessonPublished) return route.fulfill({ status: 404 })
     lessonPoll += 1
     if (lessonPoll === 1) return route.fulfill({ status: 404 })
     return route.fulfill({ json: lessonPoll >= 3 ? completeLesson : draftLesson })
@@ -351,6 +359,11 @@ async function mockPublicDiscovery(
   await page.route('**/api/v1/assistant-runs/answer-run-1', route => route.fulfill({ json: {
     run: { id: 'answer-run-1', subjectId: 'version-1', createdAt: new Date().toISOString() }, activities: [],
   } }))
+  return {
+    publishPlan: () => { planPublished = true },
+    publishFirstLesson: () => { firstLessonPublished = true },
+    planReads: () => planReads,
+  }
 }
 
 test('keeps full-catalog browsing separate from the conversational recommendation journey', async ({ page }) => {
@@ -767,6 +780,39 @@ test('recovers persisted recommendation work after a full refresh without journe
   const pending = page.getByTestId('pending-guide-journey')
   await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
   await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+})
+
+test('advances My Guides from plan startup to the first readable chapter without a manual refresh', async ({ page }) => {
+  const preparation = await mockPublicDiscovery(page, true, true)
+  await page.goto('/discover')
+
+  await page.getByLabel('和推荐 Agent 聊聊').fill('4 个人，90 分钟内，想要中等策略')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByText('支持 4 人游玩')).toBeVisible()
+  await page.getByRole('button', { name: '选这款，找规则书' }).click()
+  const journey = page.getByTestId('player-journey-surface')
+  await journey.getByRole('button', { name: '选择这份' }).click()
+  await journey.getByRole('checkbox', { name: /我确认该链接来自有权提供/ }).check()
+  await journey.getByRole('button', { name: '下载规则书并生成讲解' }).click()
+  await journey.getByRole('button', { name: '关闭小窗' }).click()
+  await page.goto('/lessons')
+
+  const pending = page.getByTestId('pending-guide-journey')
+  await expect(pending.getByRole('heading', { name: '展翅翱翔' })).toBeVisible()
+  await expect(pending.getByText('规则书已可用，正在建立讲解计划并启动逐章生成')).toBeVisible()
+
+  const previousPlanReads = preparation.planReads()
+  preparation.publishPlan()
+  await expect.poll(preparation.planReads, { timeout: 6_000 }).toBeGreaterThan(previousPlanReads)
+  await expect(pending).toBeVisible()
+  await expect(page.getByText('等待开始')).toHaveCount(0)
+  await expect(page.getByText('还没有可读的讲解')).toHaveCount(0)
+  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toHaveCount(0)
+
+  preparation.publishFirstLesson()
+  await expect(page.getByText('可读，核对中')).toBeVisible({ timeout: 4_000 })
+  await expect(page.getByRole('link', { name: '立即阅读完整讲解' })).toBeVisible()
+  await expect(pending).toHaveCount(0)
 })
 
 test('keeps the readable-guide continuation legible and focus-safe at 320 and 390 px', async ({ page }) => {

@@ -119,8 +119,35 @@ const pendingCopy = computed(() => locale.value === 'zh-CN' ? {
   retryPreparation: 'Retry guide preparation', retryingPreparation: 'Restarting…',
   retryFailed: 'A new guide-preparation task could not be started. Please try again shortly.',
 })
+const terminalPreparationStates = new Set(['COMPLETED', 'FAILED', 'DEGRADED', 'INSUFFICIENT_EVIDENCE'])
+function preparationForPlan(plan: TeachingPlan) {
+  return preparationRuns.value
+    .filter(run => run.subjectId === plan.documentVersionId)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0]
+}
+function preparationStillOwnsPlanStartup(plan: TeachingPlan) {
+  const preparation = preparationForPlan(plan)
+  return Boolean(preparation
+    && preparation.state !== 'COMPLETED'
+    && !progress.value[plan.id]?.run
+    && !progress.value[plan.id]?.lesson)
+}
+function preparationCanStillStartTeaching(plan: TeachingPlan) {
+  const preparation = preparationForPlan(plan)
+  return Boolean(preparation
+    && !terminalPreparationStates.has(preparation.state)
+    && !progress.value[plan.id]?.run
+    && !progress.value[plan.id]?.lesson)
+}
+const plansReplacingPendingJourneys = computed(() => plans.value.filter((plan) => {
+  const preparation = preparationForPlan(plan)
+  return !preparation
+    || preparation.state === 'COMPLETED'
+    || Boolean(progress.value[plan.id]?.run || progress.value[plan.id]?.lesson)
+}))
+const visiblePlans = computed(() => plans.value.filter(plan => !preparationStillOwnsPlanStartup(plan)))
 const pendingJourneys = computed(() => buildPendingGuideJourneys(
-  plans.value,
+  plansReplacingPendingJourneys.value,
   guideImports.value,
   preparationRuns.value,
   guideDocuments.value,
@@ -180,7 +207,7 @@ function continuationPriority(plan: TeachingPlan) {
   return 200
 }
 
-const planGroups = computed(() => groupPlansForReading(plans.value, continuationPriority))
+const planGroups = computed(() => groupPlansForReading(visiblePlans.value, continuationPriority))
 const planGroupByPlanId = computed(() => {
   const groups = new Map<string, typeof planGroups.value[number]>()
   for (const group of planGroups.value) {
@@ -188,7 +215,7 @@ const planGroupByPlanId = computed(() => {
   }
   return groups
 })
-const selectedPlans = computed(() => showingAllVersions.value ? plans.value : planGroups.value.map((group) => group.plan))
+const selectedPlans = computed(() => showingAllVersions.value ? visiblePlans.value : planGroups.value.map((group) => group.plan))
 const selectedPlanFilter = computed<PlanFilter>(() => planFilter.value === 'READABLE' && readableGroupCount.value === 0
   ? 'PENDING'
   : planFilter.value)
@@ -430,6 +457,7 @@ function cancelProgressReads() {
 function plansNeedingRefresh() {
   return plans.value.filter((plan) => knownRunIds.has(plan.id)
     || stateOf(plan.id) === 'GENERATING'
+    || preparationCanStillStartTeaching(plan)
     || Boolean(progressErrors.value[plan.id]))
 }
 
@@ -461,7 +489,7 @@ function clearJourneyTimer() {
 
 function scheduleJourneyRefresh() {
   clearJourneyTimer()
-  if (disposed || pendingJourneys.value.length === 0) return
+  if (disposed || !pendingJourneys.value.some(journey => journey.state === 'active')) return
   journeyTimer = setTimeout(() => { void loadPlans(true) }, 4_000)
 }
 
@@ -750,19 +778,19 @@ onBeforeUnmount(() => {
           <p class="mt-4 max-w-2xl leading-7 text-ink/55">{{ t('lessons.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button v-if="plans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
+          <button v-if="visiblePlans.length > 1" type="button" :disabled="cleanupLoading || Boolean(deletingPlanId)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-ink/15 px-4 text-sm font-semibold hover:border-copper/50 disabled:opacity-40" @click="requestCleanDuplicates">{{ cleanupLoading && !destructiveAction ? t('lessons.cleanup.loading') : t('lessons.cleanup.action') }}</button>
           <RouterLink :to="{ name: 'teach' }" class="inline-flex min-h-11 items-center justify-center rounded-lg bg-copper px-4 text-sm font-semibold text-white">{{ t('lessons.upload') }}</RouterLink>
         </div>
       </div>
 
       <p v-if="startedPlanId" class="mt-6 rounded-lg bg-indigo/5 px-4 py-3 text-sm text-indigo" role="status">{{ t('lessons.started') }}</p>
       <p v-if="cleanupMessage" class="mt-6 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-800" role="status">{{ cleanupMessage }}</p>
-      <div v-if="plans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
-        <p>{{ t('lessons.summary', { versions: plans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
-        <button v-if="plans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: plans.length }) }}</button>
+      <div v-if="visiblePlans.length" class="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink/45">
+        <p>{{ t('lessons.summary', { versions: visiblePlans.length, rulebooks: planGroups.length, readable: readableGroupCount }) }}</p>
+        <button v-if="visiblePlans.length > planGroups.length" type="button" class="font-semibold text-indigo underline decoration-indigo-soft underline-offset-4 " @click="showingAllVersions ? hideAllVersions() : showAllVersions()">{{ showingAllVersions ? t('lessons.history.hide') : t('lessons.history.show', { count: visiblePlans.length }) }}</button>
       </div>
 
-      <div v-if="plans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
+      <div v-if="visiblePlans.length" class="mt-5 flex flex-wrap gap-2" role="group" :aria-label="t('lessons.filter.aria')">
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'READABLE' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'READABLE'" @click="planFilter = 'READABLE'">{{ t('lessons.filter.readable', { count: readableGroupCount }) }}</button>
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'PENDING' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'PENDING'" @click="planFilter = 'PENDING'">{{ t('lessons.filter.pending', { count: pendingGroupCount }) }}</button>
         <button type="button" class="min-h-10 rounded-full px-4 text-sm font-semibold transition" :class="selectedPlanFilter === 'ALL' ? 'bg-ink text-paper' : 'border border-ink/15 text-ink/65 hover:border-ink/35'" :aria-pressed="selectedPlanFilter === 'ALL'" @click="planFilter = 'ALL'">{{ t('lessons.filter.all', { count: planGroups.length }) }}</button>
@@ -804,13 +832,13 @@ onBeforeUnmount(() => {
         <button class="mt-4 text-sm font-semibold underline underline-offset-4" @click="loadPlans()">{{ t('lessons.reload') }}</button>
       </div>
 
-      <div v-else-if="plans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
+      <div v-else-if="visiblePlans.length === 0 && pendingJourneys.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-14 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.empty.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.empty.description') }}</p>
         <RouterLink :to="{ name: 'teach' }" class="mt-7 inline-flex rounded-lg bg-copper px-5 py-3 font-semibold text-white">{{ t('lessons.empty.action') }}</RouterLink>
       </div>
 
-      <div v-else-if="plans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
+      <div v-else-if="visiblePlans.length > 0 && displayedPlans.length === 0" class="mt-8 rounded-xl border border-dashed border-ink/20 px-6 py-12 text-center">
         <h2 class="font-display text-2xl font-semibold">{{ t('lessons.noReadable.title') }}</h2>
         <p class="mx-auto mt-3 max-w-lg leading-7 text-ink/55">{{ t('lessons.noReadable.description') }}</p>
         <button type="button" class="mt-6 text-sm font-semibold text-indigo underline underline-offset-4" @click="planFilter = 'PENDING'">{{ t('lessons.noReadable.action') }}</button>
