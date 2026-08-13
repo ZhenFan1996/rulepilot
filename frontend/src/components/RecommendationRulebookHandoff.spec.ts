@@ -426,6 +426,72 @@ describe('RecommendationRulebookHandoff', () => {
     expect(requests.filter(request => request.path === '/api/v1/teaching-plans/plan-1/illustrated-lessons')).toHaveLength(1)
   })
 
+  it('polls quickly only until the first published chapter becomes readable', async () => {
+    vi.useFakeTimers()
+    let wrapper: Awaited<ReturnType<typeof mountHandoff>>['wrapper'] | undefined
+    try {
+      sessionStorage.setItem('rulepilot:recommendation-journey:266192', JSON.stringify({
+        imported: {
+          game: { id: 'game-1', name: '展翅翱翔' },
+          edition: { id: 'edition-1', name: 'BGG 版本' },
+          alreadyImported: false,
+        },
+        importJob: {
+          id: 'import-1', stage: 'COMPLETED', documentVersionId: 'version-1', duplicate: false, errorCode: null,
+          teachingHandoffState: 'LAUNCHED', teachingPreparationRunId: 'preparation-run-1',
+        },
+        preparationRunId: 'preparation-run-1',
+      }))
+      let lessonRequests = 0
+      vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+        const path = String(input)
+        if (path === '/api/v1/document-versions/version-1/progress/snapshot') {
+          return Response.json({ stage: 'READY', percentage: 100, processedPages: 12, totalPages: 12, complete: true })
+        }
+        if (path === '/api/v1/assistant-runs/preparation-run-1') {
+          return Response.json(runSnapshot('preparation-run-1', 'COMPLETED'))
+        }
+        if (path === '/api/v1/document-versions/version-1/teaching-plans/latest') {
+          return Response.json(planFixture('plan-1', 'version-1'))
+        }
+        if (path === '/api/v1/assistant-runs/latest?mode=TEACHING&subjectId=plan-1') {
+          return Response.json(runSnapshot('teaching-run-1', 'LESSON_COMPOSITION'))
+        }
+        if (path === '/api/v1/teaching-plans/plan-1/illustrated-lessons/latest') {
+          lessonRequests += 1
+          return lessonRequests === 1
+            ? new Response(null, { status: 404 })
+            : Response.json({ ...lessonFixture('lesson-1'), status: 'DRAFT_READY' })
+        }
+        return new Response(null, { status: 404 })
+      }))
+
+      const mounted = await mountHandoff()
+      wrapper = mounted.wrapper
+      await vi.advanceTimersByTimeAsync(0)
+      await flushPromises()
+      expect(lessonRequests).toBe(1)
+      expect(wrapper.text()).not.toContain('讲解已有可读内容')
+
+      await vi.advanceTimersByTimeAsync(499)
+      await flushPromises()
+      expect(lessonRequests).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await flushPromises()
+      expect(lessonRequests).toBe(2)
+      expect(wrapper.text()).toContain('讲解已有可读内容')
+      expect(vi.getTimerCount()).toBe(1)
+
+      await vi.runOnlyPendingTimersAsync()
+      await flushPromises()
+      expect(lessonRequests).toBe(3)
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('turns an account-gated exact BGG download into an actionable browser handoff', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = String(input)

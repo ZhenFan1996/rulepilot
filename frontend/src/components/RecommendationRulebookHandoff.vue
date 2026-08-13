@@ -10,6 +10,7 @@ import {
   acceptImportJob,
   acceptJourneyRun,
   derivePlayerJourney,
+  playerJourneyPollDelay,
   type PlayerJourneyDocumentProgress,
   type PlayerJourneyImportJob,
   type PlayerJourneyLesson,
@@ -484,7 +485,14 @@ async function refreshJourney(request = sequence) {
     if (request === sequence) pollingWarning.value = true
   } finally {
     refreshingJourney = false
-    if (request === sequence) scheduleJourney(pollingWarning.value ? 3_000 : 1_250)
+    if (request === sequence) {
+      scheduleJourney(playerJourneyPollDelay(
+        pollingWarning.value,
+        Boolean(plan.value)
+          && !projection.value.canReadLesson
+          && (!teachingRun.value || teachingRunIsActive(teachingRun.value.run.state)),
+      ))
+    }
   }
 }
 

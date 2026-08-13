@@ -119,6 +119,15 @@ export interface PlayerJourneyProjection {
   latestActivity: string | null
 }
 
+export function playerJourneyPollDelay(
+  pollingWarning: boolean,
+  waitingForFirstReadableSection: boolean,
+) {
+  if (pollingWarning) return 3_000
+  if (waitingForFirstReadableSection) return 500
+  return 1_250
+}
+
 const FAILED_RUN_STATES = new Set(['FAILED', 'INSUFFICIENT_EVIDENCE', 'DEGRADED'])
 
 export function derivePlayerJourney(input: PlayerJourneyInput): PlayerJourneyProjection {
