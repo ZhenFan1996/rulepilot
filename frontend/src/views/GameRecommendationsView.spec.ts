@@ -310,11 +310,11 @@ describe('GameRecommendationsView', () => {
 
   it('aborts progressive enrichment and prefetch transport when the view unmounts', async () => {
     const pending = new Promise<Response>(() => undefined)
-    const signals: AbortSignal[] = []
+    const requests: Array<{ url: string; signal: AbortSignal }> = []
     const fetchMock = vi.fn((input: string | URL | Request, options?: RequestInit) => {
       const url = String(input)
       const signal = options?.signal
-      if (signal) signals.push(signal)
+      if (signal) requests.push({ url, signal })
       if (url.includes('enrich=false') && url.includes('page=0')) {
         return Promise.resolve(Response.json({ ...catalog, sort: 'rank', total: 2, totalPages: 2 }))
       }
@@ -323,11 +323,15 @@ describe('GameRecommendationsView', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const wrapper = await mountView()
-    await flushPromises()
-    expect(signals).toHaveLength(3)
+    await vi.waitFor(() => expect(requests.filter(({ url }) => url.includes('/api/v1/bgg/catalog'))).toHaveLength(3))
     wrapper.unmount()
-    expect(signals[0]!.aborted).toBe(false)
-    expect(signals.slice(1).every(signal => signal.aborted)).toBe(true)
+
+    const baseRequest = requests.find(({ url }) => url.includes('enrich=false') && url.includes('page=0'))!
+    const outstandingRequests = requests.filter(({ url }) =>
+      url.includes('/api/auth/session') || url.includes('enrich=true') || url.includes('page=1'))
+    expect(baseRequest.signal.aborted).toBe(false)
+    expect(outstandingRequests).toHaveLength(3)
+    expect(outstandingRequests.every(({ signal }) => signal.aborted)).toBe(true)
   })
 
   it('states clearly when the official full snapshot has not been imported', async () => {

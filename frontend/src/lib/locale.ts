@@ -1063,6 +1063,7 @@ const messages = {
     'home.hotHint': '热度只代表近期关注，不是“最适合你”的排名。',
     'home.hotLoading': '正在看看最近哪些桌游有人关注…',
     'home.hotMissing': '这会儿没拿到热门资料。你仍然可以直接加规则书，或按自己的条件找游戏。',
+    'home.hotEmpty': '热门榜暂时没有可展示封面的桌游，仍可逛完整目录。',
     'home.hotInspect': '看看 {game}',
     'home.randomEyebrow': '换个思路',
     'home.randomTitle': '随机抽三盒',

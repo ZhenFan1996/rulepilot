@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import TabletopGlyph from '@/components/TabletopGlyph.vue'
-import { useLocale } from '@/lib/locale'
+import { useLocale, type AppLocale } from '@/lib/locale'
 
 interface HotGame {
   rank: number
@@ -18,15 +18,10 @@ interface HotGame {
 }
 
 const { locale, t } = useLocale()
-const username = ref('')
 const hotGames = ref<HotGame[]>([])
-const loadingGames = ref(true)
-const gameError = ref(false)
+const gameError = ref<boolean | null>(null)
 const randomOffset = ref(0)
-
-const greeting = computed(() => username.value
-  ? t('home.greetingNamed', { username: username.value })
-  : t('home.greeting'))
+let activeGamesController: AbortController | null = null
 
 const featuredGames = computed(() => hotGames.value.slice(0, 4))
 const randomGames = computed(() => {
@@ -44,41 +39,52 @@ function shuffleRandomGames() {
   randomOffset.value = (randomOffset.value + 1 + Math.floor(Math.random() * (size - 1))) % size
 }
 
-async function load() {
-  loadingGames.value = true
-  gameError.value = false
+function isCurrentGamesRequest(requestedLocale: AppLocale, controller: AbortController) {
+  return activeGamesController === controller
+    && locale.value === requestedLocale
+}
+
+async function loadGames() {
+  const requestedLocale = locale.value
+  activeGamesController?.abort()
+  const controller = new AbortController()
+  activeGamesController = controller
+  gameError.value = null
+  hotGames.value = []
   try {
-    const [sessionResponse, hotResponse] = await Promise.all([
-      fetch('/api/auth/session', { credentials: 'include' }).catch(() => null),
-      fetch(`/api/v1/bgg/recommendations?locale=${encodeURIComponent(locale.value)}`, { credentials: 'include' }),
-    ])
-    if (sessionResponse?.ok) username.value = ((await sessionResponse.json()) as { username: string }).username
-    else username.value = ''
+    const hotResponse = await fetch(
+      `/api/v1/bgg/recommendations?locale=${requestedLocale}`,
+      { credentials: 'include', signal: controller.signal },
+    )
     if (!hotResponse.ok) throw new Error('hot games unavailable')
-    hotGames.value = (await hotResponse.json() as HotGame[])
+    const responseGames = (await hotResponse.json() as HotGame[])
       .filter(game => game.thumbnailUrl)
       .slice(0, 12)
+    if (!isCurrentGamesRequest(requestedLocale, controller)) return
+    hotGames.value = responseGames
     randomOffset.value = hotGames.value.length > 4
       ? Math.floor(Math.random() * (hotGames.value.length - 4))
       : 0
+    gameError.value = false
   } catch {
+    if (!isCurrentGamesRequest(requestedLocale, controller)) return
     gameError.value = true
-    hotGames.value = []
-  } finally {
-    loadingGames.value = false
   }
 }
 
-onMounted(load)
-watch(locale, load)
+watch(locale, loadGames, { immediate: true })
+onBeforeUnmount(() => {
+  activeGamesController?.abort()
+  activeGamesController = null
+})
 </script>
 
 <template>
-  <AppShell>
+  <AppShell v-slot="{ username }">
     <div class="tabletop-page home-page max-w-7xl">
       <section class="home-intro tabletop-illustrated-hero player-board" aria-labelledby="home-title">
         <div class="home-intro__copy">
-          <p class="tabletop-kicker">{{ greeting }}</p>
+          <p class="tabletop-kicker">{{ username ? t('home.greetingNamed', { username }) : t('home.greeting') }}</p>
           <h1 id="home-title" class="home-intro__title">{{ t('home.title') }}</h1>
           <p class="home-intro__lede">{{ t('home.description') }}</p>
 
@@ -134,9 +140,14 @@ watch(locale, load)
           </a>
         </header>
 
-        <p v-if="loadingGames" class="home-hot__state" role="status">{{ t('home.hotLoading') }}</p>
-        <div v-else-if="gameError || featuredGames.length === 0" class="home-hot__state home-hot__state--notice">
-          <p>{{ t('home.hotMissing') }}</p>
+        <div
+          v-if="gameError !== false || !hotGames.length"
+          class="home-hot__state"
+          :class="{ 'home-hot__state--notice': gameError !== null }"
+          :role="gameError === true ? 'alert' : 'status'"
+        >
+          <p>{{ t(gameError === null ? 'home.hotLoading' : gameError ? 'home.hotMissing' : 'home.hotEmpty') }}</p>
+          <button v-if="gameError === true" type="button" class="mt-3 min-h-11 font-semibold text-indigo underline" @click="loadGames">{{ t('account.retry') }}</button>
         </div>
         <ol v-else class="home-game-grid">
           <li v-for="game in featuredGames" :key="game.bggId">

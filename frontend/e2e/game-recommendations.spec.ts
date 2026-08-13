@@ -190,14 +190,21 @@ async function mockPublicDiscovery(page: import('@playwright/test').Page, authen
     })
   })
   await page.route('**/api/v1/bgg/catalog?*', async route => {
-    if (route.request().url().includes('enrich=true')) {
+    const url = new URL(route.request().url())
+    const requestedCatalog = {
+      ...catalog,
+      page: Number(url.searchParams.get('page')),
+      sort: url.searchParams.get('sort'),
+      type: url.searchParams.get('type'),
+    }
+    if (url.searchParams.get('enrich') === 'true') {
       await new Promise(resolve => setTimeout(resolve, 1_500))
-      await route.fulfill({ json: catalog })
+      await route.fulfill({ json: requestedCatalog })
       return
     }
     await route.fulfill({
       json: {
-        ...catalog,
+        ...requestedCatalog,
         taxonomyTranslated: false,
         games: [{
           ...catalog.games[0],

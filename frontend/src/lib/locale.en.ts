@@ -1055,6 +1055,7 @@ export default {
     'home.hotHint': 'Hotness shows recent attention, not a ranking of what will suit you best.',
     'home.hotLoading': 'Checking what players have been looking at lately…',
     'home.hotMissing': 'Trending data is quiet right now. You can still add a rulebook or look for a game on your own terms.',
+    'home.hotEmpty': 'No trending games have a displayable cover right now. The full catalog is still available.',
     'home.hotInspect': 'Take a look at {game}',
     'home.randomEyebrow': 'Try another angle',
     'home.randomTitle': 'Three from the shelf',

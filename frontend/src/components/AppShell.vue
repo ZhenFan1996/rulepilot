@@ -10,6 +10,7 @@ import { LOGIN_REQUIRED_EVENT, notifySessionCleared } from '@/lib/authSession'
 import { useLocale } from '@/lib/locale'
 
 withDefaults(defineProps<{ immersive?: boolean }>(), { immersive: false })
+defineSlots<{ default(props: { username: string }): unknown }>()
 
 const route = useRoute()
 const { t } = useLocale()
@@ -33,6 +34,8 @@ const loginReminderVisible = ref(false)
 const backgroundWorkCenter = ref<{ openCenter: (trigger?: HTMLElement | null) => void } | null>(null)
 const backgroundActiveCount = ref(0)
 const backgroundFinishedCount = ref(0)
+let disposed = false
+const sessionController = new AbortController()
 
 const navigation = [
   { name: 'home', path: '/', labelKey: 'nav.home', icon: 'compass' },
@@ -71,21 +74,28 @@ function toggleTheme() {
 
 async function loadSession() {
   try {
-    const response = await fetch('/api/auth/session', { credentials: 'include' })
-    if (response.ok) {
-      const session = await response.json() as { username: string; roles?: string[] }
-      username.value = session.username
-      roles.value = Array.isArray(session.roles) ? session.roles : []
-    }
+    const response = await fetch('/api/auth/session', { credentials: 'include', signal: sessionController.signal })
+    if (disposed) return
+    if (!response.ok) return clearSessionIdentity()
+    const session = await response.json() as { username?: unknown; roles?: unknown }
+    if (disposed) return
+    username.value = typeof session.username === 'string' ? session.username.trim() : ''
+    roles.value = Array.isArray(session.roles)
+      ? session.roles.filter((role): role is string => typeof role === 'string')
+      : []
   } catch {
-    username.value = ''
-    roles.value = []
+    if (!disposed) clearSessionIdentity()
   }
 }
 
-function showLoginReminder() {
+function clearSessionIdentity() {
   username.value = ''
   roles.value = []
+}
+
+function showLoginReminder() {
+  sessionController.abort()
+  clearSessionIdentity()
   loginReminderVisible.value = true
 }
 
@@ -117,6 +127,8 @@ onMounted(() => applyAppearance(appearance.value, false))
 onMounted(loadSession)
 onMounted(() => window.addEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder))
 onBeforeUnmount(() => {
+  disposed = true
+  sessionController.abort()
   window.removeEventListener(LOGIN_REQUIRED_EVENT, showLoginReminder)
 })
 </script>
@@ -218,7 +230,7 @@ onBeforeUnmount(() => {
           <button type="button" class="grid min-h-11 min-w-11 place-items-center rounded-lg text-xl text-ink/45 hover:bg-ink/5 hover:text-ink" :aria-label="t('shell.loginReminder.dismiss')" @click="loginReminderVisible = false">×</button>
         </div>
       </aside>
-      <slot />
+      <slot :username="username" />
     </main>
 
     <BackgroundWorkCenter
